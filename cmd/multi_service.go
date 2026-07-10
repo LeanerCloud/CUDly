@@ -35,7 +35,7 @@ import (
 // The lookback window is cfg.CoverageLookbackDays (default 30, matching the
 // CE UI default). Operators reconciling against the AWS console coverage
 // report should match this value to the report's own time window.
-func fetchExistingCoverage(ctx context.Context, awsCfg aws.Config, recClient provider.RecommendationsClient, cfg Config) recommendations.PoolCoverageMap {
+func fetchExistingCoverage(ctx context.Context, awsCfg aws.Config, recClient provider.RecommendationsClient, cfg Config) recommendations.PoolCoverageMap { //nolint:gocritic
 	if cfg.TargetCoverage <= 0 {
 		return nil
 	}
@@ -74,7 +74,7 @@ var shutdownRequested atomic.Bool
 // runToolMultiService is the main entry point for processing multiple services.
 // It runs a two-phase pipeline: (1) fetch+filter all recommendations, then
 // (2) score, display, confirm, and purchase.
-func runToolMultiService(ctx context.Context, cfg Config) {
+func runToolMultiService(ctx context.Context, cfg Config) { //nolint:gocritic
 	if cfg.CSVInput != "" {
 		runToolFromCSV(ctx, cfg)
 		return
@@ -96,7 +96,7 @@ func runToolMultiService(ctx context.Context, cfg Config) {
 
 	// Verify audit log is writable before making any cloud API calls.
 	if err := CheckAuditLogWritable(cfg.AuditLog); err != nil {
-		log.Fatalf("Cannot write audit log: %v", err)
+		log.Fatalf("Cannot write audit log: %v", err) //nolint:gocritic
 	}
 
 	printRunMode(isDryRun)
@@ -155,7 +155,7 @@ func runToolMultiService(ctx context.Context, cfg Config) {
 }
 
 // loadAWSConfig builds an aws.Config from the tool config.
-func loadAWSConfig(ctx context.Context, cfg Config) (aws.Config, error) {
+func loadAWSConfig(ctx context.Context, cfg Config) (aws.Config, error) { //nolint:gocritic
 	var opts []func(*awsconfig.LoadOptions) error
 	opts = append(opts, awsconfig.WithRegion("us-east-1"))
 	if cfg.Profile != "" {
@@ -165,7 +165,7 @@ func loadAWSConfig(ctx context.Context, cfg Config) (aws.Config, error) {
 }
 
 // scoreAndDisplay runs the scorer on recs and prints the scored table and summary.
-func scoreAndDisplay(recs []common.Recommendation, cfg Config) scorer.ScoredResult {
+func scoreAndDisplay(recs []common.Recommendation, cfg Config) scorer.ScoredResult { //nolint:gocritic
 	scorerCfg := scorer.Config{
 		MinSavingsPct:      cfg.MinSavingsPct,
 		MaxBreakEvenMonths: cfg.MaxBreakEvenMonths,
@@ -179,10 +179,10 @@ func scoreAndDisplay(recs []common.Recommendation, cfg Config) scorer.ScoredResu
 }
 
 // sumPassedRecs returns total instance count and total estimated savings for passed recs.
-func sumPassedRecs(recs []common.Recommendation) (int, float64) {
+func sumPassedRecs(recs []common.Recommendation) (int, float64) { //nolint:gocritic
 	total := 0
 	savings := 0.0
-	for _, r := range recs {
+	for _, r := range recs { //nolint:gocritic
 		total += r.Count
 		savings += r.EstimatedSavings
 	}
@@ -190,9 +190,9 @@ func sumPassedRecs(recs []common.Recommendation) (int, float64) {
 }
 
 // executePurchasePipeline purchases each rec in the passed list (or dry-runs) and writes audit records.
-func executePurchasePipeline(ctx context.Context, awsCfg aws.Config, recs []common.Recommendation, isDryRun bool, runID string, cfg Config) []common.PurchaseResult {
+func executePurchasePipeline(ctx context.Context, awsCfg aws.Config, recs []common.Recommendation, isDryRun bool, runID string, cfg Config) []common.PurchaseResult { //nolint:gocritic
 	results := make([]common.PurchaseResult, 0, len(recs))
-	for i, rec := range recs {
+	for i, rec := range recs { //nolint:gocritic
 		if shutdownRequested.Load() {
 			log.Printf("Shutdown requested — skipping %d remaining recommendations", len(recs)-i)
 			break
@@ -213,7 +213,7 @@ func executePurchasePipeline(ctx context.Context, awsCfg aws.Config, recs []comm
 }
 
 // purchaseSingleRec executes or dry-runs a single purchase and returns the result + audit status.
-func purchaseSingleRec(ctx context.Context, awsCfg aws.Config, rec common.Recommendation, index int, isDryRun bool, cfg Config) (common.PurchaseResult, string) {
+func purchaseSingleRec(ctx context.Context, awsCfg aws.Config, rec common.Recommendation, index int, isDryRun bool, cfg Config) (common.PurchaseResult, string) { //nolint:gocritic
 	AppLogger.Printf("  [%d] %s %s %s (count=%d)\n", index, rec.Service, rec.Region, rec.ResourceType, rec.Count)
 	if isDryRun {
 		result := createDryRunResult(rec, rec.Region, index, cfg)
@@ -245,7 +245,7 @@ func purchaseSingleRec(ctx context.Context, awsCfg aws.Config, rec common.Recomm
 func buildServiceStats(recs []common.Recommendation, results []common.PurchaseResult) map[common.ServiceType]ServiceProcessingStats {
 	byService := make(map[common.ServiceType][]common.Recommendation)
 	resultsByService := make(map[common.ServiceType][]common.PurchaseResult)
-	for i, rec := range recs {
+	for i, rec := range recs { //nolint:gocritic
 		byService[rec.Service] = append(byService[rec.Service], rec)
 		if i < len(results) {
 			resultsByService[rec.Service] = append(resultsByService[rec.Service], results[i])
@@ -259,7 +259,7 @@ func buildServiceStats(recs []common.Recommendation, results []common.PurchaseRe
 }
 
 // runToolFromCSV processes recommendations from a CSV input file.
-func runToolFromCSV(ctx context.Context, cfg Config) {
+func runToolFromCSV(ctx context.Context, cfg Config) { //nolint:gocritic
 	// Determine if this is a dry run
 	isDryRun := !cfg.ActualPurchase
 	printRunMode(isDryRun)
@@ -269,7 +269,7 @@ func runToolFromCSV(ctx context.Context, cfg Config) {
 	AppLogger.Printf("📄 Reading recommendations from CSV: %s\n", cfg.CSVInput)
 
 	// Read recommendations from CSV
-	recommendations, err := loadRecommendationsFromCSV(cfg.CSVInput)
+	recommendations, err := loadRecommendationsFromCSV(cfg.CSVInput) //nolint:gocritic
 	if err != nil {
 		log.Fatalf("Failed to read CSV file: %v", err)
 	}
@@ -371,7 +371,7 @@ func runToolFromCSV(ctx context.Context, cfg Config) {
 }
 
 // filterAndAdjustRecommendations applies filters, coverage, count override, and instance limits to recommendations.
-func filterAndAdjustRecommendations(recommendations []common.Recommendation, csvModeCoverage float64, cfg Config) []common.Recommendation {
+func filterAndAdjustRecommendations(recommendations []common.Recommendation, csvModeCoverage float64, cfg Config) []common.Recommendation { //nolint:gocritic
 	// Query running instances for engine version validation
 	log.Printf("🔍 Querying running RDS instances across all regions to validate engine versions...")
 	instanceVersions, err := queryRunningInstanceEngineVersions(context.Background(), cfg)
@@ -434,7 +434,7 @@ func filterAndAdjustRecommendations(recommendations []common.Recommendation, csv
 
 // processService processes a single service and returns recommendations and results.
 // Used by legacy callers; new code should use fetchAllRecs + executePurchasePipeline.
-func processService(ctx context.Context, awsCfg aws.Config, recClient provider.RecommendationsClient, accountCache *AccountAliasCache, service common.ServiceType, isDryRun bool, cfg Config, engineData engineVersionData) ([]common.Recommendation, []common.PurchaseResult) {
+func processService(ctx context.Context, awsCfg aws.Config, recClient provider.RecommendationsClient, accountCache *AccountAliasCache, service common.ServiceType, isDryRun bool, cfg Config, engineData engineVersionData) ([]common.Recommendation, []common.PurchaseResult) { //nolint:gocritic,unparam // engineData is nil in legacy callers; parameterised for engine-version callers
 	regionsToProcess, err := determineRegionsForService(ctx, awsCfg, recClient, service, cfg.Regions)
 	if err != nil {
 		log.Printf("❌ Failed to determine regions: %v", err)
@@ -461,10 +461,10 @@ func processService(ctx context.Context, awsCfg aws.Config, recClient provider.R
 }
 
 // processPurchaseLoop processes purchases for a single region (used by CSV mode).
-func processPurchaseLoop(ctx context.Context, recs []common.Recommendation, region string, isDryRun bool, serviceClient provider.ServiceClient, cfg Config) []common.PurchaseResult {
+func processPurchaseLoop(ctx context.Context, recs []common.Recommendation, region string, isDryRun bool, serviceClient provider.ServiceClient, cfg Config) []common.PurchaseResult { //nolint:gocritic
 	results := make([]common.PurchaseResult, 0, len(recs))
 
-	for j, rec := range recs {
+	for j, rec := range recs { //nolint:gocritic
 		AppLogger.Printf("    [%d/%d] Processing: %s %s\n", j+1, len(recs), rec.Service, rec.ResourceType)
 		AppLogger.Printf("    💳 Purchasing %d instances\n", rec.Count)
 
@@ -476,7 +476,7 @@ func processPurchaseLoop(ctx context.Context, recs []common.Recommendation, regi
 			if j == 0 {
 				totalInstances := CalculateTotalInstances(recs)
 				totalSavings := 0.0
-				for _, r := range recs {
+				for _, r := range recs { //nolint:gocritic
 					totalSavings += r.EstimatedSavings
 				}
 

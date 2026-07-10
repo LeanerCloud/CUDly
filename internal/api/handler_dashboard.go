@@ -42,7 +42,7 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 		}
 	}
 
-	recommendations, err := h.scheduler.ListRecommendations(ctx, &config.RecommendationFilter{
+	recommendations, err := h.scheduler.ListRecommendations(ctx, config.RecommendationFilter{
 		Provider: params["provider"],
 	})
 	if err != nil {
@@ -558,7 +558,7 @@ func commitmentExpiry(p config.PurchaseHistoryRecord) time.Time {
 // inventory endpoint. Status values: see PurchaseHistoryRecord.Status doc.
 func isActiveCommitment(p config.PurchaseHistoryRecord, now time.Time) bool {
 	// Status is unpersisted (dynamodbav:"-"); DB rows always read back as "".
-	// Synthesized rows set it to "failed", "expired", "canceled", "pending",
+	// Synthesised rows set it to "failed", "expired", "cancelled", "pending",
 	// "notified", "approved", "running", or "paused". Only "" and "completed"
 	// represent a commitment that is actually live on the provider.
 	if p.Status != "" && p.Status != "completed" {

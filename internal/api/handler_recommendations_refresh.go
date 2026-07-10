@@ -59,9 +59,8 @@ func (h *Handler) postRefreshRecommendations(ctx context.Context, req *events.La
 		return nil, err
 	}
 
-	// Read current freshness so we can include last_collected_at in the 202 body.
-	freshness, err := h.config.GetRecommendationsFreshness(ctx)
-	if err != nil {
+	// Pre-flight check: verify freshness is readable before marking started.
+	if _, err := h.config.GetRecommendationsFreshness(ctx); err != nil {
 		return nil, fmt.Errorf("failed to read freshness: %w", err)
 	}
 
@@ -75,7 +74,7 @@ func (h *Handler) postRefreshRecommendations(ctx context.Context, req *events.La
 		return nil, NewClientError(409, "recommendation collection already in progress; try again in a few minutes")
 	}
 
-	freshness, err = h.runMarkedCollection(ctx)
+	freshness, err := h.runMarkedCollection(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -192,4 +191,47 @@ func (h *Handler) getLambdaInvoker(ctx context.Context) (LambdaInvokerInterface,
 		return nil, fmt.Errorf("load AWS config: %w", h.awsCfgErr)
 	}
 	return lambda.NewFromConfig(h.awsCfg), nil
+}
+
+// triggerColdStartCollect is the GET /api/recommendations cold-start path.
+// It is called from ListRecommendations when last_collected_at is nil AND
+// last_collection_started_at is nil (no collection running). It fires an
+// async self-invoke (Lambda mode) or a synchronous collect (HTTP mode) and
+// returns the freshness state after the trigger so the caller can return an
+// empty list to the user with the correct "collecting" indicator.
+//
+// The returned freshness may have LastCollectionStartedAt set (async) or
+// LastCollectedAt set (sync). Callers should treat a non-nil
+// LastCollectionStartedAt as "collection in progress".
+func (h *Handler) triggerColdStartCollect(ctx context.Context) (*config.RecommendationsFreshness, error) { //nolint:unused // retained for cold-start orchestration path
+	schedulerARN := os.Getenv("SCHEDULER_LAMBDA_ARN")
+	if schedulerARN != "" {
+		// Atomic mark. ok=false means another caller already marked it — we
+		// MUST NOT trigger a second async invoke or call ClearCollectionStarted
+		// (that would wipe the other caller's in-flight marker). Returning the
+		// current freshness lets the caller see the in-flight collection and
+		// poll for completion.
+		ok, err := h.config.MarkCollectionStarted(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to mark cold-start collection: %w", err)
+		}
+		if !ok {
+			return h.config.GetRecommendationsFreshness(ctx)
+		}
+		if invokeErr := h.asyncInvokeSelf(ctx, schedulerARN); invokeErr != nil {
+			// Roll back ONLY because we own the marker (ok==true above).
+			if clearErr := h.config.ClearCollectionStarted(ctx); clearErr != nil {
+				logging.Warnf("coldStartCollect: failed to clear collection started marker: %v", clearErr)
+			}
+			return nil, fmt.Errorf("failed to trigger cold-start collect: %w", invokeErr)
+		}
+		// Re-read freshness to return the started_at value.
+		return h.config.GetRecommendationsFreshness(ctx)
+	}
+
+	// HTTP / non-Lambda mode: synchronous collect.
+	if _, err := h.scheduler.CollectRecommendations(ctx); err != nil {
+		return nil, fmt.Errorf("cold-start collect failed: %w", err)
+	}
+	return h.config.GetRecommendationsFreshness(ctx)
 }

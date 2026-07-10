@@ -31,7 +31,7 @@ type APIKeyInfo struct {
 // APICreateAPIKeyResponse represents the API response for creating an API key.
 type APICreateAPIKeyResponse struct {
 	Info   *APIKeyInfo `json:"info"`
-	APIKey string      `json:"api_key"` // Full key - only returned once
+	APIKey string      `json:"api_key"` //nolint:gosec // G117: intentional credential field; full key returned once on creation
 	KeyID  string      `json:"key_id"`
 }
 

@@ -10,7 +10,7 @@ import (
 )
 
 // GlobalConfig represents the global CUDly configuration.
-type GlobalConfig struct {
+type GlobalConfig struct { //nolint:govet // fieldalignment: logical grouping takes priority over size optimisation
 	EnabledProviders       []string `json:"enabled_providers" dynamodbav:"enabled_providers"`
 	NotificationEmail      *string  `json:"notification_email,omitempty" dynamodbav:"notification_email,omitempty"`
 	AutoCollect            bool     `json:"auto_collect"`

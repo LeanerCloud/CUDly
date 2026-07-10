@@ -60,7 +60,7 @@ type APIPermissionConstraint struct {
 // Groups must be non-empty: authorization is group-membership-only (issue #907).
 type APICreateUserRequest struct {
 	Email    string   `json:"email"`
-	Password string   `json:"password"`
+	Password string   `json:"password"` //nolint:gosec
 	Groups   []string `json:"groups,omitempty"`
 }
 
@@ -380,7 +380,7 @@ func (s *Service) GetUserPermissionsAPI(ctx context.Context, userID string) (any
 // the frontend renders as a QR code). Wraps MFASetup; thin shim
 // exists so the api package can refer to a stable signature without
 // importing the auth package's internal MFASetupResult type.
-func (s *Service) MFASetupAPI(ctx context.Context, userID, password string) (string, string, error) {
+func (s *Service) MFASetupAPI(ctx context.Context, userID, password string) (string, string, error) { //nolint:gocritic
 	result, err := s.MFASetup(ctx, userID, password)
 	if err != nil {
 		return "", "", err

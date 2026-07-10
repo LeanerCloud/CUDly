@@ -241,9 +241,9 @@ func TestShouldIncludeEngine(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		recommendation common.Recommendation
 		includeEngines []string
 		excludeEngines []string
+		recommendation common.Recommendation
 		expected       bool
 	}{
 		{

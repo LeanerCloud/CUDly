@@ -16,13 +16,13 @@ import (
 // This implementation uses a sliding window algorithm with the database as the backend,
 // making it suitable for Lambda functions and distributed systems.
 type DBRateLimiter struct {
-	lastCleanup     time.Time
 	pool            *pgxpool.Pool
-	limits          map[string]RateLimitConfig
-	cleanupInterval time.Duration
+	limits          map[string]RateLimitConfig // endpoint -> config
 	limitsMu        sync.RWMutex
+	lastCleanup     time.Time
 	cleanupMu       sync.Mutex
 	cleanupRunning  atomic.Bool
+	cleanupInterval time.Duration
 }
 
 // Verify that DBRateLimiter implements RateLimiterInterface.

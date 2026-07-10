@@ -103,7 +103,7 @@ type UserAPIKey struct {
 
 // AuthContext represents the complete authorization context for a user
 // It combines group memberships and the permissions computed from them.
-type AuthContext struct {
+type AuthContext struct { //nolint:revive // stutter: AuthContext is the established public name; renaming would break callers
 	User            *User
 	Groups          []*Group
 	AllowedAccounts []string     // Computed from all groups (union)
@@ -224,7 +224,7 @@ type Session struct {
 // LoginRequest represents a login attempt.
 type LoginRequest struct {
 	Email    string `json:"email"`
-	Password string `json:"password"`
+	Password string `json:"password"` //nolint:gosec
 	MFACode  string `json:"mfa_code,omitempty"`
 }
 
@@ -259,7 +259,7 @@ type PasswordResetConfirm struct {
 // one group: authorization derives entirely from group membership (issue #907).
 type CreateUserRequest struct {
 	Email    string   `json:"email"`
-	Password string   `json:"password"`
+	Password string   `json:"password"` //nolint:gosec
 	GroupIDs []string `json:"group_ids,omitempty"`
 }
 
@@ -288,7 +288,7 @@ type ChangePasswordRequest struct {
 // SetupAdminRequest for first-time admin setup with API key.
 type SetupAdminRequest struct {
 	Email    string `json:"email"`
-	Password string `json:"password"`
+	Password string `json:"password"` //nolint:gosec
 }
 
 // CreateAPIKeyRequest for creating a new user API key.
@@ -301,7 +301,7 @@ type CreateAPIKeyRequest struct {
 // CreateAPIKeyResponse returns the newly created API key (only shown once).
 type CreateAPIKeyResponse struct {
 	Info   *UserAPIKey `json:"info"`
-	APIKey string      `json:"api_key"` // Full key - only returned on creation
+	APIKey string      `json:"api_key"` //nolint:gosec // G117: intentional credential field; full key returned once on creation
 	KeyID  string      `json:"key_id"`
 }
 

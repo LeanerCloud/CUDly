@@ -436,10 +436,10 @@ func buildFederationBundle(data *federationIaCData, target, source, slug string)
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 
-	if err = addBundleTerraform(zw, data, target, source, slug); err != nil {
+	if err = addBundleTerraform(zw, data, target, source, slug); err != nil { //nolint:gocritic
 		return nil, "", err
 	}
-	if err = addBundleCFN(zw, data, target, source, slug); err != nil {
+	if err = addBundleCFN(zw, data, target, source, slug); err != nil { //nolint:gocritic
 		return nil, "", err
 	}
 
@@ -462,7 +462,7 @@ func buildCFNZip(data *federationIaCData, target, source, slug string) (zipBytes
 	}
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
-	if err = writeCFNFiles(zw, data, source, slug); err != nil {
+	if err = writeCFNFiles(zw, data, source, slug); err != nil { //nolint:gocritic
 		return nil, "", err
 	}
 	if err = zw.Close(); err != nil {
@@ -503,7 +503,7 @@ func buildAzureTemplateZip(format string, data *federationIaCData, target, slug 
 	}
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
-	if err = writeAzureTemplateFiles(zw, data, format, templateName); err != nil {
+	if err = writeAzureTemplateFiles(zw, data, format, templateName); err != nil { //nolint:gocritic
 		return nil, "", err
 	}
 	if err = zw.Close(); err != nil {

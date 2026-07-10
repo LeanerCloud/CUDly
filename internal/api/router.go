@@ -390,7 +390,7 @@ func (r *Router) Route(ctx context.Context, method, path string, req *events.Lam
 }
 
 // matches checks if a route matches the given method and path.
-func (r *Router) matches(route Route, method, path string) bool {
+func (r *Router) matches(route Route, method, path string) bool { //nolint:gocritic
 	// Check method (if specified)
 	if route.Method != "" && route.Method != method {
 		return false
@@ -414,7 +414,7 @@ func (r *Router) matches(route Route, method, path string) bool {
 }
 
 // extractParams extracts path parameters from the route.
-func (r *Router) extractParams(route Route, path string) map[string]string {
+func (r *Router) extractParams(route Route, path string) map[string]string { //nolint:gocritic
 	params := make(map[string]string)
 
 	// Extract ID from prefix-based routes

@@ -1,4 +1,4 @@
-package api
+package api //nolint:revive // package name matches directory per Go convention
 
 import (
 	"context"
@@ -227,7 +227,7 @@ func TestRIUtilizationCache_SingleflightCollapsesConcurrentRefreshes(t *testing.
 	// Gate the fetcher so concurrent calls all race to enter the
 	// refresh — singleflight should collapse them.
 	release := make(chan struct{})
-	fetch := func(_ context.Context, _ int) ([]recommendations.RIUtilization, error) {
+	fetch := func(_ context.Context, _ int) ([]recommendations.RIUtilization, error) { //nolint:unparam // error always nil; closure test stub
 		calls.Add(1)
 		<-release
 		return freshData, nil

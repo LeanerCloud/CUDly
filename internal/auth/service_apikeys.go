@@ -265,7 +265,7 @@ func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserA
 		return nil, nil, fmt.Errorf("invalid API key")
 	}
 
-	if err := validateAPIKeyStatus(key); err != nil {
+	if err = validateAPIKeyStatus(key); err != nil { //nolint:gocritic // sloppyReassign: reuse outer err to avoid shadow
 		return nil, nil, err
 	}
 

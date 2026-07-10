@@ -98,15 +98,15 @@ func NewDefaultCommandRunner() *DefaultCommandRunner {
 
 // Run runs a command and streams output to stdout/stderr.
 func (r *DefaultCommandRunner) Run(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+	cmd := exec.Command(name, args...) //nolint:noctx
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
 // RunWithStdin runs a command with stdin input and streams output to stdout/stderr.
-func (r *DefaultCommandRunner) RunWithStdin(name string, stdin string, args ...string) error {
-	cmd := exec.Command(name, args...)
+func (r *DefaultCommandRunner) RunWithStdin(name, stdin string, args ...string) error {
+	cmd := exec.Command(name, args...) //nolint:noctx
 	cmd.Stdin = strings.NewReader(stdin)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

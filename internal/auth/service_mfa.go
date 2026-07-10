@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec
 	"crypto/subtle"
 	"encoding/base32"
 	"fmt"
@@ -266,7 +266,7 @@ func (s *Service) consumeRecoveryCode(user *User, entered string) bool {
 // secret, so a stateless client-side carrier (signed token) is not
 // needed.
 type MFASetupResult struct {
-	Secret          string
+	Secret          string //nolint:gosec
 	ProvisioningURI string
 }
 
@@ -380,7 +380,7 @@ func (s *Service) MFAEnable(ctx context.Context, userID, code string) ([]string,
 	if err != nil || user == nil {
 		return nil, fmt.Errorf("%w", ErrMFAAuthFailed)
 	}
-	if err := s.validatePendingMFAEnrollment(ctx, user, code); err != nil {
+	if err = s.validatePendingMFAEnrollment(ctx, user, code); err != nil { //nolint:gocritic // sloppyReassign: reuse outer err to avoid shadow
 		return nil, err
 	}
 

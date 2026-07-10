@@ -508,10 +508,10 @@ func TestPrintComparisonSection(t *testing.T) {
 func TestPrintFinalMessage(t *testing.T) {
 	tests := []struct {
 		name       string
-		isDryRun   bool
-		riSuccess  int
 		wantOutput []string
 		notWanted  []string
+		riSuccess  int
+		isDryRun   bool
 	}{
 		{
 			name:      "Dry run shows no Archera pitch",

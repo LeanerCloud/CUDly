@@ -33,37 +33,44 @@ const (
 
 // Config holds all configuration for the RI helper tool.
 type Config struct {
-	CSVOutput         string
-	CSVInput          string
-	PaymentOption     string
-	Profile           string
-	ValidationProfile string
-	// Purchase pipeline settings
-	AuditLog             string
-	IdempotencyWindow    string
-	Providers            []string
-	Regions              []string
-	Services             []string
-	IncludeRegions       []string
-	ExcludeRegions       []string
-	IncludeInstanceTypes []string
-	ExcludeInstanceTypes []string
-	IncludeEngines       []string
-	ExcludeEngines       []string
-	IncludeAccounts      []string
-	ExcludeAccounts      []string
-	// Savings Plans specific filters
-	IncludeSPTypes []string
-	ExcludeSPTypes []string
-	Coverage       float64
+	Providers []string
+	Regions   []string
+	Services  []string
+	Coverage  float64
 	// TargetCoverage, when > 0, switches sizing from --coverage's
 	// rec.Count-scaling to under-buy against historical hourly usage:
 	// each rec is sized to floor(avg * TargetCoverage/100), leaving
 	// (100-TargetCoverage)% of historical demand on-demand. Mutually
 	// exclusive with --coverage (target wins, with an info log). See
 	// cmd/helpers.go: ApplyTargetCoverage.
-	TargetCoverage     float64
-	TermYears          int
+	TargetCoverage         float64
+	ActualPurchase         bool
+	CSVOutput              string
+	CSVInput               string
+	AllServices            bool
+	PaymentOption          string
+	TermYears              int
+	IncludeRegions         []string
+	ExcludeRegions         []string
+	IncludeInstanceTypes   []string
+	ExcludeInstanceTypes   []string
+	IncludeEngines         []string
+	ExcludeEngines         []string
+	IncludeAccounts        []string
+	ExcludeAccounts        []string
+	SkipConfirmation       bool
+	MaxInstances           int32
+	OverrideCount          int32
+	Profile                string
+	ValidationProfile      string
+	IncludeExtendedSupport bool
+	// Savings Plans specific filters
+	IncludeSPTypes []string
+	ExcludeSPTypes []string
+	// Purchase pipeline settings
+	AuditLog           string
+	DryRun             bool
+	IdempotencyWindow  string
 	MinSavingsPct      float64
 	MaxBreakEvenMonths int
 	MinCount           int
@@ -86,14 +93,7 @@ type Config struct {
 	// can't approximate target=80% without buying enough RIs to hit
 	// 100% coverage). Zero (default) keeps all pools. SPs and recs
 	// without a per-hour signal pass through unfiltered.
-	MinPoolSize            float64
-	MaxInstances           int32
-	OverrideCount          int32
-	ActualPurchase         bool
-	AllServices            bool
-	SkipConfirmation       bool
-	IncludeExtendedSupport bool
-	DryRun                 bool
+	MinPoolSize float64
 }
 
 func main() {

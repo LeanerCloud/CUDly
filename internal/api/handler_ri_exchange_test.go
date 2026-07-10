@@ -694,7 +694,7 @@ func TestGetReshapeRecommendations_EmptyRegionUsesConfigRegion(t *testing.T) {
 	}
 }
 
-// Suppress unused import warnings
+// Suppress unused import warnings.
 var _ = mock.Anything
 var _ = time.Now
 var _ = config.RIExchangeRecord{}
@@ -1177,13 +1177,6 @@ func TestGetExchangeQuote_ValidOfferingIDPassesFormat(t *testing.T) {
 	// fail because there's no real EC2 client wired -- but the test
 	// exercises that the regex guard does NOT fire on a valid UUID.
 	// We stub the handler to short-circuit before the AWS call.
-	called := false
-	stub := &stubTargetOfferingsEC2{
-		instances: []ec2svc.ConvertibleRI{},
-	}
-	_ = stub
-	_ = called
-
 	h := &Handler{auth: &mockAuthForExchange{}}
 
 	// The handler calls exchange.GetExchangeQuote next; that will fail

@@ -313,15 +313,15 @@ func rejectUnknownKeys(credentialType string, payload map[string]interface{}, al
 // payloadDepth returns the maximum nesting depth of m, counting the top-level
 // map as depth 1. A nested map adds 1; non-map values do not.
 func payloadDepth(m map[string]interface{}, current int) int {
-	max := current
+	depth := current
 	for _, v := range m {
 		if nested, ok := v.(map[string]interface{}); ok {
-			if d := payloadDepth(nested, current+1); d > max {
-				max = d
+			if d := payloadDepth(nested, current+1); d > depth {
+				depth = d
 			}
 		}
 	}
-	return max
+	return depth
 }
 
 // validateServiceName checks if a service name is valid.
@@ -617,7 +617,7 @@ func decodeBase64Password(encoded string) (string, error) {
 //
 // paramName is included in the error message so callers can distinguish
 // min_savings_usd vs min_savings_pct errors in client logs.
-func parseMinSavingsParam(raw string, paramName string) (float64, error) {
+func parseMinSavingsParam(raw, paramName string) (float64, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw == "0" {
 		return 0, nil

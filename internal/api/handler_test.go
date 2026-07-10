@@ -905,7 +905,7 @@ func TestHandler_HandleRequest_Error(t *testing.T) {
 	assert.Equal(t, "Internal server error", body["error"])
 }
 
-// Integration tests for dashboard endpoints
+// Integration tests for dashboard endpoints.
 func TestHandler_HandleRequest_GetDashboardSummary(t *testing.T) {
 	ctx := context.Background()
 	mockScheduler := new(MockScheduler)
@@ -1240,7 +1240,7 @@ func TestHandler_HandleRequest_CreatePlannedPurchases(t *testing.T) {
 	assert.Equal(t, 200, resp.StatusCode)
 }
 
-// Tests for edge cases in getPlan
+// Tests for edge cases in getPlan.
 func TestHandler_HandleRequest_GetPlan_Error(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -1272,7 +1272,7 @@ func TestHandler_HandleRequest_GetPlan_Error(t *testing.T) {
 	assert.Equal(t, 500, resp.StatusCode)
 }
 
-// Test for deleteUser edge case - self deletion prevention
+// Test for deleteUser edge case - self deletion prevention.
 func TestHandler_HandleRequest_DeleteUser_SelfDeletion(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
@@ -1311,7 +1311,7 @@ func TestHandler_HandleRequest_DeleteUser_SelfDeletion(t *testing.T) {
 	assert.Equal(t, "cannot delete your own account", body["error"])
 }
 
-// Test for listPlans error case
+// Test for listPlans error case.
 func TestHandler_HandleRequest_ListPlans_Error(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -1406,7 +1406,7 @@ func TestHandler_HandleRequest_ListPlans_UnassignedFlagged(t *testing.T) {
 	assert.True(t, lp.Unassigned, "zero-account plan must have unassigned=true")
 }
 
-// Test for updateConfig error case - invalid JSON returns 500 (not 400)
+// Test for updateConfig error case - invalid JSON returns 500 (not 400).
 func TestHandler_HandleRequest_UpdateConfig_InvalidJSON(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)

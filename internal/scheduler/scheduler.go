@@ -53,7 +53,7 @@ type Config struct {
 	// external_id), the ambient path stamps that account's UUID onto
 	// every rec it returns so the approve modal shows the registered
 	// name instead of `(ambient)`. Optional -- when nil, the ambient
-	// path keeps its pre-fix behaviour (CloudAccountID = nil), which
+	// path keeps its pre-fix behavior (CloudAccountID = nil), which
 	// preserves the truly-orphan case.
 	STSClient     STSClient
 	DashboardURL  string

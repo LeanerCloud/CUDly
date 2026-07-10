@@ -84,6 +84,10 @@ linters:
       - linters:
           - all
         path: .*_gen\.go
+      - linters:
+          - revive
+        text: "avoid meaningless package names"
+        path: internal/api/
     paths:
       - third_party$
       - builtin$

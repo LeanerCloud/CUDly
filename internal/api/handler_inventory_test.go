@@ -650,7 +650,7 @@ func TestHandler_getCoverageBreakdown_AzureAllUpfrontConsistency(t *testing.T) {
 	}
 	// No Azure on-demand recommendations: the only signal for Azure is the
 	// covered commitment. Pre-fix this yields nil/zero coverage; post-fix the
-	// amortised upfront makes Azure 100% covered for compute.
+	// amortized upfront makes Azure 100% covered for compute.
 	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{}, nil)
 
 	mockAuth, req := adminInventoryReq(ctx)

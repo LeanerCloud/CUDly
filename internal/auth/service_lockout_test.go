@@ -36,7 +36,7 @@ func TestLogin_AccountLockout_BeforePasswordCheck(t *testing.T) {
 	resp, err := service.Login(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "Check your email address and password and try again") // Generic error to prevent user enumeration
+	assert.Contains(t, err.Error(), "check your email address and password and try again") // Generic error to prevent user enumeration
 
 	mockStore.AssertExpectations(t)
 	// Verify UpdateUser was NOT called - lockout check happens first
@@ -297,7 +297,7 @@ func TestLogin_AccountLockout_GenericErrorMessage(t *testing.T) {
 
 	// Error message should be generic to prevent user enumeration
 	// Should NOT reveal that account is locked
-	assert.Equal(t, "Check your email address and password and try again", err.Error())
+	assert.Equal(t, "check your email address and password and try again", err.Error())
 
 	mockStore.AssertExpectations(t)
 }
@@ -369,10 +369,10 @@ func TestRecordFailedLogin(t *testing.T) {
 //
 // Issue #416 added the "store error" scenario: the real Postgres store returns
 // (nil, pgx.ErrNoRows) for a missing row, not (nil, nil). Both the error path and
-// the nil-user path now collapse to the same message "Check your email address and password and try again"
+// the nil-user path now collapse to the same message "check your email address and password and try again"
 // and the Login function runs a dummy bcrypt compare to equalize response timing.
 func TestLogin_OWASPEnumerationInvariant(t *testing.T) {
-	const wantMsg = "Check your email address and password and try again"
+	const wantMsg = "check your email address and password and try again"
 	ctx := context.Background()
 
 	lockUntil := time.Now().Add(10 * time.Minute)

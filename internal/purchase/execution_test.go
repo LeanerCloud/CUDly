@@ -22,9 +22,7 @@ import (
 // lock down the per-rec context.WithTimeout(ctx, max) contract introduced for
 // issue #683: a bare _, ok := c.Deadline(); return ok matcher would pass even
 // if executeSinglePurchase silently fell back to the parent's longer deadline.
-//
-//nolint:unparam // test helper: max fixed to the per-rec timeout under test
-func hasPerRecDeadline(max time.Duration) func(context.Context) bool {
+func hasPerRecDeadline(max time.Duration) func(context.Context) bool { //nolint:unparam // max always 30s in current tests; parameterized for contract clarity
 	return func(c context.Context) bool {
 		deadline, ok := c.Deadline()
 		if !ok {
@@ -100,7 +98,7 @@ func TestManager_ExecutePurchase(t *testing.T) {
 		dashboardURL:    "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	require.NoError(t, err)
 
 	// Verify that only selected recommendation was purchased
@@ -166,7 +164,7 @@ func TestManager_ExecutePurchase_WebSourcePropagates(t *testing.T) {
 		dashboardURL:    "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	require.NoError(t, err)
 	mockServiceClient.AssertExpectations(t)
 }
@@ -222,7 +220,7 @@ func TestManager_ExecutePurchase_InvalidSourceFallsBackUntagged(t *testing.T) {
 		dashboardURL:    "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	require.NoError(t, err)
 	mockServiceClient.AssertExpectations(t)
 }
@@ -246,7 +244,7 @@ func TestManager_ExecutePurchase_PlanNotFound(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "plan not found")
 
@@ -272,7 +270,7 @@ func TestManager_ExecutePurchase_GetPlanError(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get plan")
 
@@ -310,7 +308,7 @@ func TestManager_ExecutePurchase_NoRecommendations(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	require.NoError(t, err)
 
 	mockStore.AssertExpectations(t)
@@ -534,7 +532,7 @@ func TestManager_ExecutePurchase_MultiAccount(t *testing.T) {
 		// assumeRoleSTS is nil → access_keys path, no role assumption needed
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	require.NoError(t, err)
 
 	// The original exec record should be unchanged (fan-out creates per-account copies).
@@ -645,7 +643,7 @@ func TestExecuteForAccount_CredentialFailure_MarksFailed(t *testing.T) {
 				credStore:       credStore,
 			}
 
-			err := manager.executePurchase(ctx, exec)
+			_, err := manager.executePurchase(ctx, exec)
 
 			// Must surface the credential failure — no ambient fallback.
 			require.Error(t, err)
@@ -777,7 +775,7 @@ func TestExecuteMultiAccount_PartialFailure_IsolatesAccounts(t *testing.T) {
 		credStore:       credStore,
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 
 	// The call must return an error (account-I's failure is aggregated).
 	// This proves the errgroup collected the failure rather than discarding it.
@@ -944,7 +942,7 @@ func TestExecuteMultiAccount_RunsAccountsInParallel(t *testing.T) {
 	}
 
 	start := time.Now()
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	elapsed := time.Since(start)
 
 	require.NoError(t, err, "both accounts have valid credentials and should succeed")
@@ -1063,7 +1061,7 @@ func TestExecutePurchase_SingleAccount_AzureUsesResolvedCreds(t *testing.T) {
 		dashboardURL:    "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	require.NoError(t, err)
 
 	mockStore.AssertExpectations(t)
@@ -1182,7 +1180,7 @@ func TestExecutePurchase_AzureCanonicalServiceTypes(t *testing.T) {
 				dashboardURL:    "https://dashboard.example.com",
 			}
 
-			err := manager.executePurchase(ctx, exec)
+			_, err := manager.executePurchase(ctx, exec)
 			require.NoError(t, err)
 
 			mockStore.AssertExpectations(t)
@@ -1227,7 +1225,7 @@ func TestExecutePurchase_SingleAccount_CredResolutionError(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "credential resolution failed for account "+acctID)
 	assert.Contains(t, err.Error(), "connection refused")
@@ -1270,7 +1268,7 @@ func TestExecutePurchase_SingleAccount_AccountNotFound(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "credential resolution failed for account "+acctID)
 	assert.Contains(t, err.Error(), "account not found")
@@ -1694,7 +1692,7 @@ func TestManager_ExecutePurchase_SingleAccount_StampsTargetAccount(t *testing.T)
 				dashboardURL:    "https://dashboard.example.com",
 			}
 
-			err := manager.executePurchase(ctx, exec)
+			_, err := manager.executePurchase(ctx, exec)
 			require.NoError(t, err)
 
 			assert.Equal(t, tc.externalID, stampedAccount,

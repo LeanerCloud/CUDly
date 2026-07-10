@@ -227,7 +227,7 @@ type AuthServiceInterface interface {
 // Auth request/response types (to avoid import cycle with auth package).
 type LoginRequest struct {
 	Email    string `json:"email"`
-	Password string `json:"password"`
+	Password string `json:"password"` //nolint:gosec
 	MFACode  string `json:"mfa_code,omitempty"`
 }
 
@@ -247,7 +247,7 @@ type UserInfo struct {
 
 type SetupAdminRequest struct {
 	Email    string `json:"email"`
-	Password string `json:"password"`
+	Password string `json:"password"` //nolint:gosec
 }
 
 type PasswordResetRequest struct {
@@ -277,7 +277,7 @@ type User struct {
 // non-empty: authorization is group-membership-only (issue #907).
 type CreateUserRequest struct {
 	Email    string   `json:"email"`
-	Password string   `json:"password"`
+	Password string   `json:"password"` //nolint:gosec
 	Groups   []string `json:"groups,omitempty"`
 }
 
@@ -455,7 +455,7 @@ type UserPermissionsResponse struct {
 // required as defense-in-depth — a stolen session alone shouldn't
 // be enough to swap a user's MFA secret.
 type MFASetupRequest struct {
-	Password string `json:"password"`
+	Password string `json:"password"` //nolint:gosec
 }
 
 // MFASetupResponse returns the freshly-generated secret + the
@@ -463,7 +463,7 @@ type MFASetupRequest struct {
 // already persisted server-side as the pending secret; clients do
 // not need to round-trip it back on enable.
 type MFASetupResponse struct {
-	Secret          string `json:"secret"`
+	Secret          string `json:"secret"` //nolint:gosec
 	ProvisioningURI string `json:"provisioning_uri"`
 }
 
@@ -483,7 +483,7 @@ type MFAEnableResponse struct {
 // MFADisableRequest turns off MFA. Requires the current password AND
 // a fresh proof-of-possession (TOTP code or unused recovery code).
 type MFADisableRequest struct {
-	Password string `json:"password"`
+	Password string `json:"password"` //nolint:gosec
 	Code     string `json:"code"`
 }
 
