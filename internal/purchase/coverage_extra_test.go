@@ -102,7 +102,7 @@ func TestMapServiceType_AzureCanonicalTypesResolveOnAzureProvider(t *testing.T) 
 	}
 }
 
-// Tests for resolveAccountProvider with unknown provider
+// Tests for resolveAccountProvider with unknown provider.
 func TestResolveAccountProvider_UnknownProvider(t *testing.T) {
 	m := &Manager{}
 	account := config.CloudAccount{
@@ -115,7 +115,7 @@ func TestResolveAccountProvider_UnknownProvider(t *testing.T) {
 	assert.Nil(t, result)
 }
 
-// Tests for resolveAWSProvider when assumeRoleSTS is nil
+// Tests for resolveAWSProvider when assumeRoleSTS is nil.
 func TestResolveAWSProvider_NoSTS(t *testing.T) {
 	m := &Manager{
 		assumeRoleSTS: nil,
@@ -132,7 +132,7 @@ func TestResolveAWSProvider_NoSTS(t *testing.T) {
 	assert.Nil(t, result)
 }
 
-// Tests for resolveAzureProvider without credStore and not managed_identity — returns error
+// Tests for resolveAzureProvider without credStore and not managed_identity — returns error.
 func TestResolveAzureProvider_NoCredStoreNoManagedIdentity(t *testing.T) {
 	m := &Manager{
 		credStore: nil,
@@ -147,7 +147,7 @@ func TestResolveAzureProvider_NoCredStoreNoManagedIdentity(t *testing.T) {
 	assert.Nil(t, result)
 }
 
-// Tests for resolveGCPProvider without credStore and not application_default — returns error
+// Tests for resolveGCPProvider without credStore and not application_default — returns error.
 func TestResolveGCPProvider_NoCredStoreNoADC(t *testing.T) {
 	m := &Manager{
 		credStore: nil,
@@ -162,7 +162,7 @@ func TestResolveGCPProvider_NoCredStoreNoADC(t *testing.T) {
 	assert.Nil(t, result)
 }
 
-// Tests for resolveGCPProvider with application_default (nil credStore is okay)
+// Tests for resolveGCPProvider with application_default (nil credStore is okay).
 func TestResolveGCPProvider_ApplicationDefault(t *testing.T) {
 	m := &Manager{
 		credStore: nil,
@@ -179,7 +179,7 @@ func TestResolveGCPProvider_ApplicationDefault(t *testing.T) {
 	assert.Nil(t, result)
 }
 
-// Tests for handleExecutePurchase: execution found + status "approved" → success path
+// Tests for handleExecutePurchase: execution found + status "approved" → success path.
 func TestHandleExecutePurchase_ApprovedStatus(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -233,7 +233,7 @@ func TestHandleExecutePurchase_ApprovedStatus(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
-// Tests for handleExecutePurchase: GetExecutionByID returns error
+// Tests for handleExecutePurchase: GetExecutionByID returns error.
 func TestHandleExecutePurchase_GetError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -256,7 +256,7 @@ func TestHandleExecutePurchase_GetError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to get execution")
 }
 
-// Tests for handleExecutePurchase: SavePurchaseExecution error after failed purchase
+// Tests for handleExecutePurchase: SavePurchaseExecution error after failed purchase.
 func TestHandleExecutePurchase_SaveError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -406,7 +406,7 @@ func TestProcessMessage_CancelHappyPath(t *testing.T) {
 	// tests); actor_email is non-empty so cancelledBy is non-nil.
 	actor := "owner@example.com"
 	mockStore.On("CancelExecutionAtomic", ctx, mock.Anything, "exec-cancel", &actor).
-		Return(true, "cancelled", nil)
+		Return(true, "canceled", nil)
 	// Suppression cleanup must follow a successful atomic cancel.
 	mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, "exec-cancel").
 		Return(nil)
@@ -503,7 +503,7 @@ func TestProcessMessage_ApproveRejectsNonMatchingActor(t *testing.T) {
 }
 
 // TestProcessMessage_ApproveRejectsTokenMismatch: token is wrong,
-// actor_email is set. Existing behaviour (token check fails) — verified
+// actor_email is set. Existing behavior (token check fails) — verified
 // here so a future refactor of verifyAsyncApprovalActor doesn't
 // regress the token comparison ordering.
 func TestProcessMessage_ApproveRejectsTokenMismatch(t *testing.T) {
@@ -766,7 +766,7 @@ func TestManager_ExecuteSinglePurchase_PurchaseNotSuccessful_WithError(t *testin
 	assert.Contains(t, exec.Recommendations[0].Error, "capacity limit exceeded")
 }
 
-// Tests for executeSinglePurchase with Engine field (DatabaseDetails branch)
+// Tests for executeSinglePurchase with Engine field (DatabaseDetails branch).
 func TestManager_ExecuteSinglePurchase_WithEngine(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -823,7 +823,7 @@ func TestManager_ExecuteSinglePurchase_WithEngine(t *testing.T) {
 	assert.Equal(t, "ri-engine-001", exec.Recommendations[0].PurchaseID)
 }
 
-// Tests for savePurchaseHistory error path (just logs, doesn't fail)
+// Tests for savePurchaseHistory error path (just logs, doesn't fail).
 func TestManager_SavePurchaseHistory_Error(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -1087,7 +1087,7 @@ func TestManager_ExecuteSinglePurchase_DetailsByService(t *testing.T) {
 		{
 			// Legacy umbrella slug ("savings-plans") that mapSavingsPlansSlug
 			// still accepts for purchase_execution rows persisted before the
-			// rename in PR #94. DecodeServiceDetailsFor must also recognise
+			// rename in PR #94. DecodeServiceDetailsFor must also recognize
 			// this alias so a stored "savings-plans" rec round-trips through
 			// the codec the same way as the canonical "savingsplans" form.
 			// Regression guard: without the "savings-plans" case in

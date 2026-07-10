@@ -9,7 +9,7 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 )
 
-// RouteHandler is a function that handles a matched route
+// RouteHandler is a function that handles a matched route.
 type RouteHandler func(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error)
 
 // AuthLevel controls how Router.Route() enforces authentication.
@@ -48,7 +48,7 @@ const (
 	AuthPublic
 )
 
-// Route defines a routing rule
+// Route defines a routing rule.
 type Route struct {
 	Handler    RouteHandler
 	ExactPath  string
@@ -58,7 +58,7 @@ type Route struct {
 	Auth       AuthLevel
 }
 
-// Router manages request routing
+// Router manages request routing.
 type Router struct {
 	h      *Handler
 	routes []Route
@@ -93,7 +93,7 @@ func validateRoutes(routes []Route) {
 	}
 }
 
-// registerRoutes sets up all application routes
+// registerRoutes sets up all application routes.
 func (r *Router) registerRoutes() {
 	r.routes = []Route{
 		// Dashboard endpoints — read-only views available to any signed-in
@@ -389,8 +389,8 @@ func (r *Router) Route(ctx context.Context, method, path string, req *events.Lam
 	return nil, errNotFound
 }
 
-// matches checks if a route matches the given method and path
-func (r *Router) matches(route Route, method, path string) bool {
+// matches checks if a route matches the given method and path.
+func (r *Router) matches(route Route, method, path string) bool { //nolint:gocritic
 	// Check method (if specified)
 	if route.Method != "" && route.Method != method {
 		return false
@@ -413,8 +413,8 @@ func (r *Router) matches(route Route, method, path string) bool {
 	return route.PathPrefix != "" || route.PathSuffix != ""
 }
 
-// extractParams extracts path parameters from the route
-func (r *Router) extractParams(route Route, path string) map[string]string {
+// extractParams extracts path parameters from the route.
+func (r *Router) extractParams(route Route, path string) map[string]string { //nolint:gocritic
 	params := make(map[string]string)
 
 	// Extract ID from prefix-based routes
@@ -800,7 +800,7 @@ func (r *Router) rejectRIExchangeHandler(ctx context.Context, req *events.Lambda
 	return r.h.rejectRIExchange(ctx, params["id"], req.QueryStringParameters["token"])
 }
 
-// formatNotFoundError creates a detailed not found error message
+// formatNotFoundError creates a detailed not found error message.
 func formatNotFoundError(method, path string) error {
 	return fmt.Errorf("%w: %s %s", errNotFound, method, path)
 }

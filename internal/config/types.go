@@ -10,7 +10,7 @@ import (
 )
 
 // GlobalConfig represents the global CUDly configuration.
-type GlobalConfig struct {
+type GlobalConfig struct { //nolint:govet // fieldalignment: logical grouping takes priority over size optimisation
 	EnabledProviders       []string `json:"enabled_providers" dynamodbav:"enabled_providers"`
 	NotificationEmail      *string  `json:"notification_email,omitempty" dynamodbav:"notification_email,omitempty"`
 	AutoCollect            bool     `json:"auto_collect"`
@@ -25,7 +25,7 @@ type GlobalConfig struct {
 	// GracePeriodDays is a per-provider window (in days) during which
 	// just-purchased capacity is suppressed from the recommendations
 	// list so users don't re-buy the same capacity while the cloud
-	// provider's utilisation metrics catch up. Keys are provider slugs
+	// provider's utilization metrics catch up. Keys are provider slugs
 	// ("aws", "azure", "gcp"). Missing keys default to DefaultGracePeriodDays
 	// (7). An explicit 0 disables suppression for that provider. Use
 	// GracePeriodFor to read a specific provider's effective value (it

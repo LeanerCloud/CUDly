@@ -50,10 +50,10 @@ type reshapeRecsClient interface {
 	GetRIUtilization(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error)
 }
 
-// buildReshapeEC2Client honours the injected factory when set, falling
+// buildReshapeEC2Client honors the injected factory when set, falling
 // back to the direct AWS SDK constructor otherwise. Tests inject a
 // stub via Handler.reshapeEC2Factory; prod leaves the field nil.
-func (h *Handler) buildReshapeEC2Client(cfg aws.Config) reshapeEC2Client {
+func (h *Handler) buildReshapeEC2Client(cfg aws.Config) reshapeEC2Client { //nolint:gocritic
 	if h.reshapeEC2Factory != nil {
 		return h.reshapeEC2Factory(cfg)
 	}
@@ -62,7 +62,7 @@ func (h *Handler) buildReshapeEC2Client(cfg aws.Config) reshapeEC2Client {
 
 // buildReshapeRecsClient mirrors buildReshapeEC2Client for the
 // recommendations adapter.
-func (h *Handler) buildReshapeRecsClient(cfg aws.Config) reshapeRecsClient {
+func (h *Handler) buildReshapeRecsClient(cfg aws.Config) reshapeRecsClient { //nolint:gocritic
 	if h.reshapeRecsFactory != nil {
 		return h.reshapeRecsFactory(cfg)
 	}
@@ -77,9 +77,9 @@ type targetOfferingsEC2Client interface {
 	ListTargetOfferings(ctx context.Context, params ec2svc.ListTargetOfferingsParams) ([]ec2svc.TargetOffering, error)
 }
 
-// buildTargetOfferingsEC2Client honours the injected factory when set,
+// buildTargetOfferingsEC2Client honors the injected factory when set,
 // falling back to the direct AWS SDK constructor otherwise.
-func (h *Handler) buildTargetOfferingsEC2Client(cfg aws.Config) targetOfferingsEC2Client {
+func (h *Handler) buildTargetOfferingsEC2Client(cfg aws.Config) targetOfferingsEC2Client { //nolint:gocritic
 	if h.targetOfferingsEC2Factory != nil {
 		return h.targetOfferingsEC2Factory(cfg)
 	}
@@ -110,7 +110,7 @@ var offeringIDPattern = regexp.MustCompile(
 // the query so AWS returns all valid target instance types -- the full
 // menu of what the user can exchange into.
 //
-// GET /api/ri-exchange/target-offerings?source_ri_id=<uuid>&region=<region>
+// GET /api/ri-exchange/target-offerings?source_ri_id=<uuid>&region=<region>.
 func (h *Handler) listTargetOfferings(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
 		return nil, err
@@ -332,7 +332,7 @@ func (h *Handler) checkListRIsAccountIDParam(ctx context.Context, params map[str
 // the running AWS account.
 //
 // The optional ?account_id= query parameter narrows the listing to a single
-// AWS account so the page honours the Main Header global account filter
+// AWS account so the page honors the Main Header global account filter
 // (issue #871). Convertible RIs are read from the deployment's ambient AWS
 // credentials, which resolve to exactly one account number; when the chip
 // selects a different account, none of these RIs belong to it, so we return
@@ -447,7 +447,7 @@ func parseThresholdParam(params map[string]string) (float64, error) {
 // Used to populate exchange.RIInfo.MonthlyCost so the cross-family
 // dollar-units pre-filter can compare against per-target offering
 // costs computed with the same formula.
-func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) float64 {
+func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) float64 { //nolint:gocritic
 	if ri.Duration <= 0 {
 		return 0
 	}
@@ -461,7 +461,7 @@ func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) float64 {
 // convertToExchangeTypes converts provider-specific types to the exchange package types.
 func convertToExchangeTypes(instances []ec2svc.ConvertibleRI, utilData []recommendations.RIUtilization) ([]exchange.RIInfo, []exchange.UtilizationInfo) {
 	riInfos := make([]exchange.RIInfo, len(instances))
-	for i, inst := range instances {
+	for i, inst := range instances { //nolint:gocritic
 		riInfos[i] = exchange.RIInfo{
 			ID:                  inst.ReservedInstanceID,
 			InstanceType:        inst.InstanceType,
@@ -613,7 +613,7 @@ func (h *Handler) attachReshapeStaleness(ctx context.Context, resp *ReshapeRecom
 // populated value is sufficient and avoids a noisy mismatch panic when
 // some entries are missing the field.
 func firstNonEmptyCurrency(instances []ec2svc.ConvertibleRI) string {
-	for _, inst := range instances {
+	for _, inst := range instances { //nolint:gocritic
 		if inst.CurrencyCode != "" {
 			return inst.CurrencyCode
 		}
@@ -689,7 +689,7 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 // Extracted from executeExchange to keep the handler below the
 // cyclomatic-complexity threshold; every branch here becomes a
 // separate test case so the logic stays inspectable.
-func validateExecuteExchangeBody(body ExchangeExecuteRequestBody) error {
+func validateExecuteExchangeBody(body ExchangeExecuteRequestBody) error { //nolint:gocritic
 	if len(body.RIIDs) == 0 {
 		return NewClientError(400, "ri_ids is required")
 	}
@@ -973,7 +973,7 @@ func (h *Handler) getRIExchangeHistory(ctx context.Context, req *events.LambdaFu
 	if !auth.IsUnrestrictedAccess(allowed) {
 		nameByID := h.resolveAccountNamesByID(ctx)
 		filtered := records[:0]
-		for _, r := range records {
+		for _, r := range records { //nolint:gocritic
 			if auth.MatchesAccount(allowed, r.AccountID, nameByID[r.AccountID]) {
 				filtered = append(filtered, r)
 			}
@@ -1016,7 +1016,7 @@ func (h *Handler) approveRIExchange(ctx context.Context, req *events.LambdaFunct
 			}
 			// Record-level RBAC denied (e.g. approve-own user is not the creator).
 			// If a token is present, preserve legacy token flow; otherwise surface the error.
-			if !(token != "" && isPermissionDenied(sessErr)) {
+			if token == "" || !isPermissionDenied(sessErr) {
 				return nil, sessErr
 			}
 		case isPermissionDenied(err):
@@ -1048,7 +1048,7 @@ func (h *Handler) approveRIExchangeViaToken(ctx context.Context, id, token strin
 		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
 	}
 	if transitioned == nil {
-		return nil, NewClientError(409, "exchange already processed, expired, or was cancelled by a newer analysis run")
+		return nil, NewClientError(409, "exchange already processed, expired, or was canceled by a newer analysis run")
 	}
 
 	return h.executeApprovedExchange(ctx, id, record)
@@ -1081,7 +1081,7 @@ func (h *Handler) approveRIExchangeViaSession(ctx context.Context, req *events.L
 		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
 	}
 	if transitioned == nil {
-		return nil, NewClientError(409, "exchange already processed, expired, or was cancelled by a newer analysis run")
+		return nil, NewClientError(409, "exchange already processed, expired, or was canceled by a newer analysis run")
 	}
 
 	result, execErr := h.executeApprovedExchange(ctx, id, record)
@@ -1098,7 +1098,7 @@ func (h *Handler) approveRIExchangeViaSession(ctx context.Context, req *events.L
 }
 
 // fetchAndAuthorizeRIExchange looks up the pending exchange record by id, checks
-// that it is in "pending" state, and then verifies that session is authorised to
+// that it is in "pending" state, and then verifies that session is authorized to
 // approve it. Extracted from approveRIExchangeViaSession to keep that function
 // under the cyclomatic-complexity limit.
 func (h *Handler) fetchAndAuthorizeRIExchange(ctx context.Context, session *Session, id string) (*config.RIExchangeRecord, error) {
@@ -1268,7 +1268,7 @@ func (h *Handler) executeApprovedExchange(ctx context.Context, id string, record
 		Region:           region,
 		ReservedIDs:      record.SourceRIIDs,
 		TargetOfferingID: record.TargetOfferingID,
-		TargetCount:      int32(record.TargetCount),
+		TargetCount:      int32(record.TargetCount), //nolint:gosec
 		MaxPaymentDueUSD: perExchangeCap,
 	})
 	if execErr != nil {
@@ -1333,15 +1333,16 @@ func (h *Handler) rejectRIExchange(ctx context.Context, id, token string) (any, 
 	}
 
 	// Token-based rejection: no session user, so transitioned_by = NULL.
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000009_ri_exchange_history.up.sql
 	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "cancelled", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
 	}
 	if transitioned == nil {
-		return nil, NewClientError(409, "exchange already processed, expired, or was cancelled")
+		return nil, NewClientError(409, "exchange already processed, expired, or was cancelled") //nolint:misspell // DB schema value
 	}
 
-	return map[string]string{"status": "cancelled"}, nil
+	return map[string]string{"status": "cancelled"}, nil //nolint:misspell // DB schema value
 }
 
 // RIExchangeConfigResponse is the response for GET /api/ri-exchange/config.

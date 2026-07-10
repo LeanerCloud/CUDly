@@ -908,7 +908,7 @@ func TestHandler_getPlannedPurchases_PausedStaysVisible(t *testing.T) {
 	assert.Equal(t, "pending", result.Purchases[0].Status)
 	assert.Equal(t, "paused", result.Purchases[1].Status)
 	// The paused row is present, not dropped.
-	var statuses []string
+	statuses := make([]string, 0, len(result.Purchases))
 	for _, p := range result.Purchases {
 		statuses = append(statuses, p.Status)
 	}
@@ -2595,7 +2595,7 @@ func TestHandler_cancelPurchase_DeepLink_AdminBypassesContactEmailGate(t *testin
 	// was NOT consulted. If a regression re-routed admins through the
 	// token path, GetGlobalConfig would fire because the gate fetches
 	// the global notification email; asserting it didn't is the cleanest
-	// way to pin the new branch behaviour.
+	// way to pin the new branch behavior.
 	mockConfig.AssertNotCalled(t, "GetGlobalConfig", mock.Anything)
 	mockAuth.AssertExpectations(t)
 }
@@ -3538,7 +3538,7 @@ func TestHandler_authorizeSessionExecuteDirect_NilAuth(t *testing.T) {
 // cancel a scheduled purchase created by ANOTHER user. They drive the real
 // handlers end-to-end (ValidateSession -> requirePermission -> account scope
 // -> authorizeExecutionManagement -> transition) and FAIL against the pre-fix
-// handler, which honoured the request because only update:purchases was
+// handler, which honored the request because only update:purchases was
 // checked.
 
 const ownExecID = "12121212-1212-1212-1212-121212121212"
@@ -3548,7 +3548,7 @@ const ownUserB = "bbbb2222-2222-2222-2222-222222222222" // creator of P2
 // buildManageHandler wires a non-admin "user-token" session for userID with
 // account access (empty allowed_accounts -> all accessible) and the given
 // update-any grant. The stored execution is created by creatorID.
-func buildManageHandler(userID, creatorID string, hasUpdateAny bool) (*Handler, *MockConfigStore, *MockAuthService) {
+func buildManageHandler(userID, creatorID string, hasUpdateAny bool) (*Handler, *MockConfigStore, *MockAuthService) { //nolint:unparam // userID always ownUserA in current tests; parameterized for fixture flexibility
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", mock.Anything, "user-token").Return(&Session{UserID: userID}, nil)
 	mockAuth.On("HasPermissionAPI", mock.Anything, userID, "update", "purchases").Return(true, nil).Maybe()
@@ -3901,7 +3901,7 @@ func TestApproveWithDelay_CASLostMaps409(t *testing.T) {
 	execID := "exec-cas-409"
 	exec := &config.PurchaseExecution{ExecutionID: execID, Status: "pending"}
 
-	concurrentCancelErr := fmt.Errorf("%w: execution %s already cancelled",
+	concurrentCancelErr := fmt.Errorf("%w: execution %s already canceled",
 		config.ErrExecutionNotInExpectedStatus, execID)
 
 	mockConfig := new(MockConfigStore)

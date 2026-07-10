@@ -341,10 +341,10 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 	if err != nil {
 		return nil, err
 	}
-	if err = h.requireExecutionAccess(ctx, session, executionID); err != nil {
+	if err = h.requireExecutionAccess(ctx, session, executionID); err != nil { //nolint:gocritic
 		return nil, err
 	}
-	if err = h.authorizeExecutionManagement(ctx, session, executionID); err != nil {
+	if err = h.authorizeExecutionManagement(ctx, session, executionID); err != nil { //nolint:gocritic
 		return nil, err
 	}
 
@@ -1407,7 +1407,7 @@ func (h *Handler) tryResolveActorEmail(ctx context.Context, req *events.LambdaFu
 // failures into the contact_email gate — exactly the misclassification
 // the propagate-vs-fall-through split is meant to prevent.
 func isPermissionDenied(err error) bool {
-	ce, ok := err.(*clientError)
+	ce, ok := err.(*clientError) //nolint:errorlint // strict (unwrapped) assertion is deliberate; see comment above
 	return ok && ce.code == 403
 }
 
@@ -2044,7 +2044,7 @@ func approvalResponseRecipient(globalNotify, to string) string {
 //
 // Errors are also logged at Errorf level so they show up in CloudWatch, but
 // the reason string is what the API response surfaces to the UI.
-func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution, recs []config.RecommendationRecord, totalUpfront, totalSavings float64) (sent bool, reason string, responseRecipient string) {
+func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution, recs []config.RecommendationRecord, totalUpfront, totalSavings float64) (sent bool, reason, responseRecipient string) {
 	if h.emailNotifier == nil {
 		return false, "email notifier not configured for this deployment", ""
 	}
@@ -2143,7 +2143,7 @@ func (h *Handler) resolveDashboardURL(req *events.LambdaFunctionURLRequest) stri
 // purchase in that account; the global notification inbox is informed for
 // visibility. So we direct the email at the contact email(s) as To, list
 // any *other* contact emails plus the global notification email as Cc,
-// and the approve/cancel token is only honoured for session holders whose
+// and the approve/cancel token is only honored for session holders whose
 // email matches one of the authorized approvers (case-insensitive).
 //
 // **Authorisation policy** (post-security-hardening): the authorized-
@@ -2153,7 +2153,7 @@ func (h *Handler) resolveDashboardURL(req *events.LambdaFunctionURLRequest) stri
 // per-account contact_email, the approver set is empty and the caller
 // must reject the approval with a clear error directing the operator to
 // set a contact email on the account. This closes the loophole where a
-// catch-all inbox could authorise spend on accounts it doesn't own.
+// catch-all inbox could authorize spend on accounts it doesn't own.
 //
 // Returns ("", nil, nil, nil) when neither contact_email nor globalNotify
 // is configured — the caller surfaces a user-facing error.

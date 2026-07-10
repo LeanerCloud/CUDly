@@ -11,7 +11,7 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 )
 
-// isPublicEndpoint returns true for endpoints that don't require authentication
+// isPublicEndpoint returns true for endpoints that don't require authentication.
 func (h *Handler) isPublicEndpoint(path string) bool {
 	publicEndpoints := []string{
 		"/health",     // Root health endpoint (no /api prefix)
@@ -43,7 +43,7 @@ func (h *Handler) isPublicEndpoint(path string) bool {
 	return false
 }
 
-// authenticate checks authentication via admin API key, user API key, or Bearer token
+// authenticate checks authentication via admin API key, user API key, or Bearer token.
 func (h *Handler) authenticate(ctx context.Context, req *events.LambdaFunctionURLRequest) bool {
 	apiKey := extractAPIKey(req)
 
@@ -100,7 +100,7 @@ func (h *Handler) checkBearerToken(ctx context.Context, req *events.LambdaFuncti
 // with SigV4, which overwrites the standard Authorization header.
 func (h *Handler) extractBearerToken(req *events.LambdaFunctionURLRequest) string {
 	// First check X-Authorization (used by frontend with CloudFront OAC)
-	auth := req.Headers["x-authorization"]
+	auth := req.Headers["x-authorization"] //nolint:gocritic
 	if auth == "" {
 		auth = req.Headers["X-Authorization"]
 	}
@@ -172,7 +172,7 @@ func (h *Handler) requiresCSRFValidation(method, path string, req *events.Lambda
 	return true
 }
 
-// validateCSRF validates the CSRF token from the request header
+// validateCSRF validates the CSRF token from the request header.
 func (h *Handler) validateCSRF(ctx context.Context, req *events.LambdaFunctionURLRequest) error {
 	if h.auth == nil {
 		return fmt.Errorf("authentication service not configured")

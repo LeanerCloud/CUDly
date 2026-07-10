@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// MockRateLimiter is a mock implementation of RateLimiterInterface
+// MockRateLimiter is a mock implementation of RateLimiterInterface.
 type MockRateLimiter struct {
 	mock.Mock
 }

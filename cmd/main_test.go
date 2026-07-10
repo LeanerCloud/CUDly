@@ -402,9 +402,9 @@ func TestGeneratePurchaseIDComprehensive(t *testing.T) {
 	tests := []struct {
 		name                string
 		region              string
-		rec                 common.Recommendation
 		expectedContains    []string
 		expectedNotContains []string
+		rec                 common.Recommendation
 		isDryRun            bool
 	}{
 		{

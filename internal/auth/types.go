@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// User represents a user account
+// User represents a user account.
 type User struct {
 	CreatedAt                 time.Time  `json:"created_at" dynamodbav:"CreatedAt"`
 	UpdatedAt                 time.Time  `json:"updated_at" dynamodbav:"UpdatedAt"`
@@ -41,7 +41,7 @@ type User struct {
 	MFAEnabled          bool `json:"mfa_enabled" dynamodbav:"MFAEnabled"`
 }
 
-// Group represents a permission group
+// Group represents a permission group.
 type Group struct {
 	CreatedAt       time.Time    `json:"created_at" dynamodbav:"CreatedAt"`
 	UpdatedAt       time.Time    `json:"updated_at" dynamodbav:"UpdatedAt"`
@@ -57,7 +57,7 @@ type Group struct {
 	SystemManaged bool `json:"system_managed,omitempty" dynamodbav:"SystemManaged"`
 }
 
-// Permission defines what actions a group can perform
+// Permission defines what actions a group can perform.
 type Permission struct {
 
 	// Constraints limit the permission to specific contexts
@@ -69,7 +69,7 @@ type Permission struct {
 	Resource string `json:"resource" dynamodbav:"Resource"`
 }
 
-// PermissionConstraints limit permissions to specific accounts, providers, or services
+// PermissionConstraints limit permissions to specific accounts, providers, or services.
 type PermissionConstraints struct {
 	// AccountIDs limits to specific AWS/Azure/GCP accounts
 	AccountIDs []string `json:"account_ids,omitempty" dynamodbav:"AccountIDs"`
@@ -87,7 +87,7 @@ type PermissionConstraints struct {
 	MaxPurchaseAmount float64 `json:"max_purchase_amount,omitempty" dynamodbav:"MaxPurchaseAmount"`
 }
 
-// UserAPIKey represents a personal API key for a user with scoped permissions
+// UserAPIKey represents a personal API key for a user with scoped permissions.
 type UserAPIKey struct {
 	CreatedAt   time.Time    `json:"created_at" dynamodbav:"CreatedAt"`
 	ExpiresAt   *time.Time   `json:"expires_at,omitempty" dynamodbav:"ExpiresAt"`
@@ -103,7 +103,7 @@ type UserAPIKey struct {
 
 // AuthContext represents the complete authorization context for a user
 // It combines group memberships and the permissions computed from them.
-type AuthContext struct {
+type AuthContext struct { //nolint:revive // stutter: AuthContext is the established public name; renaming would break callers
 	User            *User
 	Groups          []*Group
 	AllowedAccounts []string     // Computed from all groups (union)
@@ -209,7 +209,7 @@ func (ctx *AuthContext) CanAccessAccount(accountID, accountName string) bool {
 	return MatchesAccount(ctx.AllowedAccounts, accountID, accountName)
 }
 
-// Session represents an active user session
+// Session represents an active user session.
 type Session struct {
 	Token     string    `json:"token" dynamodbav:"PK"`
 	UserID    string    `json:"user_id" dynamodbav:"UserID"`
@@ -221,14 +221,14 @@ type Session struct {
 	CSRFToken string    `json:"csrf_token,omitempty" dynamodbav:"CSRFToken"`
 }
 
-// LoginRequest represents a login attempt
+// LoginRequest represents a login attempt.
 type LoginRequest struct {
 	Email    string `json:"email"`
-	Password string `json:"password"`
+	Password string `json:"password"` //nolint:gosec
 	MFACode  string `json:"mfa_code,omitempty"`
 }
 
-// LoginResponse is returned after successful login
+// LoginResponse is returned after successful login.
 type LoginResponse struct {
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expires_at"`
@@ -236,7 +236,7 @@ type LoginResponse struct {
 	CSRFToken string    `json:"csrf_token,omitempty"`
 }
 
-// UserInfo is the public user info returned to clients
+// UserInfo is the public user info returned to clients.
 type UserInfo struct {
 	ID         string   `json:"id"`
 	Email      string   `json:"email"`
@@ -244,12 +244,12 @@ type UserInfo struct {
 	MFAEnabled bool     `json:"mfa_enabled"`
 }
 
-// PasswordResetRequest initiates a password reset
+// PasswordResetRequest initiates a password reset.
 type PasswordResetRequest struct {
 	Email string `json:"email"`
 }
 
-// PasswordResetConfirm completes a password reset
+// PasswordResetConfirm completes a password reset.
 type PasswordResetConfirm struct {
 	Token       string `json:"token"`
 	NewPassword string `json:"new_password"`
@@ -259,7 +259,7 @@ type PasswordResetConfirm struct {
 // one group: authorization derives entirely from group membership (issue #907).
 type CreateUserRequest struct {
 	Email    string   `json:"email"`
-	Password string   `json:"password"`
+	Password string   `json:"password"` //nolint:gosec
 	GroupIDs []string `json:"group_ids,omitempty"`
 }
 
@@ -279,33 +279,33 @@ type UpdateUserRequest struct {
 	GroupIDs []string `json:"group_ids,omitempty"`
 }
 
-// ChangePasswordRequest for users changing their own password
+// ChangePasswordRequest for users changing their own password.
 type ChangePasswordRequest struct {
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`
 }
 
-// SetupAdminRequest for first-time admin setup with API key
+// SetupAdminRequest for first-time admin setup with API key.
 type SetupAdminRequest struct {
 	Email    string `json:"email"`
-	Password string `json:"password"`
+	Password string `json:"password"` //nolint:gosec
 }
 
-// CreateAPIKeyRequest for creating a new user API key
+// CreateAPIKeyRequest for creating a new user API key.
 type CreateAPIKeyRequest struct {
 	ExpiresAt   *time.Time   `json:"expires_at,omitempty"`
 	Name        string       `json:"name"`
 	Permissions []Permission `json:"permissions,omitempty"`
 }
 
-// CreateAPIKeyResponse returns the newly created API key (only shown once)
+// CreateAPIKeyResponse returns the newly created API key (only shown once).
 type CreateAPIKeyResponse struct {
 	Info   *UserAPIKey `json:"info"`
-	APIKey string      `json:"api_key"` // Full key - only returned on creation
+	APIKey string      `json:"api_key"` //nolint:gosec // G117: intentional credential field; full key returned once on creation
 	KeyID  string      `json:"key_id"`
 }
 
-// Predefined roles
+// Predefined roles.
 const (
 	RoleAdmin    = "admin"
 	RoleUser     = "user"
@@ -329,7 +329,7 @@ const DefaultPurchaserGroupID = "00000000-0000-5000-8000-000000000007"
 // the seeded row.
 const GroupPurchaser = "Purchaser"
 
-// Predefined actions
+// Predefined actions.
 const (
 	ActionView    = "view"
 	ActionCreate  = "create"
@@ -345,7 +345,7 @@ const (
 	//   * RoleAdmin — implicit via {ActionAdmin, ResourceAll}; covers
 	//     both verbs.
 	//   * RoleUser — DefaultUserPermissions() adds cancel-own:purchases.
-	//     Allows cancelling pending executions whose created_by_user_id
+	//     Allows canceling pending executions whose created_by_user_id
 	//     matches the session user. Legacy rows with NULL creator are
 	//     out of reach for non-admins via this verb; admins still cancel
 	//     them via cancel-any.
@@ -437,7 +437,7 @@ const (
 	// (pause / resume / run / delete) a SCHEDULED purchase execution
 	// regardless of who created it (issue #950). It complements the base
 	// update:purchases verb every authenticated user already holds: that
-	// base verb authorises managing only your OWN scheduled purchases
+	// base verb authorizes managing only your OWN scheduled purchases
 	// (created_by_user_id == session.UserID), while update-any drops the
 	// per-record ownership check.
 	//
@@ -482,7 +482,7 @@ const (
 	ActionRevokeAny = "revoke-any"
 )
 
-// Predefined resources
+// Predefined resources.
 const (
 	ResourceRecommendations = "recommendations"
 	ResourcePlans           = "plans"
@@ -504,14 +504,14 @@ const (
 	ResourceAll        = "*"
 )
 
-// DefaultAdminPermissions returns full admin permissions
+// DefaultAdminPermissions returns full admin permissions.
 func DefaultAdminPermissions() []Permission {
 	return []Permission{
 		{Action: ActionAdmin, Resource: ResourceAll},
 	}
 }
 
-// DefaultUserPermissions returns standard user permissions
+// DefaultUserPermissions returns standard user permissions.
 func DefaultUserPermissions() []Permission {
 	return []Permission{
 		{Action: ActionView, Resource: ResourceRecommendations},
@@ -535,7 +535,7 @@ func DefaultUserPermissions() []Permission {
 		// pending purchase executions they created themselves (issue #46).
 		// The handler still requires the execution to be in a cancellable
 		// state (pending/notified) and the creator UUID to match the
-		// session UserID before honouring the request.
+		// session UserID before honoring the request.
 		{Action: ActionCancelOwn, Resource: ResourcePurchases},
 		// retry-own:purchases — every authenticated user can retry
 		// failed purchase executions they created themselves (issue #47).
@@ -549,7 +549,7 @@ func DefaultUserPermissions() []Permission {
 		// pending purchase executions they created themselves (issue #286).
 		// The handler still requires the execution to be in an approvable
 		// state (pending/notified) and the creator UUID to match the
-		// session UserID before honouring the request. The legacy email-
+		// session UserID before honoring the request. The legacy email-
 		// token approve path stays as an escape hatch for non-session
 		// approvers.
 		{Action: ActionApproveOwn, Resource: ResourcePurchases},
@@ -563,7 +563,7 @@ func DefaultUserPermissions() []Permission {
 	}
 }
 
-// DefaultReadOnlyPermissions returns read-only permissions
+// DefaultReadOnlyPermissions returns read-only permissions.
 func DefaultReadOnlyPermissions() []Permission {
 	return []Permission{
 		{Action: ActionView, Resource: ResourceRecommendations},

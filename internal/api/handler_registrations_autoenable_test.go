@@ -1,4 +1,4 @@
-package api
+package api //nolint:revive // package name matches directory per Go convention
 
 import (
 	"testing"

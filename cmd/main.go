@@ -27,11 +27,11 @@ import (
 
 const (
 	// MaxReasonableInstances is the maximum number of instances that can be processed
-	// This is a safety limit to prevent accidental large purchases
+	// This is a safety limit to prevent accidental large purchases.
 	MaxReasonableInstances = 10000
 )
 
-// Config holds all configuration for the RI helper tool
+// Config holds all configuration for the RI helper tool.
 type Config struct {
 	CSVOutput         string
 	CSVInput          string
@@ -173,7 +173,7 @@ func init() {
 			"Default 0 = no filter.")
 }
 
-// Package-level Config that cobra flags bind to
+// Package-level Config that cobra flags bind to.
 var toolCfg = Config{}
 
 // validateFlags is now defined in validators.go
@@ -239,7 +239,7 @@ func parseServices(serviceNames []string) []common.ServiceType {
 	return result
 }
 
-// getAllServices returns all supported services
+// getAllServices returns all supported services.
 func getAllServices() []common.ServiceType {
 	return []common.ServiceType{
 		common.ServiceRDS,
@@ -255,8 +255,8 @@ func getAllServices() []common.ServiceType {
 	}
 }
 
-// createServiceClient creates the appropriate service client for a service
-func createServiceClient(service common.ServiceType, cfg aws.Config) provider.ServiceClient {
+// createServiceClient creates the appropriate service client for a service.
+func createServiceClient(service common.ServiceType, cfg aws.Config) provider.ServiceClient { //nolint:gocritic
 	switch service {
 	case common.ServiceRDS:
 		return rds.NewClient(cfg)
@@ -288,7 +288,7 @@ func createServiceClient(service common.ServiceType, cfg aws.Config) provider.Se
 // cfg.TargetCoverage when set (>0), else cfg.Coverage. Use this when
 // emitting human-facing labels (purchase IDs, audit-log fields) so the label
 // reflects the value that drove the sizing, not the unused default.
-func effectiveSizingPct(cfg Config) float64 {
+func effectiveSizingPct(cfg Config) float64 { //nolint:gocritic
 	if cfg.TargetCoverage > 0 {
 		return cfg.TargetCoverage
 	}
@@ -327,7 +327,7 @@ func extractEngineLabel(details interface{}) string {
 // sizingPct is the percentage that actually drove the sizing decision (see
 // effectiveSizingPct); it appears in the ID as e.g. "80pct" purely for human
 // readability and audit traceability.
-func generatePurchaseID(rec common.Recommendation, region string, _ int, isDryRun bool, sizingPct float64) string {
+func generatePurchaseID(rec common.Recommendation, region string, _ int, isDryRun bool, sizingPct float64) string { //nolint:gocritic
 	// Generate a short UUID suffix (first 8 characters) for uniqueness
 	uuidSuffix := uuid.New().String()[:8]
 	timestamp := time.Now().Format("20060102-150405")
@@ -366,7 +366,7 @@ func generatePurchaseID(rec common.Recommendation, region string, _ int, isDryRu
 		prefix, service, region, instanceType, rec.Count, coveragePct, timestamp, uuidSuffix)
 }
 
-// sanitizeAccountName converts account name to a filesystem/ID-safe format
+// sanitizeAccountName converts account name to a filesystem/ID-safe format.
 func sanitizeAccountName(accountName string) string {
 	if accountName == "" {
 		return ""

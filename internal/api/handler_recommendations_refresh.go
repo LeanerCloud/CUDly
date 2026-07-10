@@ -59,9 +59,8 @@ func (h *Handler) postRefreshRecommendations(ctx context.Context, req *events.La
 		return nil, err
 	}
 
-	// Read current freshness so we can include last_collected_at in the 202 body.
-	freshness, err := h.config.GetRecommendationsFreshness(ctx)
-	if err != nil {
+	// Pre-flight check: verify freshness is readable before marking started.
+	if _, err := h.config.GetRecommendationsFreshness(ctx); err != nil {
 		return nil, fmt.Errorf("failed to read freshness: %w", err)
 	}
 
@@ -75,7 +74,7 @@ func (h *Handler) postRefreshRecommendations(ctx context.Context, req *events.La
 		return nil, NewClientError(409, "recommendation collection already in progress; try again in a few minutes")
 	}
 
-	freshness, err = h.runMarkedCollection(ctx)
+	freshness, err := h.runMarkedCollection(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +132,7 @@ func (h *Handler) runMarkedCollection(ctx context.Context) (*config.Recommendati
 
 // asyncInvokeSelf fires an InvocationType=Event invoke of the given Lambda
 // function ARN with the EventBridge-style payload that handleLambdaScheduledEvent
-// recognises as a "collect recommendations" job. The call returns immediately;
+// recognizes as a "collect recommendations" job. The call returns immediately;
 // the Lambda runtime delivers the event to the next available container
 // (which may be this same container's next invocation).
 func (h *Handler) asyncInvokeSelf(ctx context.Context, functionARN string) error {
@@ -204,7 +203,7 @@ func (h *Handler) getLambdaInvoker(ctx context.Context) (LambdaInvokerInterface,
 // The returned freshness may have LastCollectionStartedAt set (async) or
 // LastCollectedAt set (sync). Callers should treat a non-nil
 // LastCollectionStartedAt as "collection in progress".
-func (h *Handler) triggerColdStartCollect(ctx context.Context) (*config.RecommendationsFreshness, error) {
+func (h *Handler) triggerColdStartCollect(ctx context.Context) (*config.RecommendationsFreshness, error) { //nolint:unused // retained for cold-start orchestration path
 	schedulerARN := os.Getenv("SCHEDULER_LAMBDA_ARN")
 	if schedulerARN != "" {
 		// Atomic mark. ok=false means another caller already marked it — we

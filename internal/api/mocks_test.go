@@ -41,7 +41,7 @@ func (m *MockCredentialStore) DecryptPayload(ciphertext string) ([]byte, error) 
 	return []byte(ciphertext), nil // no-op: return ciphertext as "decrypted" for tests
 }
 
-// MockPurchaseManager is a mock implementation of purchase.Manager
+// MockPurchaseManager is a mock implementation of purchase.Manager.
 type MockPurchaseManager struct {
 	mock.Mock
 }
@@ -61,7 +61,7 @@ func (m *MockPurchaseManager) CancelExecution(ctx context.Context, execID, token
 	return args.Error(0)
 }
 
-// MockScheduler is a mock implementation of scheduler.Scheduler
+// MockScheduler is a mock implementation of scheduler.Scheduler.
 type MockScheduler struct {
 	mock.Mock
 }
@@ -95,7 +95,7 @@ func (m *MockScheduler) GetRecommendationByID(ctx context.Context, id string) (*
 	return rec, hiddenBy, args.Error(2)
 }
 
-// MockAuthService is a mock implementation of the auth service
+// MockAuthService is a mock implementation of the auth service.
 type MockAuthService struct {
 	mock.Mock
 }
@@ -167,7 +167,7 @@ func (m *MockAuthService) UpdateUserProfile(ctx context.Context, userID string, 
 	return args.Error(0)
 }
 
-// User management mock methods
+// User management mock methods.
 func (m *MockAuthService) CreateUserAPI(ctx context.Context, req interface{}) (interface{}, error) {
 	args := m.Called(ctx, req)
 	return args.Get(0), args.Error(1)
@@ -220,7 +220,7 @@ func (m *MockAuthService) MFARegenerateRecoveryCodesAPI(ctx context.Context, use
 	return args.Get(0).([]string), args.Error(1)
 }
 
-// Group management mock methods
+// Group management mock methods.
 func (m *MockAuthService) CreateGroupAPI(ctx context.Context, req interface{}) (interface{}, error) {
 	args := m.Called(ctx, req)
 	return args.Get(0), args.Error(1)
@@ -282,7 +282,7 @@ func (m *MockAuthService) GetAllowedAccountsAPI(ctx context.Context, userID stri
 	return nil, args.Error(1)
 }
 
-// API Key management mock methods
+// API Key management mock methods.
 func (m *MockAuthService) CreateAPIKeyAPI(ctx context.Context, userID string, req interface{}) (interface{}, error) {
 	args := m.Called(ctx, userID, req)
 	return args.Get(0), args.Error(1)

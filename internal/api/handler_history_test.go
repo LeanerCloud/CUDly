@@ -1694,7 +1694,7 @@ func TestHandler_getHistory_CompletedExecutionNotDuplicated(t *testing.T) {
 }
 
 // TestSummarizePurchaseHistory_CancelledExcludedFromKPIs is the regression
-// test for issue #736. Cancelling a pending purchase must not add its upfront
+// test for issue #736. Canceling a pending purchase must not add its upfront
 // cost or savings to the KPI totals. Specifically:
 //   - TotalUpfront, TotalMonthlySavings, TotalAnnualSavings must reflect only
 //     the approved/completed rows.
@@ -1821,7 +1821,7 @@ func TestSummarizePurchaseHistory_CancelPendingDoesNotChangeKPIs(t *testing.T) {
 	}
 	before := summarizePurchaseHistory(baseline)
 
-	// After: same rows plus one cancelled execution (the pending that got cancelled).
+	// After: same rows plus one canceled execution (the pending that got canceled).
 	withCancelled := append(baseline, config.PurchaseHistoryRecord{
 		Status:           "cancelled", //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 		UpfrontCost:      999.0,

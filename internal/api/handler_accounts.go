@@ -93,7 +93,7 @@ func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionUR
 
 	filter := buildAccountFilter(req.QueryStringParameters)
 
-	accounts, err := h.config.ListCloudAccounts(ctx, filter)
+	accounts, err := h.config.ListCloudAccounts(ctx, filter) //nolint:gocritic
 	if err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
@@ -111,7 +111,7 @@ func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionUR
 	}
 	if !auth.IsUnrestrictedAccess(allowedAccounts) {
 		filtered := accounts[:0]
-		for _, acct := range accounts {
+		for _, acct := range accounts { //nolint:gocritic
 			if auth.MatchesAccount(allowedAccounts, acct.ID, acct.Name) {
 				filtered = append(filtered, acct)
 			}
@@ -156,7 +156,7 @@ func (h *Handler) listAccountsMinimal(ctx context.Context, req *events.LambdaFun
 
 	filter := buildAccountFilter(req.QueryStringParameters)
 
-	accounts, err := h.config.ListCloudAccounts(ctx, filter)
+	accounts, err := h.config.ListCloudAccounts(ctx, filter) //nolint:gocritic
 	if err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
@@ -187,7 +187,7 @@ func (h *Handler) listAccountsMinimal(ctx context.Context, req *events.LambdaFun
 }
 
 // markSelfAccount sets IsSelf=true on the account matching the source identity.
-func (h *Handler) markSelfAccount(ctx context.Context, accounts []config.CloudAccount) {
+func (h *Handler) markSelfAccount(ctx context.Context, accounts []config.CloudAccount) { //nolint:gocritic
 	si := h.resolveSourceIdentity(ctx)
 	if si == nil || si.ExternalID() == "" {
 		return
@@ -348,7 +348,7 @@ var validAccountProviders = map[string]bool{
 }
 
 // validateCloudAccountRequest checks required fields and allowed values.
-func validateCloudAccountRequest(req CloudAccountRequest) error {
+func validateCloudAccountRequest(req CloudAccountRequest) error { //nolint:gocritic
 	if req.Name == "" {
 		return NewClientError(400, "name is required")
 	}
@@ -369,7 +369,7 @@ func validateCloudAccountRequest(req CloudAccountRequest) error {
 }
 
 // validateAuthMode checks that the provider-specific auth mode is a known value.
-func validateAuthMode(req CloudAccountRequest) error {
+func validateAuthMode(req CloudAccountRequest) error { //nolint:gocritic
 	switch req.Provider {
 	case "aws":
 		return validateAWSAuthMode(req)
@@ -409,7 +409,7 @@ func validateAuthMode(req CloudAccountRequest) error {
 // identity via the token subject claim (see resolveWebIdentityProvider
 // in internal/credentials/resolver.go), and stscreds.WebIdentityRoleOptions
 // has no ExternalID field. access_keys doesn't assume a role at all.
-func validateAWSAuthMode(req CloudAccountRequest) error {
+func validateAWSAuthMode(req CloudAccountRequest) error { //nolint:gocritic
 	if req.AWSAuthMode != "" && !validAWSAuthModes[req.AWSAuthMode] {
 		return NewClientError(400, "invalid aws_auth_mode")
 	}
@@ -489,7 +489,7 @@ func isValidAWSExternalIDCharset(s string) bool {
 }
 
 // cloudAccountFromRequest maps a CloudAccountRequest to a config.CloudAccount.
-func cloudAccountFromRequest(req CloudAccountRequest) *config.CloudAccount {
+func cloudAccountFromRequest(req CloudAccountRequest) *config.CloudAccount { //nolint:gocritic
 	a := &config.CloudAccount{
 		Name:                    req.Name,
 		Description:             req.Description,
@@ -550,11 +550,11 @@ func (h *Handler) updateAccount(ctx context.Context, httpReq *events.LambdaFunct
 	}
 
 	var req CloudAccountRequest
-	if err := json.Unmarshal([]byte(httpReq.Body), &req); err != nil {
+	if err = json.Unmarshal([]byte(httpReq.Body), &req); err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	if err := validateCloudAccountRequest(req); err != nil {
+	if err = validateCloudAccountRequest(req); err != nil { //nolint:gocritic // sloppyReassign: reuse outer err to avoid shadow
 		return nil, err
 	}
 
@@ -596,7 +596,7 @@ func (h *Handler) deleteAccount(ctx context.Context, req *events.LambdaFunctionU
 
 	// Verify the user can access this account AND that it exists. Returns 404
 	// for both "doesn't exist" and "out of scope" to avoid existence leakage.
-	if _, err := h.requireAccountAccess(ctx, session, id); err != nil {
+	if _, err = h.requireAccountAccess(ctx, session, id); err != nil {
 		return nil, err
 	}
 
@@ -690,7 +690,7 @@ func (h *Handler) saveAccountCredentials(ctx context.Context, httpReq *events.La
 	// Must precede the credStore-nil check so missing/out-of-scope accounts
 	// return 404 rather than a 500 about credential store configuration.
 	// Returns errNotFound for both cases to avoid existence disclosure.
-	if _, err := h.requireAccountAccess(ctx, session, id); err != nil {
+	if _, err = h.requireAccountAccess(ctx, session, id); err != nil {
 		return nil, err
 	}
 
@@ -871,7 +871,7 @@ func runGCPFederatedTokenExchange(ctx context.Context, ts oauth2.TokenSource) Ac
 // gcpTokenExchangeAttempt runs one Token() call with a 15s deadline.
 // Returns (result, nil, _) on success, (_, err, true) on a retriable
 // IAM propagation error, (_, err, false) on any other failure.
-func gcpTokenExchangeAttempt(ctx context.Context, ts oauth2.TokenSource) (AccountTestResult, error, bool) {
+func gcpTokenExchangeAttempt(ctx context.Context, ts oauth2.TokenSource) (AccountTestResult, error, bool) { //nolint:revive // error-return: error is intentionally non-last; bool indicates retriability
 	tokCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	tokenChan := make(chan tokenResult, 1)
@@ -1025,7 +1025,7 @@ func (h *Handler) listAccountServiceOverrides(ctx context.Context, req *events.L
 		return nil, err
 	}
 
-	if _, err := h.requireAccountAccess(ctx, session, id); err != nil {
+	if _, err = h.requireAccountAccess(ctx, session, id); err != nil {
 		return nil, err
 	}
 
@@ -1054,12 +1054,12 @@ func (h *Handler) saveAccountServiceOverride(ctx context.Context, httpReq *event
 		return nil, err
 	}
 
-	if _, err := h.requireAccountAccess(ctx, session, accountID); err != nil {
+	if _, err = h.requireAccountAccess(ctx, session, accountID); err != nil {
 		return nil, err
 	}
 
 	var req AccountServiceOverrideRequest
-	if err := json.Unmarshal([]byte(httpReq.Body), &req); err != nil {
+	if err = json.Unmarshal([]byte(httpReq.Body), &req); err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
@@ -1092,7 +1092,7 @@ func (h *Handler) saveAccountServiceOverride(ctx context.Context, httpReq *event
 }
 
 // buildServiceOverride constructs an AccountServiceOverride from request and existing data.
-func buildServiceOverride(accountID, provider, service string, req AccountServiceOverrideRequest, existing *config.AccountServiceOverride, now time.Time) *config.AccountServiceOverride {
+func buildServiceOverride(accountID, provider, service string, req AccountServiceOverrideRequest, existing *config.AccountServiceOverride, now time.Time) *config.AccountServiceOverride { //nolint:gocritic
 	override := &config.AccountServiceOverride{
 		AccountID: accountID,
 		Provider:  provider,
@@ -1114,12 +1114,12 @@ func buildServiceOverride(accountID, provider, service string, req AccountServic
 }
 
 // applyServiceOverrideFields copies sparse request fields onto an override.
-func applyServiceOverrideFields(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) {
+func applyServiceOverrideFields(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) { //nolint:gocritic
 	applyOverrideScalars(o, req)
 	applyOverrideSlices(o, req)
 }
 
-func applyOverrideScalars(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) {
+func applyOverrideScalars(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) { //nolint:gocritic
 	if req.Enabled != nil {
 		o.Enabled = req.Enabled
 	}
@@ -1137,7 +1137,7 @@ func applyOverrideScalars(o *config.AccountServiceOverride, req AccountServiceOv
 	}
 }
 
-func applyOverrideSlices(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) {
+func applyOverrideSlices(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) { //nolint:gocritic
 	if req.IncludeEngines != nil {
 		o.IncludeEngines = req.IncludeEngines
 	}
@@ -1343,7 +1343,7 @@ func (h *Handler) listPlanAccounts(ctx context.Context, req *events.LambdaFuncti
 		return nil, err
 	}
 
-	accounts, err := h.config.GetPlanAccounts(ctx, id)
+	accounts, err := h.config.GetPlanAccounts(ctx, id) //nolint:gocritic
 	if err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
@@ -1473,7 +1473,7 @@ func (h *Handler) buildOrgRootAWSConfig(ctx context.Context, root *config.CloudA
 // runOrgDiscovery dispatches to the configured discovery function — the
 // injectable seam Handler.discoverOrgFn for tests, falling back to the real
 // accounts.DiscoverOrgAccounts in production.
-func (h *Handler) runOrgDiscovery(ctx context.Context, cfg aws.Config) (*accounts.OrgDiscoveryResult, error) {
+func (h *Handler) runOrgDiscovery(ctx context.Context, cfg aws.Config) (*accounts.OrgDiscoveryResult, error) { //nolint:gocritic
 	discoverFn := h.discoverOrgFn
 	if discoverFn == nil {
 		discoverFn = accounts.DiscoverOrgAccounts

@@ -54,7 +54,7 @@ func TestService_Login(t *testing.T) {
 		resp, err := service.Login(ctx, req)
 		assert.Error(t, err)
 		assert.Nil(t, resp)
-		assert.Contains(t, err.Error(), "Check your email address and password and try again")
+		assert.Contains(t, err.Error(), "check your email address and password and try again")
 
 		mockStore.AssertExpectations(t)
 	})
@@ -77,7 +77,7 @@ func TestService_Login(t *testing.T) {
 		resp, err := service.Login(ctx, req)
 		assert.Error(t, err)
 		assert.Nil(t, resp)
-		assert.Contains(t, err.Error(), "Check your email address and password and try again")
+		assert.Contains(t, err.Error(), "check your email address and password and try again")
 
 		mockStore.AssertExpectations(t)
 	})
@@ -101,7 +101,7 @@ func TestService_Login(t *testing.T) {
 		resp, err := service.Login(ctx, req)
 		assert.Error(t, err)
 		assert.Nil(t, resp)
-		assert.Contains(t, err.Error(), "Check your email address and password and try again")
+		assert.Contains(t, err.Error(), "check your email address and password and try again")
 
 		mockStore.AssertExpectations(t)
 	})
@@ -462,7 +462,7 @@ func TestLogin_WithMFA_NoSecret(t *testing.T) {
 		MFASecret:    "", // Data-integrity anomaly: MFA enabled but no secret stored
 	}
 
-	const genericMsg = "Check your email address and password and try again"
+	const genericMsg = "check your email address and password and try again"
 
 	// Right password, no MFA secret -- must return the generic error.
 	t.Run("correct password no MFA secret returns generic error", func(t *testing.T) {
@@ -509,7 +509,7 @@ func TestLogin_WithMFA_NoSecret(t *testing.T) {
 	})
 }
 
-// Test UpdateUserProfile
+// Test UpdateUserProfile.
 func TestService_ErrorPaths(t *testing.T) {
 	ctx := context.Background()
 
@@ -810,7 +810,7 @@ func TestService_Login_LockedUser(t *testing.T) {
 	resp, err := service.Login(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "Check your email address and password and try again")
+	assert.Contains(t, err.Error(), "check your email address and password and try again")
 
 	mockStore.AssertExpectations(t)
 }
@@ -836,7 +836,7 @@ func TestService_Login_EmptyPasswordHash(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, resp)
 	// Must return generic error, not a message that leaks account state
-	assert.Contains(t, err.Error(), "Check your email address and password and try again")
+	assert.Contains(t, err.Error(), "check your email address and password and try again")
 
 	mockStore.AssertExpectations(t)
 }

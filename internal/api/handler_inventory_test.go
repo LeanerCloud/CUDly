@@ -56,7 +56,7 @@ func TestHandler_listActiveCommitments_Empty(t *testing.T) {
 // TestHandler_listActiveCommitments_FiltersExpired verifies the term-expiry
 // predicate drops rows whose timestamp + term has elapsed and keeps the
 // in-term ones. Same predicate the dashboard aggregate uses; this test
-// guards the predicate's behaviour in the inventory-handler context so a
+// guards the predicate's behavior in the inventory-handler context so a
 // future refactor (e.g. moving to days-from-now) trips here too.
 func TestHandler_listActiveCommitments_FiltersExpired(t *testing.T) {
 	ctx := context.Background()
@@ -594,7 +594,7 @@ func TestHandler_getCoverageBreakdown_ProviderAndAccountChip(t *testing.T) {
 // Root cause: an Azure all-upfront RI carries MonthlyCost == nil (no recurring
 // charge — see config.PurchaseHistoryRecord.MonthlyCost), and the old Coverage
 // path summed only non-nil MonthlyCost, silently dropping the row. The covered
-// monthly of such a commitment is its amortised upfront (UpfrontCost / term
+// monthly of such a commitment is its amortized upfront (UpfrontCost / term
 // months), so the two surfaces disagreed: the dashboard found the commitment,
 // Coverage acted as if Azure had none.
 //
@@ -603,7 +603,7 @@ func TestHandler_getCoverageBreakdown_ProviderAndAccountChip(t *testing.T) {
 //   - the dashboard's active-commitment aggregation sees it (non-zero
 //     EstimatedSavings for azure:compute), proving the commitment is "current";
 //   - the Coverage tab now reports a non-zero covered monthly for Azure equal
-//     to the amortised upfront, instead of nil / zero coverage.
+//     to the amortized upfront, instead of nil / zero coverage.
 //
 // Pre-fix the Coverage assertion fails (azure section has nil Services and nil
 // OverallCoveragePct). Post-fix both surfaces agree that Azure has an active,
@@ -619,7 +619,7 @@ func TestHandler_getCoverageBreakdown_AzureAllUpfrontConsistency(t *testing.T) {
 
 	now := time.Now()
 	// Azure all-upfront RI: no recurring monthly charge (MonthlyCost nil),
-	// $1200 upfront over a 1-year term => $100/mo amortised covered spend.
+	// $1200 upfront over a 1-year term => $100/mo amortized covered spend.
 	// EstimatedSavings is populated, which is what the dashboard's
 	// "current / committed" figure renders.
 	azureCommitment := config.PurchaseHistoryRecord{
@@ -650,7 +650,7 @@ func TestHandler_getCoverageBreakdown_AzureAllUpfrontConsistency(t *testing.T) {
 	}
 	// No Azure on-demand recommendations: the only signal for Azure is the
 	// covered commitment. Pre-fix this yields nil/zero coverage; post-fix the
-	// amortised upfront makes Azure 100% covered for compute.
+	// amortized upfront makes Azure 100% covered for compute.
 	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{}, nil)
 
 	mockAuth, req := adminInventoryReq(ctx)
@@ -678,9 +678,9 @@ func TestHandler_getCoverageBreakdown_AzureAllUpfrontConsistency(t *testing.T) {
 
 	compute := azure.Services[0]
 	assert.Equal(t, "compute", compute.Service)
-	// $1200 upfront / (1yr * 12mo) = $100/mo amortised covered spend.
+	// $1200 upfront / (1yr * 12mo) = $100/mo amortized covered spend.
 	assert.InDelta(t, 100.0, compute.CoveredMonthly, 0.001,
-		"covered monthly = amortised upfront for an all-upfront commitment")
+		"covered monthly = amortized upfront for an all-upfront commitment")
 	assert.Equal(t, 0.0, compute.OnDemandMonthly)
 	require.NotNil(t, compute.CoveragePct)
 	// 100 covered / (100 covered + 0 on-demand) = 100% — never nil/zero.

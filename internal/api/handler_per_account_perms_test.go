@@ -691,7 +691,7 @@ func TestPerAccountPerms_ExecutePurchase_UnattributedRecRejected400(t *testing.T
 // does not block in-scope requests.
 //
 // Note: the status in the response is "failed" because no emailNotifier is
-// wired in this test. That is the correct behaviour per the existing
+// wired in this test. That is the correct behavior per the existing
 // TestHandler_executePurchase_Success test — "failed" means "saved but email
 // could not send", not that the scope check blocked it.
 func TestPerAccountPerms_ExecutePurchase_AllowedAccountAccepted(t *testing.T) {

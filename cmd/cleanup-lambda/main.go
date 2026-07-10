@@ -10,12 +10,12 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 )
 
-// CleanupEvent represents the input to the cleanup function
+// CleanupEvent represents the input to the cleanup function.
 type CleanupEvent struct {
 	DryRun bool `json:"dryRun,omitempty"`
 }
 
-// CleanupResult represents the cleanup operation results
+// CleanupResult represents the cleanup operation results.
 type CleanupResult struct {
 	SessionsDeleted   int64 `json:"sessionsDeleted"`
 	ExecutionsDeleted int64 `json:"executionsDeleted"`

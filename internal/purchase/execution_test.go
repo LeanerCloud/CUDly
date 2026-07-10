@@ -22,7 +22,7 @@ import (
 // lock down the per-rec context.WithTimeout(ctx, max) contract introduced for
 // issue #683: a bare _, ok := c.Deadline(); return ok matcher would pass even
 // if executeSinglePurchase silently fell back to the parent's longer deadline.
-func hasPerRecDeadline(max time.Duration) func(context.Context) bool {
+func hasPerRecDeadline(max time.Duration) func(context.Context) bool { //nolint:unparam // max always 30s in current tests; parameterized for contract clarity
 	return func(c context.Context) bool {
 		deadline, ok := c.Deadline()
 		if !ok {
@@ -170,7 +170,7 @@ func TestManager_ExecutePurchase_WebSourcePropagates(t *testing.T) {
 }
 
 // TestManager_ExecutePurchase_InvalidSourceFallsBackUntagged verifies the
-// NormalizeSource defence-in-depth: a DB row with an unexpected source value
+// NormalizeSource defense-in-depth: a DB row with an unexpected source value
 // proceeds with an empty source (untagged) rather than failing the already-
 // approved execution or poisoning cloud tags with arbitrary strings.
 func TestManager_ExecutePurchase_InvalidSourceFallsBackUntagged(t *testing.T) {

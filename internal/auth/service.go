@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"net/mail"
 	"strings"
@@ -13,9 +14,9 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// Configuration constants
+// Configuration constants.
 const (
-	// PasswordResetExpiry is how long password reset tokens are valid
+	// PasswordResetExpiry is how long password reset tokens are valid.
 	PasswordResetExpiry = 1 * time.Hour
 
 	// PasswordSetupExpiry is how long an invited user has to set their
@@ -24,23 +25,23 @@ const (
 	// before the recipient acts on them.
 	PasswordSetupExpiry = 7 * 24 * time.Hour
 
-	// DefaultSessionDurationHours is the default session duration in hours
+	// DefaultSessionDurationHours is the default session duration in hours.
 	DefaultSessionDurationHours = 24
 
 	// Account lockout settings for brute-force protection
-	// MaxFailedLoginAttempts is the number of failed attempts before lockout
+	// MaxFailedLoginAttempts is the number of failed attempts before lockout.
 	MaxFailedLoginAttempts = 5
 
-	// AccountLockoutDuration is how long an account is locked after max failed attempts
+	// AccountLockoutDuration is how long an account is locked after max failed attempts.
 	AccountLockoutDuration = 15 * time.Minute
 
 	// genericLoginError is returned for every authentication failure so callers
 	// cannot distinguish a missing account from a wrong password (anti-enumeration,
 	// closes issues #416 and #993).
-	genericLoginError = "Check your email address and password and try again"
+	genericLoginError = "check your email address and password and try again"
 )
 
-// Service handles authentication and authorization
+// Service handles authentication and authorization.
 type Service struct {
 	store       StoreInterface
 	emailSender EmailSenderInterface
@@ -59,7 +60,7 @@ type Service struct {
 	bcryptCostOverride int // if > 0, overrides bcryptCost const (used by tests for speed)
 }
 
-// ServiceConfig holds configuration for the auth service
+// ServiceConfig holds configuration for the auth service.
 type ServiceConfig struct {
 	Store            StoreInterface
 	EmailSender      EmailSenderInterface
@@ -73,8 +74,8 @@ type ServiceConfig struct {
 	SessionDuration time.Duration
 }
 
-// NewService creates a new auth service
-func NewService(cfg ServiceConfig) *Service {
+// NewService creates a new auth service.
+func NewService(cfg ServiceConfig) *Service { //nolint:gocritic // hugeParam: ServiceConfig (88 bytes) passed by value; all callers own the literal
 	if cfg.SessionDuration == 0 {
 		cfg.SessionDuration = time.Duration(DefaultSessionDurationHours) * time.Hour
 	}
@@ -127,14 +128,14 @@ func NewService(cfg ServiceConfig) *Service {
 	}
 }
 
-// notifyPasswordChange calls the password change callback if configured
+// notifyPasswordChange calls the password change callback if configured.
 func (s *Service) notifyPasswordChange(ctx context.Context, userID, newPassword string) {
 	if s.onPasswordChange != nil {
 		s.onPasswordChange(ctx, userID, newPassword)
 	}
 }
 
-// ensureStore returns an error if the auth store is not initialized
+// ensureStore returns an error if the auth store is not initialized.
 func (s *Service) ensureStore() error {
 	if s.store == nil {
 		return fmt.Errorf("auth store not initialized")
@@ -142,7 +143,7 @@ func (s *Service) ensureStore() error {
 	return nil
 }
 
-// Login authenticates a user and creates a session
+// Login authenticates a user and creates a session.
 func (s *Service) Login(ctx context.Context, req LoginRequest) (*LoginResponse, error) {
 	if err := s.ensureStore(); err != nil {
 		return nil, err
@@ -173,26 +174,26 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (*LoginResponse, 
 	return s.completeSuccessfulLogin(ctx, user)
 }
 
-// getUserAndValidateStatus retrieves user and checks if account is active and unlocked
+// getUserAndValidateStatus retrieves user and checks if account is active and unlocked.
 func (s *Service) getUserAndValidateStatus(ctx context.Context, email string) (*User, error) {
 	user, err := s.store.GetUserByEmail(ctx, email)
 	if err != nil || user == nil {
 		// Return the same generic message for both "user not found" and store
 		// errors so callers cannot distinguish a missing account from a DB
 		// failure (issue #416). The caller (Login) runs a dummy bcrypt compare
-		// after this to equalise response time with the wrong-password path.
-		return nil, fmt.Errorf(genericLoginError)
+		// after this to equalize response time with the wrong-password path.
+		return nil, errors.New(genericLoginError)
 	}
 
 	if !user.Active {
-		return nil, fmt.Errorf(genericLoginError)
+		return nil, errors.New(genericLoginError)
 	}
 
 	if user.LockedUntil != nil && time.Now().Before(*user.LockedUntil) {
 		remainingTime := time.Until(*user.LockedUntil).Round(time.Minute)
 		// Omit user.ID from log to avoid leaking internal identifiers to log
 		logging.Warnf("Login attempt for locked account (locked for %v more)", remainingTime)
-		return nil, fmt.Errorf(genericLoginError)
+		return nil, errors.New(genericLoginError)
 	}
 	// NOTE: when LockedUntil is set but the window has already expired, the user falls
 	// through here with FailedLoginAttempts and LockedUntil still set in memory.
@@ -225,12 +226,12 @@ func (s *Service) verifyPasswordAndMFA(ctx context.Context, user *User, req Logi
 	// Both branches return the same message as the "user not found" path so the
 	// full login failure surface is uniform (issue #416).
 	if user.PasswordHash == "" {
-		return fmt.Errorf(genericLoginError)
+		return errors.New(genericLoginError)
 	}
 
 	if !s.verifyPassword(req.Password, user.PasswordHash) {
 		s.recordFailedLogin(ctx, user)
-		return fmt.Errorf(genericLoginError)
+		return errors.New(genericLoginError)
 	}
 
 	if user.MFAEnabled {
@@ -242,7 +243,7 @@ func (s *Service) verifyPasswordAndMFA(ctx context.Context, user *User, req Logi
 			// Log internally for operator visibility without leaking internal state
 			// to the caller -- a distinct message would confirm the password was correct.
 			logging.Errorf("MFA enabled but secret missing for user %s -- possible data integrity issue", user.ID)
-			return fmt.Errorf(genericLoginError)
+			return errors.New(genericLoginError)
 		}
 		// verifyTOTP fails closed on empty or malformed inputs: empty code, empty
 		// secret, and base32-decode errors all return false rather than a match.
@@ -269,7 +270,7 @@ func (s *Service) verifyPasswordAndMFA(ctx context.Context, user *User, req Logi
 	return nil
 }
 
-// completeSuccessfulLogin creates session and updates user login info
+// completeSuccessfulLogin creates session and updates user login info.
 func (s *Service) completeSuccessfulLogin(ctx context.Context, user *User) (*LoginResponse, error) {
 	session, err := s.createSession(ctx, user, "", "")
 	if err != nil {
@@ -301,7 +302,7 @@ func (s *Service) completeSuccessfulLogin(ctx context.Context, user *User) (*Log
 	}, nil
 }
 
-// Logout invalidates a session
+// Logout invalidates a session.
 func (s *Service) Logout(ctx context.Context, token string) error {
 	if err := s.ensureStore(); err != nil {
 		return err
@@ -313,7 +314,7 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 	return s.store.DeleteSession(ctx, hashedToken)
 }
 
-// ValidateSession checks if a session is valid and returns user info
+// ValidateSession checks if a session is valid and returns user info.
 func (s *Service) ValidateSession(ctx context.Context, token string) (*Session, error) {
 	if err := s.ensureStore(); err != nil {
 		return nil, err
@@ -377,7 +378,7 @@ func (s *Service) ValidateCSRFToken(ctx context.Context, sessionToken, csrfToken
 	return nil
 }
 
-// CleanupExpiredSessions removes expired sessions from the store
+// CleanupExpiredSessions removes expired sessions from the store.
 func (s *Service) CleanupExpiredSessions(ctx context.Context) error {
 	if err := s.ensureStore(); err != nil {
 		return err
@@ -385,7 +386,7 @@ func (s *Service) CleanupExpiredSessions(ctx context.Context) error {
 	return s.store.CleanupExpiredSessions(ctx)
 }
 
-// Ping checks the health of the auth store database connection
+// Ping checks the health of the auth store database connection.
 func (s *Service) Ping(ctx context.Context) error {
 	if err := s.ensureStore(); err != nil {
 		return err

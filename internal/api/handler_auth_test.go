@@ -1165,7 +1165,7 @@ func authedReq(token, body string) *events.LambdaFunctionURLRequest {
 func TestHandler_login_MFARequired_ReturnsMFASentinel(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	mockAuth.On("Login", ctx, mock.Anything).Return((*LoginResponse)(nil), ErrMFARequired_test()).Once()
+	mockAuth.On("Login", ctx, mock.Anything).Return((*LoginResponse)(nil), ErrMFARequiredTest()).Once()
 
 	handler := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
@@ -1183,7 +1183,7 @@ func TestHandler_login_MFARequired_ReturnsMFASentinel(t *testing.T) {
 func TestHandler_login_InvalidMFACode_ReturnsCodedSentinel(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	mockAuth.On("Login", ctx, mock.Anything).Return((*LoginResponse)(nil), ErrInvalidMFACode_test()).Once()
+	mockAuth.On("Login", ctx, mock.Anything).Return((*LoginResponse)(nil), ErrInvalidMFACodeTest()).Once()
 
 	handler := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
@@ -1292,15 +1292,15 @@ func TestHandler_mfaRegenerateRecoveryCodes_HappyPath(t *testing.T) {
 	mockAuth.AssertExpectations(t)
 }
 
-// ErrMFARequired_test / ErrInvalidMFACode_test return the sentinel
+// ErrMFARequiredTest / ErrInvalidMFACode_test return the sentinel
 // errors from the auth package via a non-importing path so the api
 // package's _test.go files don't need to import the whole auth
 // package just for two values. Both are exported sentinels in the
 // auth package (errors.go); the api package's login handler maps
 // them via errors.Is(). Here we just wrap them so the mocked Login
 // returns the same value the real service would.
-func ErrMFARequired_test() error    { return mfaRequiredSentinel }
-func ErrInvalidMFACode_test() error { return mfaInvalidSentinel }
+func ErrMFARequiredTest() error    { return mfaRequiredSentinel }
+func ErrInvalidMFACodeTest() error { return mfaInvalidSentinel }
 
 // Tests for GET /api/auth/me/permissions (issue #917).
 
@@ -1497,7 +1497,7 @@ func TestHandler_login_ErrorEquivalence(t *testing.T) {
 	// GetUserByEmail-error path in the real service).
 	mockAuthNotFound := new(MockAuthService)
 	mockAuthNotFound.On("Login", ctx, mock.Anything).
-		Return((*LoginResponse)(nil), errors.New("Check your email address and password and try again")).Once()
+		Return((*LoginResponse)(nil), errors.New("check your email address and password and try again")).Once()
 	t.Cleanup(func() { mockAuthNotFound.AssertExpectations(t) })
 
 	handlerNotFound := &Handler{auth: mockAuthNotFound}
@@ -1513,7 +1513,7 @@ func TestHandler_login_ErrorEquivalence(t *testing.T) {
 	// Path 2: service returns the "wrong password" message (existing user).
 	mockAuthWrongPass := new(MockAuthService)
 	mockAuthWrongPass.On("Login", ctx, mock.Anything).
-		Return((*LoginResponse)(nil), errors.New("Check your email address and password and try again")).Once()
+		Return((*LoginResponse)(nil), errors.New("check your email address and password and try again")).Once()
 	t.Cleanup(func() { mockAuthWrongPass.AssertExpectations(t) })
 
 	handlerWrongPass := &Handler{auth: mockAuthWrongPass}

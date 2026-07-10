@@ -48,7 +48,7 @@ func (c *AWSCredentials) String() string { return "[REDACTED AWS CREDENTIALS]" }
 
 // AzureCredentials holds resolved Azure service principal credentials.
 type AzureCredentials struct {
-	ClientSecret string
+	ClientSecret string //nolint:gosec
 }
 
 // String returns a redacted representation.
@@ -74,7 +74,7 @@ type STSClientFactory func(provider aws.CredentialsProvider) STSClient
 // AWSResolveOptions holds optional dependencies for the AWS credential
 // resolver. The bastion path needs both AccountLookup and STSClientFactory to
 // self-resolve correctly; without them, bastion mode falls back to the
-// pre-self-loading behaviour (trusts the caller-supplied STS client) for
+// pre-self-loading behavior (trusts the caller-supplied STS client) for
 // backward compatibility.
 //
 // AmbientProvider, when set, is returned for role_arn accounts whose
@@ -206,7 +206,7 @@ func resolveRoleARNProvider(
 // at depth 1 to prevent loops.
 //
 // Legacy path: when either option is nil, the resolver falls back to the old
-// behaviour and trusts that the caller-supplied stsClient already carries
+// behavior and trusts that the caller-supplied stsClient already carries
 // bastion credentials. This preserves backward compatibility with callers that
 // have not yet been updated to wire the lookup/factory.
 func resolveBastionProvider(
@@ -238,7 +238,7 @@ func resolveBastionProvider(
 	}
 	// Recursively resolve the bastion's own credentials. Pass empty opts to
 	// guarantee the recursive call cannot trigger bastion mode (already
-	// guarded above by the AWSAuthMode check, but defence in depth).
+	// guarded above by the AWSAuthMode check, but defense in depth).
 	bastionCreds, err := ResolveAWSCredentialProviderWithOpts(ctx, bastion, store, stsClient, AWSResolveOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("credentials: resolve bastion %s creds: %w", bastion.ID, err)
@@ -289,7 +289,7 @@ func ResolveAzureCredentials(ctx context.Context, account *config.CloudAccount, 
 		return nil, fmt.Errorf("credentials: no client secret stored for account %s", account.ID)
 	}
 	var payload struct {
-		ClientSecret string `json:"client_secret"`
+		ClientSecret string `json:"client_secret"` //nolint:gosec
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return nil, fmt.Errorf("credentials: parse azure secret for account %s: %w", account.ID, err)
@@ -450,7 +450,7 @@ func loadStoredGCPTokenSource(
 	if raw == nil {
 		return nil, fmt.Errorf("credentials: no gcp credentials stored for account %s", account.ID)
 	}
-	creds, err := google.CredentialsFromJSON(ctx, raw, gcpCloudPlatformScope)
+	creds, err := google.CredentialsFromJSON(ctx, raw, gcpCloudPlatformScope) //nolint:staticcheck // SA1019: CredentialsFromJSONWithParams requires google-api-go-client bump; tracked in known-issues
 	if err != nil {
 		return nil, fmt.Errorf("credentials: parse gcp credentials for account %s: %w", account.ID, err)
 	}

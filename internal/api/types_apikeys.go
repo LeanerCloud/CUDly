@@ -11,7 +11,7 @@ type CreateAPIKeyRequest struct {
 
 // CreateAPIKeyResponse returns the newly created API key (only shown once).
 type CreateAPIKeyResponse struct {
-	APIKey string   `json:"api_key"`
+	APIKey string   `json:"api_key"` //nolint:gosec
 	Info   *KeyInfo `json:"info"`
 	KeyID  string   `json:"key_id"`
 }

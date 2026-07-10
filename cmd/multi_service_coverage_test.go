@@ -272,9 +272,9 @@ func TestAdjustRecommendationForExcludedVersions_AdditionalCases(t *testing.T) {
 	}
 
 	tests := []struct {
+		instanceVersions map[string][]InstanceEngineVersion
 		name             string
 		rec              common.Recommendation
-		instanceVersions map[string][]InstanceEngineVersion
 		expectedCount    int
 	}{
 		{
@@ -370,10 +370,10 @@ func TestValidateFlags_Coverage(t *testing.T) {
 	defer func() { toolCfg = origCfg }()
 
 	tests := []struct {
-		name        string
 		setupCfg    func()
-		expectError bool
+		name        string
 		errorMsg    string
+		expectError bool
 	}{
 		{
 			name: "Valid configuration",
@@ -770,7 +770,7 @@ func TestFilterAndAdjustRecommendations_OverrideCountApplied(t *testing.T) {
 }
 
 // TestFetchExistingCoverage_LookbackDays verifies that fetchExistingCoverage
-// honours cfg.CoverageLookbackDays (issue #360). The test uses the
+// honors cfg.CoverageLookbackDays (issue #360). The test uses the
 // MockRecommendationsClient which fails the *awsprovider.RecommendationsClientAdapter
 // type assertion, exercising the non-AWS-provider early-return path. The key
 // assertions are:
@@ -798,7 +798,7 @@ func TestFetchExistingCoverage_LookbackDays(t *testing.T) {
 	})
 
 	t.Run("custom lookback stored in Config", func(t *testing.T) {
-		cfg := Config{TargetCoverage: 80, CoverageLookbackDays: 60, Regions: []string{"us-east-1"}}
+		cfg := Config{CoverageLookbackDays: 60}
 		// CoverageLookbackDays field value is preserved in the struct.
 		assert.Equal(t, 60, cfg.CoverageLookbackDays)
 	})

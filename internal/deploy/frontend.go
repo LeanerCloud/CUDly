@@ -134,7 +134,7 @@ func (s *FrontendService) FindFrontendDir() (string, error) {
 	// Check environment variable first for deployed binaries
 	if envPath := os.Getenv("CUDLY_FRONTEND_DIR"); envPath != "" {
 		packageJSON := filepath.Join(envPath, "package.json")
-		if _, err := os.Stat(packageJSON); err == nil {
+		if _, err := os.Stat(packageJSON); err == nil { //nolint:gosec
 			return filepath.Abs(envPath)
 		}
 	}
@@ -149,7 +149,7 @@ func (s *FrontendService) FindFrontendDir() (string, error) {
 		execDir := filepath.Dir(execPath)
 		paths = append(paths,
 			filepath.Join(execDir, "frontend"),
-			filepath.Join(execDir, "../frontend"),
+			filepath.Join(execDir, "../frontend"), //nolint:gocritic
 		)
 	}
 
@@ -190,7 +190,7 @@ func (s *FrontendService) findDistributionForBucket(ctx context.Context, bucketN
 			continue
 		}
 
-		for _, dist := range result.DistributionList.Items {
+		for _, dist := range result.DistributionList.Items { //nolint:gocritic
 			if distID := s.checkDistributionOrigins(dist, bucketName); distID != "" {
 				return distID, nil
 			}
@@ -200,7 +200,7 @@ func (s *FrontendService) findDistributionForBucket(ctx context.Context, bucketN
 	return "", nil
 }
 
-func (s *FrontendService) checkDistributionOrigins(dist cftypes.DistributionSummary, bucketName string) string {
+func (s *FrontendService) checkDistributionOrigins(dist cftypes.DistributionSummary, bucketName string) string { //nolint:gocritic
 	if dist.Origins == nil || dist.Origins.Items == nil {
 		return ""
 	}

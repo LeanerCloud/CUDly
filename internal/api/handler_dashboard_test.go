@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// createMockLambdaRequest creates a mock Lambda function URL request for testing
+// createMockLambdaRequest creates a mock Lambda function URL request for testing.
 func createMockLambdaRequest(sourceIP string) *events.LambdaFunctionURLRequest {
 	return &events.LambdaFunctionURLRequest{
 		RequestContext: events.LambdaFunctionURLRequestContext{

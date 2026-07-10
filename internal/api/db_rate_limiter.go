@@ -25,7 +25,7 @@ type DBRateLimiter struct {
 	cleanupRunning  atomic.Bool
 }
 
-// Verify that DBRateLimiter implements RateLimiterInterface
+// Verify that DBRateLimiter implements RateLimiterInterface.
 var _ RateLimiterInterface = (*DBRateLimiter)(nil)
 
 // dbRateLimiterScheduledCleanupInterval is the period between scheduled
@@ -70,7 +70,7 @@ func (rl *DBRateLimiter) StartCleanupWorker(ctx context.Context) {
 	}()
 }
 
-// SetLimit allows customizing rate limits for specific endpoints
+// SetLimit allows customizing rate limits for specific endpoints.
 func (rl *DBRateLimiter) SetLimit(endpoint string, config RateLimitConfig) {
 	rl.limitsMu.Lock()
 	defer rl.limitsMu.Unlock()
@@ -98,7 +98,7 @@ func (rl *DBRateLimiter) SetLimit(endpoint string, config RateLimitConfig) {
 // rate limiter still denies correctly, and `cleanup()` evicts
 // expired rows on its 24-hour cycle. This is a small accounting
 // trade for atomicity and is acceptable for rate-limit semantics.
-func (rl *DBRateLimiter) Allow(ctx context.Context, key string, endpoint string) (bool, error) {
+func (rl *DBRateLimiter) Allow(ctx context.Context, key, endpoint string) (bool, error) {
 	if rl == nil || rl.pool == nil {
 		return true, nil
 	}
@@ -144,7 +144,7 @@ func (rl *DBRateLimiter) Allow(ctx context.Context, key string, endpoint string)
 }
 
 // maybeCleanup triggers cleanup if enough time has passed since the last cleanup
-// This prevents spawning too many goroutines when under high load
+// This prevents spawning too many goroutines when under high load.
 func (rl *DBRateLimiter) maybeCleanup() {
 	// Quick check without lock - if cleanup is already running, skip
 	if rl.cleanupRunning.Load() {
@@ -174,7 +174,7 @@ func (rl *DBRateLimiter) maybeCleanup() {
 }
 
 // cleanup removes expired rate limit entries from the database
-// This is called asynchronously and errors are logged but not returned
+// This is called asynchronously and errors are logged but not returned.
 func (rl *DBRateLimiter) cleanup() {
 	if rl.pool == nil {
 		return
@@ -197,20 +197,20 @@ func (rl *DBRateLimiter) cleanup() {
 	}
 }
 
-// AllowWithIP is a convenience method that formats the key as an IP-based key
-func (rl *DBRateLimiter) AllowWithIP(ctx context.Context, ip string, endpoint string) (bool, error) {
+// AllowWithIP is a convenience method that formats the key as an IP-based key.
+func (rl *DBRateLimiter) AllowWithIP(ctx context.Context, ip, endpoint string) (bool, error) {
 	key := fmt.Sprintf("IP#%s", ip)
 	return rl.Allow(ctx, key, endpoint)
 }
 
-// AllowWithEmail is a convenience method that formats the key as an email-based key
-func (rl *DBRateLimiter) AllowWithEmail(ctx context.Context, email string, endpoint string) (bool, error) {
+// AllowWithEmail is a convenience method that formats the key as an email-based key.
+func (rl *DBRateLimiter) AllowWithEmail(ctx context.Context, email, endpoint string) (bool, error) {
 	key := fmt.Sprintf("EMAIL#%s", email)
 	return rl.Allow(ctx, key, endpoint)
 }
 
-// AllowWithUser is a convenience method that formats the key as a user-based key
-func (rl *DBRateLimiter) AllowWithUser(ctx context.Context, userID string, endpoint string) (bool, error) {
+// AllowWithUser is a convenience method that formats the key as a user-based key.
+func (rl *DBRateLimiter) AllowWithUser(ctx context.Context, userID, endpoint string) (bool, error) {
 	key := fmt.Sprintf("USER#%s", userID)
 	return rl.Allow(ctx, key, endpoint)
 }
