@@ -9,14 +9,15 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLocalSignerMintAndVerify(t *testing.T) {
 	ctx := context.Background()
 	signer, err := NewLocalSigner()
-	if err != nil {
-		t.Fatalf("new signer: %v", err)
-	}
+	require.NoError(t, err, "new signer")
 
 	claims := map[string]any{
 		"iss": "https://cudly.example.com",
@@ -26,90 +27,54 @@ func TestLocalSignerMintAndVerify(t *testing.T) {
 	}
 
 	jws, err := Mint(ctx, signer, claims)
-	if err != nil {
-		t.Fatalf("mint: %v", err)
-	}
+	require.NoError(t, err, "mint")
 
 	parts := strings.Split(jws, ".")
-	if len(parts) != 3 {
-		t.Fatalf("expected 3 JWS parts, got %d", len(parts))
-	}
+	require.Len(t, parts, 3, "expected 3 JWS parts")
 
 	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		t.Fatalf("decode header: %v", err)
-	}
+	require.NoError(t, err, "decode header")
 	var header map[string]any
-	err = json.Unmarshal(headerBytes, &header)
-	if err != nil {
-		t.Fatalf("unmarshal header: %v", err)
-	}
-	if header["alg"] != "RS256" {
-		t.Errorf("alg=%v, want RS256", header["alg"])
-	}
-	if header["typ"] != "JWT" {
-		t.Errorf("typ=%v, want JWT", header["typ"])
-	}
+	require.NoError(t, json.Unmarshal(headerBytes, &header), "unmarshal header")
+	assert.Equal(t, "RS256", header["alg"], "alg")
+	assert.Equal(t, "JWT", header["typ"], "typ")
 	expectedKid, _ := signer.KeyID(ctx)
-	if header["kid"] != expectedKid {
-		t.Errorf("kid mismatch: header=%v signer=%v", header["kid"], expectedKid)
-	}
+	assert.Equal(t, expectedKid, header["kid"], "kid")
 
 	claimsBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		t.Fatalf("decode claims: %v", err)
-	}
+	require.NoError(t, err, "decode claims")
 	var decoded map[string]any
-	err = json.Unmarshal(claimsBytes, &decoded)
-	if err != nil {
-		t.Fatalf("unmarshal claims: %v", err)
-	}
-	if decoded["iss"] != claims["iss"] {
-		t.Errorf("iss mismatch: %v vs %v", decoded["iss"], claims["iss"])
-	}
+	require.NoError(t, json.Unmarshal(claimsBytes, &decoded), "unmarshal claims")
+	assert.Equal(t, claims["iss"], decoded["iss"], "iss")
 
 	// Verify the signature end-to-end with the signer's public key.
 	sigBytes, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil {
-		t.Fatalf("decode signature: %v", err)
-	}
+	require.NoError(t, err, "decode signature")
 	pub, err := signer.PublicKey(ctx)
-	if err != nil {
-		t.Fatalf("public key: %v", err)
-	}
+	require.NoError(t, err, "public key")
 	signingInput := parts[0] + "." + parts[1]
 	digest := sha256.Sum256([]byte(signingInput))
-	if err := rsa.VerifyPKCS1v15(pub, crypto.SHA256, digest[:], sigBytes); err != nil {
-		t.Errorf("signature verify failed: %v", err)
-	}
+	assert.NoError(t, rsa.VerifyPKCS1v15(pub, crypto.SHA256, digest[:], sigBytes), "signature verify failed")
 }
 
 func TestBuildJWKS(t *testing.T) {
 	ctx := context.Background()
 	signer, err := NewLocalSigner()
-	if err != nil {
-		t.Fatalf("new signer: %v", err)
-	}
+	require.NoError(t, err, "new signer")
 	jwks, err := BuildJWKS(ctx, signer)
-	if err != nil {
-		t.Fatalf("build jwks: %v", err)
-	}
-	if len(jwks.Keys) != 1 {
-		t.Fatalf("want 1 key, got %d", len(jwks.Keys))
-	}
+	require.NoError(t, err, "build jwks")
+	require.Len(t, jwks.Keys, 1, "want 1 key")
 	k := jwks.Keys[0]
-	if k.Kty != "RSA" || k.Use != "sig" || k.Alg != "RS256" {
-		t.Errorf("jwk metadata wrong: %+v", k)
-	}
-	if k.Kid == "" || k.N == "" || k.E == "" {
-		t.Errorf("jwk missing kid/n/e: %+v", k)
-	}
-	if _, err := base64.RawURLEncoding.DecodeString(k.N); err != nil {
-		t.Errorf("n not base64url: %v", err)
-	}
-	if _, err := base64.RawURLEncoding.DecodeString(k.E); err != nil {
-		t.Errorf("e not base64url: %v", err)
-	}
+	assert.Equal(t, "RSA", k.Kty, "jwk kty")
+	assert.Equal(t, "sig", k.Use, "jwk use")
+	assert.Equal(t, "RS256", k.Alg, "jwk alg")
+	assert.NotEmpty(t, k.Kid, "jwk kid")
+	assert.NotEmpty(t, k.N, "jwk n")
+	assert.NotEmpty(t, k.E, "jwk e")
+	_, err = base64.RawURLEncoding.DecodeString(k.N)
+	assert.NoError(t, err, "n not base64url")
+	_, err = base64.RawURLEncoding.DecodeString(k.E)
+	assert.NoError(t, err, "e not base64url")
 }
 
 func TestBuildDiscovery(t *testing.T) {
