@@ -1393,7 +1393,7 @@ func (h *Handler) tryResolveActorEmail(ctx context.Context, req *events.LambdaFu
 // failures into the contact_email gate — exactly the misclassification
 // the propagate-vs-fall-through split is meant to prevent.
 func isPermissionDenied(err error) bool {
-	ce, ok := err.(*clientError)
+	ce, ok := err.(*clientError) //nolint:errorlint // strict (unwrapped) assertion is deliberate; see comment above
 	return ok && ce.code == 403
 }
 
