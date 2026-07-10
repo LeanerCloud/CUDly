@@ -4048,7 +4048,8 @@ func TestHandler_revokePurchase_ValidToken(t *testing.T) {
 	// Atomic conditional transition completed/partially_completed ->
 	// revocation_requested, returning the updated row.
 	mockStore.On("TransitionExecutionStatus", ctx, execID,
-		[]string{"completed", "partially_completed"}, "revocation_requested").
+		[]string{"completed", "partially_completed"}, "revocation_requested",
+		mock.MatchedBy(func(actor *string) bool { return actor != nil && *actor == revokerEmail })).
 		Return(&config.PurchaseExecution{ExecutionID: execID, Status: "revocation_requested"}, nil)
 	// SetCancelledBy stamps the actor without a full-row overwrite (Finding #5).
 	mockStore.On("SetCancelledBy", ctx, execID, revokerEmail).Return(nil)
@@ -4066,7 +4067,7 @@ func TestHandler_revokePurchase_ValidToken(t *testing.T) {
 		Headers:               map[string]string{"authorization": "Bearer sess-tok"},
 		QueryStringParameters: map[string]string{"token": token},
 	}
-	result, err := handler.revokePurchase(ctx, req, execID, token)
+	result, err := handler.revokeViaEmailToken(ctx, req, execID, token)
 	require.NoError(t, err, "valid token on completed execution must not error")
 	resultMap := result.(map[string]string)
 	assert.Equal(t, "revocation_requested", resultMap["status"])
@@ -4109,7 +4110,7 @@ func TestHandler_revokePurchase_InvalidToken(t *testing.T) {
 		Headers:               map[string]string{"authorization": "Bearer sess-tok"},
 		QueryStringParameters: map[string]string{"token": "wrong-token"},
 	}
-	_, err := handler.revokePurchase(ctx, req, execID, "wrong-token")
+	_, err := handler.revokeViaEmailToken(ctx, req, execID, "wrong-token")
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "expected a client error")
@@ -4135,7 +4136,7 @@ func TestHandler_revokePurchase_PendingExecution(t *testing.T) {
 	req := &events.LambdaFunctionURLRequest{
 		QueryStringParameters: map[string]string{"token": "tok"},
 	}
-	_, err := handler.revokePurchase(ctx, req, execID, "tok")
+	_, err := handler.revokeViaEmailToken(ctx, req, execID, "tok")
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "expected a client error")
@@ -4153,7 +4154,7 @@ func TestHandler_revokePurchase_NotFound(t *testing.T) {
 
 	handler := &Handler{config: mockStore}
 	req := &events.LambdaFunctionURLRequest{}
-	_, err := handler.revokePurchase(ctx, req, execID, "some-token")
+	_, err := handler.revokeViaEmailToken(ctx, req, execID, "some-token")
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "expected a client error")
@@ -4199,7 +4200,7 @@ func TestHandler_revokePurchase_ExpiredToken(t *testing.T) {
 		Headers:               map[string]string{"authorization": "Bearer sess-tok"},
 		QueryStringParameters: map[string]string{"token": token},
 	}
-	_, err := handler.revokePurchase(ctx, req, execID, token)
+	_, err := handler.revokeViaEmailToken(ctx, req, execID, token)
 	require.Error(t, err, "expired revocation token must be rejected")
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "expected a client error")
@@ -4223,7 +4224,8 @@ func TestHandler_revokePurchase_SessionAdminCancelAny(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	mockStore.On("TransitionExecutionStatus", ctx, execID,
-		[]string{"completed", "partially_completed"}, "revocation_requested").
+		[]string{"completed", "partially_completed"}, "revocation_requested",
+		mock.MatchedBy(func(actor *string) bool { return actor != nil && *actor == adminEmail })).
 		Return(&config.PurchaseExecution{ExecutionID: execID, Status: "revocation_requested"}, nil)
 	// SetCancelledBy replaces the full-row SavePurchaseExecution (Finding #5).
 	mockStore.On("SetCancelledBy", ctx, execID, adminEmail).Return(nil)
@@ -4238,7 +4240,7 @@ func TestHandler_revokePurchase_SessionAdminCancelAny(t *testing.T) {
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer admin-token"},
 	}
-	result, err := handler.revokePurchase(ctx, req, execID, "")
+	result, err := handler.revokeViaEmailToken(ctx, req, execID, "")
 	require.NoError(t, err, "session admin with cancel-any must succeed")
 	resultMap := result.(map[string]string)
 	assert.Equal(t, "revocation_requested", resultMap["status"])
@@ -4261,7 +4263,8 @@ func TestHandler_revokePurchase_SessionOwnerCancelOwn(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	mockStore.On("TransitionExecutionStatus", ctx, execID,
-		[]string{"completed", "partially_completed"}, "revocation_requested").
+		[]string{"completed", "partially_completed"}, "revocation_requested",
+		mock.MatchedBy(func(actor *string) bool { return actor != nil && *actor == ownerEmail })).
 		Return(&config.PurchaseExecution{ExecutionID: execID, Status: "revocation_requested"}, nil)
 	// SetCancelledBy replaces the full-row SavePurchaseExecution (Finding #5).
 	mockStore.On("SetCancelledBy", ctx, execID, ownerEmail).Return(nil)
@@ -4276,7 +4279,7 @@ func TestHandler_revokePurchase_SessionOwnerCancelOwn(t *testing.T) {
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer owner-token"},
 	}
-	result, err := handler.revokePurchase(ctx, req, execID, "")
+	result, err := handler.revokeViaEmailToken(ctx, req, execID, "")
 	require.NoError(t, err, "session owner with cancel-own must succeed")
 	resultMap := result.(map[string]string)
 	assert.Equal(t, "revocation_requested", resultMap["status"])
@@ -4309,7 +4312,7 @@ func TestHandler_revokePurchase_SessionNoPermissionNoToken(t *testing.T) {
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer user-token"},
 	}
-	_, err := handler.revokePurchase(ctx, req, execID, "")
+	_, err := handler.revokeViaEmailToken(ctx, req, execID, "")
 	require.Error(t, err, "no permission and no token must be denied")
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "expected a client error")
@@ -4330,7 +4333,8 @@ func TestHandler_revokeViaSession_ConcurrentTransition(t *testing.T) {
 
 	mockStore := new(MockConfigStore)
 	mockStore.On("TransitionExecutionStatus", ctx, execID,
-		[]string{"completed", "partially_completed"}, "revocation_requested").
+		[]string{"completed", "partially_completed"}, "revocation_requested",
+		mock.MatchedBy(func(actor *string) bool { return actor != nil && *actor == "someone@example.com" })).
 		Return(nil, fmt.Errorf("%w: execution %s", config.ErrExecutionNotInExpectedStatus, execID))
 
 	handler := &Handler{config: mockStore}
@@ -4415,7 +4419,8 @@ func TestRevokeViaSession_CancelledByFoldsIntoTransition_NoLostUpdate(t *testing
 
 	mockStore := new(MockConfigStore)
 	mockStore.On("TransitionExecutionStatus", ctx, execID,
-		[]string{"completed", "partially_completed"}, "revocation_requested").
+		[]string{"completed", "partially_completed"}, "revocation_requested",
+		mock.MatchedBy(func(actor *string) bool { return actor != nil && *actor == revokedBy })).
 		Return(&config.PurchaseExecution{ExecutionID: execID, Status: "revocation_requested"}, nil)
 	// SetCancelledBy must be called; SavePurchaseExecution must NOT.
 	mockStore.On("SetCancelledBy", ctx, execID, revokedBy).Return(nil)
@@ -4592,7 +4597,7 @@ func TestRevokePurchase_GETRendersConfirmationPage_NoMutation(t *testing.T) {
 		},
 		QueryStringParameters: map[string]string{"token": token},
 	}
-	result, err := handler.revokePurchase(ctx, req, execID, token)
+	result, err := handler.revokeViaEmailToken(ctx, req, execID, token)
 	require.NoError(t, err)
 
 	raw, ok := result.(*rawResponse)
@@ -4632,7 +4637,8 @@ func TestRevokePurchase_POSTPerformsRevoke(t *testing.T) {
 		return &config.CloudAccount{ID: id, ContactEmail: revokerEmail}, nil
 	}
 	mockStore.On("TransitionExecutionStatus", ctx, execID,
-		[]string{"completed", "partially_completed"}, "revocation_requested").
+		[]string{"completed", "partially_completed"}, "revocation_requested",
+		mock.MatchedBy(func(actor *string) bool { return actor != nil && *actor == revokerEmail })).
 		Return(&config.PurchaseExecution{ExecutionID: execID, Status: "revocation_requested"}, nil)
 	// SetCancelledBy replaces the full-row SavePurchaseExecution (Finding #5).
 	mockStore.On("SetCancelledBy", ctx, execID, revokerEmail).Return(nil)
@@ -4650,7 +4656,7 @@ func TestRevokePurchase_POSTPerformsRevoke(t *testing.T) {
 		Headers:               map[string]string{"authorization": "Bearer sess-tok"},
 		QueryStringParameters: map[string]string{"token": token},
 	}
-	result, err := handler.revokePurchase(ctx, req, execID, token)
+	result, err := handler.revokeViaEmailToken(ctx, req, execID, token)
 	require.NoError(t, err)
 	resultMap, ok := result.(map[string]string)
 	require.True(t, ok)

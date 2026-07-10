@@ -109,7 +109,7 @@ func TestExecutedNotification_SessionApprovePath(t *testing.T) {
 	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 
 	mockPurchase := new(MockPurchaseManager)
-	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail).Return(nil)
+	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail, (*string)(nil)).Return(nil)
 
 	notifier := &recordingExecutedNotifier{}
 	handler := &Handler{
@@ -165,7 +165,7 @@ func TestExecutedNotification_DirectExecutePath(t *testing.T) {
 	}, nil)
 
 	mockPurchase := new(MockPurchaseManager)
-	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail).Return(nil)
+	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail, (*string)(nil)).Return(nil)
 
 	notifier := &recordingExecutedNotifier{}
 	handler := &Handler{
@@ -211,7 +211,7 @@ func TestExecutedNotification_DirectExecute_NilNotifierNoPanic(t *testing.T) {
 	mockConfig.On("SavePurchaseExecution", ctx, exec).Return(nil)
 
 	mockPurchase := new(MockPurchaseManager)
-	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail).Return(nil)
+	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail, (*string)(nil)).Return(nil)
 
 	handler := &Handler{
 		purchase:      mockPurchase,

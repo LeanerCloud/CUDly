@@ -769,7 +769,7 @@ func TestApproveExecution_RotatesApprovalToken(t *testing.T) {
 	}
 
 	store.On("GetExecutionByID", ctx, "exec-rotate").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-rotate", approveFromStatuses, "approved").Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-rotate", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-rotate")
 
 	err := manager.ApproveExecution(ctx, "exec-rotate", "pre-rotate-token", "")

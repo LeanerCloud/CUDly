@@ -164,12 +164,12 @@ func (r *Router) registerRoutes() {
 		{PathPrefix: "/api/purchases/approve/", Method: "POST", Handler: r.approvePurchaseHandler, Auth: AuthPublic},
 		{PathPrefix: "/api/purchases/cancel/", Method: "GET", Handler: r.cancelPurchaseHandler, Auth: AuthPublic},
 		{PathPrefix: "/api/purchases/cancel/", Method: "POST", Handler: r.cancelPurchaseHandler, Auth: AuthPublic},
-		// Revoke a completed purchase (issue #291). Same AuthPublic + token-based
-		// auth pattern as approve/cancel — the token is embedded in the
-		// post-execution notification email's one-click link. Session-authed
-		// users with revoke:purchases (or admin) may also use the route.
-		{PathPrefix: "/api/purchases/revoke/", Method: "GET", Handler: r.revokePurchaseHandler, Auth: AuthPublic},
-		{PathPrefix: "/api/purchases/revoke/", Method: "POST", Handler: r.revokePurchaseHandler, Auth: AuthPublic},
+		// Revoke a completed purchase via email one-click link (issue #291).
+		// AuthPublic + token-based auth pattern: the token is embedded in the
+		// post-execution notification email's one-click link. GET renders a
+		// confirmation form; POST executes the revocation.
+		{PathPrefix: "/api/purchases/revoke/", Method: "GET", Handler: r.revokeViaEmailTokenHandler, Auth: AuthPublic},
+		{PathPrefix: "/api/purchases/revoke/", Method: "POST", Handler: r.revokeViaEmailTokenHandler, Auth: AuthPublic},
 		// Retry a failed purchase execution (issue #47). Session-authed
 		// only — the original failed row's email-token has already been
 		// consumed/expired, so there is no token-mode dispatch here.
@@ -573,12 +573,22 @@ func (r *Router) retryPurchaseHandler(ctx context.Context, req *events.LambdaFun
 	return r.h.retryPurchase(ctx, req, params["id"])
 }
 
-func (r *Router) revokePurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+// revokeViaEmailTokenHandler handles GET/POST /api/purchases/revoke/{execID}
+// (issue #291 email one-click link). GET renders a confirmation form;
+// POST executes the token-based revocation.
+func (r *Router) revokeViaEmailTokenHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	if err := r.h.checkRateLimit(ctx, req, "approve_cancel_public"); err != nil {
 		return nil, err
 	}
 	token := resolveApprovalToken(req)
-	return r.h.revokePurchase(ctx, req, params["id"], token)
+	return r.h.revokeViaEmailToken(ctx, req, params["id"], token)
+}
+
+// revokePurchaseHandler handles POST /api/purchases/{id}/revoke
+// (issue #290 in-app session-authenticated revoke within the provider's
+// free-cancel window).
+func (r *Router) revokePurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.revokePurchase(ctx, req, params["id"])
 }
 
 func (r *Router) calculateRevokeHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

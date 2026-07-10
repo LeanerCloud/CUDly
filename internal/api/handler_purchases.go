@@ -520,6 +520,10 @@ func (h *Handler) approveViaToken(ctx context.Context, req *events.LambdaFunctio
 	if err := h.purchase.ApproveExecution(ctx, execution.ExecutionID, token, actor); err != nil {
 		return nil, err
 	}
+	// Best-effort post-execution notification email (issue #291). Mirrors
+	// the session-authed path; errors are logged inside sendPurchaseExecutedEmail
+	// and never propagate — the purchase is already done at this point.
+	h.sendPurchaseExecutedEmail(ctx, req, execution, actor)
 	return map[string]string{"status": "completed"}, nil
 }
 
@@ -977,7 +981,7 @@ func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.Lamb
 	return map[string]string{"status": "canceled"}, nil
 }
 
-// revokePurchase is the one-click revocation handler embedded in the
+// revokeViaEmailToken is the one-click revocation handler embedded in the
 // post-execution notification email (issue #291). It accepts the same
 // three-mode dispatch shape as approvePurchase / cancelPurchase:
 //
@@ -989,7 +993,7 @@ func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.Lamb
 // The revocation window check is intentionally limited in this
 // iteration: because the sibling "AWS RI/SP revocation via support case"
 // issue has not yet landed its dedicated revocation_window_closes_at
-// column, revokePurchase reuses the ApprovalToken. Once the sibling lands
+// column, revokeViaEmailToken reuses the ApprovalToken. Once the sibling lands
 // and adds a RevocationToken + RevocationWindowClosesAt column, this
 // handler should validate RevocationWindowClosesAt here before
 // attempting the cancellation.
@@ -1028,7 +1032,7 @@ cancellation within the allowed window.</p>
 </body>
 </html>`
 
-func (h *Handler) revokePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, execID, token string) (any, error) {
+func (h *Handler) revokeViaEmailToken(ctx context.Context, req *events.LambdaFunctionURLRequest, execID, token string) (any, error) {
 	if err := validateUUID(execID); err != nil {
 		return nil, err
 	}
@@ -1109,12 +1113,12 @@ func renderRevokeConfirmPage(execID, token string) *rawResponse {
 }
 
 // tryRevokeViaSession attempts the session-authenticated branch of the
-// revokePurchase three-mode dispatch (same shape as the session branch of
+// revokeViaEmailToken three-mode dispatch (same shape as the session branch of
 // cancelPurchase). Returns (result, true, err) when the session was present
 // and either completed the revocation or encountered a hard error; returns
 // (nil, false, nil) when the session was absent or returned a permission-denied
 // error so the caller can fall through to the token branch. Extracted from
-// revokePurchase to keep that function under the cyclomatic limit.
+// revokeViaEmailToken to keep that function under the cyclomatic limit.
 func (h *Handler) tryRevokeViaSession(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution) (any, bool, error) {
 	session := h.tryGetSession(ctx, req)
 	if session == nil {
@@ -1134,7 +1138,7 @@ func (h *Handler) tryRevokeViaSession(ctx context.Context, req *events.LambdaFun
 
 // checkRevokableStatus returns nil when the execution is in a state that allows
 // revocation (completed or partially_completed), or a 409 ClientError when the
-// status makes revocation impossible. Extracted from revokePurchase to keep
+// status makes revocation impossible. Extracted from revokeViaEmailToken to keep
 // that function under the cyclomatic limit.
 func checkRevokableStatus(execution *config.PurchaseExecution) error {
 	switch execution.Status {
@@ -1161,7 +1165,7 @@ const revocationWindowDuration = 24 * time.Hour
 // has not closed (revocationWindowDuration after CompletedAt), and that the
 // token matches using constant-time comparison. Pre-migration rows without an
 // ApprovalTokenExpiresAt pass the expiry check (legacy backward compat).
-// Extracted from revokePurchase to keep that function under the cyclomatic limit.
+// Extracted from revokeViaEmailToken to keep that function under the cyclomatic limit.
 func validateRevokeToken(execution *config.PurchaseExecution, token string) error {
 	if execution.ApprovalToken == "" {
 		return NewClientError(403, "invalid revocation token")
@@ -1237,9 +1241,10 @@ func revocationWindowClosesAt(execution *config.PurchaseExecution) string {
 // and we return a 409 rather than blindly overwriting. CancelledBy is stamped
 // in a follow-up SavePurchaseExecution on the freshly-returned row.
 func (h *Handler) revokeViaSession(ctx context.Context, execution *config.PurchaseExecution, revokedBy string) (any, error) {
+	actor := &revokedBy
 	updated, err := h.config.TransitionExecutionStatus(
 		ctx, execution.ExecutionID,
-		[]string{"completed", "partially_completed"}, "revocation_requested")
+		[]string{"completed", "partially_completed"}, "revocation_requested", actor)
 	if err != nil {
 		if errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
 			return nil, NewClientError(409, fmt.Sprintf(

@@ -35,23 +35,9 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 		return fmt.Errorf("failed to get execution: %w", err)
 	}
 
-	// Validate token using constant-time comparison to prevent timing attacks.
-	// SHA-256 both inputs first so that variable-length strings can't leak
-	// token length via the comparison path (Finding #4).
-	if execution.ApprovalToken == "" || token == "" {
-		return fmt.Errorf("invalid approval token")
-	}
-	storedHash := sha256.Sum256([]byte(execution.ApprovalToken))
-	userHash := sha256.Sum256([]byte(token))
-	if subtle.ConstantTimeCompare(storedHash[:], userHash[:]) != 1 {
-		return fmt.Errorf("invalid approval token")
-	}
-
-	// Enforce token TTL (issue #397). Legacy rows that pre-date migration
-	// 000051 have ApprovalTokenExpiresAt == nil and are passed through
-	// for backward compatibility; all new rows carry a non-nil deadline.
-	if execution.ApprovalTokenExpiresAt != nil && time.Now().After(*execution.ApprovalTokenExpiresAt) {
-		return fmt.Errorf("approval token has expired")
+	// Validate token and TTL (Finding #4 + issue #397).
+	if err := validateApprovalToken(execution, token); err != nil {
+		return err
 	}
 
 	// Preflight guard (issue #609): reject non-AWS orphan executions before
@@ -107,6 +93,27 @@ func maskActor(actor string) string {
 		return "..." + actor[len(actor)-4:]
 	}
 	return "****"
+}
+
+// validateApprovalToken checks that the execution carries a non-empty token,
+// that the supplied token matches the stored one using constant-time comparison
+// (Finding #4 -- prevents timing attacks), and that the token has not expired
+// (issue #397). Legacy rows with a nil ApprovalTokenExpiresAt pass the TTL
+// check for backward compatibility. Extracted from ApproveExecution to keep
+// that function under the gocyclo threshold.
+func validateApprovalToken(execution *config.PurchaseExecution, token string) error {
+	if execution.ApprovalToken == "" || token == "" {
+		return fmt.Errorf("invalid approval token")
+	}
+	storedHash := sha256.Sum256([]byte(execution.ApprovalToken))
+	userHash := sha256.Sum256([]byte(token))
+	if subtle.ConstantTimeCompare(storedHash[:], userHash[:]) != 1 {
+		return fmt.Errorf("invalid approval token")
+	}
+	if execution.ApprovalTokenExpiresAt != nil && time.Now().After(*execution.ApprovalTokenExpiresAt) {
+		return fmt.Errorf("approval token has expired")
+	}
+	return nil
 }
 
 // OrphanExecutionError returns a descriptive error when the execution has no
