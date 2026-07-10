@@ -676,6 +676,7 @@ func TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns(t *testing.T) {
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key", "scheduled_execution_at",
 	}
+	schedAt := now.Add(2 * time.Hour)
 	rows := pgxmock.NewRows(cols).AddRow(
 		"plan-1", "exec-1", "pending", 1, now,
 		sql.NullTime{}, "tok-123", recsJSON,
@@ -686,6 +687,16 @@ func TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns(t *testing.T) {
 		nil, sql.NullTime{}, nil,
 		"idem-key-planned",
 		sql.NullTime{}, // scheduled_execution_at (NULL: not on the pre-fire delay path)
+	).AddRow(
+		"plan-1", "exec-2", "pending", 1, now,
+		sql.NullTime{}, "tok-456", recsJSON,
+		100.0, 200.0, sql.NullTime{}, "", sql.NullTime{},
+		nil, "", nil, nil, 100,
+		nil, nil, 0,
+		sql.NullTime{},
+		nil, sql.NullTime{}, nil,
+		"idem-key-delayed",
+		sql.NullTime{Time: schedAt, Valid: true}, // scheduled_execution_at populated (pre-fire delay path)
 	)
 	// Regexp matcher: only matches if the issued SELECT projects both
 	// idempotency_key and scheduled_execution_at. The alternation forces both
@@ -697,11 +708,17 @@ func TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns(t *testing.T) {
 
 	execs, err := store.GetPlannedExecutions(ctx, []string{"pending"}, 10)
 	require.NoError(t, err)
-	require.Len(t, execs, 1)
+	require.Len(t, execs, 2)
 	assert.Equal(t, "idem-key-planned", execs[0].IdempotencyKey)
 	// NULL scheduled_execution_at must deserialise as nil (*time.Time), not a zero
 	// value; applyNullTimesToExecution only sets the pointer when Valid is true.
 	assert.Nil(t, execs[0].ScheduledExecutionAt, "NULL scheduled_execution_at must be nil, not zero time")
+	// Non-NULL scheduled_execution_at must round-trip into the pointer field. This
+	// is the direct regression guard for the fix: with the column absent from the
+	// SELECT projection the value never reaches ScheduledExecutionAt and every
+	// delayed execution reads back as unscheduled.
+	require.NotNil(t, execs[1].ScheduledExecutionAt, "populated scheduled_execution_at must round-trip, not be dropped")
+	assert.Equal(t, schedAt, *execs[1].ScheduledExecutionAt)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
