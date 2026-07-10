@@ -168,7 +168,7 @@ func crossProviderPaymentAlias(provider, raw string) (string, bool) {
 
 // ValidOfferingClasses lists the accepted EC2 RI offering class values for
 // GlobalConfig. The empty string is also accepted (maps to "convertible" at
-// purchase time to preserve pre-694 behaviour).
+// purchase time to preserve pre-694 behavior).
 var ValidOfferingClasses = []string{"convertible", "standard"}
 
 // ValidRampScheduleTypes lists all supported ramp schedule types.

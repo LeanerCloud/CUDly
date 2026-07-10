@@ -248,7 +248,7 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 	if procErr != nil {
 		acctExec.Status = "failed"
 		acctExec.Error = procErr.Error()
-		_ = m.config.SavePurchaseExecution(ctx, &acctExec)
+		m.saveExecutionStatusBestEffort(ctx, &acctExec)
 		return false, procErr
 	}
 
@@ -521,7 +521,7 @@ type recPurchaseOutcome struct {
 	index    int
 }
 
-func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, provCfg *provider.ProviderConfig) (float64, float64, []string, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
+func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, provCfg *provider.ProviderConfig) (totalSavings, totalUpfront float64, purchaseErrors []string, procErr error) {
 	// ExecutionID is carried into PurchaseOptions so executeSinglePurchase
 	// can tag every per-rec log line with the owning exec UUID. Without
 	// this, CloudWatch filtering by exec ID returns zero hits and a stuck
@@ -604,7 +604,7 @@ func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *conf
 	// there are no concurrent writes to totals, exec.Recommendations, or
 	// purchaseErrors (05-N2). Do NOT move the aggregation inside the FanOut
 	// closure or run it concurrently with the fan-out.
-	totalSavings, totalUpfront, purchaseErrors := m.aggregatePurchaseOutcomes(ctx, exec, plan, accountID, results)
+	totalSavings, totalUpfront, purchaseErrors = m.aggregatePurchaseOutcomes(ctx, exec, plan, accountID, results)
 	return totalSavings, totalUpfront, purchaseErrors, nil
 }
 
