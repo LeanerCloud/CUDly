@@ -217,6 +217,18 @@ type StoreInterface interface {
 	// on subsequent poll/cancel transitions (issue #292).
 	UpdatePurchaseHistoryListing(ctx context.Context, purchaseID, listingID, listingState string) error
 
+	// ClaimMarketplaceListingSlot atomically reserves the marketplace-listing
+	// slot for a purchase_history row so two concurrent marketplace-list
+	// requests cannot both proceed to create a duplicate AWS listing (issue
+	// #292). It transitions listing_state to ListingStatePending only when the
+	// row is not already listed or mid-listing, and reports whether this call
+	// won the claim: (true, nil) means the caller reserved the slot and must
+	// then persist the real listing on success or release the slot back to its
+	// prior state on failure; (false, nil) means another request already holds
+	// an active or pending listing (the caller maps this to a 409). Modeled on
+	// FlipPurchaseRevocationInFlight.
+	ClaimMarketplaceListingSlot(ctx context.Context, purchaseID string) (bool, error)
+
 	// RI Exchange history
 	SaveRIExchangeRecord(ctx context.Context, record *RIExchangeRecord) error
 	GetRIExchangeRecord(ctx context.Context, id string) (*RIExchangeRecord, error)

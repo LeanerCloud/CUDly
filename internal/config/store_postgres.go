@@ -1675,8 +1675,8 @@ func (s *PostgresStore) SavePurchaseHistory(ctx context.Context, record *Purchas
 // UpdatePurchaseHistoryListing stamps the marketplace listing fields onto a
 // purchase_history row identified by its purchase_id (RI reservation ID).
 // Called by the marketplace-list handler after CreateReservedInstancesListing
-// succeeds (listing_id + listing_state="active") and by the status-poll path
-// when AWS reports closed or cancelled.
+// succeeds (listing_id + listing_state="active") and by the status-poll path on
+// the later closed/canceled transitions.
 func (s *PostgresStore) UpdatePurchaseHistoryListing(ctx context.Context, purchaseID, listingID, listingState string) error {
 	query := `
 		UPDATE purchase_history
@@ -1691,6 +1691,28 @@ func (s *PostgresStore) UpdatePurchaseHistoryListing(ctx context.Context, purcha
 		return fmt.Errorf("purchase %s not found in history", purchaseID)
 	}
 	return nil
+}
+
+// ClaimMarketplaceListingSlot atomically reserves the marketplace-listing slot
+// for a purchase_history row so two concurrent marketplace-list requests cannot
+// both proceed to create a duplicate AWS listing (issue #292). The single
+// conditional UPDATE transitions listing_state to ListingStatePending only when
+// the row is not already active or pending, so exactly one racing request wins.
+// It returns (true, nil) when this call reserved the slot and (false, nil) when
+// the row is already active/pending (or absent); the caller maps false to a 409.
+func (s *PostgresStore) ClaimMarketplaceListingSlot(ctx context.Context, purchaseID string) (bool, error) {
+	query := `
+		UPDATE purchase_history
+		SET listing_state = $1
+		WHERE purchase_id = $2
+		  AND lower(COALESCE(listing_state, '')) NOT IN ($3, $4)
+	`
+	tag, err := s.db.Exec(ctx, query,
+		ListingStatePending, purchaseID, ListingStateActive, ListingStatePending)
+	if err != nil {
+		return false, fmt.Errorf("failed to claim marketplace listing slot for purchase %s: %w", purchaseID, err)
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 // GetPurchaseHistory retrieves purchase history for an account.
@@ -1942,7 +1964,7 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 // revocation columns from issue #290, then the marketplace columns from #292).
 // purchaseHistoryNullables holds the nullable scan targets shared by every
 // purchase_history reader (scanPurchaseHistoryRow, GetPurchaseHistoryByPurchaseID).
-// Centralising the NULL reconciliation in applyTo keeps each reader's
+// Centralizing the NULL reconciliation in applyTo keeps each reader's
 // cyclomatic complexity under the gocyclo budget as columns accrue across
 // issues #290 (revocation) and #292 (marketplace).
 type purchaseHistoryNullables struct {

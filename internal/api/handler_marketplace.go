@@ -40,7 +40,7 @@ type marketplaceEC2Client interface {
 	CancelMarketplaceListing(ctx context.Context, listingID string) (ec2svc.MarketplaceListingResult, error)
 }
 
-// buildMarketplaceEC2Client honours the injected factory for tests, falling
+// buildMarketplaceEC2Client honors the injected factory for tests, falling
 // back to the direct AWS SDK constructor in production.
 func (h *Handler) buildMarketplaceEC2Client(cfg aws.Config) marketplaceEC2Client {
 	if h.marketplaceEC2Factory != nil {
@@ -111,12 +111,12 @@ func (h *Handler) validateMarketplaceListRequest(ctx context.Context, req *event
 	}
 
 	// Reject if a listing is already active to avoid duplicate listings.
-	if strings.EqualFold(row.ListingState, "active") {
+	if strings.EqualFold(row.ListingState, config.ListingStateActive) {
 		return nil, body, NewClientError(409, fmt.Sprintf("an active marketplace listing %s already exists for this RI; cancel it first", row.ListingID))
 	}
 
 	// Decode optional body.
-	if len(req.Body) > 0 {
+	if req.Body != "" {
 		if err := json.Unmarshal([]byte(req.Body), &body); err != nil {
 			return nil, body, NewClientError(400, "invalid request body: "+err.Error())
 		}
@@ -166,36 +166,9 @@ func (h *Handler) marketplaceList(ctx context.Context, req *events.LambdaFunctio
 		})
 	}
 
-	// List every RI in the row: a row of N Standard RIs must list all N, not a
-	// single unit (issue #292 multi-count fix). Floor at 1 for legacy rows that
-	// somehow recorded a non-positive count so a valid Standard RI still lists.
-	instanceCount := int32(row.Count)
-	if instanceCount < 1 {
-		instanceCount = 1
-	}
-
-	result, err := ec2Client.CreateMarketplaceListing(ctx, ec2svc.MarketplaceListingRequest{
-		ReservedInstancesID: purchaseID,
-		ClientToken:         uuid.New().String(),
-		PriceSchedule:       awsSchedule,
-		InstanceCount:       instanceCount,
-	})
+	result, err := h.reserveAndCreateListing(ctx, purchaseID, row, ec2Client, awsSchedule)
 	if err != nil {
-		logging.Warnf("marketplace: CreateReservedInstancesListing for purchase %s failed: %v", purchaseID, err)
-		return nil, mapAWSMarketplaceError("AWS marketplace listing failed", err)
-	}
-
-	// Persist the listing ID and state. On DB failure, attempt a compensating
-	// rollback (cancel the just-created listing) to avoid a desync where the
-	// user sees success but the listing is invisible in subsequent renders.
-	if dbErr := h.config.UpdatePurchaseHistoryListing(ctx, purchaseID, result.ListingID, result.State); dbErr != nil {
-		logging.Errorf("marketplace: listing created (%s / %s) but DB update failed: %v — attempting rollback", result.ListingID, result.State, dbErr)
-		if _, rollbackErr := ec2Client.CancelMarketplaceListing(ctx, result.ListingID); rollbackErr != nil {
-			logging.Errorf("marketplace: rollback cancel for listing %s also failed: %v", result.ListingID, rollbackErr)
-		} else {
-			logging.Warnf("marketplace: listing %s rolled back (cancelled) after DB failure", result.ListingID)
-		}
-		return nil, fmt.Errorf("listing created but could not be persisted; listing has been rolled back: %w", dbErr)
+		return nil, err
 	}
 
 	return &MarketplaceListResponse{
@@ -205,6 +178,82 @@ func (h *Handler) marketplaceList(ctx context.Context, req *events.LambdaFunctio
 		AWSFeePercent: awsMarketplaceFeePercent,
 		Note:          fmt.Sprintf("AWS charges a %d%% transaction fee on the listing proceeds. Net proceeds = ListingPrice * %.2f.", awsMarketplaceFeePercent, awsMarketplaceNetFactor),
 	}, nil
+}
+
+// reserveAndCreateListing atomically claims the marketplace-listing slot for the
+// row, creates the AWS listing, and persists it, releasing the claim on every
+// failure path so a failed attempt never leaves the row stuck in the transient
+// pending state. Extracted from marketplaceList to keep that handler under the
+// gocyclo budget. Returns the persisted listing result on success.
+func (h *Handler) reserveAndCreateListing(ctx context.Context, purchaseID string, row *config.PurchaseHistoryRecord, ec2Client marketplaceEC2Client, awsSchedule []ec2svc.MarketplacePriceTier) (ec2svc.MarketplaceListingResult, error) {
+	// List every RI in the row: a row of N Standard RIs must list all N, not a
+	// single unit (issue #292 multi-count fix). Floor at 1 for legacy rows that
+	// somehow recorded a non-positive count so a valid Standard RI still lists,
+	// and reject an implausibly large count rather than silently truncating it
+	// into int32 (which could list the wrong number of RIs on the money path).
+	instanceCount := int32(1)
+	switch {
+	case row.Count > math.MaxInt32:
+		return ec2svc.MarketplaceListingResult{}, NewClientError(500, fmt.Sprintf("purchase count %d exceeds the marketplace listing limit", row.Count))
+	case row.Count > 1:
+		instanceCount = int32(row.Count)
+	}
+
+	// Atomically reserve the listing slot before calling AWS. The read-only
+	// listing_state check in validateMarketplaceListRequest is not enough on its
+	// own: two concurrent requests can both pass it, and AWS assigns a fresh
+	// ClientToken per call so the provider will not dedup them, leaving two live
+	// listings for one RI. The claim serializes concurrent creates for the same
+	// purchase_id (issue #292 CR concurrent-create guard).
+	claimed, err := h.config.ClaimMarketplaceListingSlot(ctx, purchaseID)
+	if err != nil {
+		return ec2svc.MarketplaceListingResult{}, fmt.Errorf("failed to reserve marketplace listing slot: %w", err)
+	}
+	if !claimed {
+		return ec2svc.MarketplaceListingResult{}, NewClientError(409, "a marketplace listing is already active or in progress for this RI; cancel it first")
+	}
+
+	result, err := ec2Client.CreateMarketplaceListing(ctx, ec2svc.MarketplaceListingRequest{
+		ReservedInstancesID: purchaseID,
+		ClientToken:         uuid.New().String(),
+		PriceSchedule:       awsSchedule,
+		InstanceCount:       instanceCount,
+	})
+	if err != nil {
+		// AWS created nothing: release the claim so a retry is not blocked.
+		h.releaseMarketplaceClaim(ctx, purchaseID, row)
+		logging.Warnf("marketplace: CreateReservedInstancesListing for purchase %s failed: %v", purchaseID, err)
+		return ec2svc.MarketplaceListingResult{}, mapAWSMarketplaceError("AWS marketplace listing failed", err)
+	}
+
+	// Persist the listing ID and state. On DB failure, attempt a compensating
+	// rollback (cancel the just-created listing) to avoid a desync where the
+	// user sees success but the listing is invisible in subsequent renders, then
+	// release the claim so the row does not stay stuck in the pending state.
+	if dbErr := h.config.UpdatePurchaseHistoryListing(ctx, purchaseID, result.ListingID, result.State); dbErr != nil {
+		logging.Errorf("marketplace: listing created (%s / %s) but DB update failed: %v; attempting rollback", result.ListingID, result.State, dbErr)
+		if _, rollbackErr := ec2Client.CancelMarketplaceListing(ctx, result.ListingID); rollbackErr != nil {
+			logging.Errorf("marketplace: rollback cancel for listing %s also failed: %v", result.ListingID, rollbackErr)
+		} else {
+			logging.Warnf("marketplace: listing %s rolled back (canceled) after DB failure", result.ListingID)
+		}
+		h.releaseMarketplaceClaim(ctx, purchaseID, row)
+		return ec2svc.MarketplaceListingResult{}, fmt.Errorf("listing created but could not be persisted; listing has been rolled back: %w", dbErr)
+	}
+
+	return result, nil
+}
+
+// releaseMarketplaceClaim restores a purchase_history row's listing fields to
+// the state captured before ClaimMarketplaceListingSlot reserved the slot. It
+// runs on every failure path after a successful claim so a failed listing
+// attempt does not leave the row stuck in the transient pending state (which
+// would block future list attempts). Best-effort: on error it logs loudly
+// because the row may stay pending until the #292 status poller reconciles it.
+func (h *Handler) releaseMarketplaceClaim(ctx context.Context, purchaseID string, row *config.PurchaseHistoryRecord) {
+	if err := h.config.UpdatePurchaseHistoryListing(ctx, purchaseID, row.ListingID, row.ListingState); err != nil {
+		logging.Errorf("marketplace: failed to release listing claim for purchase %s (row may be stuck in %q): %v", purchaseID, config.ListingStatePending, err)
+	}
 }
 
 // marketplaceCancel handles POST /api/purchases/{id}/marketplace-cancel.
@@ -230,7 +279,7 @@ func (h *Handler) marketplaceCancel(ctx context.Context, req *events.LambdaFunct
 		return nil, err
 	}
 
-	if !strings.EqualFold(row.ListingState, "active") {
+	if !strings.EqualFold(row.ListingState, config.ListingStateActive) {
 		return nil, NewClientError(409, "no active listing found for this RI; current state: "+row.ListingState)
 	}
 
@@ -247,12 +296,12 @@ func (h *Handler) marketplaceCancel(ctx context.Context, req *events.LambdaFunct
 		return nil, mapAWSMarketplaceError("AWS cancel listing failed", err)
 	}
 
-	// The listing is already cancelled in AWS; there is no compensating rollback
+	// The listing is already canceled in AWS; there is no compensating rollback
 	// available if the DB write fails. Return an internal error so the caller
 	// knows the state is out of sync and can retry or contact an administrator.
 	if dbErr := h.config.UpdatePurchaseHistoryListing(ctx, purchaseID, result.ListingID, result.State); dbErr != nil {
-		logging.Errorf("marketplace: listing cancelled in AWS (%s) but DB update failed: %v — state is out of sync", result.ListingID, dbErr)
-		return nil, fmt.Errorf("listing cancelled in AWS but could not be persisted: %w", dbErr)
+		logging.Errorf("marketplace: listing canceled in AWS (%s) but DB update failed: %v; state is out of sync", result.ListingID, dbErr)
+		return nil, fmt.Errorf("listing canceled in AWS but could not be persisted: %w", dbErr)
 	}
 
 	return map[string]string{"listing_id": result.ListingID, "listing_state": result.State}, nil
@@ -273,7 +322,7 @@ func (h *Handler) authorizeSessionSell(ctx context.Context, session *Session, cl
 		return NewClientError(500, "authentication service not configured")
 	}
 
-	// Admins are recognised by holding the full-access admin capability
+	// Admins are recognized by holding the full-access admin capability
 	// (auth migrated from role-based to group-membership-only, issue #907).
 	isAdmin, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionAdmin, auth.ResourceAll)
 	if err != nil {
@@ -311,7 +360,7 @@ func (h *Handler) authorizeSessionSell(ctx context.Context, session *Session, cl
 // permit access to the given cloud account UUID. Returns 403 otherwise.
 func (h *Handler) authorizeAllowedAccount(ctx context.Context, session *Session, cloudAccountID string) error {
 	if h.auth != nil {
-		// Admins are recognised by holding the full-access admin capability
+		// Admins are recognized by holding the full-access admin capability
 		// (auth migrated from role-based to group-membership-only, issue #907).
 		isAdmin, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionAdmin, auth.ResourceAll)
 		if err != nil {

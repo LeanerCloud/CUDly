@@ -449,6 +449,12 @@ func (m *MockConfigStore) UpdatePurchaseHistoryListing(ctx context.Context, purc
 	return args.Error(0)
 }
 
+// ClaimMarketplaceListingSlot mocks the atomic listing-slot claim (issue #292).
+func (m *MockConfigStore) ClaimMarketplaceListingSlot(ctx context.Context, purchaseID string) (bool, error) {
+	args := m.Called(ctx, purchaseID)
+	return args.Bool(0), args.Error(1)
+}
+
 func (m *MockConfigStore) SaveRIExchangeRecord(ctx context.Context, record *config.RIExchangeRecord) error {
 	args := m.Called(ctx, record)
 	return args.Error(0)

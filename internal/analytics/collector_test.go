@@ -434,6 +434,10 @@ func (m *mockConfigStore) UpdatePurchaseHistoryListing(_ context.Context, _, _, 
 	return nil
 }
 
+func (m *mockConfigStore) ClaimMarketplaceListingSlot(_ context.Context, _ string) (bool, error) {
+	return true, nil
+}
+
 // strPtr is a test helper for *string fields.
 func strPtr(s string) *string { return &s }
 

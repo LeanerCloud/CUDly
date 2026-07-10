@@ -797,11 +797,24 @@ type PurchaseHistoryRecord struct {
 	// CreateReservedInstancesListing. Empty when the RI has not been
 	// listed. Persisted in purchase_history via migration 000068.
 	ListingID string `json:"listing_id,omitempty" dynamodbav:"listing_id,omitempty"`
-	// ListingState mirrors the AWS marketplace listing state: "active",
-	// "cancelled", or "closed" (sold). Empty when not listed.
-	// Persisted in purchase_history via migration 000068.
+	// ListingState mirrors the AWS marketplace listing state (see the
+	// ListingState* constants). Empty when not listed. Persisted in
+	// purchase_history via migration 000068.
 	ListingState string `json:"listing_state,omitempty" dynamodbav:"listing_state,omitempty"`
 }
+
+// AWS EC2 ReservedInstancesListing status values, mirroring the
+// ec2types.ListingStatus enum. Stored verbatim in purchase_history.listing_state
+// so the strings must match AWS exactly. ListingStatePending is additionally
+// written by the marketplace-list handler as a transient claim that guards
+// against concurrent listing creation (issue #292); the other three come
+// straight from AWS.
+const (
+	ListingStateActive    = "active"
+	ListingStatePending   = "pending"
+	ListingStateCancelled = "cancelled" //nolint:misspell // AWS ListingStatus enum literal, not prose
+	ListingStateClosed    = "closed"
+)
 
 // RIExchangeRecord represents a record in the ri_exchange_history table.
 type RIExchangeRecord struct {

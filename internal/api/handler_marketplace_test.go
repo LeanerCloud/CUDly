@@ -22,27 +22,29 @@ import (
 const validMarketplacePurchaseID = "11111111-1111-1111-1111-111111111111"
 
 // stubMarketplaceEC2 is a configurable stub implementing marketplaceEC2Client.
-// Each field, when set, overrides the corresponding method's behaviour and
+// Each field, when set, overrides the corresponding method's behavior and
 // records the last request so tests can assert on what was sent to AWS.
 type stubMarketplaceEC2 struct {
 	createFn func(ctx context.Context, req ec2svc.MarketplaceListingRequest) (ec2svc.MarketplaceListingResult, error)
 	cancelFn func(ctx context.Context, listingID string) (ec2svc.MarketplaceListingResult, error)
 
 	lastCreateReq   ec2svc.MarketplaceListingRequest
+	createCallCount int
 	cancelCallCount int
 	lastCancelID    string
 }
 
 func (s *stubMarketplaceEC2) CreateMarketplaceListing(ctx context.Context, req ec2svc.MarketplaceListingRequest) (ec2svc.MarketplaceListingResult, error) {
+	s.createCallCount++
 	s.lastCreateReq = req
 	if s.createFn != nil {
 		return s.createFn(ctx, req)
 	}
-	return ec2svc.MarketplaceListingResult{ListingID: "ril-default", State: "active"}, nil
+	return ec2svc.MarketplaceListingResult{ListingID: "ril-default", State: config.ListingStateActive}, nil
 }
 
 func (s *stubMarketplaceEC2) DescribeMarketplaceListing(_ context.Context, listingID string) (ec2svc.MarketplaceListingResult, error) {
-	return ec2svc.MarketplaceListingResult{ListingID: listingID, State: "active"}, nil
+	return ec2svc.MarketplaceListingResult{ListingID: listingID, State: config.ListingStateActive}, nil
 }
 
 func (s *stubMarketplaceEC2) CancelMarketplaceListing(ctx context.Context, listingID string) (ec2svc.MarketplaceListingResult, error) {
@@ -51,7 +53,7 @@ func (s *stubMarketplaceEC2) CancelMarketplaceListing(ctx context.Context, listi
 	if s.cancelFn != nil {
 		return s.cancelFn(ctx, listingID)
 	}
-	return ec2svc.MarketplaceListingResult{ListingID: listingID, State: "cancelled"}, nil
+	return ec2svc.MarketplaceListingResult{ListingID: listingID, State: config.ListingStateCancelled}, nil
 }
 
 // marketplaceTestAPIError is an smithy.APIError with a controllable fault so
@@ -152,7 +154,9 @@ func TestMarketplaceList_SellOwnAllowed(t *testing.T) {
 
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).
 		Return(standardRow(), nil)
-	cfgStore.On("UpdatePurchaseHistoryListing", mock.Anything, validMarketplacePurchaseID, "ril-default", "active").
+	cfgStore.On("ClaimMarketplaceListingSlot", mock.Anything, validMarketplacePurchaseID).
+		Return(true, nil)
+	cfgStore.On("UpdatePurchaseHistoryListing", mock.Anything, validMarketplacePurchaseID, "ril-default", config.ListingStateActive).
 		Return(nil)
 
 	h := newMarketplaceHandler(cfgStore, authSvc, ec2)
@@ -203,7 +207,7 @@ func TestMarketplaceList_DuplicateActiveListing409(t *testing.T) {
 	adminSession(authSvc)
 
 	row := standardRow()
-	row.ListingState = "active"
+	row.ListingState = config.ListingStateActive
 	row.ListingID = "ril-existing"
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).
 		Return(row, nil)
@@ -224,6 +228,11 @@ func TestMarketplaceList_AWSClientFaultMapsTo400(t *testing.T) {
 	adminSession(authSvc)
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).
 		Return(standardRow(), nil)
+	cfgStore.On("ClaimMarketplaceListingSlot", mock.Anything, validMarketplacePurchaseID).
+		Return(true, nil)
+	// AWS create fails, so the claim must be released back to the unlisted state.
+	cfgStore.On("UpdatePurchaseHistoryListing", mock.Anything, validMarketplacePurchaseID, "", "").
+		Return(nil)
 
 	ec2 := &stubMarketplaceEC2{
 		createFn: func(_ context.Context, _ ec2svc.MarketplaceListingRequest) (ec2svc.MarketplaceListingResult, error) {
@@ -249,6 +258,11 @@ func TestMarketplaceList_AWSServerFaultMapsTo502(t *testing.T) {
 	adminSession(authSvc)
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).
 		Return(standardRow(), nil)
+	cfgStore.On("ClaimMarketplaceListingSlot", mock.Anything, validMarketplacePurchaseID).
+		Return(true, nil)
+	// AWS create fails, so the claim must be released back to the unlisted state.
+	cfgStore.On("UpdatePurchaseHistoryListing", mock.Anything, validMarketplacePurchaseID, "", "").
+		Return(nil)
 
 	ec2 := &stubMarketplaceEC2{
 		createFn: func(_ context.Context, _ ec2svc.MarketplaceListingRequest) (ec2svc.MarketplaceListingResult, error) {
@@ -273,6 +287,11 @@ func TestMarketplaceList_UnknownErrorMapsTo502(t *testing.T) {
 	adminSession(authSvc)
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).
 		Return(standardRow(), nil)
+	cfgStore.On("ClaimMarketplaceListingSlot", mock.Anything, validMarketplacePurchaseID).
+		Return(true, nil)
+	// AWS create fails, so the claim must be released back to the unlisted state.
+	cfgStore.On("UpdatePurchaseHistoryListing", mock.Anything, validMarketplacePurchaseID, "", "").
+		Return(nil)
 
 	ec2 := &stubMarketplaceEC2{
 		createFn: func(_ context.Context, _ ec2svc.MarketplaceListingRequest) (ec2svc.MarketplaceListingResult, error) {
@@ -295,9 +314,15 @@ func TestMarketplaceList_DBFailureCompensatingRollback(t *testing.T) {
 	adminSession(authSvc)
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).
 		Return(standardRow(), nil)
+	cfgStore.On("ClaimMarketplaceListingSlot", mock.Anything, validMarketplacePurchaseID).
+		Return(true, nil)
 	// DB persist fails after the listing was created.
-	cfgStore.On("UpdatePurchaseHistoryListing", mock.Anything, validMarketplacePurchaseID, "ril-default", "active").
+	cfgStore.On("UpdatePurchaseHistoryListing", mock.Anything, validMarketplacePurchaseID, "ril-default", config.ListingStateActive).
 		Return(errors.New("db down"))
+	// After the compensating cancel, the claim is released back to unlisted so
+	// the row is not left stuck in the pending state.
+	cfgStore.On("UpdatePurchaseHistoryListing", mock.Anything, validMarketplacePurchaseID, "", "").
+		Return(nil)
 
 	ec2 := &stubMarketplaceEC2{}
 	h := newMarketplaceHandler(cfgStore, authSvc, ec2)
@@ -335,11 +360,11 @@ func TestMarketplaceCancel_HappyPath(t *testing.T) {
 	adminSession(authSvc)
 
 	row := standardRow()
-	row.ListingState = "active"
+	row.ListingState = config.ListingStateActive
 	row.ListingID = "ril-cancel"
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).
 		Return(row, nil)
-	cfgStore.On("UpdatePurchaseHistoryListing", mock.Anything, validMarketplacePurchaseID, "ril-cancel", "cancelled").
+	cfgStore.On("UpdatePurchaseHistoryListing", mock.Anything, validMarketplacePurchaseID, "ril-cancel", config.ListingStateCancelled).
 		Return(nil)
 
 	ec2 := &stubMarketplaceEC2{}
@@ -349,7 +374,7 @@ func TestMarketplaceCancel_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 	m, ok := resp.(map[string]string)
 	require.True(t, ok)
-	assert.Equal(t, "cancelled", m["listing_state"])
+	assert.Equal(t, config.ListingStateCancelled, m["listing_state"])
 	assert.Equal(t, "ril-cancel", ec2.lastCancelID)
 	cfgStore.AssertExpectations(t)
 }
@@ -370,4 +395,58 @@ func TestMarketplaceCancel_NoActiveListing409(t *testing.T) {
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
 	assert.Equal(t, 409, ce.code)
+}
+
+// TestMarketplaceList_ConcurrentClaimLoses409 reproduces the concurrent-create
+// race (issue #292 CR): the pre-flight listing_state read passes, but a parallel
+// request has already reserved the listing slot, so the atomic claim loses. The
+// handler must return 409 and must NOT call AWS (creating a second live listing
+// for one RI would be a real double-listing on the money path). This test fails
+// on the pre-guard code, which called AWS unconditionally after the read-check.
+func TestMarketplaceList_ConcurrentClaimLoses409(t *testing.T) {
+	cfgStore := &MockConfigStore{}
+	authSvc := &MockAuthService{}
+	adminSession(authSvc)
+
+	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).
+		Return(standardRow(), nil)
+	// A concurrent request already holds the slot: the atomic claim reports lost.
+	cfgStore.On("ClaimMarketplaceListingSlot", mock.Anything, validMarketplacePurchaseID).
+		Return(false, nil)
+
+	ec2 := &stubMarketplaceEC2{}
+	h := newMarketplaceHandler(cfgStore, authSvc, ec2)
+	_, err := h.marketplaceList(context.Background(), marketplaceReq(), validMarketplacePurchaseID)
+
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 409, ce.code)
+	// The guard must fire before AWS: no listing may be created when the claim loses.
+	assert.Equal(t, 0, ec2.createCallCount)
+	cfgStore.AssertExpectations(t)
+}
+
+// TestMarketplaceList_ClaimErrorMapsToInternal verifies a claim DB error is
+// surfaced (not swallowed) and blocks the AWS call, so a broken slot-reservation
+// never silently proceeds to create an unguarded listing.
+func TestMarketplaceList_ClaimErrorMapsToInternal(t *testing.T) {
+	cfgStore := &MockConfigStore{}
+	authSvc := &MockAuthService{}
+	adminSession(authSvc)
+
+	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).
+		Return(standardRow(), nil)
+	cfgStore.On("ClaimMarketplaceListingSlot", mock.Anything, validMarketplacePurchaseID).
+		Return(false, errors.New("db down"))
+
+	ec2 := &stubMarketplaceEC2{}
+	h := newMarketplaceHandler(cfgStore, authSvc, ec2)
+	_, err := h.marketplaceList(context.Background(), marketplaceReq(), validMarketplacePurchaseID)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reserve marketplace listing slot")
+	// A failed claim must not fall through to AWS.
+	assert.Equal(t, 0, ec2.createCallCount)
+	cfgStore.AssertExpectations(t)
 }
