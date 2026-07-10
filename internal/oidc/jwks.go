@@ -39,13 +39,19 @@ func PublicJWK(pub crypto.PublicKey, kid string) (JWK, error) {
 		return JWK{}, fmt.Errorf("oidc: PublicJWK requires *ecdsa.PublicKey, got %T", pub)
 	}
 	byteLen := (ecPub.Curve.Params().BitSize + 7) / 8
-	xBytes := ecPub.X.Bytes()
-	yBytes := ecPub.Y.Bytes()
-	// Left-pad to the expected coordinate byte length (RFC 7518 §6.2.1.2).
-	xPadded := make([]byte, byteLen)
-	yPadded := make([]byte, byteLen)
-	copy(xPadded[byteLen-len(xBytes):], xBytes)
-	copy(yPadded[byteLen-len(yBytes):], yBytes)
+	// Derive the fixed-width, already left-padded coordinates from the
+	// uncompressed SEC 1 point (0x04 || X || Y) via crypto/ecdh, matching
+	// ComputeKeyID and avoiding the deprecated ecdsa.PublicKey.X/Y fields.
+	ecdhKey, err := ecPub.ECDH()
+	if err != nil {
+		return JWK{}, fmt.Errorf("oidc: convert ecdsa public key to ecdh: %w", err)
+	}
+	uncompressed := ecdhKey.Bytes()
+	if len(uncompressed) != 1+2*byteLen {
+		return JWK{}, fmt.Errorf("oidc: unexpected uncompressed point length %d, want %d", len(uncompressed), 1+2*byteLen)
+	}
+	xPadded := uncompressed[1 : 1+byteLen]
+	yPadded := uncompressed[1+byteLen:]
 	return JWK{
 		Kty: "EC",
 		Use: "sig",

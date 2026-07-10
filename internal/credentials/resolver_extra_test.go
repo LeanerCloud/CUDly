@@ -2,6 +2,7 @@ package credentials
 
 import (
 	"context"
+	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -24,7 +25,7 @@ type stubOIDCSigner struct{}
 func (stubOIDCSigner) Sign(context.Context, []byte) ([]byte, error) {
 	return nil, assert.AnError
 }
-func (stubOIDCSigner) PublicKey(context.Context) (*rsa.PublicKey, error) {
+func (stubOIDCSigner) PublicKey(context.Context) (crypto.PublicKey, error) {
 	return nil, assert.AnError
 }
 func (stubOIDCSigner) KeyID(context.Context) (string, error) {
