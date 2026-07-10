@@ -573,7 +573,7 @@ func TestPlainTextTemplates_NoHTMLEscaping(t *testing.T) {
 
 // Issue #296: plain-text RI exchange pending approval email carries the
 // enriched summary fields (requested-by, cancellation-window note) and uses
-// labelled Approve/Reject URLs instead of bracket-wrapped actions.
+// labeled Approve/Reject URLs instead of bracket-wrapped actions.
 func TestRenderRIExchangePendingApprovalEmail_Issue296(t *testing.T) {
 	data := RIExchangeNotificationData{
 		DashboardURL:           "https://dashboard.example.com",
@@ -611,7 +611,7 @@ func TestRenderRIExchangePendingApprovalEmail_Issue296(t *testing.T) {
 	assert.Contains(t, body, "cristi@acme.com")
 	assert.Contains(t, body, "2026-05-22T10:00:00Z")
 
-	// Labelled action URLs (not bracket notation).
+	// Labeled action URLs (not bracket notation).
 	assert.Contains(t, body, "Approve: ")
 	assert.Contains(t, body, "Reject:  ")
 	assert.Contains(t, body, "/api/ri-exchange/approve/rec-001")

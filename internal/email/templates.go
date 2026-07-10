@@ -322,7 +322,7 @@ This is an automated message from CUDly. Do not share these links.
 
 // riExchangePendingApprovalHTMLTemplate renders the same approval request as
 // the plain-text template above with inline-styled approve/reject CTAs and an
-// exchange summary table. CSS classes are NOT honoured by most email clients
+// exchange summary table. CSS classes are NOT honored by most email clients
 // (Outlook, mobile Gmail) -- every visual rule lives in inline style=""
 // attributes. Mirrors purchaseApprovalRequestHTMLTemplate. Issue #296.
 const riExchangePendingApprovalHTMLTemplate = `<!DOCTYPE html>
