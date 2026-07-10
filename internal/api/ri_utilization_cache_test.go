@@ -159,15 +159,23 @@ func TestRIUtilizationCache_StaleOnNonLambdaServesStaleAndKicksRefresh(t *testin
 	}
 
 	// Give the storePayload write a beat to land.
-	deadline := time.Now().Add(500 * time.Millisecond)
+	if !waitForStoredRI(store, "us-east-1", 30, "ri-fresh", 500*time.Millisecond) {
+		t.Fatalf("background refresh did not update the stored row")
+	}
+}
+
+// waitForStoredRI polls the store until it holds exactly one row with the
+// given ReservedInstanceID, or the timeout elapses. It returns true on match.
+func waitForStoredRI(store *fakeRIUtilCacheStore, region string, days int, wantRIID string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		latest, ok := store.latest("us-east-1", 30)
-		if ok && len(latest) == 1 && latest[0].ReservedInstanceID == "ri-fresh" {
-			return
+		latest, ok := store.latest(region, days)
+		if ok && len(latest) == 1 && latest[0].ReservedInstanceID == wantRIID {
+			return true
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("background refresh did not update the stored row")
+	return false
 }
 
 func TestRIUtilizationCache_StaleOnLambdaBlocksForSyncRefetch(t *testing.T) {

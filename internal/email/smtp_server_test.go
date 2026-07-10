@@ -68,66 +68,67 @@ func (s *mockSMTPServer) start(_ *testing.T) {
 			if err != nil {
 				return
 			}
-
-			line = strings.TrimSpace(line)
-
-			// If in DATA mode, collect the message until we see "."
-			if s.inData {
-				s.mu.Lock()
-				s.receivedMsg += line + "\n"
-				s.mu.Unlock()
-				if line == "." {
-					s.inData = false
-					fmt.Fprintf(writer, "250 2.0.0 OK: message queued\r\n")
-					writer.Flush()
-				}
-				continue
-			}
-
-			s.mu.Lock()
-			s.receivedMsg += line + "\n"
-			s.mu.Unlock()
-
-			// Determine response based on command
-			switch {
-			case strings.HasPrefix(line, "EHLO") || strings.HasPrefix(line, "HELO"):
-				// Send multi-line EHLO response
-				fmt.Fprintf(writer, "250-localhost Hello\r\n")
-				fmt.Fprintf(writer, "250-SIZE 35882577\r\n")
-				fmt.Fprintf(writer, "250-8BITMIME\r\n")
-				fmt.Fprintf(writer, "250-AUTH PLAIN LOGIN\r\n")
-				fmt.Fprintf(writer, "250 OK\r\n")
-				writer.Flush()
-			case strings.HasPrefix(line, "AUTH"):
-				if s.authFail {
-					fmt.Fprintf(writer, "535 5.7.8 Authentication failed\r\n")
-				} else {
-					fmt.Fprintf(writer, "235 2.7.0 Authentication successful\r\n")
-				}
-				writer.Flush()
-			case strings.HasPrefix(line, "MAIL FROM"):
-				fmt.Fprintf(writer, "250 2.1.0 OK\r\n")
-				writer.Flush()
-			case strings.HasPrefix(line, "RCPT TO"):
-				fmt.Fprintf(writer, "250 2.1.5 OK\r\n")
-				writer.Flush()
-			case strings.HasPrefix(line, "DATA"):
-				s.inData = true
-				fmt.Fprintf(writer, "354 Start mail input; end with <CRLF>.<CRLF>\r\n")
-				writer.Flush()
-			case strings.HasPrefix(line, "QUIT"):
-				fmt.Fprintf(writer, "221 2.0.0 Bye\r\n")
-				writer.Flush()
+			if quit := s.respondToLine(writer, strings.TrimSpace(line)); quit {
 				return
-			case strings.HasPrefix(line, "RSET"):
-				fmt.Fprintf(writer, "250 2.0.0 OK\r\n")
-				writer.Flush()
-			default:
-				fmt.Fprintf(writer, "250 OK\r\n")
-				writer.Flush()
 			}
 		}
 	}()
+}
+
+// respondToLine records the line and writes the stub server's response,
+// returning true when the connection should be closed (QUIT).
+func (s *mockSMTPServer) respondToLine(writer *bufio.Writer, line string) (quit bool) {
+	s.mu.Lock()
+	s.receivedMsg += line + "\n"
+	s.mu.Unlock()
+
+	// If in DATA mode, collect the message until we see ".".
+	if s.inData {
+		if line == "." {
+			s.inData = false
+			fmt.Fprintf(writer, "250 2.0.0 OK: message queued\r\n")
+			writer.Flush()
+		}
+		return false
+	}
+
+	return s.respondToCommand(writer, line)
+}
+
+// respondToCommand writes the response for a single SMTP command line,
+// returning true when the connection should be closed (QUIT).
+func (s *mockSMTPServer) respondToCommand(writer *bufio.Writer, line string) (quit bool) {
+	defer writer.Flush()
+	switch {
+	case strings.HasPrefix(line, "EHLO") || strings.HasPrefix(line, "HELO"):
+		// Send multi-line EHLO response
+		fmt.Fprintf(writer, "250-localhost Hello\r\n")
+		fmt.Fprintf(writer, "250-SIZE 35882577\r\n")
+		fmt.Fprintf(writer, "250-8BITMIME\r\n")
+		fmt.Fprintf(writer, "250-AUTH PLAIN LOGIN\r\n")
+		fmt.Fprintf(writer, "250 OK\r\n")
+	case strings.HasPrefix(line, "AUTH"):
+		if s.authFail {
+			fmt.Fprintf(writer, "535 5.7.8 Authentication failed\r\n")
+		} else {
+			fmt.Fprintf(writer, "235 2.7.0 Authentication successful\r\n")
+		}
+	case strings.HasPrefix(line, "MAIL FROM"):
+		fmt.Fprintf(writer, "250 2.1.0 OK\r\n")
+	case strings.HasPrefix(line, "RCPT TO"):
+		fmt.Fprintf(writer, "250 2.1.5 OK\r\n")
+	case strings.HasPrefix(line, "DATA"):
+		s.inData = true
+		fmt.Fprintf(writer, "354 Start mail input; end with <CRLF>.<CRLF>\r\n")
+	case strings.HasPrefix(line, "QUIT"):
+		fmt.Fprintf(writer, "221 2.0.0 Bye\r\n")
+		return true
+	case strings.HasPrefix(line, "RSET"):
+		fmt.Fprintf(writer, "250 2.0.0 OK\r\n")
+	default:
+		fmt.Fprintf(writer, "250 OK\r\n")
+	}
+	return false
 }
 
 // stop closes the server.
@@ -514,66 +515,89 @@ func handleFlexSMTPConn(conn net.Conn, behavior string) {
 			return
 		}
 		cmd := strings.ToUpper(strings.TrimSpace(line))
-
-		switch {
-		case strings.HasPrefix(cmd, "EHLO") || strings.HasPrefix(cmd, "HELO"):
-			fmt.Fprintf(conn, "250-localhost Hello\r\n")
-			fmt.Fprintf(conn, "250-SIZE 10240000\r\n")
-			fmt.Fprintf(conn, "250 AUTH PLAIN LOGIN\r\n")
-
-		case strings.HasPrefix(cmd, "STARTTLS"):
-			fmt.Fprintf(conn, "220 Ready to start TLS\r\n")
-			return // plaintext conn -> client TLS handshake fails
-
-		case strings.HasPrefix(cmd, "AUTH"):
-			switch behavior {
-			case "auth_fail_535":
-				fmt.Fprintf(conn, "535 5.7.8 Authentication credentials invalid\r\n")
-			case "auth_fail_other":
-				fmt.Fprintf(conn, "454 4.7.0 Temporary authentication failure\r\n")
-			default:
-				fmt.Fprintf(conn, "235 2.7.0 Authentication successful\r\n")
-			}
-
-		case strings.HasPrefix(cmd, "MAIL FROM:"):
-			if behavior == "mail_fail" {
-				fmt.Fprintf(conn, "550 5.1.0 Sender rejected\r\n")
-			} else {
-				fmt.Fprintf(conn, "250 2.1.0 OK\r\n")
-			}
-
-		case strings.HasPrefix(cmd, "RCPT TO:"):
-			if behavior == "rcpt_fail" {
-				fmt.Fprintf(conn, "550 5.1.1 Recipient rejected\r\n")
-			} else {
-				fmt.Fprintf(conn, "250 2.1.5 OK\r\n")
-			}
-
-		case strings.HasPrefix(cmd, "DATA"):
-			if behavior == "data_fail" {
-				fmt.Fprintf(conn, "554 5.0.0 Transaction failed\r\n")
-			} else {
-				fmt.Fprintf(conn, "354 Start mail input; end with <CRLF>.<CRLF>\r\n")
-				for {
-					dataLine, err := reader.ReadString('\n')
-					if err != nil {
-						return
-					}
-					if strings.TrimSpace(dataLine) == "." {
-						break
-					}
-				}
-				fmt.Fprintf(conn, "250 2.0.0 OK\r\n")
-			}
-
-		case strings.HasPrefix(cmd, "QUIT"):
-			fmt.Fprintf(conn, "221 2.0.0 Bye\r\n")
+		if done := handleFlexSMTPCommand(conn, reader, cmd, behavior); done {
 			return
-
-		default:
-			fmt.Fprintf(conn, "500 5.5.1 Command not recognized\r\n")
 		}
 	}
+}
+
+// handleFlexSMTPCommand writes the stub response for a single command,
+// returning true when the connection should be closed (STARTTLS, QUIT, or a
+// read error while draining a DATA body).
+func handleFlexSMTPCommand(conn net.Conn, reader *bufio.Reader, cmd, behavior string) (done bool) {
+	switch {
+	case strings.HasPrefix(cmd, "EHLO") || strings.HasPrefix(cmd, "HELO"):
+		fmt.Fprintf(conn, "250-localhost Hello\r\n")
+		fmt.Fprintf(conn, "250-SIZE 10240000\r\n")
+		fmt.Fprintf(conn, "250 AUTH PLAIN LOGIN\r\n")
+
+	case strings.HasPrefix(cmd, "STARTTLS"):
+		fmt.Fprintf(conn, "220 Ready to start TLS\r\n")
+		return true // plaintext conn -> client TLS handshake fails
+
+	case strings.HasPrefix(cmd, "AUTH"):
+		handleFlexAuth(conn, behavior)
+
+	case strings.HasPrefix(cmd, "MAIL FROM:"):
+		writeFlexReply(conn, behavior == "mail_fail", "550 5.1.0 Sender rejected\r\n", "250 2.1.0 OK\r\n")
+
+	case strings.HasPrefix(cmd, "RCPT TO:"):
+		writeFlexReply(conn, behavior == "rcpt_fail", "550 5.1.1 Recipient rejected\r\n", "250 2.1.5 OK\r\n")
+
+	case strings.HasPrefix(cmd, "DATA"):
+		return handleFlexData(conn, reader, behavior)
+
+	case strings.HasPrefix(cmd, "QUIT"):
+		fmt.Fprintf(conn, "221 2.0.0 Bye\r\n")
+		return true
+
+	default:
+		fmt.Fprintf(conn, "500 5.5.1 Command not recognized\r\n")
+	}
+	return false
+}
+
+// writeFlexReply writes failMsg when fail is true, otherwise okMsg.
+func writeFlexReply(conn net.Conn, fail bool, failMsg, okMsg string) {
+	if fail {
+		fmt.Fprintf(conn, "%s", failMsg)
+	} else {
+		fmt.Fprintf(conn, "%s", okMsg)
+	}
+}
+
+// handleFlexAuth writes the AUTH response for the configured behavior.
+func handleFlexAuth(conn net.Conn, behavior string) {
+	switch behavior {
+	case "auth_fail_535":
+		fmt.Fprintf(conn, "535 5.7.8 Authentication credentials invalid\r\n")
+	case "auth_fail_other":
+		fmt.Fprintf(conn, "454 4.7.0 Temporary authentication failure\r\n")
+	default:
+		fmt.Fprintf(conn, "235 2.7.0 Authentication successful\r\n")
+	}
+}
+
+// handleFlexData handles a DATA command, draining the message body until the
+// terminating ".". It returns true when the connection should be closed
+// because of a read error mid-body.
+func handleFlexData(conn net.Conn, reader *bufio.Reader, behavior string) (done bool) {
+	if behavior == "data_fail" {
+		fmt.Fprintf(conn, "554 5.0.0 Transaction failed\r\n")
+		return false
+	}
+	fmt.Fprintf(conn, "354 Start mail input; end with <CRLF>.<CRLF>\r\n")
+	for {
+		dataLine, err := reader.ReadString('\n')
+		if err != nil {
+			return true
+		}
+		if strings.TrimSpace(dataLine) == "." {
+			break
+		}
+	}
+	fmt.Fprintf(conn, "250 2.0.0 OK\r\n")
+	return false
 }
 
 // testFlexAuth implements smtp.Auth for testing without TLS requirement.

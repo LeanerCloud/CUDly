@@ -1061,12 +1061,7 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		outOfRangeDay := now.AddDate(0, 0, -10) // older than the window AND outside the requested range
 
 		mockStore.On("GetPurchaseHistoryFiltered", ctx,
-			mock.MatchedBy(func(f config.PurchaseHistoryFilter) bool {
-				return f.Provider == "" && len(f.AccountIDs) == 0 && len(f.ExternalIDsByProvider) == 0 &&
-					f.Start != nil && f.Start.Format("2006-01-02") == startDay &&
-					f.End != nil && f.End.Format("2006-01-02") == endDay &&
-					f.Limit == config.DefaultListLimit
-			}),
+			mock.MatchedBy(dateRangeOnlyFilterMatcher(startDay, endDay)),
 		).Return([]config.PurchaseHistoryRecord{{AccountID: "in-range", PurchaseID: "p-in-range"}}, nil).Once()
 
 		execs := []config.PurchaseExecution{
@@ -1100,10 +1095,7 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 
 		uuidA := "55555555-5555-5555-5555-555555555555"
 		mockStore.On("GetPurchaseHistoryFiltered", ctx,
-			mock.MatchedBy(func(f config.PurchaseHistoryFilter) bool {
-				return f.Provider == "aws" && len(f.AccountIDs) == 1 && f.AccountIDs[0] == uuidA &&
-					f.Start != nil && f.End != nil && f.Limit == config.DefaultListLimit
-			}),
+			mock.MatchedBy(providerAccountDateFilterMatcher(uuidA)),
 		).Return([]config.PurchaseHistoryRecord{{AccountID: "match", PurchaseID: "p-match"}}, nil).Once()
 
 		now := time.Now().UTC()
@@ -1155,6 +1147,28 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		assert.False(t, ids["exec-wrong-provider"])
 		assert.False(t, ids["exec-wrong-account"])
 	})
+}
+
+// dateRangeOnlyFilterMatcher returns a MatchedBy predicate asserting the SQL
+// filter carries only the given start/end days (no provider/account predicates)
+// plus the default limit.
+func dateRangeOnlyFilterMatcher(startDay, endDay string) func(config.PurchaseHistoryFilter) bool {
+	return func(f config.PurchaseHistoryFilter) bool {
+		return f.Provider == "" && len(f.AccountIDs) == 0 && len(f.ExternalIDsByProvider) == 0 &&
+			f.Start != nil && f.Start.Format("2006-01-02") == startDay &&
+			f.End != nil && f.End.Format("2006-01-02") == endDay &&
+			f.Limit == config.DefaultListLimit
+	}
+}
+
+// providerAccountDateFilterMatcher returns a MatchedBy predicate asserting the
+// SQL filter combines provider=aws, the single account UUID, a non-nil date
+// range, and the default limit.
+func providerAccountDateFilterMatcher(uuidA string) func(config.PurchaseHistoryFilter) bool {
+	return func(f config.PurchaseHistoryFilter) bool {
+		return f.Provider == "aws" && len(f.AccountIDs) == 1 && f.AccountIDs[0] == uuidA &&
+			f.Start != nil && f.End != nil && f.Limit == config.DefaultListLimit
+	}
 }
 
 // TestHandler_getHistory_FilterValidation covers the 400-on-malformed-input
