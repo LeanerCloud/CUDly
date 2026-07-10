@@ -48,12 +48,12 @@ func TestTruncate(t *testing.T) {
 	assert.Equal(t, "abcde...(truncated)", truncate("abcdef", 5))
 }
 
-func accountJSON(id, tenantID, name, state string) []byte {
+func accountJSON(id, tenantID string) []byte {
 	b, err := json.Marshal(azAccountShow{
 		ID:       id,
 		TenantID: tenantID,
-		Name:     name,
-		State:    state,
+		Name:     "My Sub",
+		State:    "Enabled",
 	})
 	if err != nil {
 		panic(err)
@@ -70,11 +70,9 @@ func TestValidateAccountExpectations(t *testing.T) {
 		wantMsgPart string // substring expected in Message when non-empty
 	}{
 		{
-			name: "valid json, no expectations",
-			opts: Options{},
-			accountOut: accountJSON(
-				"sub-123", "tenant-456", "My Sub", "Enabled",
-			),
+			name:       "valid json, no expectations",
+			opts:       Options{},
+			accountOut: accountJSON("sub-123", "tenant-456"),
 			wantStatus: report.StatusPass,
 		},
 		{
@@ -83,9 +81,7 @@ func TestValidateAccountExpectations(t *testing.T) {
 				ExpectedSubID:    "sub-123",
 				ExpectedTenantID: "tenant-456",
 			},
-			accountOut: accountJSON(
-				"sub-123", "tenant-456", "My Sub", "Enabled",
-			),
+			accountOut: accountJSON("sub-123", "tenant-456"),
 			wantStatus: report.StatusPass,
 		},
 		{
@@ -93,9 +89,7 @@ func TestValidateAccountExpectations(t *testing.T) {
 			opts: Options{
 				ExpectedSubID: "sub-expected",
 			},
-			accountOut: accountJSON(
-				"sub-actual", "tenant-456", "My Sub", "Enabled",
-			),
+			accountOut:  accountJSON("sub-actual", "tenant-456"),
 			wantStatus:  report.StatusFail,
 			wantMsgPart: "unexpected subscription",
 		},
@@ -104,9 +98,7 @@ func TestValidateAccountExpectations(t *testing.T) {
 			opts: Options{
 				ExpectedTenantID: "tenant-expected",
 			},
-			accountOut: accountJSON(
-				"sub-123", "tenant-actual", "My Sub", "Enabled",
-			),
+			accountOut:  accountJSON("sub-123", "tenant-actual"),
 			wantStatus:  report.StatusFail,
 			wantMsgPart: "unexpected tenant",
 		},

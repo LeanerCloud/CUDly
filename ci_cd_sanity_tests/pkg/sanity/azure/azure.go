@@ -47,11 +47,11 @@ type azAccountShow struct {
 	} `json:"user"`
 }
 
-func truncate(s string, max int) string {
-	if len(s) <= max {
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
 		return s
 	}
-	return s[:max] + "...(truncated)"
+	return s[:maxLen] + "...(truncated)"
 }
 
 // validateAccountExpectations parses "az account show" JSON output and checks
@@ -97,7 +97,7 @@ func validateAccountExpectations(opts Options, accountOut []byte) report.CheckRe
 	return check
 }
 
-// encodeAccountJSON serialises azureSubscriptionInfo into the same JSON shape
+// encodeAccountJSON serializes azureSubscriptionInfo into the same JSON shape
 // that "az account show -o json" produced so that validateAccountExpectations
 // can be reused without modification. The struct is composed of plain strings
 // so json.Marshal cannot realistically fail; a nil return on the impossible
@@ -251,7 +251,7 @@ func runAccountSetCheck(ctx context.Context, subscriptionID string, cred azcore.
 // runAccountShowCheck retrieves subscription identity information.
 // It returns the check result and the JSON-encoded account info (for use by
 // validateAccountExpectations). The JSON is empty on failure.
-func runAccountShowCheck(ctx context.Context, subscriptionID string, cred azcore.TokenCredential) (report.CheckResult, []byte) {
+func runAccountShowCheck(ctx context.Context, subscriptionID string, cred azcore.TokenCredential) (result report.CheckResult, accountJSON []byte) {
 	cr := newCheckResult("azure:account:show", time.Now().UTC())
 	cr.Details["subscriptionID"] = subscriptionID
 
@@ -293,7 +293,7 @@ func runAccountShowCheck(ctx context.Context, subscriptionID string, cred azcore
 // AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_CLIENT_SECRET environment
 // variables (service-principal flow). On an operator workstation it falls back
 // to AzureCLICredential (i.e. the session established by "az login"), so the
-// behaviour is identical to the previous CLI-based implementation.
+// behavior is identical to the previous CLI-based implementation.
 func Run(ctx context.Context, opts Options) (*report.Report, error) {
 	if opts.SubscriptionID == "" {
 		opts.SubscriptionID = os.Getenv("AZURE_SUBSCRIPTION_ID")
