@@ -127,7 +127,11 @@ func TestAnalyticsNestedRollup_COR02(t *testing.T) {
 	})
 
 	t.Run("down restores the flat-AVG view and up reapplies cleanly", func(t *testing.T) {
-		require.NoError(t, migrations.RollbackMigrations(ctx, container.DB.Pool(), getMigrationsPath(), 1))
+		// Migrate down to version 77 (just below this migration) so 000078's
+		// down runs regardless of how many later migrations sit above it on
+		// main; a fixed-step RollbackMigrations would only undo the topmost
+		// migration and leave the nested-rollup view in place.
+		require.NoError(t, migrations.MigrateToVersion(ctx, container.DB.Pool(), getMigrationsPath(), 77))
 		_, err := container.DB.Exec(ctx, "REFRESH MATERIALIZED VIEW monthly_savings_summary")
 		require.NoError(t, err)
 
