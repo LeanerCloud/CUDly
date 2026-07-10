@@ -70,10 +70,12 @@ const (
 // identity read it from here rather than re-resolving it through a second
 // ValidateSession / ValidateUserAPIKeyAPI call.
 type Principal struct {
+	// Field order groups the pointer-bearing Session ahead of the trailing
+	// string so the struct satisfies govet fieldalignment.
 	Kind    PrincipalKind
+	Session *Session // non-nil only for PrincipalSession
 	UserID  string   // empty for PrincipalAdminAPIKey
 	Email   string   // empty for PrincipalAdminAPIKey; populated for session/user-api-key
-	Session *Session // non-nil only for PrincipalSession
 }
 
 // authenticate checks authentication via admin API key, user API key, or Bearer token
