@@ -2,6 +2,7 @@ package migrations
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -513,8 +514,9 @@ func GetMigrationVersion(ctx context.Context, pool *pgxpool.Pool, migrationsPath
 }
 
 // buildMigrateDSN builds a connection string for golang-migrate from pgx config.
-// sslmode is inferred from the pgx TLSConfig ("require" when TLS is configured,
-// "disable" otherwise).
+// The SSL mode is recovered from the parsed TLSConfig so strict modes
+// (verify-ca / verify-full) are preserved rather than silently downgraded to
+// require. See sslModeFromTLSConfig for the exact mapping.
 func buildMigrateDSN(config *pgxpool.Config) string {
 	// Extract connection details from pgx config
 	host := config.ConnConfig.Host
@@ -527,11 +529,7 @@ func buildMigrateDSN(config *pgxpool.Config) string {
 	encodedUser := url.QueryEscape(user)
 	encodedPassword := url.QueryEscape(password)
 
-	// Infer sslmode from the TLS config.
-	sslMode := "require"
-	if config.ConnConfig.TLSConfig == nil {
-		sslMode = "disable"
-	}
+	sslMode := sslModeFromTLSConfig(config.ConnConfig.TLSConfig)
 
 	// Build DSN (golang-migrate uses postgres:// format)
 	// Don't add connection options - RDS Proxy doesn't support them
@@ -544,6 +542,39 @@ func buildMigrateDSN(config *pgxpool.Config) string {
 		database,
 		sslMode,
 	)
+}
+
+// sslModeFromTLSConfig recovers the libpq sslmode string that pgx derived from
+// the original DSN, so the migration DSN matches the security policy the
+// application enforces in normal operation. pgx (v5) maps sslmode -> *tls.Config
+// as follows, which we invert here:
+//
+//   - disable      -> nil
+//   - require       -> InsecureSkipVerify=true, no custom chain/host verification
+//   - verify-ca     -> InsecureSkipVerify=true + a VerifyPeerCertificate callback
+//     (verifies the chain but not the hostname)
+//   - verify-full   -> InsecureSkipVerify=false + ServerName set
+//     (verifies both chain and hostname)
+//
+// Collapsing every TLS-enabled mode to "require" would silently drop the
+// certificate-validation guarantees of verify-ca / verify-full during
+// migrations, so we distinguish them explicitly.
+func sslModeFromTLSConfig(tlsConfig *tls.Config) string {
+	if tlsConfig == nil {
+		return "disable"
+	}
+	// verify-full is the only mode where pgx leaves InsecureSkipVerify=false:
+	// the standard library then verifies both the chain and the hostname.
+	if !tlsConfig.InsecureSkipVerify {
+		return "verify-full"
+	}
+	// verify-ca skips the standard hostname check but installs a custom
+	// VerifyPeerCertificate callback to validate the chain; plain require
+	// installs neither.
+	if tlsConfig.VerifyPeerCertificate != nil {
+		return "verify-ca"
+	}
+	return "require"
 }
 
 // ValidateMigrationsPath checks if migrations directory exists.

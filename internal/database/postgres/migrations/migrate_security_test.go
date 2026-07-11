@@ -133,6 +133,26 @@ func TestBuildMigrateDSN_PasswordNotInLogs(t *testing.T) {
 		"buildMigrateDSN must not emit the database password to the log output")
 }
 
+// TestBuildMigrateDSN_PreservesSSLMode guards against silently downgrading the
+// migration DSN's sslmode: a strict mode (verify-ca / verify-full) must survive
+// the DSN -> pgx *tls.Config -> migration DSN round-trip rather than collapsing
+// to require. This also pins the pgx-version-specific TLSConfig mapping in
+// sslModeFromTLSConfig.
+func TestBuildMigrateDSN_PreservesSSLMode(t *testing.T) {
+	for _, mode := range []string{"disable", "require", "verify-ca", "verify-full"} {
+		t.Run(mode, func(t *testing.T) {
+			rawDSN := fmt.Sprintf("postgres://user:pass@localhost:5432/db?sslmode=%s", mode)
+			poolCfg, err := pgxpool.ParseConfig(rawDSN)
+			require.NoError(t, err, "pgxpool.ParseConfig must accept sslmode=%s", mode)
+
+			result := buildMigrateDSN(poolCfg)
+
+			assert.Contains(t, result, "sslmode="+mode,
+				"buildMigrateDSN must preserve the configured sslmode, not downgrade it")
+		})
+	}
+}
+
 // TestMaybeForceVersion_NonNumericError ensures a non-numeric
 // CUDLY_FORCE_MIGRATION_VERSION produces an error without logging the
 // bad value to stdout.
