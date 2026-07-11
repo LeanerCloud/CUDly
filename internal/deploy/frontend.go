@@ -92,7 +92,7 @@ func (s *FrontendService) uploadDirectory(ctx context.Context, distDir, bucketNa
 		key := strings.ReplaceAll(relPath, string(filepath.Separator), "/")
 
 		// Read file
-		content, err := os.ReadFile(path)
+		content, err := os.ReadFile(path) //nolint:gosec // G304: path from filepath.WalkDir callback; root dir is configured, not user-supplied
 		if err != nil {
 			return fmt.Errorf("failed to read %s: %w", path, err)
 		}

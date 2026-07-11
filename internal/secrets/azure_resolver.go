@@ -55,7 +55,7 @@ func (r *AzureResolver) GetSecret(ctx context.Context, secretID string) (string,
 }
 
 // PutSecret creates or updates a secret in Azure Key Vault.
-func (r *AzureResolver) PutSecret(ctx context.Context, secretID string, value string) error {
+func (r *AzureResolver) PutSecret(ctx context.Context, secretID, value string) error {
 	params := azsecrets.SetSecretParameters{
 		Value: &value,
 	}

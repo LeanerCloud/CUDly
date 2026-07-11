@@ -134,9 +134,9 @@ func TestHandleLambdaHTTPEvent(t *testing.T) {
 
 func TestHandleLambdaSQSEvent(t *testing.T) {
 	tests := []struct {
+		setupMocks  func(*testutil.MockPurchaseManager)
 		name        string
 		rawEvent    string
-		setupMocks  func(*testutil.MockPurchaseManager)
 		expectError bool
 	}{
 		{
@@ -214,9 +214,9 @@ func TestHandleLambdaSQSEvent(t *testing.T) {
 
 func TestHandleLambdaScheduledEvent(t *testing.T) {
 	tests := []struct {
+		setupMocks  func(*testutil.MockScheduler)
 		name        string
 		rawEvent    string
-		setupMocks  func(*testutil.MockScheduler)
 		expectError bool
 	}{
 		{
@@ -289,9 +289,9 @@ func TestHandleLambdaEvent_UnknownEventReturnsError(t *testing.T) {
 
 func TestHandleLambdaEvent(t *testing.T) {
 	tests := []struct {
+		setupApp    func(*Application)
 		name        string
 		rawEvent    string
-		setupApp    func(*Application)
 		expectError bool
 	}{
 		{

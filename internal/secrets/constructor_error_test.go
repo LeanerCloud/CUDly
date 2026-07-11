@@ -9,7 +9,7 @@ import (
 )
 
 // TestNewAWSResolver_ConfigError attempts to trigger AWS config loading error
-// by manipulating AWS_CONFIG_FILE to point to an invalid file
+// by manipulating AWS_CONFIG_FILE to point to an invalid file.
 func TestNewAWSResolver_ConfigError(t *testing.T) {
 	ctx := context.Background()
 
@@ -63,7 +63,7 @@ func TestNewAWSResolver_ConfigError(t *testing.T) {
 	}
 }
 
-// TestNewGCPResolver_ConfigError attempts to trigger GCP config loading error
+// TestNewGCPResolver_ConfigError attempts to trigger GCP config loading error.
 func TestNewGCPResolver_ConfigError(t *testing.T) {
 	ctx := context.Background()
 
@@ -93,7 +93,7 @@ func TestNewGCPResolver_ConfigError(t *testing.T) {
 	}
 }
 
-// TestNewAzureResolver_ConfigError attempts to trigger Azure config loading error
+// TestNewAzureResolver_ConfigError attempts to trigger Azure config loading error.
 func TestNewAzureResolver_ConfigError(t *testing.T) {
 	ctx := context.Background()
 
@@ -137,12 +137,12 @@ func TestNewAzureResolver_ConfigError(t *testing.T) {
 	}
 }
 
-// TestNewAWSResolver_CancelledContext tests constructor with canceled context
-func TestNewAWSResolver_CancelledContext(t *testing.T) {
+// TestNewAWSResolver_CanceledContext tests constructor with canceled context.
+func TestNewAWSResolver_CanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
+	cancel() // Cancel immediately.
 
-	// AWS SDK might still succeed with canceled context for config loading
+	// AWS SDK might still succeed with canceled context for config loading.
 	resolver, err := NewAWSResolver(ctx, "us-east-1")
 
 	if err != nil {
@@ -153,14 +153,14 @@ func TestNewAWSResolver_CancelledContext(t *testing.T) {
 	}
 }
 
-// TestNewGCPResolver_CancelledContext tests constructor with canceled context
-func TestNewGCPResolver_CancelledContext(t *testing.T) {
+// TestNewGCPResolver_CanceledContext tests constructor with canceled context.
+func TestNewGCPResolver_CanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	resolver, err := NewGCPResolver(ctx, "test-project")
 
-	// Canceled context might cause client creation to fail
+	// Canceled context might cause client creation to fail.
 	if err != nil {
 		assert.Nil(t, resolver)
 	} else {
@@ -170,8 +170,8 @@ func TestNewGCPResolver_CancelledContext(t *testing.T) {
 	}
 }
 
-// TestNewAzureResolver_CancelledContext tests constructor with canceled context
-func TestNewAzureResolver_CancelledContext(t *testing.T) {
+// TestNewAzureResolver_CanceledContext tests constructor with canceled context.
+func TestNewAzureResolver_CanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 

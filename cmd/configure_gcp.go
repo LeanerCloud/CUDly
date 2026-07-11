@@ -222,7 +222,7 @@ func loadAndUpdateGCPCredentials(credsFile string) (GCPCredentials, []byte, erro
 
 	if gcpOpts.ProjectID != "" {
 		creds.ProjectID = gcpOpts.ProjectID
-		credsData, err = json.Marshal(creds)
+		credsData, err = json.Marshal(creds) //nolint:gosec // G117: marshaling service account credentials intentionally for file update
 		if err != nil {
 			return GCPCredentials{}, nil, fmt.Errorf("failed to marshal updated credentials: %w", err)
 		}

@@ -674,9 +674,9 @@ func (m *mockSNSPublisher) Publish(ctx context.Context, params *sns.PublishInput
 // / lastTo / lastFrom let happy-path tests assert the SES wire was exercised
 // with the right addressing.
 type mockSESEmailSender struct {
-	sendEmailCalls int
 	lastTo         string
 	lastFrom       string
+	sendEmailCalls int
 }
 
 func (m *mockSESEmailSender) SendEmail(ctx context.Context, params *sesv2.SendEmailInput, optFns ...func(*sesv2.Options)) (*sesv2.SendEmailOutput, error) {

@@ -150,7 +150,7 @@ func (h *Handler) resolveAllowedAccountScope(ctx context.Context, session *Sessi
 	// Non-nil empty slice: a sentinel meaning "scoped to zero accounts" so the
 	// dual-column predicate matches no rows (never falls back to all-accounts).
 	allowedUUIDs := []string{}
-	for _, a := range accounts {
+	for _, a := range accounts { //nolint:gocritic
 		if auth.MatchesAccount(allowed, a.ID, a.Name) {
 			allowedUUIDs = append(allowedUUIDs, a.ID)
 		}
@@ -173,7 +173,7 @@ func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *S
 
 	nameByID := h.resolveAccountNamesByID(ctx)
 	filtered := recs[:0]
-	for _, rec := range recs {
+	for _, rec := range recs { //nolint:gocritic
 		if rec.CloudAccountID == nil {
 			continue
 		}
@@ -218,7 +218,7 @@ func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *S
 // therefore correct: it projects "how much would I save if I only bought
 // RIs to cover X% of my instances" against the 100%-coverage baseline
 // that every provider gives us. Verified by TestSummarizeRecommendationsWithCoverage_100PctContract.
-func summarizeRecommendationsWithCoverage(
+func summarizeRecommendationsWithCoverage( //nolint:gocritic
 	recs []config.RecommendationRecord,
 	coverageByKey map[string]float64,
 ) (float64, map[string]ServiceSavings) {
@@ -236,7 +236,7 @@ func summarizeRecommendationsWithCoverage(
 
 	var total float64
 	byService := make(map[string]ServiceSavings)
-	for _, rep := range representatives {
+	for _, rep := range representatives { //nolint:gocritic
 		scaled := rep.scaled
 		total += scaled
 		svc := byService[rep.rec.Service]
@@ -277,7 +277,7 @@ type cellRepresentative struct {
 // variants so the backend by_service rollup and the frontend per-cell grouping
 // agree. A nil CloudAccountID maps to the empty segment, matching the
 // frontend's nullish-coalescing of cloud_account_id to an empty string.
-func recCellKey(rec config.RecommendationRecord) string {
+func recCellKey(rec config.RecommendationRecord) string { //nolint:gocritic
 	account := ""
 	if rec.CloudAccountID != nil {
 		account = *rec.CloudAccountID
@@ -303,7 +303,7 @@ func bestVariantPerCell(
 ) []cellRepresentative {
 	indexByCell := make(map[string]int, len(recs))
 	reps := make([]cellRepresentative, 0, len(recs))
-	for _, rec := range recs {
+	for _, rec := range recs { //nolint:gocritic
 		scaled := scaledSavings(rec, coverageByKey)
 		key := recCellKey(rec)
 		if idx, ok := indexByCell[key]; ok {
@@ -321,7 +321,7 @@ func bestVariantPerCell(
 // scaledSavings returns rec.Savings * min(max(coverage, 0), 100) / 100 when
 // a coverage entry exists for the rec's (account, provider, service) triple.
 // Otherwise returns rec.Savings unchanged.
-func scaledSavings(rec config.RecommendationRecord, coverageByKey map[string]float64) float64 {
+func scaledSavings(rec config.RecommendationRecord, coverageByKey map[string]float64) float64 { //nolint:gocritic
 	if rec.CloudAccountID == nil || coverageByKey == nil {
 		return rec.Savings
 	}
@@ -459,7 +459,7 @@ func (h *Handler) getUpcomingPurchases(ctx context.Context, req *events.LambdaFu
 // scheduler at instance-create time).
 func upcomingFromExecution(plan *config.PurchasePlan, exec *config.PurchaseExecution) UpcomingPurchase {
 	var provider, service string
-	for _, svcCfg := range plan.Services {
+	for _, svcCfg := range plan.Services { //nolint:gocritic
 		provider = svcCfg.Provider
 		service = svcCfg.Service
 		break
@@ -482,7 +482,7 @@ func upcomingFromExecution(plan *config.PurchasePlan, exec *config.PurchaseExecu
 // No rate limiting — this is hit by Terraform deployment checks and the frontend on every page load.
 // Sensitive identifiers (API key secret URL, deployment AWS account ID) are intentionally
 // absent here; they live on the authenticated GET /api/info/deployment endpoint (#633).
-func (h *Handler) getPublicInfo(ctx context.Context, req *events.LambdaFunctionURLRequest) (*PublicInfoResponse, error) {
+func (h *Handler) getPublicInfo(ctx context.Context, _ *events.LambdaFunctionURLRequest) (*PublicInfoResponse, error) { //nolint:unparam // error return kept for interface consistency
 	// Check if admin exists
 	adminExists := false
 	if h.auth != nil {
@@ -502,7 +502,7 @@ func (h *Handler) getPublicInfo(ctx context.Context, req *events.LambdaFunctionU
 // Requires at least AuthUser (enforced by the router). The two fields it returns
 // expose the AWS account ID and the Secrets Manager ARN path — neither should be
 // reachable without a valid session (#633).
-func (h *Handler) getDeploymentInfo(ctx context.Context, _ *events.LambdaFunctionURLRequest) (*DeploymentInfoResponse, error) {
+func (h *Handler) getDeploymentInfo(ctx context.Context, _ *events.LambdaFunctionURLRequest) (*DeploymentInfoResponse, error) { //nolint:unparam // error return is always nil; kept for interface consistency
 	// Build the AWS Console deep-link to the Secrets Manager secret.
 	var apiKeySecretURL string
 	if h.secretsARN != "" {
@@ -541,7 +541,7 @@ func (h *Handler) getDeploymentInfo(ctx context.Context, _ *events.LambdaFunctio
 // place). One year is approximated as 365 days — matches the original
 // dashboard arithmetic verbatim; leap-year precision isn't material for
 // a multi-year RI/SP/CUD term.
-func commitmentExpiry(p config.PurchaseHistoryRecord) time.Time {
+func commitmentExpiry(p config.PurchaseHistoryRecord) time.Time { //nolint:gocritic
 	termDuration := time.Duration(p.Term) * 365 * 24 * time.Hour
 	return p.Timestamp.Add(termDuration)
 }
@@ -556,9 +556,9 @@ func commitmentExpiry(p config.PurchaseHistoryRecord) time.Time {
 //
 // Same predicate shared by the dashboard aggregate and the per-commitment
 // inventory endpoint. Status values: see PurchaseHistoryRecord.Status doc.
-func isActiveCommitment(p config.PurchaseHistoryRecord, now time.Time) bool {
+func isActiveCommitment(p config.PurchaseHistoryRecord, now time.Time) bool { //nolint:gocritic
 	// Status is unpersisted (dynamodbav:"-"); DB rows always read back as "".
-	// Synthesised rows set it to "failed", "expired", "cancelled", "pending",
+	// Synthesized rows set it to "failed", "expired", "canceled", "pending",
 	// "notified", "approved", "running", or "paused". Only "" and "completed"
 	// represent a commitment that is actually live on the provider.
 	if p.Status != "" && p.Status != "completed" {
@@ -574,7 +574,7 @@ func isActiveCommitment(p config.PurchaseHistoryRecord, now time.Time) bool {
 // same "active" definition.
 func aggregateActiveCommitmentsPerService(purchases []config.PurchaseHistoryRecord, now time.Time) map[string]float64 {
 	byService := make(map[string]float64)
-	for _, p := range purchases {
+	for _, p := range purchases { //nolint:gocritic
 		if !isActiveCommitment(p, now) {
 			continue
 		}
@@ -658,7 +658,7 @@ func (h *Handler) calculateCommitmentMetrics(ctx context.Context, accountUUIDs [
 		committedMonthly += v
 	}
 
-	for _, p := range purchases {
+	for _, p := range purchases { //nolint:gocritic
 		if !isActiveCommitment(p, currentTime) {
 			continue
 		}

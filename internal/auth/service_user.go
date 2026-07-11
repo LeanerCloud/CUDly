@@ -26,12 +26,12 @@ func (s *Service) SetupAdmin(ctx context.Context, req SetupAdminRequest) (*Login
 		return nil, ErrAdminExists
 	}
 
-	if _, err := mail.ParseAddress(req.Email); err != nil {
+	if _, parseErr := mail.ParseAddress(req.Email); parseErr != nil {
 		return nil, ErrInvalidEmail
 	}
 
-	if err := s.validatePassword(req.Password); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrPasswordPolicy, err)
+	if valErr := s.validatePassword(req.Password); valErr != nil {
+		return nil, fmt.Errorf("%w: %w", ErrPasswordPolicy, valErr)
 	}
 
 	passwordHash, err := s.hashPassword(req.Password)
@@ -487,7 +487,7 @@ func (s *Service) GetUser(ctx context.Context, userID string) (*User, error) {
 }
 
 // UpdateUserProfile allows a user to update their own email and password.
-func (s *Service) UpdateUserProfile(ctx context.Context, userID string, email string, currentPassword string, newPassword string) error {
+func (s *Service) UpdateUserProfile(ctx context.Context, userID, email, currentPassword, newPassword string) error {
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -503,17 +503,18 @@ func (s *Service) UpdateUserProfile(ctx context.Context, userID string, email st
 		return ErrCurrentPasswordIncorrect
 	}
 
-	if err := s.updateUserEmail(ctx, user, email); err != nil {
-		return err
+	if emailErr := s.updateUserEmail(ctx, user, email); emailErr != nil {
+		return emailErr
 	}
 
-	passwordChanged, err := s.updateUserPassword(user, newPassword)
+	var passwordChanged bool
+	passwordChanged, err = s.updateUserPassword(user, newPassword)
 	if err != nil {
 		return err
 	}
 
 	user.UpdatedAt = time.Now()
-	if err := s.store.UpdateUser(ctx, user); err != nil {
+	if err = s.store.UpdateUser(ctx, user); err != nil {
 		return fmt.Errorf("failed to update user: %w", err)
 	}
 

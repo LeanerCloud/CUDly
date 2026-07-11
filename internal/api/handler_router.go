@@ -33,14 +33,9 @@ func IsNotFoundError(err error) bool {
 
 // clientError represents an error that should be returned to the client with a specific HTTP status code.
 type clientError struct {
+	details map[string]any
 	message string
 	code    int
-	// details carries optional structured fields (e.g. ops_hint,
-	// retry_attempt_n) that the response writer surfaces alongside the
-	// human message. Used by retry-soft-block responses (issue #47) so
-	// the frontend can render a confirm-with-warning UX without parsing
-	// the message string.
-	details map[string]any
 }
 
 func (e *clientError) Error() string { return e.message }

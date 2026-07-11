@@ -1828,7 +1828,7 @@ func TestHandler_getHistory_LimitParsing(t *testing.T) {
 
 func TestSummarizePurchaseHistory_CancelPendingDoesNotChangeKPIs(t *testing.T) {
 	// Baseline: three approved (completed) rows.
-	baseline := []config.PurchaseHistoryRecord{
+	baseline := []config.PurchaseHistoryRecord{ //nolint:prealloc // test literal; appended once below
 		{Status: "completed", UpfrontCost: 100.0, EstimatedSavings: 10.0},
 		{Status: "completed", UpfrontCost: 200.0, EstimatedSavings: 20.0},
 		{Status: "completed", UpfrontCost: 300.0, EstimatedSavings: 30.0},

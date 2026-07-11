@@ -16,13 +16,13 @@ import (
 // This implementation uses a sliding window algorithm with the database as the backend,
 // making it suitable for Lambda functions and distributed systems.
 type DBRateLimiter struct {
-	pool            *pgxpool.Pool
-	limits          map[string]RateLimitConfig // endpoint -> config
-	limitsMu        sync.RWMutex
 	lastCleanup     time.Time
+	pool            *pgxpool.Pool
+	limits          map[string]RateLimitConfig
+	cleanupInterval time.Duration
+	limitsMu        sync.RWMutex
 	cleanupMu       sync.Mutex
 	cleanupRunning  atomic.Bool
-	cleanupInterval time.Duration
 }
 
 // Verify that DBRateLimiter implements RateLimiterInterface.
@@ -98,7 +98,7 @@ func (rl *DBRateLimiter) SetLimit(endpoint string, config RateLimitConfig) {
 // rate limiter still denies correctly, and `cleanup()` evicts
 // expired rows on its 24-hour cycle. This is a small accounting
 // trade for atomicity and is acceptable for rate-limit semantics.
-func (rl *DBRateLimiter) Allow(ctx context.Context, key string, endpoint string) (bool, error) {
+func (rl *DBRateLimiter) Allow(ctx context.Context, key, endpoint string) (bool, error) {
 	if rl == nil || rl.pool == nil {
 		return true, nil
 	}
@@ -198,19 +198,19 @@ func (rl *DBRateLimiter) cleanup() {
 }
 
 // AllowWithIP is a convenience method that formats the key as an IP-based key.
-func (rl *DBRateLimiter) AllowWithIP(ctx context.Context, ip string, endpoint string) (bool, error) {
+func (rl *DBRateLimiter) AllowWithIP(ctx context.Context, ip, endpoint string) (bool, error) {
 	key := fmt.Sprintf("IP#%s", ip)
 	return rl.Allow(ctx, key, endpoint)
 }
 
 // AllowWithEmail is a convenience method that formats the key as an email-based key.
-func (rl *DBRateLimiter) AllowWithEmail(ctx context.Context, email string, endpoint string) (bool, error) {
+func (rl *DBRateLimiter) AllowWithEmail(ctx context.Context, email, endpoint string) (bool, error) {
 	key := fmt.Sprintf("EMAIL#%s", email)
 	return rl.Allow(ctx, key, endpoint)
 }
 
 // AllowWithUser is a convenience method that formats the key as a user-based key.
-func (rl *DBRateLimiter) AllowWithUser(ctx context.Context, userID string, endpoint string) (bool, error) {
+func (rl *DBRateLimiter) AllowWithUser(ctx context.Context, userID, endpoint string) (bool, error) {
 	key := fmt.Sprintf("USER#%s", userID)
 	return rl.Allow(ctx, key, endpoint)
 }

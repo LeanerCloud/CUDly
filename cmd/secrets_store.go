@@ -10,10 +10,10 @@ import (
 
 // SecretsStore interface for storing credentials.
 type SecretsStore interface {
-	// ListSecrets returns a list of secret ARNs matching the filter
+	// ListSecrets returns a list of secret ARNs matching the filter.
 	ListSecrets(ctx context.Context, filter string) ([]string, error)
-	// UpdateSecret updates a secret with the given ID and value
-	UpdateSecret(ctx context.Context, secretID string, secretValue string) error
+	// UpdateSecret updates a secret with the given ID and value.
+	UpdateSecret(ctx context.Context, secretID, secretValue string) error
 }
 
 // AWSSecretsStore implements SecretsStore using AWS Secrets Manager.
@@ -45,9 +45,9 @@ func (s *AWSSecretsStore) ListSecrets(ctx context.Context, filter string) ([]str
 	}
 
 	arns := make([]string, 0, len(result.SecretList))
-	for _, secret := range result.SecretList {
-		if secret.ARN != nil {
-			arns = append(arns, *secret.ARN)
+	for i := range result.SecretList {
+		if result.SecretList[i].ARN != nil {
+			arns = append(arns, *result.SecretList[i].ARN)
 		}
 	}
 
@@ -55,7 +55,7 @@ func (s *AWSSecretsStore) ListSecrets(ctx context.Context, filter string) ([]str
 }
 
 // UpdateSecret updates a secret with the given value.
-func (s *AWSSecretsStore) UpdateSecret(ctx context.Context, secretID string, secretValue string) error {
+func (s *AWSSecretsStore) UpdateSecret(ctx context.Context, secretID, secretValue string) error {
 	input := &secretsmanager.UpdateSecretInput{
 		SecretId:     aws.String(secretID),
 		SecretString: aws.String(secretValue),

@@ -130,7 +130,7 @@ func storeAzureCredentials(ctx context.Context, store SecretsStore, stackName st
 	}
 
 	// Marshal credentials to JSON
-	credJSON, err := json.Marshal(creds)
+	credJSON, err := json.Marshal(creds) //nolint:gosec // G117: marshaling service principal credentials intentionally for secrets storage
 	if err != nil {
 		return fmt.Errorf("failed to marshal credentials: %w", err)
 	}

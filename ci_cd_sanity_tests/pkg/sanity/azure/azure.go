@@ -103,7 +103,7 @@ func Run(ctx context.Context, opts Options) (*report.Report, error) {
 
 	runCmd := func(name string, args ...string) ([]byte, report.CheckResult) {
 		start := time.Now().UTC()
-		cmd := exec.CommandContext(rctx, "az", args...)
+		cmd := exec.CommandContext(rctx, "az", args...) //nolint:gosec // G204: args are constructed from validated cloud resource names, not user input
 		out, err := cmd.CombinedOutput()
 		end := time.Now().UTC()
 

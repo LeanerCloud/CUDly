@@ -233,7 +233,6 @@ func TestGCPResolver_ResourceNameFormat(t *testing.T) {
 	// projects/{project}/secrets/{secret}/versions/latest
 	resolver := &GCPResolver{
 		projectID: "my-project",
-		client:    nil,
 	}
 
 	// Verify the projectID is stored correctly

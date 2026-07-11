@@ -45,37 +45,26 @@ const (
 type Service struct {
 	store              StoreInterface
 	emailSender        EmailSenderInterface
-	sessionDuration    time.Duration
-	dashboardURL       string
-	bcryptCostOverride int // if > 0, overrides bcryptCost const (used by tests for speed)
+	lastUsedSFG        singleflight.Group
 	onPasswordChange   func(ctx context.Context, userID, newPassword string)
-	// csrfKey is the server-side key used to derive CSRF tokens as
-	// HMAC-SHA256(csrfKey, rawSessionToken). Tokens are never stored
-	// in cleartext; validation recomputes the HMAC and compares.
-	// A random key is generated at NewService time when not supplied.
-	csrfKey []byte
-	// lastUsedSFG deduplicates concurrent UpdateLastUsed calls for the
-	// same API key so a burst of authenticated requests does not spawn
-	// an unbounded number of goroutines.
-	lastUsedSFG singleflight.Group
+	dashboardURL       string
+	csrfKey            []byte
+	sessionDuration    time.Duration
+	bcryptCostOverride int
 }
 
 // ServiceConfig holds configuration for the auth service.
 type ServiceConfig struct {
 	Store            StoreInterface
 	EmailSender      EmailSenderInterface
-	SessionDuration  time.Duration
-	DashboardURL     string
 	OnPasswordChange func(ctx context.Context, userID, newPassword string)
-	// CSRFKey is the server-side secret used to derive CSRF tokens as
-	// HMAC-SHA256(CSRFKey, rawSessionToken). Must be 32 bytes for
-	// 256-bit security. When empty, NewService generates a random key and
-	// logs a warning; all existing sessions will require re-login on restart.
-	CSRFKey []byte
+	DashboardURL     string
+	CSRFKey          []byte
+	SessionDuration  time.Duration
 }
 
 // NewService creates a new auth service.
-func NewService(cfg ServiceConfig) *Service {
+func NewService(cfg ServiceConfig) *Service { //nolint:gocritic // hugeParam: ServiceConfig (88 bytes) passed by value; all callers own the literal
 	if cfg.SessionDuration == 0 {
 		cfg.SessionDuration = time.Duration(DefaultSessionDurationHours) * time.Hour
 	}

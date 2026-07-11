@@ -227,7 +227,6 @@ func TestAzureResolver_VaultURLFormat(t *testing.T) {
 	// The Azure resolver stores the vault URL as-is
 	resolver := &AzureResolver{
 		vaultURL: "https://my-vault.vault.azure.net/",
-		client:   nil,
 	}
 
 	// Verify the vaultURL is stored correctly
