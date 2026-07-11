@@ -48,7 +48,7 @@ func (c *AWSCredentials) String() string { return "[REDACTED AWS CREDENTIALS]" }
 
 // AzureCredentials holds resolved Azure service principal credentials.
 type AzureCredentials struct {
-	ClientSecret string
+	ClientSecret string //nolint:gosec // G117: field must carry the resolved Azure client secret to build the token credential; String() redacts it (never logged)
 }
 
 // String returns a redacted representation.
@@ -289,7 +289,7 @@ func ResolveAzureCredentials(ctx context.Context, account *config.CloudAccount, 
 		return nil, fmt.Errorf("credentials: no client secret stored for account %s", account.ID)
 	}
 	var payload struct {
-		ClientSecret string `json:"client_secret"`
+		ClientSecret string `json:"client_secret"` //nolint:gosec // G117: local unmarshal target for the stored Azure client secret; transient, not logged
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return nil, fmt.Errorf("credentials: parse azure secret for account %s: %w", account.ID, err)
@@ -414,7 +414,7 @@ func resolveGCPWIFCredential(
 		var loadErr error
 		raw, loadErr = store.LoadRaw(ctx, account.ID, CredTypeGCPWIFConfig)
 		if loadErr != nil {
-			return nil, fmt.Errorf("credentials: LoadRaw WIF config for account %s: %w", account.ID, loadErr)
+			return nil, fmt.Errorf("credentials: load GCP WIF config for account %s: %w", account.ID, loadErr)
 		}
 	}
 
@@ -450,9 +450,44 @@ func loadStoredGCPTokenSource(
 	if raw == nil {
 		return nil, fmt.Errorf("credentials: no gcp credentials stored for account %s", account.ID)
 	}
-	creds, err := google.CredentialsFromJSON(ctx, raw, gcpCloudPlatformScope)
+	// Detect the credential type from the JSON's "type" discriminator and load
+	// it with the type-pinned google loader. Both a service-account key
+	// ("service_account") and a workload-identity-federation config
+	// ("external_account") are accepted, since loadStoredGCPTokenSource serves
+	// both the gcp_service_account and legacy WIF credential paths.
+	credKind, err := detectGCPCredentialsType(raw)
+	if err != nil {
+		return nil, fmt.Errorf("credentials: detect gcp credential type for account %s: %w", account.ID, err)
+	}
+	creds, err := google.CredentialsFromJSONWithTypeAndParams(ctx, raw, credKind, google.CredentialsParams{
+		Scopes: []string{gcpCloudPlatformScope},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("credentials: parse gcp credentials for account %s: %w", account.ID, err)
 	}
 	return creds.TokenSource, nil
+}
+
+// detectGCPCredentialsType reads the "type" discriminator from a GCP credential
+// JSON blob and maps it to the google.CredentialsType the type-pinned loader
+// expects. Only the two kinds CUDly stores are accepted: a service-account key
+// ("service_account") and a workload-identity-federation config
+// ("external_account"). Any other type is rejected so an unexpected credential
+// shape can never be loaded unintentionally.
+func detectGCPCredentialsType(raw []byte) (google.CredentialsType, error) {
+	var header struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &header); err != nil {
+		return "", fmt.Errorf("parse credential type field: %w", err)
+	}
+	switch header.Type {
+	case string(google.ServiceAccount):
+		return google.ServiceAccount, nil
+	case string(google.ExternalAccount):
+		return google.ExternalAccount, nil
+	default:
+		return "", fmt.Errorf("unsupported gcp credential type %q (want %q or %q)",
+			header.Type, google.ServiceAccount, google.ExternalAccount)
+	}
 }
