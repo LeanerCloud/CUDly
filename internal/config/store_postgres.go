@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/database"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -2754,7 +2755,12 @@ func (s *PostgresStore) DeleteCloudAccount(ctx context.Context, id string) error
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck
+	// Rollback is a no-op after a successful Commit (pgx returns ErrTxClosed).
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			logging.Warnf("config: DeleteCloudAccount rollback failed: %v", rbErr)
+		}
+	}()
 
 	// Reset any linked approved registration first (explicit NULL so we don't
 	// rely on the FK's ON DELETE SET NULL behavior).
@@ -3062,10 +3068,15 @@ func (s *PostgresStore) SetPlanAccounts(ctx context.Context, planID string, acco
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck
+	// Rollback is a no-op after a successful Commit (pgx returns ErrTxClosed).
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			logging.Warnf("config: SetPlanAccounts rollback failed: %v", rbErr)
+		}
+	}()
 
-	if err = s.validatePlanAccountProvidersTx(ctx, tx, planID, accountIDs); err != nil {
-		return err
+	if errX := s.validatePlanAccountProvidersTx(ctx, tx, planID, accountIDs); errX != nil {
+		return errX
 	}
 
 	if _, err = tx.Exec(ctx, `DELETE FROM plan_accounts WHERE plan_id = $1`, planID); err != nil {

@@ -163,7 +163,7 @@ func TestRecEffectiveSavingsPct_Config(t *testing.T) {
 
 // TestRecommendationFilter_UnitDistinction is the central regression test for
 // issue #1089. It asserts that the SAME numeric value "30" produces different
-// filter behavior when interpreted as a dollar amount vs. a percentage:
+// filter behaviour when interpreted as a dollar amount vs. a percentage:
 //
 //	rec.Savings = $100/mo, on_demand = $500/mo => effective_pct = 20%
 //	min_savings_usd=30  => passes  ($100 >= $30)
@@ -199,13 +199,13 @@ func TestRecommendationFilter_UnitDistinction(t *testing.T) {
 
 func TestBuildRecommendationFilter_MinSavingsUSD(t *testing.T) {
 	t.Run("MinSavingsUSD zero produces no WHERE clause fragment", func(t *testing.T) {
-		clause, args := buildRecommendationFilter(RecommendationFilter{MinSavingsUSD: 0})
+		clause, args := buildRecommendationFilter(&RecommendationFilter{MinSavingsUSD: 0})
 		assert.Empty(t, clause)
 		assert.Empty(t, args)
 	})
 
 	t.Run("MinSavingsUSD positive includes monthly_savings >= clause", func(t *testing.T) {
-		clause, args := buildRecommendationFilter(RecommendationFilter{MinSavingsUSD: 50})
+		clause, args := buildRecommendationFilter(&RecommendationFilter{MinSavingsUSD: 50})
 		assert.Contains(t, clause, "monthly_savings >= $")
 		require.Len(t, args, 1)
 		assert.Equal(t, float64(50), args[0])
@@ -213,13 +213,13 @@ func TestBuildRecommendationFilter_MinSavingsUSD(t *testing.T) {
 
 	t.Run("MinSavingsPct zero is never pushed into SQL (no WHERE fragment)", func(t *testing.T) {
 		// Pct filter is applied in-process, never in SQL.
-		clause, args := buildRecommendationFilter(RecommendationFilter{MinSavingsPct: 30})
+		clause, args := buildRecommendationFilter(&RecommendationFilter{MinSavingsPct: 30})
 		assert.Empty(t, clause, "MinSavingsPct must not appear in the SQL WHERE clause")
 		assert.Empty(t, args)
 	})
 
 	t.Run("MinSavingsUSD and MinSavingsPct combined: only USD in SQL", func(t *testing.T) {
-		clause, args := buildRecommendationFilter(RecommendationFilter{
+		clause, args := buildRecommendationFilter(&RecommendationFilter{
 			MinSavingsUSD: 50,
 			MinSavingsPct: 20,
 		})
