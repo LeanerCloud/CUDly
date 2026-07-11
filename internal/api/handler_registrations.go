@@ -237,11 +237,17 @@ func (h *Handler) encryptRegistrationCredential(payload string) (string, error) 
 
 // notifyRegistrant sends an email about an approval or rejection.
 // Errors are logged but not propagated (matching sendPurchaseApprovalEmail pattern).
-func (h *Handler) notifyRegistrant(reg *config.AccountRegistration, data email.RegistrationDecisionData) {
+func (h *Handler) notifyRegistrant(reg *config.AccountRegistration, data *email.RegistrationDecisionData) {
 	if h.emailNotifier == nil || reg.ContactEmail == "" {
 		return
 	}
-	if err := h.emailNotifier.SendRegistrationDecisionNotification(context.Background(), reg.ContactEmail, data); err != nil {
+	// Best-effort, fire-after-commit notification: the registration state has
+	// already changed, so bound the synchronous send with its own timeout
+	// (not the request ctx, which may already be done) so a stalled notifier
+	// can never hold the approval/rejection path open indefinitely.
+	notifyCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := h.emailNotifier.SendRegistrationDecisionNotification(notifyCtx, reg.ContactEmail, *data); err != nil {
 		logging.Warnf("failed to send registration decision notification: %v", err)
 	}
 }
@@ -303,7 +309,7 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 		logging.Warnf("registration %s approved but failed to link cloud_account_id: %v", reg.ID, err)
 	}
 
-	h.notifyRegistrant(reg, email.RegistrationDecisionData{
+	h.notifyRegistrant(reg, &email.RegistrationDecisionData{
 		AccountName: reg.AccountName, Provider: reg.Provider,
 		ExternalID: reg.ExternalID, Decision: "approved",
 	})
@@ -364,7 +370,7 @@ func (h *Handler) rejectRegistration(ctx context.Context, httpReq *events.Lambda
 		return nil, fmt.Errorf("registrations: transition: %w", err)
 	}
 
-	h.notifyRegistrant(reg, email.RegistrationDecisionData{
+	h.notifyRegistrant(reg, &email.RegistrationDecisionData{
 		AccountName: reg.AccountName, Provider: reg.Provider,
 		ExternalID: reg.ExternalID, Decision: "rejected",
 		RejectionReason: body.Reason,
