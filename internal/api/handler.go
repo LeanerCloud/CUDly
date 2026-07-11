@@ -133,8 +133,14 @@ func (h *Handler) getRIUtilizationCache() *riUtilizationCache {
 	return h.riUtilizationCache
 }
 
-// NewHandler creates a new API handler
-func NewHandler(cfg HandlerConfig) *Handler {
+// NewHandler creates a new API handler. cfg must be non-nil: a nil config
+// would build a Handler with every dependency unset, which only surfaces as a
+// confusing nil dereference on the first request. Fail loud at construction
+// instead (callers always pass a populated *HandlerConfig).
+func NewHandler(cfg *HandlerConfig) *Handler {
+	if cfg == nil {
+		panic("api: NewHandler requires a non-nil *HandlerConfig")
+	}
 	corsOrigin := cfg.CORSAllowedOrigin
 	if corsOrigin == "" {
 		// Security: CORS must be explicitly configured

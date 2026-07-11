@@ -15,7 +15,7 @@ import (
 
 // createTestApp creates a minimal Application for testing with no DB dependency.
 func createTestApp() *server.Application {
-	apiHandler := api.NewHandler(api.HandlerConfig{})
+	apiHandler := api.NewHandler(&api.HandlerConfig{})
 	return &server.Application{
 		API:       apiHandler,
 		Scheduler: &testutil.MockScheduler{},

@@ -125,8 +125,14 @@ type Scheduler struct {
 // opportunistic refresh closes the gap when users are active.
 const defaultCacheTTL = 6 * time.Hour
 
-// NewScheduler creates a new scheduler.
-func NewScheduler(cfg SchedulerConfig) *Scheduler {
+// NewScheduler creates a new scheduler. cfg must be non-nil: a nil config
+// would build a Scheduler with every dependency unset, surfacing only as a
+// confusing nil dereference later. Fail loud at construction instead (callers
+// always pass a populated *SchedulerConfig).
+func NewScheduler(cfg *SchedulerConfig) *Scheduler {
+	if cfg == nil {
+		panic("scheduler: NewScheduler requires a non-nil *SchedulerConfig")
+	}
 	factory := cfg.ProviderFactory
 	if factory == nil {
 		factory = &provider.DefaultFactory{}

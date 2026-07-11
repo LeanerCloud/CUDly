@@ -447,7 +447,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 	})
 
 	// Initialize scheduler
-	sched := scheduler.NewScheduler(scheduler.SchedulerConfig{
+	sched := scheduler.NewScheduler(&scheduler.SchedulerConfig{
 		ConfigStore:     deps.ConfigStore,
 		PurchaseManager: purchaseManager,
 		EmailSender:     deps.EmailSender,
@@ -481,7 +481,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 	}
 
 	// Initialize API handler
-	apiHandler := api.NewHandler(api.HandlerConfig{
+	apiHandler := api.NewHandler(&api.HandlerConfig{
 		ConfigStore:       deps.ConfigStore,
 		PurchaseManager:   purchaseManager,
 		Scheduler:         sched,
@@ -789,7 +789,7 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 	log.Println("Re-initialized purchase manager with credential store and cross-account STS")
 
 	// Re-initialize scheduler with per-account credential resolution.
-	app.Scheduler = scheduler.NewScheduler(scheduler.SchedulerConfig{
+	app.Scheduler = scheduler.NewScheduler(&scheduler.SchedulerConfig{
 		ConfigStore:     app.Config,
 		PurchaseManager: app.Purchase,
 		EmailSender:     app.Email,
@@ -836,7 +836,7 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 	// AnalyticsClient is Postgres-backed (see api.NewPostgresAnalyticsClient) —
 	// it aggregates purchase_history on demand so the History UI charts work
 	// without requiring a separate S3/Athena deployment.
-	app.API = api.NewHandler(api.HandlerConfig{
+	app.API = api.NewHandler(&api.HandlerConfig{
 		ConfigStore:         app.Config,
 		CredentialStore:     credStore,
 		PurchaseManager:     app.Purchase,

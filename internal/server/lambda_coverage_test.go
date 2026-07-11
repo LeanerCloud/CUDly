@@ -92,7 +92,7 @@ func TestHandleLambdaHTTPEvent_StaticPath(t *testing.T) {
 	dir := makeStaticDir(t, map[string]string{"index.html": "<html>spa</html>"})
 
 	app := &Application{
-		API:       api.NewHandler(api.HandlerConfig{}),
+		API:       api.NewHandler(&api.HandlerConfig{}),
 		staticDir: dir,
 	}
 
@@ -112,7 +112,7 @@ func TestHandleLambdaEvent_UnknownEventRouteToScheduled(t *testing.T) {
 	// "unknown" event type routes to handleLambdaScheduledEvent, which
 	// needs a parseable action. Empty object will fail ParseScheduledEvent.
 	app := &Application{
-		API: api.NewHandler(api.HandlerConfig{}),
+		API: api.NewHandler(&api.HandlerConfig{}),
 	}
 
 	rawEvent := json.RawMessage(`{"random_key": "random_value"}`)

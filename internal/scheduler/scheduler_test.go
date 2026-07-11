@@ -199,10 +199,18 @@ func TestNewScheduler(t *testing.T) {
 		DashboardURL: "https://dashboard.example.com",
 	}
 
-	scheduler := NewScheduler(cfg)
+	scheduler := NewScheduler(&cfg)
 
 	assert.NotNil(t, scheduler)
 	assert.Equal(t, "https://dashboard.example.com", scheduler.dashboardURL)
+}
+
+func TestNewScheduler_NilConfigPanics(t *testing.T) {
+	// A nil config is a programming error: building a Scheduler with every
+	// dependency unset would surface only as a nil deref later.
+	assert.PanicsWithValue(t,
+		"scheduler: NewScheduler requires a non-nil *SchedulerConfig",
+		func() { NewScheduler(nil) })
 }
 
 func TestScheduler_CollectRecommendations_NoProviders(t *testing.T) {
@@ -570,7 +578,7 @@ func TestScheduler_Interface(t *testing.T) {
 		DashboardURL: "https://test.example.com",
 	}
 
-	scheduler := NewScheduler(cfg)
+	scheduler := NewScheduler(&cfg)
 
 	// Verify scheduler has required fields
 	assert.NotNil(t, scheduler.config)
