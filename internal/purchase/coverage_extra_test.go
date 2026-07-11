@@ -607,7 +607,7 @@ func TestManager_ExecuteSinglePurchase_ProviderError(t *testing.T) {
 		dashboardURL:    "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "some purchases failed")
 	assert.Equal(t, "failed to create aws provider: provider unavailable", exec.Recommendations[0].Error)
@@ -656,7 +656,7 @@ func TestManager_ExecuteSinglePurchase_ServiceClientError(t *testing.T) {
 		dashboardURL:    "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "some purchases failed")
 	assert.Contains(t, exec.Recommendations[0].Error, "failed to get service client")
@@ -708,7 +708,7 @@ func TestManager_ExecuteSinglePurchase_PurchaseNotSuccessful(t *testing.T) {
 		dashboardURL:    "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "some purchases failed")
 	assert.Contains(t, exec.Recommendations[0].Error, "purchase was not successful")
@@ -761,7 +761,7 @@ func TestManager_ExecuteSinglePurchase_PurchaseNotSuccessful_WithError(t *testin
 		dashboardURL:    "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	assert.Error(t, err)
 	assert.Contains(t, exec.Recommendations[0].Error, "capacity limit exceeded")
 }
@@ -817,7 +817,7 @@ func TestManager_ExecuteSinglePurchase_WithEngine(t *testing.T) {
 		dashboardURL:    "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	require.NoError(t, err)
 	assert.True(t, exec.Recommendations[0].Purchased)
 	assert.Equal(t, "ri-engine-001", exec.Recommendations[0].PurchaseID)
@@ -875,7 +875,7 @@ func TestManager_SavePurchaseHistory_Error(t *testing.T) {
 	}
 
 	// Should succeed even though history save failed
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	require.NoError(t, err)
 	assert.True(t, exec.Recommendations[0].Purchased)
 }
@@ -1180,7 +1180,7 @@ func TestManager_ExecuteSinglePurchase_DetailsByService(t *testing.T) {
 				dashboardURL:    "https://dashboard.example.com",
 			}
 
-			err = manager.executePurchase(ctx, exec)
+			_, err = manager.executePurchase(ctx, exec)
 			require.NoError(t, err, "purchase should not return the regression error 'invalid service details for <Service>'")
 			assert.True(t, exec.Recommendations[0].Purchased, "rec should be marked purchased")
 			assert.Empty(t, exec.Recommendations[0].Error, "rec error should be empty")
@@ -1319,7 +1319,7 @@ func TestManager_ExecuteSinglePurchase_LegacyEmptyDetails(t *testing.T) {
 				dashboardURL:    "https://dashboard.example.com",
 			}
 
-			err := manager.executePurchase(ctx, exec)
+			_, err := manager.executePurchase(ctx, exec)
 			require.NoError(t, err, "legacy empty-Details rec must still purchase cleanly")
 			require.NotNil(t, capturedRec, "PurchaseCommitment must have been called with a non-nil rec")
 			require.NotNil(t, capturedRec.Details, "rec.Details handed to the cloud client must be non-nil even for legacy rows")

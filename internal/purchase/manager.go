@@ -217,7 +217,7 @@ func isMultiAccountAckable(execErr error) bool {
 // claimAndExecute claims the root to "running" first (issue #1013), would strand
 // the root row in "running" until the reaper failed it.
 func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseExecution) error {
-	execErr := m.executePurchase(ctx, exec)
+	_, execErr := m.executePurchase(ctx, exec)
 	m.finalizeExecution(exec, execErr)
 	if execErr != nil {
 		logging.Errorf("Failed to execute purchase %s: %v", exec.ExecutionID, execErr)

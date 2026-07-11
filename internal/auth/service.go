@@ -38,7 +38,7 @@ const (
 	// genericLoginError is returned for every authentication failure so callers
 	// cannot distinguish a missing account from a wrong password (anti-enumeration,
 	// closes issues #416 and #993).
-	genericLoginError = "Check your email address and password and try again"
+	genericLoginError = "check your email address and password and try again"
 )
 
 // Service handles authentication and authorization.
