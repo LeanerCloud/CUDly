@@ -114,8 +114,18 @@ type ladderTestStore struct {
 	latestRunAt      *time.Time
 	latestRunAtErr   error
 
-	// Capture fields: non-nil if the call was made.
+	// Per-cloud-account-id overrides, keyed by LadderConfigDB.CloudAccountID.
+	// When a config's CloudAccountID is present here, the mapped account/error
+	// takes precedence over the single cloudAcct/cloudAcctErr fields. This lets
+	// a multi-config test give each config a distinct account outcome.
+	cloudAcctByID    map[string]*config.CloudAccount
+	cloudAcctErrByID map[string]error
+
+	// Capture fields: non-nil if the call was made. savedRuns accumulates every
+	// SaveLadderRun call so multi-config tests can assert on each persisted run;
+	// savedRun mirrors the most recent one for single-config convenience.
 	savedRun              *config.LadderRunDB
+	savedRuns             []*config.LadderRunDB
 	savedTranches         []config.LadderTrancheDB
 	saveLadderRunErr      error
 	saveLadderTranchesErr error
@@ -135,7 +145,17 @@ func (s *ladderTestStore) GetLadderConfigs(_ context.Context) ([]config.LadderCo
 	return s.ladderConfigs, s.ladderConfigsErr
 }
 
-func (s *ladderTestStore) GetCloudAccount(_ context.Context, _ string) (*config.CloudAccount, error) {
+func (s *ladderTestStore) GetCloudAccount(_ context.Context, id string) (*config.CloudAccount, error) {
+	if s.cloudAcctErrByID != nil {
+		if err, ok := s.cloudAcctErrByID[id]; ok {
+			return nil, err
+		}
+	}
+	if s.cloudAcctByID != nil {
+		if acct, ok := s.cloudAcctByID[id]; ok {
+			return acct, nil
+		}
+	}
 	return s.cloudAcct, s.cloudAcctErr
 }
 
@@ -148,6 +168,7 @@ func (s *ladderTestStore) SaveLadderRun(_ context.Context, run *config.LadderRun
 		return nil, s.saveLadderRunErr
 	}
 	s.savedRun = run
+	s.savedRuns = append(s.savedRuns, run)
 	return run, nil
 }
 
@@ -305,6 +326,16 @@ func TestExecuteLadderRun_HealthyRun(t *testing.T) {
 	ctx := testutil.TestContext(t)
 	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 	dbCfg := validTestDBConfig("cfg-healthy")
+	// Two-step ramp with a DELAYED step: an AfterDays==0 step becomes a BuyNow
+	// action, only AfterDays>0 steps become persisted tranches. This ensures
+	// SaveLadderTranches receives a non-empty batch so the assertion below
+	// exercises real tranche persistence.
+	dbCfg.RampSchedule, _ = json.Marshal(pkgladder.RampSchedule{
+		Steps: []pkgladder.RampStep{
+			{AfterDays: 0, Fraction: 0.5},
+			{AfterDays: 7, Fraction: 0.5},
+		},
+	})
 
 	store := &ladderTestStore{}
 	app := &Application{Config: store}
@@ -327,6 +358,14 @@ func TestExecuteLadderRun_HealthyRun(t *testing.T) {
 
 	// Monetary snapshot: baseline-derived fields must be non-nil (we have a valid baseline).
 	assert.NotNil(t, run.BaselineUSDHr, "baseline_usd_hr must be non-nil when baseline is available")
+	require.NotNil(t, run.TargetUSDHr, "target_usd_hr must be non-nil when baseline is available")
+	// target = low-water (10) * target_coverage (80%) = 8.0, derived consistently
+	// with TargetCoveragePct rather than the raw low-water.
+	assert.InDelta(t, 8.0, *run.TargetUSDHr, 1e-9, "target must be low-water * coverage%%, not raw low-water")
+	require.NotNil(t, run.GapUSDHr, "gap_usd_hr must be non-nil when baseline is available")
+	// gap (Σ planned allocation gaps) must equal total_hourly_commit exactly.
+	assert.InDelta(t, run.TotalHourlyCommit, *run.GapUSDHr, 1e-9, "gap must equal total_hourly_commit (both Σ allocation gaps)")
+	assert.Greater(t, run.TotalHourlyCommit, 0.0, "a healthy run below target must plan a positive commitment")
 
 	// Plan JSON must be valid non-empty JSON.
 	require.True(t, len(run.Plan) > 2, "plan JSON must be non-empty")
@@ -336,19 +375,42 @@ func TestExecuteLadderRun_HealthyRun(t *testing.T) {
 	assert.Equal(t, "123456789012", planDTO.Scope.AccountID)
 	assert.False(t, planDTO.GeneratedAt.IsZero(), "plan generated_at must not be zero")
 
-	// SaveLadderTranches must have been called (even if empty for a single
-	// immediate-step ramp with no future steps).
+	// Plan must contain at least one purchase action stamped with term/payment.
+	var purchaseActions int
+	for _, a := range planDTO.Actions {
+		if a.Action == string(pkgladder.ActionPurchase) {
+			purchaseActions++
+			assert.Equal(t, string(pkgladder.Term1Year), a.Term, "purchase action must carry the term")
+			assert.Equal(t, string(pkgladder.PaymentNoUpfront), a.PaymentOption, "purchase action must carry the payment option")
+			require.NotNil(t, a.AmountUSDHr, "purchase action must carry a non-nil amount")
+		}
+	}
+	assert.Positive(t, purchaseActions, "a healthy below-target run must produce purchase actions")
+
+	// SaveLadderTranches must have been called with the ramp tranches produced
+	// from the allocations (non-empty for a below-target run).
+	require.NotNil(t, store.savedTranches, "SaveLadderTranches must be called for a healthy run")
+	assert.NotEmpty(t, store.savedTranches, "healthy below-target run must persist tranche audit rows")
+	for _, tr := range store.savedTranches {
+		assert.Equal(t, pkgladder.TrancheStatusScheduled, tr.Status, "PR-2 tranches are scheduled-only (no firing)")
+		assert.Greater(t, tr.AmountUSDHr, 0.0, "each tranche must carry a positive amount")
+	}
 	// No panic means PurchaseLayer and ReshapeBuffer were not called.
 }
 
 // ============================================================
-// executeLadderRun: nil baseline -> Hold plan, NULL monetary cols
+// executeLadderRun: GetUsageBaseline ERROR -> no run persisted
 // ============================================================
 
-func TestExecuteLadderRun_BaselineError_NullMonetary(t *testing.T) {
+// TestExecuteLadderRun_BaselineError_NoRunPersisted covers the case where
+// GetUsageBaseline itself returns an ERROR (e.g. the CE adapter is not wired).
+// This is distinct from a nil-baseline-with-no-error (which the engine treats
+// as a Hold, see TestExecuteLadderRun_NilBaseline_HoldPlan). On a baseline
+// error the run must fail loud and persist NOTHING.
+func TestExecuteLadderRun_BaselineError_NoRunPersisted(t *testing.T) {
 	ctx := testutil.TestContext(t)
 	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
-	dbCfg := validTestDBConfig("cfg-nobaseline")
+	dbCfg := validTestDBConfig("cfg-baseline-err")
 
 	store := &ladderTestStore{}
 	app := &Application{Config: store}
@@ -359,10 +421,137 @@ func TestExecuteLadderRun_BaselineError_NullMonetary(t *testing.T) {
 	}
 
 	err := app.executeLadderRun(ctx, &dbCfg, cap, "123456789012", pkgladder.Term1Year, pkgladder.PaymentNoUpfront, now)
-	// GetUsageBaseline returns an error -> executeLadderRun must return an error
-	// (fail-loud: baseline is required for a meaningful plan).
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GetUsageBaseline")
+	// Fail-loud: nothing may be persisted when the baseline lookup errors.
+	assert.Nil(t, store.savedRun, "no ladder_runs row may be persisted on a baseline error")
+	assert.Nil(t, store.savedTranches, "no tranches may be persisted on a baseline error")
+}
+
+// TestExecuteLadderRun_NilBaseline_HoldPlan covers GetUsageBaseline returning a
+// baseline with a nil LowWaterUSDPerHour and NO error. The engine treats this
+// as a Hold (explainable no-op), so executeLadderRun must persist a
+// status=planned run with NULL target/gap monetary cols and no purchase
+// actions -- NOT an error.
+func TestExecuteLadderRun_NilBaseline_HoldPlan(t *testing.T) {
+	ctx := testutil.TestContext(t)
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	dbCfg := validTestDBConfig("cfg-nilbaseline")
+
+	store := &ladderTestStore{}
+	app := &Application{Config: store}
+
+	cap := &fakeLadderCapability{
+		t: t,
+		// Baseline present but LowWaterUSDPerHour nil -> engine holds.
+		baseline: pkgladder.UsageBaseline{
+			LowWaterUSDPerHour: nil,
+			LookbackDays:       30,
+			Percentile:         5.0,
+		},
+	}
+
+	err := app.executeLadderRun(ctx, &dbCfg, cap, "123456789012", pkgladder.Term1Year, pkgladder.PaymentNoUpfront, now)
+	require.NoError(t, err, "nil baseline with no error must be a Hold, not an error")
+
+	require.NotNil(t, store.savedRun, "a Hold run must still be persisted")
+	run := store.savedRun
+	assert.Equal(t, pkgladder.RunStatusPlanned, run.Status, "Hold run status must be planned")
+	// Monetary snapshot: baseline/target/gap must be NULL (nil), never 0-coerced.
+	assert.Nil(t, run.BaselineUSDHr, "baseline_usd_hr must be nil when low-water is nil")
+	assert.Nil(t, run.TargetUSDHr, "target_usd_hr must be nil when baseline is unavailable")
+	assert.Nil(t, run.GapUSDHr, "gap_usd_hr must be nil when baseline is unavailable")
+	assert.Equal(t, 0.0, run.TotalHourlyCommit, "a Hold run plans zero new commitment")
+
+	// Plan must contain no purchase actions (Hold-only).
+	var planDTO ladderPlanJSONDTO
+	require.NoError(t, json.Unmarshal(run.Plan, &planDTO))
+	for _, a := range planDTO.Actions {
+		assert.NotEqual(t, string(pkgladder.ActionPurchase), a.Action, "a Hold-only plan must contain no purchase actions")
+	}
+	// No tranches produced from an empty allocation set.
+	assert.Empty(t, store.savedTranches, "a Hold-only run produces no tranches")
+}
+
+// TestExecuteLadderRun_ZeroGap_HoldPlan covers a run where existing commitment
+// already meets or exceeds the target, so the gap is <= the minimum and the
+// engine returns a Hold. The run must persist as status=planned with no
+// purchase actions.
+func TestExecuteLadderRun_ZeroGap_HoldPlan(t *testing.T) {
+	ctx := testutil.TestContext(t)
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	dbCfg := validTestDBConfig("cfg-zerogap")
+
+	store := &ladderTestStore{}
+	app := &Application{Config: store}
+
+	// Existing base commitment (10) already meets the low-water (10); with
+	// target coverage 80% the target (8) is below existing, so gap <= 0 -> Hold.
+	tenUSD := 10.0
+	zero := 0.0
+	cap := &fakeLadderCapability{
+		t:        t,
+		baseline: testBaseline(10.0),
+		layerStates: map[pkgladder.LayerType]pkgladder.LayerState{
+			pkgladder.LayerConvertibleRI: {
+				Layer:              pkgladder.LayerConvertibleRI,
+				ExistingUSDPerHour: &tenUSD,
+				ExpiringUSDPerHour: &zero,
+			},
+			pkgladder.LayerEC2InstanceSP: {
+				Layer:              pkgladder.LayerEC2InstanceSP,
+				ExistingUSDPerHour: &zero,
+				ExpiringUSDPerHour: &zero,
+			},
+		},
+	}
+
+	err := app.executeLadderRun(ctx, &dbCfg, cap, "123456789012", pkgladder.Term1Year, pkgladder.PaymentNoUpfront, now)
+	require.NoError(t, err)
+
+	require.NotNil(t, store.savedRun, "a zero-gap Hold run must still be persisted")
+	run := store.savedRun
+	assert.Equal(t, pkgladder.RunStatusPlanned, run.Status)
+	assert.Equal(t, 0.0, run.TotalHourlyCommit, "zero-gap run plans zero new commitment")
+
+	var planDTO ladderPlanJSONDTO
+	require.NoError(t, json.Unmarshal(run.Plan, &planDTO))
+	for _, a := range planDTO.Actions {
+		assert.NotEqual(t, string(pkgladder.ActionPurchase), a.Action, "zero-gap plan must contain no purchase actions")
+	}
+	assert.Empty(t, store.savedTranches, "a zero-gap Hold run produces no tranches")
+}
+
+// TestExecuteLadderRun_MaxActionsExceeded covers Allocate erroring because the
+// split produces more allocations than MaxActionsPerRun allows. executeLadderRun
+// must fail loud and persist nothing.
+func TestExecuteLadderRun_MaxActionsExceeded(t *testing.T) {
+	ctx := testutil.TestContext(t)
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	dbCfg := validTestDBConfig("cfg-maxactions")
+	dbCfg.MaxActionsPerRun = 1 // base+flex split yields 2 allocations > 1
+
+	store := &ladderTestStore{}
+	app := &Application{Config: store}
+
+	// Stable (10) is far below the target (80% of low-water 100 = 80), so the
+	// base layer only absorbs up to stable and the remainder spills to flex,
+	// producing TWO allocations. With MaxActionsPerRun=1 the engine must error.
+	cap := &fakeLadderCapability{
+		t: t,
+		baseline: pkgladder.UsageBaseline{
+			LowWaterUSDPerHour: nonZeroFloat64(100.0),
+			StableUSDPerHour:   nonZeroFloat64(10.0),
+			LookbackDays:       30,
+			Percentile:         5.0,
+		},
+	}
+
+	err := app.executeLadderRun(ctx, &dbCfg, cap, "123456789012", pkgladder.Term1Year, pkgladder.PaymentNoUpfront, now)
+	require.Error(t, err, "Allocate must error when the split exceeds max_actions_per_run")
+	assert.Contains(t, err.Error(), "max_actions_per_run")
+	assert.Nil(t, store.savedRun, "no run may be persisted when Allocate errors")
+	assert.Nil(t, store.savedTranches, "no tranches may be persisted when Allocate errors")
 }
 
 // ============================================================
@@ -508,16 +697,88 @@ func TestLadderTermFromYears(t *testing.T) {
 // ============================================================
 
 func TestHandleLadderRun_MultiConfigIsolation(t *testing.T) {
-	// This test exercises handleLadderRun at the unit level.
-	// Because handleLadderRun calls awsconfig.LoadDefaultConfig (AWS SDK), we
-	// test the sub-layer instead: ladderWithinCadenceWindow isolation and
-	// per-config error increments are covered by other tests.
-	// The isolation guarantee is enforced by the loop structure in
-	// handleLadderRun: errors on one config increment Errored and continue.
-	//
-	// Full integration of multi-config isolation is covered in T10 (store
-	// postgres integration tests that run against docker-compose.test.yml).
-	t.Skip("full multi-config isolation tested via integration T10; covered here by unit tests of sub-functions")
+	// runLadderConfigs is the loop that handleLadderRun runs after the AWS SDK
+	// account-resolution step. Testing it directly (rather than handleLadderRun)
+	// avoids awsconfig.LoadDefaultConfig / STS while still proving the isolation
+	// guarantee: an error on one config must not abort the others.
+	ctx := testutil.TestContext(t)
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	const ownAccount = "123456789012"
+
+	// Config A: healthy -> plans a run.
+	cfgHealthy := validTestDBConfig("cfg-healthy")
+	cfgHealthy.CloudAccountID = "acct-ok"
+	// Config B: its cloud account lookup errors -> counted Errored, must not
+	// prevent config A from planning.
+	cfgBroken := validTestDBConfig("cfg-broken")
+	cfgBroken.CloudAccountID = "acct-bad"
+
+	store := &ladderTestStore{
+		cloudAcctByID: map[string]*config.CloudAccount{
+			"acct-ok": validTestCloudAccount(ownAccount),
+		},
+		cloudAcctErrByID: map[string]error{
+			"acct-bad": errors.New("cloud account lookup failed"),
+		},
+	}
+	app := &Application{
+		Config: store,
+		LadderCapabilityFactory: func(_ context.Context, _, _ string) (pkgladder.LadderCapability, error) {
+			return &fakeLadderCapability{t: t, baseline: testBaseline(10.0)}, nil
+		},
+	}
+
+	// Order the broken config first to prove a leading failure does not abort
+	// the healthy config that follows.
+	configs := []config.LadderConfigDB{cfgBroken, cfgHealthy}
+	result := app.runLadderConfigs(ctx, configs, ownAccount, "us-east-1", pkgladder.Term1Year, pkgladder.PaymentNoUpfront, now)
+
+	require.NotNil(t, result)
+	assert.Equal(t, 1, result.Planned, "the healthy config must still be planned despite the broken one")
+	assert.Equal(t, 1, result.Errored, "the broken config must be counted Errored")
+	assert.Equal(t, 0, result.SkippedDisabled)
+	assert.Equal(t, 0, result.SkippedMultiAccount)
+
+	// Exactly one run persisted (the healthy config); it must be the healthy one.
+	require.Len(t, store.savedRuns, 1, "only the healthy config persists a run")
+	require.NotNil(t, store.savedRuns[0].ConfigID)
+	assert.Equal(t, "cfg-healthy", *store.savedRuns[0].ConfigID)
+}
+
+// ============================================================
+// buildTrancheDBRows: malformed amount fails loud (no $0 row)
+// ============================================================
+
+func TestBuildTrancheDBRows_MalformedAmount_Errors(t *testing.T) {
+	runID := "run-1"
+	cfgID := "cfg-1"
+	tranches := []pkgladder.Tranche{
+		{
+			ID:               "tr-good",
+			RunID:            runID,
+			Layer:            pkgladder.LayerConvertibleRI,
+			Term:             pkgladder.Term1Year,
+			PaymentOption:    pkgladder.PaymentNoUpfront,
+			Status:           pkgladder.TrancheStatusScheduled,
+			AmountUSDPerHour: "3/2",
+			FireAfter:        time.Now(),
+		},
+		{
+			ID:               "tr-bad",
+			RunID:            runID,
+			Layer:            pkgladder.LayerConvertibleRI,
+			Term:             pkgladder.Term1Year,
+			PaymentOption:    pkgladder.PaymentNoUpfront,
+			Status:           pkgladder.TrancheStatusScheduled,
+			AmountUSDPerHour: "not-a-number",
+			FireAfter:        time.Now(),
+		},
+	}
+
+	rows, err := buildTrancheDBRows(tranches, runID, &cfgID)
+	require.Error(t, err, "a malformed amount must fail loud, not write a $0 tranche")
+	assert.Contains(t, err.Error(), "tr-bad")
+	assert.Nil(t, rows, "no rows may be returned when any tranche amount is malformed")
 }
 
 // ============================================================

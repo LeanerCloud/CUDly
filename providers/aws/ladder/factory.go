@@ -16,8 +16,9 @@ import (
 //     a plan-only run: the engine correctly shows the full gap as unhedged).
 //   - RI coverage and utilization sources return empty results.
 //   - The on-demand series source returns an explicit error so GetUsageBaseline
-//     fails loud; handleLadderRun treats that as a failed run and records it in
-//     the DB. Real wiring arrives in PR-4 (Cost Explorer data source).
+//     fails loud; executeLadderRun returns before persisting anything, so the
+//     config is counted Errored for the run (no ladder_runs row is written).
+//     Real wiring arrives in PR-4 (Cost Explorer data source).
 //
 // The write side (PurchaseLayer / ReshapeBuffer) is not wired here; all writes
 // are rejected with errWriteNotWired, which is correct for the plan-only phase.
@@ -82,9 +83,9 @@ func (noopRICoverageSource) GetRICoverageMap(_ context.Context, _ int, _ []strin
 // noopOnDemandSeriesSource satisfies onDemandSeriesSource by returning an
 // explicit error. GetUsageBaseline requires a non-empty daily spend series to
 // compute the low-water baseline; without it the engine cannot produce a
-// meaningful plan. The handler treats GetUsageBaseline failures as a failed run
-// and records the error in the DB. Real wiring (Cost Explorer adapter) arrives
-// in PR-4.
+// meaningful plan. executeLadderRun returns early on the GetUsageBaseline
+// error, so the config is counted Errored and no ladder_runs row is persisted.
+// Real wiring (Cost Explorer adapter) arrives in PR-4.
 type noopOnDemandSeriesSource struct{}
 
 func (noopOnDemandSeriesSource) GetOnDemandSeries(_ context.Context, _ string, _ int) ([]float64, error) {

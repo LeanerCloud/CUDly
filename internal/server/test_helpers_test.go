@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/database"
+	"github.com/LeanerCloud/CUDly/pkg/ladder"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -341,7 +342,7 @@ func (m *mockConfigStoreForHealth) SaveLadderTranches(_ context.Context, _ []con
 func (m *mockConfigStoreForHealth) LatestLadderRunStartedAt(_ context.Context, _ string) (*time.Time, error) {
 	return nil, nil
 }
-func (m *mockConfigStoreForHealth) TransitionLadderRunStatus(_ context.Context, _ string, _ []string, _ string) (*config.LadderRunDB, error) {
+func (m *mockConfigStoreForHealth) TransitionLadderRunStatus(_ context.Context, _ string, _ []ladder.RunStatus, _ ladder.RunStatus) (*config.LadderRunDB, error) {
 	return nil, nil
 }
 func (m *mockConfigStoreForHealth) UpdateGlobalConfigAtomic(_ context.Context, apply func(*config.GlobalConfig) error) (*config.GlobalConfig, error) {

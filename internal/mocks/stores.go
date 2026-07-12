@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/pkg/ladder"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/mock"
 )
@@ -1430,7 +1431,7 @@ func (m *MockConfigStore) LatestLadderRunStartedAt(ctx context.Context, configID
 
 // TransitionLadderRunStatus mocks the TransitionLadderRunStatus operation.
 // Returns (nil, nil) when no expectation is registered (CAS race-lost path).
-func (m *MockConfigStore) TransitionLadderRunStatus(ctx context.Context, id string, fromStatuses []string, toStatus string) (*config.LadderRunDB, error) {
+func (m *MockConfigStore) TransitionLadderRunStatus(ctx context.Context, id string, fromStatuses []ladder.RunStatus, toStatus ladder.RunStatus) (*config.LadderRunDB, error) {
 	if !isExpected(&m.Mock, "TransitionLadderRunStatus") {
 		return nil, nil
 	}

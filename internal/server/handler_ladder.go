@@ -26,6 +26,13 @@ const (
 	cadenceWeeklyMin = 6*24*time.Hour + 20*time.Hour // weekly: 6d 20h (7d - 4h slack)
 )
 
+// dataSourceAWSCostExplorer is the provenance tag stamped on every planned
+// action in the PR-2 plan-only phase. The baseline is derived from AWS Cost
+// Explorer once the CE adapter lands (PR-4); until then the tag documents the
+// intended source. Named constant instead of a bare string literal so the
+// provenance value has a single definition.
+const dataSourceAWSCostExplorer = "aws-ce"
+
 // ladderConfigOutcome is the result of processing a single ladder_config entry
 // in the handleLadderRun loop. Using a typed constant avoids bare strings on
 // the outcome path.
@@ -115,15 +122,31 @@ func (app *Application) handleLadderRun(ctx context.Context) (*LadderRunResult, 
 	region := awsCfg.Region
 
 	now := time.Now().UTC()
-	result := &LadderRunResult{}
-
-	for i := range allConfigs {
-		result.record(app.processOneLadderConfig(ctx, &allConfigs[i], ownAccountID, region, term, paymentOpt, now))
-	}
+	result := app.runLadderConfigs(ctx, allConfigs, ownAccountID, region, term, paymentOpt, now)
 
 	log.Printf("ladder_run done: planned=%d skipped_cadence=%d skipped_disabled=%d skipped_multi_account=%d errored=%d",
 		result.Planned, result.SkippedCadence, result.SkippedDisabled, result.SkippedMultiAccount, result.Errored)
 	return result, nil
+}
+
+// runLadderConfigs processes every ladder_config entry, isolating each one:
+// an error on one config increments the Errored counter and continues to the
+// next, so a single broken config never aborts the whole run. Extracted from
+// handleLadderRun so the multi-config isolation behaviour is unit-testable
+// without the AWS SDK account-resolution path in handleLadderRun.
+func (app *Application) runLadderConfigs(
+	ctx context.Context,
+	configs []config.LadderConfigDB,
+	ownAccountID, region string,
+	term pkgladder.Term,
+	paymentOpt pkgladder.PaymentOption,
+	now time.Time,
+) *LadderRunResult {
+	result := &LadderRunResult{}
+	for i := range configs {
+		result.record(app.processOneLadderConfig(ctx, &configs[i], ownAccountID, region, term, paymentOpt, now))
+	}
+	return result
 }
 
 // processOneLadderConfig applies all eligibility gates for a single
@@ -227,7 +250,7 @@ func (app *Application) executeLadderRun(
 		LayerStates: layerStates,
 		Layers:      supportedLayers,
 		Config:      engineCfg,
-		DataSources: []string{"aws-ce"},
+		DataSources: []string{dataSourceAWSCostExplorer},
 	})
 	if err != nil {
 		return fmt.Errorf("Allocate: %w", err)
@@ -249,7 +272,27 @@ func (app *Application) executeLadderRun(
 	}
 
 	// Assemble LadderPlan (Q5: interleaves purchases AND reshapes in one JSON).
-	plan := assembleLadderPlan(scope, now, allocResult, layerStates, baseline, term, paymentOpt)
+	plan := assembleLadderPlan(scope, now, allocResult, layerStates, baseline, engineCfg.TargetCoveragePct, term, paymentOpt)
+
+	// Validate and persist the run row + tranche audit rows.
+	return app.persistLadderRun(ctx, dbCfg, runID, now, plan, baseline, allocResult, trancheResult)
+}
+
+// persistLadderRun validates the assembled plan and writes the ladder_runs row
+// followed by its ladder_tranches audit rows. Split from executeLadderRun so
+// each function stays within the project's cyclomatic-complexity limit (10).
+// A failure at any step returns an error before the next write, so a config
+// is never left with a half-persisted run.
+func (app *Application) persistLadderRun(
+	ctx context.Context,
+	dbCfg *config.LadderConfigDB,
+	runID string,
+	now time.Time,
+	plan *pkgladder.LadderPlan,
+	baseline pkgladder.UsageBaseline,
+	allocResult *pkgladder.AllocateResult,
+	trancheResult *pkgladder.TrancheResult,
+) error {
 	if err := plan.Validate(); err != nil {
 		return fmt.Errorf("LadderPlan.Validate: %w", err)
 	}
@@ -287,7 +330,10 @@ func (app *Application) executeLadderRun(
 	}
 
 	// Persist the tranche audit rows (status=scheduled; no firing in PR-2).
-	trancheRows := buildTrancheDBRows(trancheResult.Tranches, savedRun.ID, &cfgID)
+	trancheRows, err := buildTrancheDBRows(trancheResult.Tranches, savedRun.ID, &cfgID)
+	if err != nil {
+		return fmt.Errorf("buildTrancheDBRows: %w", err)
+	}
 	if err := app.Config.SaveLadderTranches(ctx, trancheRows); err != nil {
 		return fmt.Errorf("SaveLadderTranches: %w", err)
 	}
@@ -370,12 +416,24 @@ func ladderConfigToEngine(dbCfg *config.LadderConfigDB, accountID string) (pkgla
 // (Allocations) and Reshapes in one authoritative plan JSON. Term and
 // PaymentOption are stamped on every ActionPurchase entry; they are required
 // by PlannedAction.Validate for purchase actions.
+//
+// The monetary snapshot is derived to stay consistent with the authoritative
+// allocation rather than recomputed independently:
+//   - target = baseline low-water * targetCoveragePct/100 (the coverage goal),
+//   - existing = sum of per-layer ExistingUSDPerHour,
+//   - gap = sum of the planned allocation gaps (what is actually being placed
+//     this run), NOT target - existing.
+//
+// When the baseline low-water is nil the run is a Hold-only no-op (Allocate
+// returns no allocations), so target and gap stay nil (never 0-coerced);
+// existing is still reported from the observed layer states.
 func assembleLadderPlan(
 	scope pkgladder.Scope,
 	now time.Time,
 	allocResult *pkgladder.AllocateResult,
 	layerStates map[pkgladder.LayerType]pkgladder.LayerState,
 	baseline pkgladder.UsageBaseline,
+	targetCoveragePct float64,
 	term pkgladder.Term,
 	paymentOpt pkgladder.PaymentOption,
 ) *pkgladder.LadderPlan {
@@ -397,22 +455,27 @@ func assembleLadderPlan(
 	// Holds are informational; append last.
 	actions = append(actions, allocResult.Holds...)
 
-	// Compute aggregate monetary fields from layer states.
-	var existing, target, gap *big.Rat
+	// existing = sum of per-layer existing commitment (always reportable).
 	var existingTotal float64
 	for _, ls := range layerStates {
 		if ls.ExistingUSDPerHour != nil {
 			existingTotal += *ls.ExistingUSDPerHour
 		}
 	}
-	existing = ratFromFloat(existingTotal)
+	existing := ratFromFloat(existingTotal)
 
+	// target and gap are only meaningful when the baseline is available; nil
+	// stays nil (a Hold-only no-op has no purchase target/gap to report).
+	var target, gap *big.Rat
 	if baseline.LowWaterUSDPerHour != nil {
-		low := ratFromFloat(*baseline.LowWaterUSDPerHour)
-		target = low // LadderConfig.TargetCoveragePct scaling is applied inside Allocate
-		if existing != nil {
-			gap = new(big.Rat).Sub(target, existing)
+		if low := ratFromFloat(*baseline.LowWaterUSDPerHour); low != nil {
+			if pctFrac := ratFromFloat(targetCoveragePct / 100.0); pctFrac != nil {
+				target = new(big.Rat).Mul(low, pctFrac)
+			}
 		}
+		// gap is what is actually being placed this run (Σ allocation gaps),
+		// consistent with total_hourly_commit, not target - existing.
+		gap = sumAllocationGaps(allocResult.Allocations)
 	}
 
 	return &pkgladder.LadderPlan{
@@ -448,33 +511,46 @@ func ratToFloat64Ptr(r *big.Rat) *float64 {
 	return &f
 }
 
-// allocTotalHourlyCommit sums the GapUSDPerHour across all allocations,
-// converting to float64. This is the non-nullable total_hourly_commit stored
-// in the run row; it starts at 0 for a no-op (Hold-only) plan, which is the
-// correct semantic (zero new commitment, not "not computed").
-func allocTotalHourlyCommit(allocs []pkgladder.Allocation) float64 {
+// sumAllocationGaps sums the GapUSDPerHour across all allocations as an exact
+// *big.Rat. It returns a zero (non-nil) rat for an empty allocation set: a
+// Hold-only run plans exactly $0 of new commitment, which is a meaningful
+// value here (what is being placed), not "not computed".
+func sumAllocationGaps(allocs []pkgladder.Allocation) *big.Rat {
 	sum := new(big.Rat)
 	for _, a := range allocs {
 		if a.GapUSDPerHour != nil {
 			sum.Add(sum, a.GapUSDPerHour)
 		}
 	}
-	f, _ := sum.Float64()
+	return sum
+}
+
+// allocTotalHourlyCommit sums the GapUSDPerHour across all allocations,
+// converting to float64. This is the non-nullable total_hourly_commit stored
+// in the run row; it starts at 0 for a no-op (Hold-only) plan, which is the
+// correct semantic (zero new commitment, not "not computed").
+func allocTotalHourlyCommit(allocs []pkgladder.Allocation) float64 {
+	f, _ := sumAllocationGaps(allocs).Float64()
 	return f
 }
 
 // buildTrancheDBRows converts pkg/ladder Tranche rows to config.LadderTrancheDB
-// rows ready for SaveLadderTranches.
-func buildTrancheDBRows(tranches []pkgladder.Tranche, runID string, configID *string) []config.LadderTrancheDB {
+// rows ready for SaveLadderTranches. It fails loud on a malformed
+// AmountUSDPerHour (money path): rather than persist a silently 0-coerced
+// $0 tranche, it returns an error so the whole run is counted Errored and
+// nothing partial is written.
+func buildTrancheDBRows(tranches []pkgladder.Tranche, runID string, configID *string) ([]config.LadderTrancheDB, error) {
 	rows := make([]config.LadderTrancheDB, 0, len(tranches))
 	for _, tr := range tranches {
-		// AmountUSDHr: parse the RatString back to float64. Fail-loud:
-		// an empty or malformed RatString means BuildTranches produced a
-		// broken tranche; that should never happen after Validate() passes.
-		var amountUSDHr float64
-		if r, ok := new(big.Rat).SetString(tr.AmountUSDPerHour); ok && r != nil {
-			amountUSDHr, _ = r.Float64()
+		// AmountUSDHr: parse the RatString back to float64. A missing or
+		// malformed RatString means BuildTranches produced a broken tranche;
+		// that should never happen after Validate() passes, so surface it as
+		// an error instead of writing a $0 row.
+		r, ok := new(big.Rat).SetString(tr.AmountUSDPerHour)
+		if !ok || r == nil {
+			return nil, fmt.Errorf("tranche %s: malformed amount_usd_per_hour %q (not a parseable rational)", tr.ID, tr.AmountUSDPerHour)
 		}
+		amountUSDHr, _ := r.Float64()
 		runIDCopy := runID
 		rows = append(rows, config.LadderTrancheDB{
 			ID:            tr.ID,
@@ -488,7 +564,7 @@ func buildTrancheDBRows(tranches []pkgladder.Tranche, runID string, configID *st
 			ScheduledDate: tr.FireAfter,
 		})
 	}
-	return rows
+	return rows, nil
 }
 
 // ladderPlanJSONAction is a JSON-serializable form of pkgladder.PlannedAction.

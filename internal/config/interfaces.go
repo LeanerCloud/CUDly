@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/LeanerCloud/CUDly/pkg/ladder"
 )
 
 // StoreInterface defines the methods required for configuration storage.
@@ -351,9 +353,11 @@ type StoreInterface interface {
 	// row from one of the fromStatuses to toStatus, returning the updated row.
 	// Returns (nil, nil) when zero rows are affected (CAS race lost or wrong
 	// current status), so callers can distinguish a race from a hard error.
+	// Statuses are typed ladder.RunStatus so callers cannot pass an arbitrary
+	// string that would never match a stored status.
 	SaveLadderRun(ctx context.Context, run *LadderRunDB) (*LadderRunDB, error)
 	GetLadderRun(ctx context.Context, id string) (*LadderRunDB, error)
 	SaveLadderTranches(ctx context.Context, tranches []LadderTrancheDB) error
 	LatestLadderRunStartedAt(ctx context.Context, configID string) (*time.Time, error)
-	TransitionLadderRunStatus(ctx context.Context, id string, fromStatuses []string, toStatus string) (*LadderRunDB, error)
+	TransitionLadderRunStatus(ctx context.Context, id string, fromStatuses []ladder.RunStatus, toStatus ladder.RunStatus) (*LadderRunDB, error)
 }
