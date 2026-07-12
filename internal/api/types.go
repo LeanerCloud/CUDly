@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/analytics"
+	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/commitmentopts"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/credentials"
@@ -210,6 +211,12 @@ type AuthServiceInterface interface {
 	ListGroupsAPI(ctx context.Context) (any, error)
 	// Permission checking
 	HasPermissionAPI(ctx context.Context, userID, action, resource string) (bool, error)
+	// HasPermissionForConstraintsAPI checks action on resource against
+	// request-derived constraint sets so per-permission Constraints
+	// (MaxPurchaseAmount, Providers, Services, Regions, AccountIDs) are
+	// enforced at execution time. Every constraint set must be granted by
+	// at least one of the user's permissions (SEC-01, issue #1141).
+	HasPermissionForConstraintsAPI(ctx context.Context, userID, action, resource string, constraintSets []auth.PermissionConstraints) (bool, error)
 	// GetUserPermissionsAPI returns the effective permission set for a user
 	// (union of all group permissions). Used by GET /api/auth/me/permissions.
 	// Returns []auth.APIPermission converted to []PermissionEntry by the handler.

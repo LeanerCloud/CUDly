@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 
+	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/mocks"
@@ -251,12 +252,27 @@ func (m *MockAuthService) HasPermissionAPI(ctx context.Context, userID, action, 
 	return args.Bool(0), args.Error(1)
 }
 
+func (m *MockAuthService) HasPermissionForConstraintsAPI(ctx context.Context, userID, action, resource string, constraintSets []auth.PermissionConstraints) (bool, error) {
+	args := m.Called(ctx, userID, action, resource, constraintSets)
+	return args.Bool(0), args.Error(1)
+}
+
 func (m *MockAuthService) GetUserPermissionsAPI(ctx context.Context, userID string) (any, error) {
 	args := m.Called(ctx, userID)
 	return args.Get(0), args.Error(1)
 }
 
-// grantAdmin makes every HasPermissionAPI check succeed, modeling an
+// allowConstraintChecks stubs the SEC-01 execution-time permission
+// constraint check (HasPermissionForConstraintsAPI) to succeed for any
+// request, modelling a granting permission with no Constraints configured.
+// Tests that target constraint behaviour register an explicit expectation
+// instead.
+func (m *MockAuthService) allowConstraintChecks() {
+	m.On("HasPermissionForConstraintsAPI", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(true, nil).Maybe()
+}
+
+// grantAdmin makes every HasPermissionAPI check succeed, modelling an
 // Administrators-group member. Authorization is group-membership-only after
 // issue #907, so admin-gated handlers resolve "is admin" / specific permissions
 // through HasPermissionAPI rather than a Session.Role short-circuit; tests that
@@ -266,6 +282,10 @@ func (m *MockAuthService) GetUserPermissionsAPI(ctx context.Context, userID stri
 // UUID.
 func (m *MockAuthService) grantAdmin() {
 	m.On("HasPermissionAPI", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(true, nil).Maybe()
+	// Admins hold {admin, *}, which grants every constraint set, so the
+	// SEC-01 execution-time constraint check succeeds too.
+	m.On("HasPermissionForConstraintsAPI", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(true, nil).Maybe()
 	// Administrators-group members carry the "*" wildcard, surfaced as
 	// unrestricted access (nil/empty). Handlers that scope by account call

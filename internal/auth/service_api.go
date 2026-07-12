@@ -359,6 +359,33 @@ func (s *Service) HasPermissionAPI(ctx context.Context, userID, action, resource
 	return s.HasPermission(ctx, userID, action, resource, nil)
 }
 
+// HasPermissionForConstraintsAPI checks that the user holds action on
+// resource for EVERY request-derived constraint set, so per-permission
+// Constraints (MaxPurchaseAmount, Providers, Services, Regions, AccountIDs)
+// configured on a group permission are enforced at execution time instead of
+// being silently ignored (SEC-01, issue #1141). A single effective-permission
+// fetch covers all sets; each set must be granted by at least one permission
+// (different sets may be satisfied by different permissions, matching the
+// union semantics of group grants).
+//
+// Fail closed: an empty constraintSets slice is a caller bug, not a grant -
+// it returns an explicit error rather than allowing.
+func (s *Service) HasPermissionForConstraintsAPI(ctx context.Context, userID, action, resource string, constraintSets []PermissionConstraints) (bool, error) {
+	if len(constraintSets) == 0 {
+		return false, fmt.Errorf("no permission constraint sets provided for %s on %s", action, resource)
+	}
+	permissions, err := s.GetUserPermissions(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	for i := range constraintSets {
+		if !s.permissionsAllow(permissions, action, resource, &constraintSets[i]) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // GetUserPermissionsAPI returns the effective permission set for a user via
 // the API. Calls GetUserPermissions (the same union path the server enforces
 // with) and converts each Permission to an APIPermission for the wire format.

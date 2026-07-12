@@ -628,6 +628,131 @@ func TestService_HasPermissionAPI(t *testing.T) {
 	})
 }
 
+// TestService_HasPermissionForConstraintsAPI is the SEC-01 (#1141) regression
+// suite: per-permission Constraints (MaxPurchaseAmount, Providers, Services,
+// Regions) configured on a group permission must be enforced when the request
+// supplies constraint sets, instead of being silently ignored the way the
+// nil-constraints HasPermissionAPI path ignores them.
+func TestService_HasPermissionForConstraintsAPI(t *testing.T) {
+	ctx := context.Background()
+
+	// stubConstrainedPurchaser models the real failing scenario from the
+	// finding: an operator scoped a group's execute:purchases permission
+	// with MaxPurchaseAmount=$1000, providers=[aws], regions=[us-east-1].
+	stubConstrainedPurchaser := func(mockStore *MockStore) {
+		user := &User{ID: "purchaser-1", GroupIDs: []string{"purchasers"}}
+		mockStore.On("GetUserByID", ctx, "purchaser-1").Return(user, nil).Once()
+		mockStore.On("GetGroup", ctx, "purchasers").Return(&Group{
+			ID:   "purchasers",
+			Name: "Purchasers",
+			Permissions: []Permission{{
+				Action:   ActionExecute,
+				Resource: ResourcePurchases,
+				Constraints: &PermissionConstraints{
+					Providers:         []string{"aws"},
+					Regions:           []string{"us-east-1"},
+					MaxPurchaseAmount: 1000,
+				},
+			}},
+		}, nil).Once()
+	}
+
+	t.Run("purchase over MaxPurchaseAmount is denied", func(t *testing.T) {
+		mockStore := new(MockStore)
+		service := createTestService(mockStore, new(MockEmailSender))
+		stubConstrainedPurchaser(mockStore)
+
+		has, err := service.HasPermissionForConstraintsAPI(ctx, "purchaser-1", ActionExecute, ResourcePurchases, []PermissionConstraints{
+			{Providers: []string{"aws"}, Regions: []string{"us-east-1"}, MaxPurchaseAmount: 5000},
+		})
+		require.NoError(t, err)
+		assert.False(t, has, "a $5000 purchase must not pass a $1000 MaxPurchaseAmount cap")
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("purchase within all constraints is allowed", func(t *testing.T) {
+		mockStore := new(MockStore)
+		service := createTestService(mockStore, new(MockEmailSender))
+		stubConstrainedPurchaser(mockStore)
+
+		has, err := service.HasPermissionForConstraintsAPI(ctx, "purchaser-1", ActionExecute, ResourcePurchases, []PermissionConstraints{
+			{Providers: []string{"aws"}, Regions: []string{"us-east-1"}, MaxPurchaseAmount: 500},
+		})
+		require.NoError(t, err)
+		assert.True(t, has)
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("out-of-scope provider is denied", func(t *testing.T) {
+		mockStore := new(MockStore)
+		service := createTestService(mockStore, new(MockEmailSender))
+		stubConstrainedPurchaser(mockStore)
+
+		has, err := service.HasPermissionForConstraintsAPI(ctx, "purchaser-1", ActionExecute, ResourcePurchases, []PermissionConstraints{
+			{Providers: []string{"azure"}, Regions: []string{"us-east-1"}, MaxPurchaseAmount: 500},
+		})
+		require.NoError(t, err)
+		assert.False(t, has, "an azure purchase must not pass a providers=[aws] constraint")
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("batch with one out-of-scope set is denied", func(t *testing.T) {
+		mockStore := new(MockStore)
+		service := createTestService(mockStore, new(MockEmailSender))
+		stubConstrainedPurchaser(mockStore)
+
+		has, err := service.HasPermissionForConstraintsAPI(ctx, "purchaser-1", ActionExecute, ResourcePurchases, []PermissionConstraints{
+			{Providers: []string{"aws"}, Regions: []string{"us-east-1"}, MaxPurchaseAmount: 500},
+			{Providers: []string{"aws"}, Regions: []string{"eu-west-1"}, MaxPurchaseAmount: 500},
+		})
+		require.NoError(t, err)
+		assert.False(t, has, "every constraint set must be granted; an out-of-region rec fails the batch")
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("admin passes any constraint set", func(t *testing.T) {
+		mockStore := new(MockStore)
+		service := createTestService(mockStore, new(MockEmailSender))
+
+		adminUser := &User{ID: "admin-123", GroupIDs: []string{DefaultAdminGroupID}}
+		mockStore.On("GetUserByID", ctx, "admin-123").Return(adminUser, nil).Once()
+		mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(&Group{
+			ID:          DefaultAdminGroupID,
+			Permissions: []Permission{{Action: ActionAdmin, Resource: ResourceAll}},
+		}, nil).Once()
+
+		has, err := service.HasPermissionForConstraintsAPI(ctx, "admin-123", ActionExecute, ResourcePurchases, []PermissionConstraints{
+			{Providers: []string{"gcp"}, Regions: []string{"europe-west1"}, MaxPurchaseAmount: 9_999_999},
+		})
+		require.NoError(t, err)
+		assert.True(t, has)
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("empty constraint sets fail loud", func(t *testing.T) {
+		mockStore := new(MockStore)
+		service := createTestService(mockStore, new(MockEmailSender))
+
+		has, err := service.HasPermissionForConstraintsAPI(ctx, "purchaser-1", ActionExecute, ResourcePurchases, nil)
+		require.Error(t, err, "an empty constraint-set slice is a caller bug, not a grant")
+		assert.False(t, has)
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("store error propagates and denies", func(t *testing.T) {
+		mockStore := new(MockStore)
+		service := createTestService(mockStore, new(MockEmailSender))
+		mockStore.On("GetUserByID", ctx, "err-1").Return(nil, fmt.Errorf("database error")).Once()
+
+		has, err := service.HasPermissionForConstraintsAPI(ctx, "err-1", ActionExecute, ResourcePurchases, []PermissionConstraints{
+			{Providers: []string{"aws"}},
+		})
+		require.Error(t, err)
+		assert.False(t, has)
+		mockStore.AssertExpectations(t)
+	})
+}
+
 // Test error paths and edge cases
 
 // TestUserToAPIUser_EmptyGroups verifies the nil→[]string{} substitution
