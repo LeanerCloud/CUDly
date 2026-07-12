@@ -151,11 +151,15 @@ func TestTrancheValidate(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	valid := Tranche{
-		ID:        "tranche-1",
-		RunID:     "run-1",
-		StepIndex: 0,
-		FireAfter: now,
-		Status:    TrancheStatusScheduled,
+		ID:               "tranche-1",
+		RunID:            "run-1",
+		StepIndex:        0,
+		FireAfter:        now,
+		Status:           TrancheStatusScheduled,
+		AmountUSDPerHour: "2/1",
+		Layer:            LayerComputeSP,
+		Term:             Term1Year,
+		PaymentOption:    PaymentNoUpfront,
 	}
 	cases := []struct {
 		mutate  func(tr *Tranche)
@@ -238,6 +242,66 @@ func TestTrancheValidate(t *testing.T) {
 				tr.Status = TrancheStatusFired
 			},
 			wantErr: false,
+		},
+		{
+			name:    "empty AmountUSDPerHour is invalid",
+			mutate:  func(tr *Tranche) { tr.AmountUSDPerHour = "" },
+			wantErr: true,
+		},
+		{
+			name:    "non-rational AmountUSDPerHour is invalid",
+			mutate:  func(tr *Tranche) { tr.AmountUSDPerHour = "not-a-number" },
+			wantErr: true,
+		},
+		{
+			name:    "zero AmountUSDPerHour is invalid",
+			mutate:  func(tr *Tranche) { tr.AmountUSDPerHour = "0" },
+			wantErr: true,
+		},
+		{
+			name:    "negative AmountUSDPerHour is invalid",
+			mutate:  func(tr *Tranche) { tr.AmountUSDPerHour = "-3/2" },
+			wantErr: true,
+		},
+		{
+			name:    "fractional AmountUSDPerHour is valid",
+			mutate:  func(tr *Tranche) { tr.AmountUSDPerHour = "3/2" },
+			wantErr: false,
+		},
+		{
+			name:    "integer AmountUSDPerHour is valid",
+			mutate:  func(tr *Tranche) { tr.AmountUSDPerHour = "5" },
+			wantErr: false,
+		},
+		{
+			name:    "unknown Layer is invalid",
+			mutate:  func(tr *Tranche) { tr.Layer = "bogus-layer" },
+			wantErr: true,
+		},
+		{
+			name:    "empty Layer is invalid",
+			mutate:  func(tr *Tranche) { tr.Layer = "" },
+			wantErr: true,
+		},
+		{
+			name:    "empty Term is invalid",
+			mutate:  func(tr *Tranche) { tr.Term = "" },
+			wantErr: true,
+		},
+		{
+			name:    "empty PaymentOption is invalid",
+			mutate:  func(tr *Tranche) { tr.PaymentOption = "" },
+			wantErr: true,
+		},
+		{
+			name:    "unknown Term is invalid",
+			mutate:  func(tr *Tranche) { tr.Term = "2yr" },
+			wantErr: true,
+		},
+		{
+			name:    "unknown PaymentOption is invalid",
+			mutate:  func(tr *Tranche) { tr.PaymentOption = "biannual" },
+			wantErr: true,
 		},
 	}
 	for _, c := range cases {
