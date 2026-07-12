@@ -329,4 +329,31 @@ type StoreInterface interface {
 	GetLadderConfigs(ctx context.Context) ([]LadderConfigDB, error)
 	GetLadderConfig(ctx context.Context, cloudAccountID, provider string) (*LadderConfigDB, error)
 	UpsertLadderConfig(ctx context.Context, cfg *LadderConfigDB) (*LadderConfigDB, error)
+
+	// Ladder run/tranche persistence (migration 000080/000081, PR-2).
+	//
+	// SaveLadderRun inserts a new ladder_runs row, returning the persisted row
+	// with all DB-stamped fields (id, created_at, updated_at) populated.
+	// If run.ID is empty, a new UUID is generated before the insert.
+	//
+	// GetLadderRun returns the row for the given id, or (nil, nil) when no
+	// row exists (mirrors GetLadderConfig semantics).
+	//
+	// SaveLadderTranches inserts a batch of ladder_tranches rows inside a
+	// single transaction. Each tranche must carry a non-empty ID; duplicate
+	// IDs within the batch are rejected at the DB UNIQUE constraint level.
+	//
+	// LatestLadderRunStartedAt returns the maximum started_at for the given
+	// config_id, or nil when no run has been recorded yet. Powers the per-cadence
+	// self-gate in the scheduler (Q6).
+	//
+	// TransitionLadderRunStatus atomically updates the status of a ladder_runs
+	// row from one of the fromStatuses to toStatus, returning the updated row.
+	// Returns (nil, nil) when zero rows are affected (CAS race lost or wrong
+	// current status), so callers can distinguish a race from a hard error.
+	SaveLadderRun(ctx context.Context, run *LadderRunDB) (*LadderRunDB, error)
+	GetLadderRun(ctx context.Context, id string) (*LadderRunDB, error)
+	SaveLadderTranches(ctx context.Context, tranches []LadderTrancheDB) error
+	LatestLadderRunStartedAt(ctx context.Context, configID string) (*time.Time, error)
+	TransitionLadderRunStatus(ctx context.Context, id string, fromStatuses []string, toStatus string) (*LadderRunDB, error)
 }

@@ -747,6 +747,21 @@ func (m *mockConfigStore) GetLadderConfig(_ context.Context, _, _ string) (*conf
 func (m *mockConfigStore) UpsertLadderConfig(_ context.Context, cfg *config.LadderConfigDB) (*config.LadderConfigDB, error) {
 	return cfg, nil
 }
+func (m *mockConfigStore) SaveLadderRun(_ context.Context, run *config.LadderRunDB) (*config.LadderRunDB, error) {
+	return run, nil
+}
+func (m *mockConfigStore) GetLadderRun(_ context.Context, _ string) (*config.LadderRunDB, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) SaveLadderTranches(_ context.Context, _ []config.LadderTrancheDB) error {
+	return nil
+}
+func (m *mockConfigStore) LatestLadderRunStartedAt(_ context.Context, _ string) (*time.Time, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) TransitionLadderRunStatus(_ context.Context, _ string, _ []string, _ string) (*config.LadderRunDB, error) {
+	return nil, nil
+}
 func (m *mockConfigStore) UpdateGlobalConfigAtomic(_ context.Context, apply func(*config.GlobalConfig) error) (*config.GlobalConfig, error) {
 	cfg := &config.GlobalConfig{}
 	if err := apply(cfg); err != nil {

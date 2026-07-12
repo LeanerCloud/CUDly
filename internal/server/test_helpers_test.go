@@ -329,6 +329,21 @@ func (m *mockConfigStoreForHealth) GetLadderConfig(_ context.Context, _, _ strin
 func (m *mockConfigStoreForHealth) UpsertLadderConfig(_ context.Context, cfg *config.LadderConfigDB) (*config.LadderConfigDB, error) {
 	return cfg, nil
 }
+func (m *mockConfigStoreForHealth) SaveLadderRun(_ context.Context, run *config.LadderRunDB) (*config.LadderRunDB, error) {
+	return run, nil
+}
+func (m *mockConfigStoreForHealth) GetLadderRun(_ context.Context, _ string) (*config.LadderRunDB, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) SaveLadderTranches(_ context.Context, _ []config.LadderTrancheDB) error {
+	return nil
+}
+func (m *mockConfigStoreForHealth) LatestLadderRunStartedAt(_ context.Context, _ string) (*time.Time, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) TransitionLadderRunStatus(_ context.Context, _ string, _ []string, _ string) (*config.LadderRunDB, error) {
+	return nil, nil
+}
 func (m *mockConfigStoreForHealth) UpdateGlobalConfigAtomic(_ context.Context, apply func(*config.GlobalConfig) error) (*config.GlobalConfig, error) {
 	cfg := &config.GlobalConfig{}
 	if err := apply(cfg); err != nil {

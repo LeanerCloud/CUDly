@@ -1014,3 +1014,69 @@ type LadderConfigDB struct {
 	TargetCoverage     float64 `json:"target_coverage"`
 	Enabled            bool    `json:"enabled"`
 }
+
+// LadderRunDB mirrors the ladder_runs table (migration 000080).
+// Monetary snapshot columns are *float64 (nullable, NEVER 0-coerced:
+// NULL means "not computed", not "$0"). Field order minimizes GC
+// pointer-scan range: explicit pointer fields come before scalars.
+type LadderRunDB struct {
+	// Nullable monetary snapshot: nil means "not computed", never $0.
+	BaselineUSDHr *float64 `json:"baseline_usd_hr,omitempty"`
+	TargetUSDHr   *float64 `json:"target_usd_hr,omitempty"`
+	ExistingUSDHr *float64 `json:"existing_usd_hr,omitempty"`
+	GapUSDHr      *float64 `json:"gap_usd_hr,omitempty"`
+
+	// Nullable FK and optional text fields (all pointer types).
+	ConfigID               *string    `json:"config_id,omitempty"`
+	CompletedAt            *time.Time `json:"completed_at,omitempty"`
+	ApprovalTokenHash      *string    `json:"approval_token_hash,omitempty"`
+	ApprovalTokenExpiresAt *time.Time `json:"approval_token_expires_at,omitempty"`
+	ApprovedBy             *string    `json:"approved_by,omitempty"`
+	CancelledBy            *string    `json:"cancelled_by,omitempty"`
+	FireAt                 *time.Time `json:"fire_at,omitempty"`
+	// Mode and Cadence are nullable in the DB (populated from LadderConfigDB
+	// at run creation time; nil only for legacy / partially-failed rows).
+	Mode    *string `json:"mode,omitempty"`
+	Cadence *string `json:"cadence,omitempty"`
+
+	// Plan JSON blob (JSONB, NOT NULL DEFAULT '{}').
+	Plan json.RawMessage `json:"plan"`
+
+	// Non-nullable accumulator totals (initialised to 0, not measurements;
+	// zero is a meaningful value for these counters unlike the monetary snapshot).
+	TotalHourlyCommit float64 `json:"total_hourly_commit"`
+	TotalUpfrontCost  float64 `json:"total_upfront_cost"`
+	EstimatedSavings  float64 `json:"estimated_savings"`
+
+	// Required string / enum fields.
+	ID     string           `json:"id"`
+	Status ladder.RunStatus `json:"status"`
+
+	// Required timestamps.
+	StartedAt time.Time `json:"started_at"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// LadderTrancheDB mirrors the ladder_tranches table (migration 000081).
+// One row per ramp step per allocation; persisted as status=scheduled
+// audit rows only in PR-2 (no firing sweep wired yet). Field order
+// minimizes GC pointer-scan range.
+type LadderTrancheDB struct {
+	// Nullable FK pointers.
+	ConfigID    *string `json:"config_id,omitempty"`
+	RunID       *string `json:"run_id,omitempty"`
+	ExecutionID *string `json:"execution_id,omitempty"` // references purchase_executions.execution_id
+
+	// Required fields.
+	ID            string               `json:"id"`
+	LayerType     ladder.LayerType     `json:"layer_type"`
+	Term          ladder.Term          `json:"term"`
+	PaymentOption ladder.PaymentOption `json:"payment_option"`
+	Status        ladder.TrancheStatus `json:"status"`
+
+	// Monetary and timing.
+	AmountUSDHr   float64   `json:"amount_usd_hr"`
+	ScheduledDate time.Time `json:"scheduled_date"`
+	CreatedAt     time.Time `json:"created_at"`
+}
