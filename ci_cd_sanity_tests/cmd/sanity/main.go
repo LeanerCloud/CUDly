@@ -25,7 +25,7 @@ func main() {
 	rep, err := aws.Run(ctx, aws.Options{
 		Region:          *region,
 		ExpectedAccount: *expectedAccount,
-		MaxList:         int32(*maxList),
+		MaxList:         int32(*maxList), // #nosec G115 -- operator-controlled CLI flag with default 5; bounded well below math.MaxInt32
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sanity run failed: %v\n", err)

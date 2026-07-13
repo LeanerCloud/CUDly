@@ -103,7 +103,7 @@ func Run(ctx context.Context, opts Options) (*report.Report, error) {
 
 	runCmd := func(name string, args ...string) ([]byte, report.CheckResult) {
 		start := time.Now().UTC()
-		cmd := exec.CommandContext(rctx, "az", args...)
+		cmd := exec.CommandContext(rctx, "az", args...) // #nosec G702,G204 -- CI sanity test tooling; binary is hardcoded "az" (Azure CLI), args are Azure CLI subcommands constructed within the test code
 		out, err := cmd.CombinedOutput()
 		end := time.Now().UTC()
 

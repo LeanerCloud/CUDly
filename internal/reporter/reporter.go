@@ -47,7 +47,7 @@ func RenderTable(result scorer.ScoredResult) string {
 			rec.CommitmentType,
 		)
 	}
-	w.Flush()
+	w.Flush() // #nosec G104 -- writing to bytes.Buffer which never returns an error
 	return buf.String()
 }
 
@@ -76,7 +76,7 @@ func RenderExcluded(result scorer.ScoredResult) string {
 			fr.FilterReason,
 		)
 	}
-	w.Flush()
+	w.Flush() // #nosec G104 -- writing to bytes.Buffer which never returns an error
 	return buf.String()
 }
 

@@ -104,7 +104,9 @@ func newMigratorWithRecovery(pool *pgxpool.Pool, migrationsPath string) (*migrat
 	// migration without direct DB access. Remove the env var after the
 	// next successful deploy.
 	if err := maybeForceMigrationVersion(m); err != nil {
-		m.Close()
+		if srcErr, dbErr := m.Close(); srcErr != nil || dbErr != nil {
+			log.Printf("migrate: close after force-version error: source=%v db=%v", srcErr, dbErr)
+		}
 		return nil, err
 	}
 
@@ -113,7 +115,9 @@ func newMigratorWithRecovery(pool *pgxpool.Pool, migrationsPath string) (*migrat
 	// Up() re-applies any pending migrations, letting a cold start self-recover
 	// instead of staying broken until a manual force.
 	if err := maybeAutoHealDirty(m); err != nil {
-		m.Close()
+		if srcErr, dbErr := m.Close(); srcErr != nil || dbErr != nil {
+			log.Printf("migrate: close after auto-heal error: source=%v db=%v", srcErr, dbErr)
+		}
 		return nil, err
 	}
 

@@ -246,7 +246,7 @@ func (app *Application) handleScheduledHTTP(w http.ResponseWriter, r *http.Reque
 	// Execute scheduled task
 	result, err := app.HandleScheduledTask(ctx, taskType)
 	if err != nil {
-		log.Printf("Scheduled task %q error: %v", taskTypeStr, err)
+		log.Printf("Scheduled task %q error: %v", taskTypeStr, err) // #nosec G706 -- taskTypeStr printed with %q which escapes special chars; validated to contain no '/' before this point
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -400,7 +400,7 @@ func lambdaResponseToHTTP(w http.ResponseWriter, lambdaResp *events.LambdaFuncti
 
 	// Set status code and write body
 	w.WriteHeader(lambdaResp.StatusCode)
-	if _, err := w.Write(body); err != nil {
+	if _, err := w.Write(body); err != nil { // #nosec G705 -- body is the proxied Lambda API response; Content-Type is set from the validated Lambda response headers above
 		log.Printf("http: failed to write response body: %v", err)
 	}
 }

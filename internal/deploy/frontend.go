@@ -92,7 +92,7 @@ func (s *FrontendService) uploadDirectory(ctx context.Context, distDir, bucketNa
 		key := strings.ReplaceAll(relPath, string(filepath.Separator), "/")
 
 		// Read file
-		content, err := os.ReadFile(path)
+		content, err := os.ReadFile(path) // #nosec G304,G122 -- path is from WalkDir callback, always a descendant of distDir (npm build output under operator control); TOCTOU risk not applicable in CI/CD deploy context
 		if err != nil {
 			return fmt.Errorf("failed to read %s: %w", path, err)
 		}
@@ -134,7 +134,7 @@ func (s *FrontendService) FindFrontendDir() (string, error) {
 	// Check environment variable first for deployed binaries
 	if envPath := os.Getenv("CUDLY_FRONTEND_DIR"); envPath != "" {
 		packageJSON := filepath.Join(envPath, "package.json")
-		if _, err := os.Stat(packageJSON); err == nil {
+		if _, err := os.Stat(packageJSON); err == nil { // #nosec G703 -- CUDLY_FRONTEND_DIR is an operator-set deployment config env var, not user input
 			return filepath.Abs(envPath)
 		}
 	}

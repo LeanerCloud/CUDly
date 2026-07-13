@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 -- TOTP (RFC 6238) mandates HMAC-SHA1; using SHA256 would break compatibility with standard authenticator apps
 	"crypto/subtle"
 	"encoding/base32"
 	"fmt"

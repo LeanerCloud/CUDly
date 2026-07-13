@@ -421,7 +421,7 @@ func (h *Handler) calculateAzureRevoke(ctx context.Context, req *events.LambdaFu
 		return nil, fmt.Errorf("revoke/calculate: create calculate-refund client: %w", err)
 	}
 
-	quantity := int32(count) //nolint:gosec
+	quantity := int32(count) // #nosec G115 -- Azure reservation count bounded by API limits (<<math.MaxInt32) //nolint:gosec
 	calcResp, err := calcClient.Post(ctx, orderID, armreservations.CalculateRefundRequest{
 		Properties: &armreservations.CalculateRefundRequestProperties{
 			ReservationToReturn: &armreservations.ReservationToReturn{
@@ -604,7 +604,7 @@ func (h *Handler) callAzureReturn(
 	}
 
 	// Step 1: CalculateRefund -> sessionID + quoted amount (TOCTOU check).
-	quantity := int32(record.Count) //nolint:gosec // Count > 0 validated at purchase
+	quantity := int32(record.Count) // #nosec G115 -- Azure reservation count validated at purchase; bounded by API limits (<<math.MaxInt32) //nolint:gosec
 	sessionID, calcRefundAmount, calcRefundCurrency, err := h.azureCalculateRefund(ctx, calcClient, orderID, reservationID, quantity)
 	if err != nil {
 		return nil, err

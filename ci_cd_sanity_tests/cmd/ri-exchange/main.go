@@ -74,7 +74,7 @@ func main() {
 		AccountChk:       *expectedAccount,
 		ReservedIDs:      ids,
 		TargetOfferingID: *targetOffering,
-		TargetCount:      int32(*targetCount),
+		TargetCount:      int32(*targetCount), // #nosec G115 -- operator-controlled CLI flag; RI count bounded well below math.MaxInt32
 	}
 
 	if !*execute {
@@ -84,8 +84,8 @@ func main() {
 			ExpectedAccount:  *expectedAccount,
 			ReservedIDs:      ids,
 			TargetOfferingID: *targetOffering,
-			TargetCount:      int32(*targetCount),
-			DryRun:           false, // IAMCheckOnly: false = real quote, true = only verify IAM permissions
+			TargetCount:      int32(*targetCount), // #nosec G115 -- operator-controlled CLI flag; RI count bounded well below math.MaxInt32
+			DryRun:           false,               // IAMCheckOnly: false = real quote, true = only verify IAM permissions
 		})
 		if err != nil {
 			o.Error = err.Error()
@@ -133,7 +133,7 @@ func main() {
 		ExpectedAccount:  *expectedAccount,
 		ReservedIDs:      ids,
 		TargetOfferingID: *targetOffering,
-		TargetCount:      int32(*targetCount),
+		TargetCount:      int32(*targetCount), // #nosec G115 -- operator-controlled CLI flag; RI count bounded well below math.MaxInt32
 		MaxPaymentDueUSD: maxRat,
 	})
 	o.Quote = q

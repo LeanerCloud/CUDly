@@ -18,12 +18,16 @@ func TestContext(t *testing.T) context.Context {
 // SetEnv sets an environment variable for the duration of the test.
 func SetEnv(t *testing.T, key, value string) {
 	old := os.Getenv(key)
-	os.Setenv(key, value)
+	if err := os.Setenv(key, value); err != nil {
+		t.Fatalf("SetEnv: os.Setenv(%q): %v", key, err)
+	}
 	t.Cleanup(func() {
 		if old == "" {
 			os.Unsetenv(key)
 		} else {
-			os.Setenv(key, old)
+			if err := os.Setenv(key, old); err != nil {
+				t.Logf("SetEnv cleanup: os.Setenv(%q): %v", key, err)
+			}
 		}
 	})
 }

@@ -215,8 +215,8 @@ func buildPoolConfig(config *Config, password string) (*pgxpool.Config, error) {
 	if config.MinConnections > math.MaxInt32 {
 		return nil, fmt.Errorf("MinConnections value %d exceeds int32 max", config.MinConnections)
 	}
-	poolConfig.MaxConns = int32(config.MaxConnections)
-	poolConfig.MinConns = int32(config.MinConnections)
+	poolConfig.MaxConns = int32(config.MaxConnections) // #nosec G115 -- bounds-checked against math.MaxInt32 above
+	poolConfig.MinConns = int32(config.MinConnections) // #nosec G115 -- bounds-checked against math.MaxInt32 above
 	poolConfig.MaxConnLifetime = config.MaxConnLifetime
 	poolConfig.MaxConnIdleTime = config.MaxConnIdleTime
 	poolConfig.HealthCheckPeriod = config.HealthCheckPeriod

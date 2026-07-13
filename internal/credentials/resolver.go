@@ -24,9 +24,9 @@ import (
 // Credential type constants used as credType in CredentialStore.
 const (
 	CredTypeAWSAccessKeys     = "aws_access_keys"
-	CredTypeAzureClientSecret = "azure_client_secret"
-	CredTypeGCPServiceAccount = "gcp_service_account"
-	CredTypeGCPWIFConfig      = "gcp_workload_identity_config"
+	CredTypeAzureClientSecret = "azure_client_secret"          // #nosec G101 -- credential type name constant; not a credential value
+	CredTypeGCPServiceAccount = "gcp_service_account"          // #nosec G101 -- credential type name constant; not a credential value
+	CredTypeGCPWIFConfig      = "gcp_workload_identity_config" // #nosec G101 -- credential type name constant; not a credential value
 )
 
 const gcpCloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
