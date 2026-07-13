@@ -15,18 +15,22 @@ func TestContext(t *testing.T) context.Context {
 	return ctx
 }
 
-// SetEnv sets an environment variable for the duration of the test.
+// SetEnv sets an environment variable for the duration of the test and
+// restores the exact prior state (including the distinction between an
+// unset variable and a variable set to "") on cleanup.
 func SetEnv(t *testing.T, key, value string) {
-	old := os.Getenv(key)
+	old, wasSet := os.LookupEnv(key)
 	if err := os.Setenv(key, value); err != nil {
 		t.Fatalf("SetEnv: os.Setenv(%q): %v", key, err)
 	}
 	t.Cleanup(func() {
-		if old == "" {
-			os.Unsetenv(key)
+		if !wasSet {
+			if err := os.Unsetenv(key); err != nil {
+				t.Errorf("SetEnv cleanup: os.Unsetenv(%q): %v", key, err)
+			}
 		} else {
 			if err := os.Setenv(key, old); err != nil {
-				t.Logf("SetEnv cleanup: os.Setenv(%q): %v", key, err)
+				t.Errorf("SetEnv cleanup: os.Setenv(%q): %v", key, err)
 			}
 		}
 	})

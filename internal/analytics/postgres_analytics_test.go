@@ -924,12 +924,19 @@ func TestQueryRequest(t *testing.T) {
 	})
 
 	t.Run("handles optional fields", func(t *testing.T) {
+		start := time.Now().Add(-24 * time.Hour)
+		end := time.Now()
 		req := QueryRequest{
 			AccountUUIDs: []string{"account-123"},
-			StartDate:    time.Now().Add(-24 * time.Hour),
-			EndDate:      time.Now(),
+			StartDate:    start,
+			EndDate:      end,
 		}
 
+		// Explicitly-set optional fields must be preserved.
+		assert.Equal(t, []string{"account-123"}, req.AccountUUIDs)
+		assert.Equal(t, start, req.StartDate)
+		assert.Equal(t, end, req.EndDate)
+		// Unset optional fields default to zero values.
 		assert.Equal(t, "", req.Provider) // Optional, can be empty
 		assert.Equal(t, "", req.Service)  // Optional, can be empty
 		assert.Equal(t, 0, req.Limit)     // Optional, 0 means no limit

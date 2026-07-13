@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 )
 
@@ -36,7 +37,7 @@ func (h *Handler) createGroup(ctx context.Context, req *events.LambdaFunctionURL
 	if h.rateLimiter != nil {
 		allowed, rateLimitErr := h.rateLimiter.AllowWithUser(ctx, session.UserID, "admin")
 		if rateLimitErr != nil {
-			// Log but continue on rate limiter errors
+			logging.Warnf("rate limiter error on admin operation (user %s): %v", session.UserID, rateLimitErr)
 		} else if !allowed {
 			return nil, NewClientError(429, "too many requests, please slow down")
 		}

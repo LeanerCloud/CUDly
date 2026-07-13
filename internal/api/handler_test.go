@@ -1405,7 +1405,7 @@ func TestHandler_HandleRequest_ListPlans_UnassignedFlagged(t *testing.T) {
 	assert.True(t, lp.Unassigned, "zero-account plan must have unassigned=true")
 }
 
-// Test for updateConfig error case - invalid JSON returns 500 (not 400).
+// Test for updateConfig error case - invalid JSON returns 400.
 func TestHandler_HandleRequest_UpdateConfig_InvalidJSON(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)

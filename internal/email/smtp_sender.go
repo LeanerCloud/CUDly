@@ -18,7 +18,7 @@ import (
 type SMTPConfig struct {
 	Host          string
 	Username      string
-	Password      string //nolint:gosec // G117: HTTP redirect target is validated/trusted
+	Password      string //nolint:gosec // G101: field holds a user-supplied runtime password, not a hardcoded credential
 	FromEmail     string
 	FromName      string
 	NotifyEmail   string
