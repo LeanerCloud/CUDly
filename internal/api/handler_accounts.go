@@ -93,16 +93,16 @@ func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionUR
 
 	filter := buildAccountFilter(req.QueryStringParameters)
 
-	accounts, err := h.config.ListCloudAccounts(ctx, filter) //nolint:gocritic // importShadow: local var name matches package; clear in context
+	accts, err := h.config.ListCloudAccounts(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
 
-	if accounts == nil {
-		accounts = []config.CloudAccount{}
+	if accts == nil {
+		accts = []config.CloudAccount{}
 	}
 
-	// Filter by allowed accounts if the user has restricted access.
+	// Filter by allowed accts if the user has restricted access.
 	// An empty list or one containing "*" grants unrestricted access.
 	// Otherwise each entry is matched against the account's ID or Name.
 	allowedAccounts, err := h.getAllowedAccounts(ctx, session)
@@ -110,19 +110,19 @@ func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionUR
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
 	if !auth.IsUnrestrictedAccess(allowedAccounts) {
-		filtered := accounts[:0]
-		for _, acct := range accounts { //nolint:gocritic // rangeValCopy: acceptable value copy
+		filtered := accts[:0]
+		for _, acct := range accts { //nolint:gocritic // rangeValCopy: acceptable value copy
 			if auth.MatchesAccount(allowedAccounts, acct.ID, acct.Name) {
 				filtered = append(filtered, acct)
 			}
 		}
-		accounts = filtered
+		accts = filtered
 	}
 
 	// Mark the self-account (the account matching CUDly's own host identity)
-	h.markSelfAccount(ctx, accounts)
+	h.markSelfAccount(ctx, accts)
 
-	return accounts, nil
+	return accts, nil
 }
 
 // AccountSummary is the minimal-disclosure projection of a cloud account used
@@ -156,7 +156,7 @@ func (h *Handler) listAccountsMinimal(ctx context.Context, req *events.LambdaFun
 
 	filter := buildAccountFilter(req.QueryStringParameters)
 
-	accounts, err := h.config.ListCloudAccounts(ctx, filter) //nolint:gocritic // importShadow: local var name matches package; clear in context
+	accts, err := h.config.ListCloudAccounts(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
@@ -169,9 +169,9 @@ func (h *Handler) listAccountsMinimal(ctx context.Context, req *events.LambdaFun
 
 	// Build the minimal projection in place, applying allowed_accounts scoping
 	// during the copy so a restricted user only ever sees their entitled rows.
-	summaries := make([]AccountSummary, 0, len(accounts))
-	for i := range accounts {
-		acct := &accounts[i]
+	summaries := make([]AccountSummary, 0, len(accts))
+	for i := range accts {
+		acct := &accts[i]
 		if !unrestricted && !auth.MatchesAccount(allowedAccounts, acct.ID, acct.Name) {
 			continue
 		}
@@ -187,14 +187,14 @@ func (h *Handler) listAccountsMinimal(ctx context.Context, req *events.LambdaFun
 }
 
 // markSelfAccount sets IsSelf=true on the account matching the source identity.
-func (h *Handler) markSelfAccount(ctx context.Context, accounts []config.CloudAccount) { //nolint:gocritic // importShadow: local var name matches package; clear in context
+func (h *Handler) markSelfAccount(ctx context.Context, accts []config.CloudAccount) {
 	si := h.resolveSourceIdentity(ctx)
 	if si == nil || si.ExternalID() == "" {
 		return
 	}
-	for i := range accounts {
-		if accounts[i].Provider == si.Provider && accounts[i].ExternalID == si.ExternalID() {
-			accounts[i].IsSelf = true
+	for i := range accts {
+		if accts[i].Provider == si.Provider && accts[i].ExternalID == si.ExternalID() {
+			accts[i].IsSelf = true
 		}
 	}
 }
@@ -1350,16 +1350,16 @@ func (h *Handler) listPlanAccounts(ctx context.Context, req *events.LambdaFuncti
 		return nil, err
 	}
 
-	accounts, err := h.config.GetPlanAccounts(ctx, id) //nolint:gocritic // importShadow: local var name matches package; clear in context
+	accts, err := h.config.GetPlanAccounts(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
 
-	if accounts == nil {
-		accounts = []config.CloudAccount{}
+	if accts == nil {
+		accts = []config.CloudAccount{}
 	}
 
-	return accounts, nil
+	return accts, nil
 }
 
 // DiscoverOrgRequest is the request body for POST /api/accounts/discover-org.

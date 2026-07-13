@@ -315,11 +315,11 @@ func (a *configExchangeStoreAdapter) GetRIExchangeDailySpend(ctx context.Context
 	return a.store.GetRIExchangeDailySpend(ctx, date)
 }
 
-func (a *configExchangeStoreAdapter) CompleteRIExchange(ctx context.Context, id string, exchangeID string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func (a *configExchangeStoreAdapter) CompleteRIExchange(ctx context.Context, id, exchangeID string) error {
 	return a.store.CompleteRIExchange(ctx, id, exchangeID)
 }
 
-func (a *configExchangeStoreAdapter) FailRIExchange(ctx context.Context, id string, errorMsg string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func (a *configExchangeStoreAdapter) FailRIExchange(ctx context.Context, id, errorMsg string) error {
 	return a.store.FailRIExchange(ctx, id, errorMsg)
 }
 

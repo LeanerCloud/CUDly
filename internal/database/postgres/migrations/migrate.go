@@ -32,7 +32,7 @@ const defaultAdminGroupID = "00000000-0000-5000-8000-000000000001"
 // RunMigrations runs database migrations using golang-migrate
 // adminEmail is optional - if provided, admin user will be created after migrations complete
 // adminPassword is optional - if provided, admin is created with hashed password and active=true.
-func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath string, adminEmail string, adminPassword string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string) error {
 	// Create the migrator and run the pre-Up recovery hooks (operator force,
 	// then default-on dirty auto-heal). Kept in a helper so RunMigrations stays
 	// under the cyclomatic-complexity budget as recovery paths grow.
@@ -138,7 +138,7 @@ func newMigratorWithRecovery(pool *pgxpool.Pool, migrationsPath string) (*migrat
 //
 // Note: the `role` column was dropped by migration 000057; this INSERT
 // intentionally omits it (issue #945).
-func ensureAdminUser(ctx context.Context, pool *pgxpool.Pool, email string, password string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func ensureAdminUser(ctx context.Context, pool *pgxpool.Pool, email, password string) error {
 	if password != "" {
 		return ensureAdminUserWithPassword(ctx, pool, email, password)
 	}
@@ -190,7 +190,7 @@ func ensureAdminUser(ctx context.Context, pool *pgxpool.Pool, email string, pass
 //
 // Note: the `role` column was dropped by migration 000057; this INSERT
 // intentionally omits it (issue #945).
-func ensureAdminUserWithPassword(ctx context.Context, pool *pgxpool.Pool, email string, password string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func ensureAdminUserWithPassword(ctx context.Context, pool *pgxpool.Pool, email, password string) error {
 	log.Printf("Ensuring admin user exists with password: %s", email)
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
@@ -253,7 +253,7 @@ func ensureAdminUserWithPassword(ctx context.Context, pool *pgxpool.Pool, email 
 // when migration 000024 hasn't yet seeded the Administrators group -
 // defense-in-depth, since in practice this function is invoked
 // after RunMigrations -> m.Up() completes.
-func assignAdminGroupAndWarn(ctx context.Context, pool *pgxpool.Pool, groupID string, adminEmail string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func assignAdminGroupAndWarn(ctx context.Context, pool *pgxpool.Pool, groupID, adminEmail string) error {
 	res, err := pool.Exec(ctx, `
 		UPDATE users
 		SET group_ids = ARRAY(

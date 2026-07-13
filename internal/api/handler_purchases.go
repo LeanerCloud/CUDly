@@ -2206,7 +2206,7 @@ func (h *Handler) resolveDashboardURL(req *events.LambdaFunctionURLRequest) stri
 //
 // Returns ("", nil, nil, nil) when neither contact_email nor globalNotify
 // is configured — the caller surfaces a user-facing error.
-func (h *Handler) resolveApprovalRecipients(ctx context.Context, recs []config.RecommendationRecord, globalNotify string) (to string, cc []string, approvers []string, err error) { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func (h *Handler) resolveApprovalRecipients(ctx context.Context, recs []config.RecommendationRecord, globalNotify string) (to string, cc, approvers []string, err error) {
 	contactEmails, err := h.gatherAccountContactEmails(ctx, recs)
 	if err != nil {
 		return "", nil, nil, err

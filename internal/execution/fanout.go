@@ -126,7 +126,7 @@ func FanOutWithConcurrency[T any](
 }
 
 // Partition splits a Result slice into successes and failures.
-func Partition[T any](results []Result[T]) (successes []Result[T], failures []Result[T]) { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func Partition[T any](results []Result[T]) (successes, failures []Result[T]) {
 	for _, r := range results {
 		if r.Err != nil {
 			failures = append(failures, r)

@@ -635,13 +635,13 @@ func (s *Scheduler) resolveAmbientHostAccountID(ctx context.Context) string {
 // truly-orphan deployments are unaffected. All errors are intentionally swallowed
 // (logged at warn) — this is a best-effort UX improvement on the ambient path
 // and must not break the collection.
-func (s *Scheduler) resolveAmbientAccountID(ctx context.Context, provider, externalID string) string { //nolint:gocritic // importShadow: local var name matches package; clear in context
+func (s *Scheduler) resolveAmbientAccountID(ctx context.Context, providerName, externalID string) string {
 	if externalID == "" {
 		return ""
 	}
-	acct, err := s.config.GetCloudAccountByExternalID(ctx, provider, externalID)
+	acct, err := s.config.GetCloudAccountByExternalID(ctx, providerName, externalID)
 	if err != nil {
-		logging.Warnf("ambient host-account lookup: GetCloudAccountByExternalID(%s,%s) failed: %v", provider, externalID, err)
+		logging.Warnf("ambient host-account lookup: GetCloudAccountByExternalID(%s,%s) failed: %v", providerName, externalID, err)
 		return ""
 	}
 	if acct == nil {

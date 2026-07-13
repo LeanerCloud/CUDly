@@ -107,7 +107,7 @@ func containsRepeatedChars(password string, n int) bool {
 // Checks the current password hash and the prior-password history separately so
 // the caller can render a more useful message for the dominant case (user
 // re-typing their existing password on the reset form): see issue #459.
-func (s *Service) checkPasswordHistory(newPassword string, currentHash string, passwordHistory []string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func (s *Service) checkPasswordHistory(newPassword, currentHash string, passwordHistory []string) error {
 	// Check against current password first; distinct message so the user
 	// can tell "I typed my current one" from "this matches an old one".
 	if currentHash != "" && s.verifyPassword(newPassword, currentHash) {

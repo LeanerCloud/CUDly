@@ -397,7 +397,7 @@ func (m *MockConfigStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, pu
 }
 
 // MarkPurchaseRevoked mocks the MarkPurchaseRevoked operation (issue #290).
-func (m *MockConfigStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func (m *MockConfigStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error {
 	args := m.Called(ctx, purchaseID, revokedAt, revokedVia, supportCaseID, calcRefundAmount, calcRefundCurrency)
 	return args.Error(0)
 }
@@ -478,7 +478,7 @@ func (m *MockConfigStore) GetRIExchangeHistory(ctx context.Context, since time.T
 	return v, args.Error(1)
 }
 
-func (m *MockConfigStore) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*config.RIExchangeRecord, error) { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func (m *MockConfigStore) TransitionRIExchangeStatus(ctx context.Context, id, fromStatus, toStatus string, actor *string) (*config.RIExchangeRecord, error) {
 	args := m.Called(ctx, id, fromStatus, toStatus, actor)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -490,12 +490,12 @@ func (m *MockConfigStore) TransitionRIExchangeStatus(ctx context.Context, id str
 	return v, args.Error(1)
 }
 
-func (m *MockConfigStore) CompleteRIExchange(ctx context.Context, id string, exchangeID string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func (m *MockConfigStore) CompleteRIExchange(ctx context.Context, id, exchangeID string) error {
 	args := m.Called(ctx, id, exchangeID)
 	return args.Error(0)
 }
 
-func (m *MockConfigStore) FailRIExchange(ctx context.Context, id string, errorMsg string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func (m *MockConfigStore) FailRIExchange(ctx context.Context, id, errorMsg string) error {
 	args := m.Called(ctx, id, errorMsg)
 	return args.Error(0)
 }
@@ -1313,7 +1313,7 @@ func (m *MockConfigStore) ClearCollectionStarted(ctx context.Context) error {
 }
 
 // StampRIExchangeApprovedBy mocks the StampRIExchangeApprovedBy operation.
-func (m *MockConfigStore) StampRIExchangeApprovedBy(ctx context.Context, id string, approverEmail string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func (m *MockConfigStore) StampRIExchangeApprovedBy(ctx context.Context, id, approverEmail string) error {
 	args := m.Called(ctx, id, approverEmail)
 	return args.Error(0)
 }
@@ -1462,8 +1462,8 @@ func (m *MockConfigStore) TransitionLadderRunStatus(ctx context.Context, id stri
 }
 
 // isExpected reports whether mock has any .On() expectation for method.
-func isExpected(mock *mock.Mock, method string) bool { //nolint:gocritic // importShadow: local var name matches package; clear in context
-	for _, call := range mock.ExpectedCalls {
+func isExpected(m *mock.Mock, method string) bool {
+	for _, call := range m.ExpectedCalls {
 		if call.Method == method {
 			return true
 		}

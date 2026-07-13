@@ -114,7 +114,7 @@ func cacheControlForExt(ext string) string {
 
 // serveStaticForLambda checks if the request path matches a static file in dir.
 // Returns the file content, content type, cache header, and whether a file was found.
-func serveStaticForLambda(dir, urlPath string) (content []byte, contentType string, cacheControl string, found bool) { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func serveStaticForLambda(dir, urlPath string) (content []byte, contentType, cacheControl string, found bool) {
 	filePath, cleanPath, ok := resolveStaticFilePath(dir, urlPath)
 	if !ok {
 		return nil, "", "", false

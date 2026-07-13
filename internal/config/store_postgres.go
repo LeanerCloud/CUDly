@@ -2031,7 +2031,7 @@ func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purc
 // the purchase_history row identified by purchaseID. The UPDATE is a no-op
 // when revoked_at is already non-null (idempotency guard). Returns a not-found
 // error when zero rows are affected and revoked_at was previously NULL.
-func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error {
 	var supportCaseIDPtr *string
 	if supportCaseID != "" {
 		supportCaseIDPtr = &supportCaseID
@@ -2325,7 +2325,7 @@ func (s *PostgresStore) GetRIExchangeHistory(ctx context.Context, since time.Tim
 // Uses a single UPDATE...WHERE...RETURNING for atomicity, then diagnoses failure
 // only if zero rows are returned.
 // actor is the UUID of the user performing the transition (nil for system-initiated paths).
-func (s *PostgresStore) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*RIExchangeRecord, error) { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func (s *PostgresStore) TransitionRIExchangeStatus(ctx context.Context, id, fromStatus, toStatus string, actor *string) (*RIExchangeRecord, error) {
 	query := `
 		UPDATE ri_exchange_history
 		SET status = $3, updated_at = NOW(),
@@ -2372,7 +2372,7 @@ func (s *PostgresStore) diagnoseTransitionFailure(ctx context.Context, id, fromS
 }
 
 // CompleteRIExchange marks an RI exchange as completed.
-func (s *PostgresStore) CompleteRIExchange(ctx context.Context, id string, exchangeID string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func (s *PostgresStore) CompleteRIExchange(ctx context.Context, id, exchangeID string) error {
 	query := `
 		UPDATE ri_exchange_history
 		SET status = 'completed', exchange_id = $2, completed_at = NOW()
@@ -2395,7 +2395,7 @@ func (s *PostgresStore) CompleteRIExchange(ctx context.Context, id string, excha
 // (issue #300). Called after CompleteRIExchange when approval came from a
 // session-authed user. The stamping is best-effort (log + continue on failure
 // so the exchange itself isn't rolled back just because the audit stamp failed).
-func (s *PostgresStore) StampRIExchangeApprovedBy(ctx context.Context, id string, approverEmail string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func (s *PostgresStore) StampRIExchangeApprovedBy(ctx context.Context, id, approverEmail string) error {
 	query := `
 		UPDATE ri_exchange_history
 		SET approved_by = $2
@@ -2413,7 +2413,7 @@ func (s *PostgresStore) StampRIExchangeApprovedBy(ctx context.Context, id string
 }
 
 // FailRIExchange marks an RI exchange as failed.
-func (s *PostgresStore) FailRIExchange(ctx context.Context, id string, errorMsg string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func (s *PostgresStore) FailRIExchange(ctx context.Context, id, errorMsg string) error {
 	query := `
 		UPDATE ri_exchange_history
 		SET status = 'failed', error = $2
@@ -3208,7 +3208,7 @@ type planAccountProviderMismatch struct {
 	Provider string
 }
 
-func (s *PostgresStore) findPlanAccountProviderMismatchesTx(ctx context.Context, tx pgx.Tx, accountIDs []string, expected []string) ([]planAccountProviderMismatch, error) { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func (s *PostgresStore) findPlanAccountProviderMismatchesTx(ctx context.Context, tx pgx.Tx, accountIDs, expected []string) ([]planAccountProviderMismatch, error) {
 	expectedSet := make(map[string]struct{}, len(expected))
 	for _, provider := range expected {
 		expectedSet[provider] = struct{}{}

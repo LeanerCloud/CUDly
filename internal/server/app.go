@@ -1024,8 +1024,8 @@ func (a *authServiceAdapter) CheckAdminExists(ctx context.Context) (bool, error)
 	return a.service.CheckAdminExists(ctx)
 }
 
-func (a *authServiceAdapter) RequestPasswordReset(ctx context.Context, email string) error { //nolint:gocritic // importShadow: local var name matches package; clear in context
-	return a.service.RequestPasswordReset(ctx, email)
+func (a *authServiceAdapter) RequestPasswordReset(ctx context.Context, emailAddr string) error {
+	return a.service.RequestPasswordReset(ctx, emailAddr)
 }
 
 func (a *authServiceAdapter) ConfirmPasswordReset(ctx context.Context, req api.PasswordResetConfirm) error {
@@ -1057,8 +1057,8 @@ func (a *authServiceAdapter) GetUser(ctx context.Context, userID string) (*api.U
 	}, nil
 }
 
-func (a *authServiceAdapter) UpdateUserProfile(ctx context.Context, userID string, email string, currentPassword string, newPassword string) error { //nolint:gocritic // importShadow: local var name matches package; clear in context
-	return a.service.UpdateUserProfile(ctx, userID, email, currentPassword, newPassword)
+func (a *authServiceAdapter) UpdateUserProfile(ctx context.Context, userID, emailAddr, currentPassword, newPassword string) error {
+	return a.service.UpdateUserProfile(ctx, userID, emailAddr, currentPassword, newPassword)
 }
 
 // User management methods - delegate to auth service API methods.

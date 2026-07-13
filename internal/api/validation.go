@@ -617,7 +617,7 @@ func decodeBase64Password(encoded string) (string, error) {
 //
 // paramName is included in the error message so callers can distinguish
 // min_savings_usd vs min_savings_pct errors in client logs.
-func parseMinSavingsParam(raw string, paramName string) (float64, error) { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func parseMinSavingsParam(raw, paramName string) (float64, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw == "0" {
 		return 0, nil

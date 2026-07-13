@@ -56,7 +56,7 @@ func (r *AWSResolver) GetSecret(ctx context.Context, secretID string) (string, e
 }
 
 // PutSecret creates or updates a secret value in AWS Secrets Manager.
-func (r *AWSResolver) PutSecret(ctx context.Context, secretID string, value string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
+func (r *AWSResolver) PutSecret(ctx context.Context, secretID, value string) error {
 	input := &secretsmanager.PutSecretValueInput{
 		SecretId:     aws.String(secretID),
 		SecretString: aws.String(value),

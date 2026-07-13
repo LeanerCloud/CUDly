@@ -49,14 +49,14 @@ func (m *MockEmailSender) SendPurchaseFailedNotification(ctx context.Context, da
 }
 
 // SendPasswordResetEmail mocks the SendPasswordResetEmail operation.
-func (m *MockEmailSender) SendPasswordResetEmail(ctx context.Context, email, resetURL string) error { //nolint:gocritic // importShadow: local var name matches package; clear in context
-	args := m.Called(ctx, email, resetURL)
+func (m *MockEmailSender) SendPasswordResetEmail(ctx context.Context, emailAddr, resetURL string) error {
+	args := m.Called(ctx, emailAddr, resetURL)
 	return args.Error(0)
 }
 
 // SendWelcomeEmail mocks the SendWelcomeEmail operation.
-func (m *MockEmailSender) SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error { //nolint:gocritic // importShadow: local var name matches package; clear in context
-	args := m.Called(ctx, email, dashboardURL, role)
+func (m *MockEmailSender) SendWelcomeEmail(ctx context.Context, emailAddr, dashboardURL, role string) error {
+	args := m.Called(ctx, emailAddr, dashboardURL, role)
 	return args.Error(0)
 }
 
