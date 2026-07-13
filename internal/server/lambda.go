@@ -208,7 +208,8 @@ func (app *Application) handleLambdaSQSEvent(ctx context.Context, rawEvent json.
 	}
 
 	var failures []string
-	for _, record := range sqsEvent.Records { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range sqsEvent.Records {
+		record := sqsEvent.Records[_rvc]
 		log.Printf("Processing SQS message: %s", record.MessageId)
 		if err := app.HandleSQSMessage(ctx, record.Body); err != nil {
 			log.Printf("Failed to process message %s: %v", record.MessageId, err)

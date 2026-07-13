@@ -220,7 +220,8 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 			DashboardURL: s.dashboardURL,
 			TotalSavings: totalSavings,
 		}
-		for _, rec := range allRecommendations { //nolint:gocritic // rangeValCopy: acceptable value copy
+		for _rvc := range allRecommendations {
+			rec := allRecommendations[_rvc]
 			if len(data.Recommendations) >= 10 { // Limit to top 10 in email
 				break
 			}
@@ -345,7 +346,8 @@ func (s *Scheduler) collectAllProviders(ctx context.Context, globalCfg *config.G
 		}
 		successfulProviders = append(successfulProviders, providerName)
 		successfulCollects = append(successfulCollects, expandSuccessfulCollects(providerName, out.succeededAccountIDs)...)
-		for _, rec := range out.recs { //nolint:gocritic // rangeValCopy: acceptable value copy
+		for _rvc := range out.recs {
+			rec := out.recs[_rvc]
 			totalSavings += rec.Savings
 		}
 		allRecommendations = append(allRecommendations, out.recs...)
@@ -513,8 +515,8 @@ func fanOutPerAccount(
 	var all []config.RecommendationRecord
 	var outcome accountOutcome
 
-	for _, acct := range accounts { //nolint:gocritic // rangeValCopy: acceptable value copy
-		acct := acct // capture
+	for _rvc := range accounts {
+		acct := accounts[_rvc]
 		g.Go(func() error {
 			recs, err := fn(gctx, acct)
 			if err != nil {
@@ -1132,7 +1134,8 @@ func applySuppressionIndex(recs []config.RecommendationRecord, index map[suppres
 	// Allocate a fresh backing array so callers that hold a reference to
 	// the original recs slice do not see mutations (05-M1).
 	out := make([]config.RecommendationRecord, 0, len(recs))
-	for _, rec := range recs { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range recs {
+		rec := recs[_rvc]
 		accountID := ""
 		if rec.CloudAccountID != nil {
 			accountID = *rec.CloudAccountID
@@ -1267,7 +1270,8 @@ func marshalRecDetails(rec common.Recommendation, providerName string) []byte {
 func (s *Scheduler) convertRecommendations(recs []common.Recommendation, providerName string) []config.RecommendationRecord {
 	records := make([]config.RecommendationRecord, 0, len(recs))
 
-	for _, rec := range recs { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range recs {
+		rec := recs[_rvc]
 		engine := extractEngine(rec.Details)
 		detailsBlob := marshalRecDetails(rec, providerName)
 

@@ -129,12 +129,14 @@ func (h *Handler) filterRecommendationsByAllowedAccounts(ctx context.Context, se
 		return nil, fmt.Errorf("failed to list accounts for filter: %w", err)
 	}
 	nameByID := make(map[string]string, len(accounts))
-	for _, a := range accounts { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range accounts {
+		a := accounts[_rvc]
 		nameByID[a.ID] = a.Name
 	}
 
 	filtered := recs[:0]
-	for _, rec := range recs { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range recs {
+		rec := recs[_rvc]
 		if rec.CloudAccountID == nil {
 			continue
 		}

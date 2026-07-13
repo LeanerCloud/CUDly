@@ -443,7 +443,8 @@ func (p *EC2Prober) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) 
 			return nil, nil, err
 		}
 		offers := make([]rawOffer, 0, len(out.ReservedInstancesOfferings))
-		for _, o := range out.ReservedInstancesOfferings { //nolint:gocritic // rangeValCopy: acceptable value copy
+		for _rvc := range out.ReservedInstancesOfferings {
+			o := out.ReservedInstancesOfferings[_rvc]
 			offers = append(offers, rawOffer{
 				durationSeconds: aws.ToInt64(o.Duration),
 				payment:         string(o.OfferingType),
@@ -544,7 +545,8 @@ func (p *SavingsPlansProber) probeOnePlanType(
 			return nil, nil, err
 		}
 		offers := make([]rawOffer, 0, len(out.SearchResults))
-		for _, o := range out.SearchResults { //nolint:gocritic // rangeValCopy: acceptable value copy
+		for _rvc := range out.SearchResults {
+			o := out.SearchResults[_rvc]
 			offers = append(offers, rawOffer{
 				durationSeconds: o.DurationSeconds,
 				payment:         string(o.PaymentOption),

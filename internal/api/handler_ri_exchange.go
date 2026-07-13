@@ -462,7 +462,8 @@ func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) float64 {
 // convertToExchangeTypes converts provider-specific types to the exchange package types.
 func convertToExchangeTypes(instances []ec2svc.ConvertibleRI, utilData []recommendations.RIUtilization) ([]exchange.RIInfo, []exchange.UtilizationInfo) {
 	riInfos := make([]exchange.RIInfo, len(instances))
-	for i, inst := range instances { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for i := range instances {
+		inst := instances[i]
 		riInfos[i] = exchange.RIInfo{
 			ID:                  inst.ReservedInstanceID,
 			InstanceType:        inst.InstanceType,
@@ -614,7 +615,8 @@ func (h *Handler) attachReshapeStaleness(ctx context.Context, resp *ReshapeRecom
 // populated value is sufficient and avoids a noisy mismatch panic when
 // some entries are missing the field.
 func firstNonEmptyCurrency(instances []ec2svc.ConvertibleRI) string {
-	for _, inst := range instances { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range instances {
+		inst := instances[_rvc]
 		if inst.CurrencyCode != "" {
 			return inst.CurrencyCode
 		}
@@ -1006,7 +1008,8 @@ func (h *Handler) getRIExchangeHistory(ctx context.Context, req *events.LambdaFu
 	if !auth.IsUnrestrictedAccess(allowed) {
 		nameByID := h.resolveAccountNamesByID(ctx)
 		filtered := records[:0]
-		for _, r := range records { //nolint:gocritic // rangeValCopy: acceptable value copy
+		for _rvc := range records {
+			r := records[_rvc]
 			if auth.MatchesAccount(allowed, r.AccountID, nameByID[r.AccountID]) {
 				filtered = append(filtered, r)
 			}

@@ -22,7 +22,8 @@ func (m *Manager) SendUpcomingPurchaseNotifications(ctx context.Context) (*Notif
 	}
 
 	notified := 0
-	for _, plan := range plans { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range plans {
+		plan := plans[_rvc]
 		if m.shouldNotifyPlan(plan) {
 			if m.sendPlanNotification(ctx, &plan) {
 				notified++
@@ -156,7 +157,8 @@ func (m *Manager) buildNotificationData(plan config.PurchasePlan, exec *config.P
 		RecipientEmail:    notifyEmail,
 	}
 
-	for _, rec := range exec.Recommendations { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range exec.Recommendations {
+		rec := exec.Recommendations[_rvc]
 		data.Recommendations = append(data.Recommendations, email.RecommendationSummary{
 			Service:        rec.Service,
 			ResourceType:   rec.ResourceType,

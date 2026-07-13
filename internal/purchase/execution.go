@@ -704,7 +704,8 @@ func (m *Manager) normalizePurchaseSource(exec *config.PurchaseExecution) string
 // results writes back to exec.Recommendations deterministically.
 func selectedIndices(recs []config.RecommendationRecord) []int {
 	out := make([]int, 0, len(recs))
-	for i, rec := range recs { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for i := range recs {
+		rec := recs[i]
 		if rec.Selected {
 			out = append(out, i)
 		}
@@ -797,7 +798,8 @@ func (m *Manager) buildPurchaseConfirmationData(exec *config.PurchaseExecution, 
 		data.ArcheraEducationURL = dashboardBase + "/archera-insurance"
 	}
 
-	for _, rec := range exec.Recommendations { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range exec.Recommendations {
+		rec := exec.Recommendations[_rvc]
 		if rec.Purchased {
 			data.Recommendations = append(data.Recommendations, email.RecommendationSummary{
 				Service:        rec.Service,

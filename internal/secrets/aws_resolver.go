@@ -108,7 +108,8 @@ func (r *AWSResolver) ListSecrets(ctx context.Context, filter string) ([]string,
 			return nil, fmt.Errorf("failed to list secrets: %w", err)
 		}
 
-		for _, secret := range result.SecretList { //nolint:gocritic // rangeValCopy: acceptable value copy
+		for _rvc := range result.SecretList {
+			secret := result.SecretList[_rvc]
 			if secret.Name != nil {
 				secrets = append(secrets, *secret.Name)
 			}

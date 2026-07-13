@@ -151,7 +151,8 @@ func (h *Handler) resolveAllowedAccountScope(ctx context.Context, session *Sessi
 	// Non-nil empty slice: a sentinel meaning "scoped to zero accounts" so the
 	// dual-column predicate matches no rows (never falls back to all-accounts).
 	allowedUUIDs := []string{}
-	for _, a := range accounts { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range accounts {
+		a := accounts[_rvc]
 		if auth.MatchesAccount(allowed, a.ID, a.Name) {
 			allowedUUIDs = append(allowedUUIDs, a.ID)
 		}
@@ -174,7 +175,8 @@ func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *S
 
 	nameByID := h.resolveAccountNamesByID(ctx)
 	filtered := recs[:0]
-	for _, rec := range recs { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range recs {
+		rec := recs[_rvc]
 		if rec.CloudAccountID == nil {
 			continue
 		}
@@ -237,7 +239,8 @@ func summarizeRecommendationsWithCoverage( //nolint:gocritic // unnamedResult: r
 
 	var total float64
 	byService := make(map[string]ServiceSavings)
-	for _, rep := range representatives { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range representatives {
+		rep := representatives[_rvc]
 		scaled := rep.scaled
 		total += scaled
 		svc := byService[rep.rec.Service]
@@ -304,7 +307,8 @@ func bestVariantPerCell(
 ) []cellRepresentative {
 	indexByCell := make(map[string]int, len(recs))
 	reps := make([]cellRepresentative, 0, len(recs))
-	for _, rec := range recs { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range recs {
+		rec := recs[_rvc]
 		scaled := scaledSavings(rec, coverageByKey)
 		key := recCellKey(rec)
 		if idx, ok := indexByCell[key]; ok {
@@ -460,7 +464,8 @@ func (h *Handler) getUpcomingPurchases(ctx context.Context, req *events.LambdaFu
 // scheduler at instance-create time).
 func upcomingFromExecution(plan *config.PurchasePlan, exec *config.PurchaseExecution) UpcomingPurchase {
 	var provider, service string
-	for _, svcCfg := range plan.Services { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range plan.Services {
+		svcCfg := plan.Services[_rvc]
 		provider = svcCfg.Provider
 		service = svcCfg.Service
 		break
@@ -575,7 +580,8 @@ func isActiveCommitment(p config.PurchaseHistoryRecord, now time.Time) bool {
 // same "active" definition.
 func aggregateActiveCommitmentsPerService(purchases []config.PurchaseHistoryRecord, now time.Time) map[string]float64 {
 	byService := make(map[string]float64)
-	for _, p := range purchases { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range purchases {
+		p := purchases[_rvc]
 		if !isActiveCommitment(p, now) {
 			continue
 		}
@@ -645,7 +651,8 @@ func (h *Handler) calculateCommitmentMetrics(ctx context.Context, accountUUIDs [
 		committedMonthly += v
 	}
 
-	for _, p := range purchases { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range purchases {
+		p := purchases[_rvc]
 		if !isActiveCommitment(p, currentTime) {
 			continue
 		}

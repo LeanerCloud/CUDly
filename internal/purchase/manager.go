@@ -274,7 +274,8 @@ func allRecsSafeToRedrive(exec *config.PurchaseExecution) bool {
 	if len(exec.Recommendations) == 0 {
 		return false
 	}
-	for _, rec := range exec.Recommendations { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range exec.Recommendations {
+		rec := exec.Recommendations[_rvc]
 		if !recIsSafeToRedrive(rec) {
 			return false
 		}

@@ -111,7 +111,8 @@ func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionUR
 	}
 	if !auth.IsUnrestrictedAccess(allowedAccounts) {
 		filtered := accts[:0]
-		for _, acct := range accts { //nolint:gocritic // rangeValCopy: acceptable value copy
+		for _rvc := range accts {
+			acct := accts[_rvc]
 			if auth.MatchesAccount(allowedAccounts, acct.ID, acct.Name) {
 				filtered = append(filtered, acct)
 			}

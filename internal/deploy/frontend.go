@@ -195,7 +195,8 @@ func (s *FrontendService) findDistributionForBucket(ctx context.Context, bucketN
 			continue
 		}
 
-		for _, dist := range result.DistributionList.Items { //nolint:gocritic // rangeValCopy: acceptable value copy
+		for _rvc := range result.DistributionList.Items {
+			dist := result.DistributionList.Items[_rvc]
 			if distID := s.checkDistributionOrigins(dist, bucketName); distID != "" {
 				return distID, nil
 			}

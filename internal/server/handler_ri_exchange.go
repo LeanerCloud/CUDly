@@ -195,7 +195,8 @@ func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboar
 	allOutcomes = append(allOutcomes, result.Pending...)
 	allOutcomes = append(allOutcomes, result.Failed...)
 
-	for _, o := range allOutcomes { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range allOutcomes {
+		o := allOutcomes[_rvc]
 		data.Exchanges = append(data.Exchanges, email.RIExchangeItem{
 			RecordID:           o.RecordID,
 			ApprovalToken:      o.ApprovalToken,
@@ -247,7 +248,8 @@ func convertForAutoExchange(instances []ec2svc.ConvertibleRI, utilData []recomme
 	riInfos := make([]exchange.RIInfo, len(instances))
 	riMetadata := make(map[string]exchange.RIMetadataInfo, len(instances))
 
-	for i, inst := range instances { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for i := range instances {
+		inst := instances[i]
 		riInfos[i] = exchange.RIInfo{
 			ID:                  inst.ReservedInstanceID,
 			InstanceType:        inst.InstanceType,
@@ -305,7 +307,8 @@ func (a *configExchangeStoreAdapter) GetStaleProcessingExchanges(ctx context.Con
 		return nil, err
 	}
 	result := make([]exchange.ExchangeRecord, len(cfgRecords))
-	for i, r := range cfgRecords { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for i := range cfgRecords {
+		r := cfgRecords[i]
 		result[i] = configToExchangeRecord(&r)
 	}
 	return result, nil

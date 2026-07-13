@@ -175,7 +175,8 @@ func insertRecommendationsBatch(ctx context.Context, tx pgx.Tx, collectedAt time
 	args := make([]any, 0, len(recs)*colsPerRow)
 	placeholders := make([]string, 0, len(recs))
 
-	for i, rec := range recs { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for i := range recs {
+		rec := recs[i]
 		payload, err := json.Marshal(rec)
 		if err != nil {
 			return fmt.Errorf("failed to marshal recommendation %d: %w", i, err)

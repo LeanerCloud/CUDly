@@ -151,7 +151,8 @@ func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyF
 	userEmailCache := h.resolveUserEmails(ctx, executions)
 	out := make([]config.PurchaseHistoryRecord, 0, len(executions))
 	var staleExecs []config.PurchaseExecution
-	for _, exec := range executions { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range executions {
+		exec := executions[_rvc]
 		// Dedup: a normal completed execution is already represented by its
 		// purchase_history rows. Skip it here so it shows exactly once. Only
 		// completed executions carrying an audit-gap Error (history write
@@ -209,7 +210,8 @@ func (h *Handler) expireStaleExecutionsAsync(staleExecs []config.PurchaseExecuti
 	}
 	go func() {
 		ctx := context.Background()
-		for _, exec := range staleExecs { //nolint:gocritic // rangeValCopy: acceptable value copy
+		for _rvc := range staleExecs {
+			exec := staleExecs[_rvc]
 			_, err := h.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"pending", "notified"}, "expired", nil)
 			if err != nil {
 				logging.Warnf("history: async expire of execution %s failed: %v", exec.ExecutionID, err)
@@ -226,7 +228,8 @@ func (h *Handler) expireStaleExecutionsAsync(staleExecs []config.PurchaseExecuti
 // creators, not the number of execution rows.
 func (h *Handler) resolveUserEmails(ctx context.Context, executions []config.PurchaseExecution) map[string]string {
 	seen := make(map[string]struct{})
-	for _, exec := range executions { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range executions {
+		exec := executions[_rvc]
 		if exec.CreatedByUserID != nil && *exec.CreatedByUserID != "" {
 			seen[*exec.CreatedByUserID] = struct{}{}
 		}
@@ -474,7 +477,8 @@ func collapseRecommendationService(recs []config.RecommendationRecord) string {
 		return "multiple"
 	}
 	s := recs[0].Service
-	for _, r := range recs[1:] { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range recs[1:] {
+		r := recs[1:][_rvc]
 		if r.Service != s {
 			return "multiple"
 		}
@@ -491,7 +495,8 @@ func collapseRecommendationTerm(recs []config.RecommendationRecord) int {
 		return 0
 	}
 	t := recs[0].Term
-	for _, r := range recs[1:] { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range recs[1:] {
+		r := recs[1:][_rvc]
 		if r.Term != t {
 			return 0
 		}
@@ -507,7 +512,8 @@ func collapseRecommendationProvider(recs []config.RecommendationRecord) string {
 		return "multiple"
 	}
 	p := recs[0].Provider
-	for _, r := range recs[1:] { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range recs[1:] {
+		r := recs[1:][_rvc]
 		if r.Provider != p {
 			return "multiple"
 		}
@@ -524,7 +530,8 @@ func collapseRecommendationPayment(recs []config.RecommendationRecord) string {
 		return ""
 	}
 	p := recs[0].Payment
-	for _, r := range recs[1:] { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range recs[1:] {
+		r := recs[1:][_rvc]
 		if r.Payment != p {
 			return ""
 		}
@@ -545,7 +552,8 @@ func collapseRecommendationAccount(recs []config.RecommendationRecord) string {
 	if recs[0].CloudAccountID != nil {
 		first = *recs[0].CloudAccountID
 	}
-	for _, r := range recs[1:] { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range recs[1:] {
+		r := recs[1:][_rvc]
 		var cur string
 		if r.CloudAccountID != nil {
 			cur = *r.CloudAccountID
@@ -565,7 +573,8 @@ func collapseRecommendationAccount(recs []config.RecommendationRecord) string {
 func sumRecommendationMonthlyCostPtr(recs []config.RecommendationRecord) *float64 {
 	var total float64
 	anyNonNil := false
-	for _, r := range recs { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range recs {
+		r := recs[_rvc]
 		if r.MonthlyCost != nil {
 			total += *r.MonthlyCost
 			anyNonNil = true
@@ -821,7 +830,8 @@ func accountMatchesFilters(exec config.PurchaseExecution, accountIDs []string, e
 // recommendation (all recs in an execution share a provider in practice).
 // Returns "" when no recommendation carries one.
 func executionProvider(exec config.PurchaseExecution) string {
-	for _, r := range exec.Recommendations { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range exec.Recommendations {
+		r := exec.Recommendations[_rvc]
 		if r.Provider != "" {
 			return r.Provider
 		}
@@ -832,7 +842,8 @@ func executionProvider(exec config.PurchaseExecution) string {
 // executionHasProvider reports whether any of the execution's
 // recommendations carries the given provider value.
 func executionHasProvider(exec config.PurchaseExecution, provider string) bool {
-	for _, r := range exec.Recommendations { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range exec.Recommendations {
+		r := exec.Recommendations[_rvc]
 		if r.Provider == provider {
 			return true
 		}
@@ -954,7 +965,8 @@ func (h *Handler) filterPurchaseHistoryByAllowedAccounts(ctx context.Context, se
 	}
 	nameByID := h.resolveAccountNamesByID(ctx)
 	filtered := make([]config.PurchaseHistoryRecord, 0, len(purchases))
-	for _, p := range purchases { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range purchases {
+		p := purchases[_rvc]
 		// Empty AccountID: unattributed ambient/multi-account synthesized row.
 		// Pass through so scoped users see in-flight financial actions that
 		// cannot be pinned to a single account (issue #1032 / #621 regression).
@@ -971,7 +983,8 @@ func (h *Handler) filterPurchaseHistoryByAllowedAccounts(ctx context.Context, se
 
 func summarizePurchaseHistory(purchases []config.PurchaseHistoryRecord) HistorySummary {
 	summary := HistorySummary{TotalPurchases: len(purchases)}
-	for _, p := range purchases { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range purchases {
+		p := purchases[_rvc]
 		// Non-completed rows count toward TotalPurchases and their specific
 		// bucket (pending / in-progress / failed / expired / canceled) but
 		// are excluded from the dollar totals — the money hasn't been committed

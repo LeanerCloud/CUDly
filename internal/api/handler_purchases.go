@@ -38,7 +38,8 @@ func buildSuppressions(recs []config.RecommendationRecord, executionID string, c
 	}
 	agg := map[key]int{}
 	order := []key{}
-	for _, rec := range recs { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range recs {
+		rec := recs[_rvc]
 		if rec.Count <= 0 {
 			continue
 		}
@@ -131,7 +132,8 @@ func (h *Handler) getPlannedPurchases(ctx context.Context, req *events.LambdaFun
 	allowedPlan := make(map[string]bool)
 
 	var purchases []PlannedPurchase
-	for _, exec := range executions { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range executions {
+		exec := executions[_rvc]
 		plan := planMap[exec.PlanID]
 		if plan == nil {
 			continue
@@ -172,7 +174,8 @@ func (h *Handler) isPlanAllowedCached(ctx context.Context, session *Session, pla
 func buildPlannedPurchase(plan *config.PurchasePlan, exec *config.PurchaseExecution) PlannedPurchase {
 	var provider, service, payment string
 	var term int
-	for _, svcCfg := range plan.Services { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range plan.Services {
+		svcCfg := plan.Services[_rvc]
 		provider = svcCfg.Provider
 		service = svcCfg.Service
 		term = svcCfg.Term
@@ -713,7 +716,8 @@ func buildScheduledEmailData(dashboardURL string, execution *config.PurchaseExec
 
 	// Build a minimal summaries slice from the stored recommendations.
 	summaries := make([]email.RecommendationSummary, 0, len(execution.Recommendations))
-	for _, r := range execution.Recommendations { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range execution.Recommendations {
+		r := execution.Recommendations[_rvc]
 		summaries = append(summaries, email.RecommendationSummary{
 			Service:      r.Service,
 			ResourceType: r.ResourceType,
@@ -1649,7 +1653,8 @@ func (h *Handler) finalizePurchaseStatus(ctx context.Context, execution *config.
 // validateAndTotalRecommendations validates each recommendation and returns totals.
 func validateAndTotalRecommendations(recs []config.RecommendationRecord) (upfront, savings float64, err error) {
 	const maxAmount = 10_000_000 // $10M sanity cap
-	for i, rec := range recs {   //nolint:gocritic // rangeValCopy: acceptable value copy
+	for i := range recs {
+		rec := recs[i]
 		if rec.UpfrontCost < 0 {
 			return 0, 0, NewClientError(400, fmt.Sprintf("recommendation %d has negative upfront cost: %.2f", i, rec.UpfrontCost))
 		}
@@ -1782,7 +1787,8 @@ const purchaseIdempotencyWindow = 2 * time.Minute
 // differently. Closes issue #644.
 func purchaseIdempotencyKey(creatorID string, recs []config.RecommendationRecord, capacityPercent int) string {
 	tuples := make([]string, 0, len(recs))
-	for _, r := range recs { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range recs {
+		r := recs[_rvc]
 		acct := ""
 		if r.CloudAccountID != nil {
 			acct = *r.CloudAccountID
@@ -2121,7 +2127,8 @@ func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, req *events.Lam
 	// fall back to to (the per-account contact_email). See issue #735.
 	responseRecipient := approvalResponseRecipient(globalNotify, to)
 	summaries := make([]email.RecommendationSummary, 0, len(recs))
-	for _, rec := range recs { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range recs {
+		rec := recs[_rvc]
 		summaries = append(summaries, email.RecommendationSummary{
 			Service:        rec.Service,
 			ResourceType:   rec.ResourceType,
@@ -2293,7 +2300,8 @@ func (h *Handler) gatherAccountContactEmails(ctx context.Context, recs []config.
 func uniqueAccountIDsFromRecs(recs []config.RecommendationRecord) []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, rec := range recs { //nolint:gocritic // rangeValCopy: acceptable value copy
+	for _rvc := range recs {
+		rec := recs[_rvc]
 		if rec.CloudAccountID == nil || *rec.CloudAccountID == "" {
 			continue
 		}
