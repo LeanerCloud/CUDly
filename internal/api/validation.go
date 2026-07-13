@@ -313,15 +313,15 @@ func rejectUnknownKeys(credentialType string, payload map[string]interface{}, al
 // payloadDepth returns the maximum nesting depth of m, counting the top-level
 // map as depth 1. A nested map adds 1; non-map values do not.
 func payloadDepth(m map[string]interface{}, current int) int {
-	max := current //nolint:gocritic // builtinShadow: local var name; does not mask builtin in use
+	maxDepth := current
 	for _, v := range m {
 		if nested, ok := v.(map[string]interface{}); ok {
-			if d := payloadDepth(nested, current+1); d > max {
-				max = d
+			if d := payloadDepth(nested, current+1); d > maxDepth {
+				maxDepth = d
 			}
 		}
 	}
-	return max
+	return maxDepth
 }
 
 // validateServiceName checks if a service name is valid.
