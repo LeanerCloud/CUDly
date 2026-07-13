@@ -173,5 +173,8 @@ func TestFireScheduledDelayedPurchases_EndToEnd(t *testing.T) {
 // regression before the test suite runs.
 func TestFireScheduledDelayedPurchases_DelayPathNotSilentNoOp(t *testing.T) {
 	// Typed assertion ensures both method existence and signature are locked.
-	var _ func(context.Context) (*FireResult, error) = (&Manager{}).FireScheduledDelayedPurchases
+	// The explicit type is intentional: QF1011 notwithstanding, omitting it
+	// would revert to the weaker method-existence-only guard that this
+	// assertion replaced.
+	var _ func(context.Context) (*FireResult, error) = (&Manager{}).FireScheduledDelayedPurchases //nolint:staticcheck // QF1011: explicit type is intentional to catch signature drift
 }
