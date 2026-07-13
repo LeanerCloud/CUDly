@@ -279,7 +279,7 @@ type PurchaseExecution struct { //nolint:govet // fieldalignment: reorder would 
 	// handler / History UI falls back to the notification email as the
 	// accountable party in that case. Nullable TEXT in Postgres.
 	ApprovedBy  *string `json:"approved_by,omitempty" dynamodbav:"approved_by,omitempty"`
-	CancelledBy *string `json:"canceled_by,omitempty" dynamodbav:"canceled_by,omitempty"`
+	CancelledBy *string `json:"cancelled_by,omitempty" dynamodbav:"cancelled_by,omitempty"`
 	// CreatedByUserID is the UUID of the session-authenticated user who
 	// triggered this execution (e.g. clicked Execute on the Recommendations
 	// page or submitted the bulk-purchase modal). NULL on rows created

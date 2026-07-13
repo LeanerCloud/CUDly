@@ -98,7 +98,7 @@ func NewDefaultCommandRunner() *DefaultCommandRunner {
 
 // Run runs a command and streams output to stdout/stderr.
 func (r *DefaultCommandRunner) Run(name string, args ...string) error {
-	cmd := exec.Command(name, args...) //nolint:noctx // #nosec G204 -- context not threaded through CommandRunner interface; callers hardcode binary names
+	cmd := exec.Command(name, args...) // #nosec G204 -- deploy tooling: callers hardcode binary names (npm, docker, aws); no user input reaches this function
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -106,7 +106,7 @@ func (r *DefaultCommandRunner) Run(name string, args ...string) error {
 
 // RunWithStdin runs a command with stdin input and streams output to stdout/stderr.
 func (r *DefaultCommandRunner) RunWithStdin(name string, stdin string, args ...string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
-	cmd := exec.Command(name, args...) //nolint:noctx // #nosec G204 -- context not threaded through CommandRunner interface; callers hardcode binary names
+	cmd := exec.Command(name, args...) // #nosec G204 -- deploy tooling: callers hardcode binary names (npm, docker, aws); no user input reaches this function
 	cmd.Stdin = strings.NewReader(stdin)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
