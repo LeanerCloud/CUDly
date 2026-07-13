@@ -1484,7 +1484,7 @@ func (h *Handler) getPurchaseDetails(ctx context.Context, req *events.LambdaFunc
 }
 
 // ExecutePurchaseRequest represents the request to execute purchases.
-type ExecutePurchaseRequest struct { //nolint:govet // fieldalignment: reorder would break API/readability
+type ExecutePurchaseRequest struct {
 	Recommendations []config.RecommendationRecord `json:"recommendations"`
 	// CapacityPercent is what fraction (1..100) of the originally-
 	// recommended counts the user chose in the bulk Purchase flow.

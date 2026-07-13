@@ -138,7 +138,7 @@ const approvalExpiryWindow = 7 * 24 * time.Hour
 // The filter set (issue #701) is applied in Go against the synthetic row:
 // provider via the recs' collapsed provider, account via CloudAccountID,
 // date via ScheduledDate.
-func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyFilters) ([]config.PurchaseHistoryRecord, []config.PurchaseExecution) { //nolint:gocritic // hugeParam: by-value per calling convention
+func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyFilters) ([]config.PurchaseHistoryRecord, []config.PurchaseExecution) {
 	executions, err := h.config.GetExecutionsByStatuses(ctx, historyExecutionStatuses, config.DefaultListLimit)
 	if err != nil {
 		logging.Warnf("history: failed to load non-completed executions: %v", err)
@@ -183,7 +183,7 @@ func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyF
 // approval older than approvalExpiryWindow that should be transitioned to
 // "expired". Extracted so both fetchExecutionsAsHistory and the async sweep
 // share one staleness check.
-func isStaleExecution(exec config.PurchaseExecution) bool { //nolint:gocritic // hugeParam: by-value per calling convention
+func isStaleExecution(exec config.PurchaseExecution) bool {
 	if exec.Status != "pending" && exec.Status != "notified" {
 		return false
 	}
@@ -268,7 +268,7 @@ func (h *Handler) resolvePendingApproverEmail(ctx context.Context) string {
 // message as the status description so the user sees WHY it failed (e.g.
 // "send failed: Missing domain"). createdByEmail is the resolved email for
 // the execution's creator (empty when not resolvable).
-func executionToHistoryRow(exec config.PurchaseExecution, approver, createdByEmail string) config.PurchaseHistoryRecord { //nolint:gocritic // hugeParam: by-value per calling convention
+func executionToHistoryRow(exec config.PurchaseExecution, approver, createdByEmail string) config.PurchaseHistoryRecord {
 	var accountID string
 	if exec.CloudAccountID != nil {
 		accountID = *exec.CloudAccountID
@@ -318,7 +318,7 @@ func executionToHistoryRow(exec config.PurchaseExecution, approver, createdByEma
 // annotateHistoryRowByStatus fills in Approver + StatusDescription on the
 // row based on exec.Status. Split from executionToHistoryRow to keep the
 // switch below under the gocyclo threshold.
-func annotateHistoryRowByStatus(row *config.PurchaseHistoryRecord, exec config.PurchaseExecution, approver string) { //nolint:gocritic // hugeParam: by-value per calling convention
+func annotateHistoryRowByStatus(row *config.PurchaseHistoryRecord, exec config.PurchaseExecution, approver string) {
 	switch exec.Status {
 	case "pending", "notified":
 		row.Approver = approver
@@ -340,7 +340,7 @@ func annotateHistoryRowByStatus(row *config.PurchaseHistoryRecord, exec config.P
 // for annotateHistoryRowByStatus: approved/running, scheduled, paused,
 // partially_completed, and completed (audit-gap). Extracted to keep the parent
 // switch under the cyclomatic-complexity limit.
-func annotateInFlightOrAuditGapRow(row *config.PurchaseHistoryRecord, exec config.PurchaseExecution, approver string) { //nolint:gocritic // hugeParam: by-value per calling convention
+func annotateInFlightOrAuditGapRow(row *config.PurchaseHistoryRecord, exec config.PurchaseExecution, approver string) {
 	switch exec.Status {
 	case "approved", "running":
 		// In-flight (issue #621): approved/running rows are NOT terminal —
@@ -397,7 +397,7 @@ func annotateInFlightOrAuditGapRow(row *config.PurchaseHistoryRecord, exec confi
 //  2. approver — the notification inbox that received the cancel token;
 //     authoritative accountable party but not necessarily the clicker.
 //     Used on legacy token-only paths (async workers, old email clicks).
-func annotateCancelled(row *config.PurchaseHistoryRecord, exec config.PurchaseExecution, approver string) { //nolint:gocritic // hugeParam: by-value per calling convention
+func annotateCancelled(row *config.PurchaseHistoryRecord, exec config.PurchaseExecution, approver string) {
 	if exec.CancelledBy != nil && *exec.CancelledBy != "" {
 		row.Approver = *exec.CancelledBy
 		row.StatusDescription = "canceled by " + *exec.CancelledBy
@@ -414,7 +414,7 @@ func annotateCancelled(row *config.PurchaseHistoryRecord, exec config.PurchaseEx
 // annotateApproved resolves who approved the execution using the same
 // two-tier lookup as annotateCancelled — session-authed click wins,
 // notification inbox fills in otherwise.
-func annotateApproved(row *config.PurchaseHistoryRecord, exec config.PurchaseExecution, approver string) { //nolint:gocritic // hugeParam: by-value per calling convention
+func annotateApproved(row *config.PurchaseHistoryRecord, exec config.PurchaseExecution, approver string) {
 	if exec.ApprovedBy != nil && *exec.ApprovedBy != "" {
 		row.Approver = *exec.ApprovedBy
 		row.StatusDescription = "approved by " + *exec.ApprovedBy
@@ -442,7 +442,7 @@ func annotateApproved(row *config.PurchaseHistoryRecord, exec config.PurchaseExe
 //     "multiple" region, term collapsed to the shared value (0 when recs
 //     disagree), and execution-level cost totals. A single row cannot honestly
 //     show one resource type or term for a heterogeneous basket.
-func projectRecommendationFields(row *config.PurchaseHistoryRecord, exec config.PurchaseExecution) { //nolint:gocritic // hugeParam: by-value per calling convention
+func projectRecommendationFields(row *config.PurchaseHistoryRecord, exec config.PurchaseExecution) {
 	recs := exec.Recommendations
 	if len(recs) == 1 {
 		r := recs[0]
@@ -755,7 +755,7 @@ func parseHistoryDateBounds(startStr, endStr string) (time.Time, time.Time, erro
 //     disagree or have no account) is excluded once account_ids is non-empty.
 //   - Date: matches when ScheduledDate is within [Start, End]. Inclusive
 //     both sides; End is the end-of-day for YYYY-MM-DD inputs.
-func (f historyFilters) matchesExecution(exec config.PurchaseExecution) bool { //nolint:gocritic // hugeParam: by-value per calling convention
+func (f historyFilters) matchesExecution(exec config.PurchaseExecution) bool {
 	if f.Provider != "" {
 		if !executionHasProvider(exec, f.Provider) {
 			return false
@@ -794,7 +794,7 @@ func (f historyFilters) matchesExecution(exec config.PurchaseExecution) bool { /
 // Uses the same two-level account resolution as executionToHistoryRow:
 // exec.CloudAccountID first, then the rec-level fallback, so web bulk-purchase
 // executions (exec.CloudAccountID == nil) are not silently dropped.
-func accountMatchesFilters(exec config.PurchaseExecution, accountIDs []string, externalIDsByProvider map[string][]string) bool { //nolint:gocritic // hugeParam: by-value per calling convention
+func accountMatchesFilters(exec config.PurchaseExecution, accountIDs []string, externalIDsByProvider map[string][]string) bool {
 	var accountID string
 	if exec.CloudAccountID != nil {
 		accountID = *exec.CloudAccountID
@@ -820,7 +820,7 @@ func accountMatchesFilters(exec config.PurchaseExecution, accountIDs []string, e
 // executionProvider returns the execution's provider, taken from its first
 // recommendation (all recs in an execution share a provider in practice).
 // Returns "" when no recommendation carries one.
-func executionProvider(exec config.PurchaseExecution) string { //nolint:gocritic // hugeParam: by-value per calling convention
+func executionProvider(exec config.PurchaseExecution) string {
 	for _, r := range exec.Recommendations { //nolint:gocritic // rangeValCopy: acceptable value copy
 		if r.Provider != "" {
 			return r.Provider
@@ -831,7 +831,7 @@ func executionProvider(exec config.PurchaseExecution) string { //nolint:gocritic
 
 // executionHasProvider reports whether any of the execution's
 // recommendations carries the given provider value.
-func executionHasProvider(exec config.PurchaseExecution, provider string) bool { //nolint:gocritic // hugeParam: by-value per calling convention
+func executionHasProvider(exec config.PurchaseExecution, provider string) bool {
 	for _, r := range exec.Recommendations { //nolint:gocritic // rangeValCopy: acceptable value copy
 		if r.Provider == provider {
 			return true
@@ -868,7 +868,7 @@ func stringInSlice(needle string, haystack []string) bool {
 // column inputs by the caller (getHistory) and arrives here folded into
 // AccountIDs/ExternalIDsByProvider, so there is no longer a separate
 // single-column legacy path to coerce identifiers through.
-func (h *Handler) fetchPurchaseHistory(ctx context.Context, filters historyFilters) ([]config.PurchaseHistoryRecord, error) { //nolint:gocritic // hugeParam: by-value per calling convention
+func (h *Handler) fetchPurchaseHistory(ctx context.Context, filters historyFilters) ([]config.PurchaseHistoryRecord, error) {
 	noFilters := !filters.HasDate && filters.Provider == "" &&
 		len(filters.AccountIDs) == 0 && len(filters.ExternalIDsByProvider) == 0
 	if noFilters {

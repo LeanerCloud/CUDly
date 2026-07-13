@@ -2627,7 +2627,7 @@ func TestHandler_cancelPurchase_DeepLink_CancelOwnBypassesContactEmailGate(t *te
 // failure's outer category. Only an *exact* *clientError with code 403
 // triggers the fall-through to the contact_email gate.
 func TestIsPermissionDenied(t *testing.T) {
-	cases := []struct { //nolint:govet // fieldalignment: reorder would break API/readability
+	cases := []struct {
 		name string
 		err  error
 		want bool

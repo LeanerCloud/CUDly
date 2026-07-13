@@ -1181,7 +1181,7 @@ func TestGetExchangeQuote_ValidOfferingIDPassesFormat(t *testing.T) {
 	// We stub the handler to short-circuit before the AWS call.
 	called := false
 	stub := &stubTargetOfferingsEC2{
-		instances: []ec2svc.ConvertibleRI{}, //nolint:govet // unusedwrite: field set for test completeness
+		instances: []ec2svc.ConvertibleRI{},
 	}
 	_ = stub
 	_ = called
@@ -1492,7 +1492,7 @@ func TestExecuteApprovedExchange_EmptyRecordRegionFails(t *testing.T) {
 //   - >= 24 h → "hard" (critical banner)
 func TestClassifyRecsAge(t *testing.T) {
 	t.Parallel()
-	cases := []struct { //nolint:govet // fieldalignment: reorder would break API/readability
+	cases := []struct {
 		name string
 		age  time.Duration
 		want string

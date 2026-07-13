@@ -70,7 +70,7 @@ func purchaseRecLookupFromStore(store recsLister, accountID string) exchange.Pur
 // SDK reports on ec2.ReservedInstance.Duration so the term-match guard
 // in pkg/exchange.fillAlternativesFromRecs can compare apples-to-apples
 // against RIInfo.TermSeconds populated from ec2.ConvertibleRI.Duration.
-func recommendationToOffering(rec config.RecommendationRecord, currencyCode string) exchange.OfferingOption { //nolint:gocritic // hugeParam: by-value per calling convention
+func recommendationToOffering(rec config.RecommendationRecord, currencyCode string) exchange.OfferingOption {
 	// AWS Cost Explorer returns MonthlyCost and UpfrontCost as totals for
 	// the recommended Count of instances, not per-instance. The reshape
 	// layer compares OfferingOption.EffectiveMonthlyCost against

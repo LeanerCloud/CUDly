@@ -10,7 +10,7 @@ import (
 )
 
 // GlobalConfig represents the global CUDly configuration.
-type GlobalConfig struct { //nolint:govet // fieldalignment: reorder would break API/readability
+type GlobalConfig struct {
 	EnabledProviders       []string `json:"enabled_providers" dynamodbav:"enabled_providers"`
 	NotificationEmail      *string  `json:"notification_email,omitempty" dynamodbav:"notification_email,omitempty"`
 	AutoCollect            bool     `json:"auto_collect"`
@@ -149,7 +149,7 @@ func (g *GlobalConfig) GracePeriodFor(provider string) int {
 }
 
 // ServiceConfig represents per-service configuration.
-type ServiceConfig struct { //nolint:govet // fieldalignment: reorder would break API/readability
+type ServiceConfig struct {
 	Provider       string   `json:"provider" dynamodbav:"provider"`
 	Service        string   `json:"service" dynamodbav:"service"`
 	Enabled        bool     `json:"enabled" dynamodbav:"enabled"`
@@ -173,7 +173,7 @@ type ServiceConfig struct { //nolint:govet // fieldalignment: reorder would brea
 }
 
 // PurchasePlan represents a saved purchase plan for automated execution.
-type PurchasePlan struct { //nolint:govet // fieldalignment: reorder would break API/readability
+type PurchasePlan struct {
 	ID                     string                   `json:"id" dynamodbav:"id"`
 	Name                   string                   `json:"name" dynamodbav:"name"`
 	Enabled                bool                     `json:"enabled" dynamodbav:"enabled"`
@@ -197,7 +197,7 @@ type PurchasePlan struct { //nolint:govet // fieldalignment: reorder would break
 }
 
 // RampSchedule defines how purchases are spread over time.
-type RampSchedule struct { //nolint:govet // fieldalignment: reorder would break API/readability
+type RampSchedule struct {
 	Type             string    `json:"type" dynamodbav:"type"` // immediate, weekly, monthly, custom
 	PercentPerStep   float64   `json:"percent_per_step" dynamodbav:"percent_per_step"`
 	StepIntervalDays int       `json:"step_interval_days" dynamodbav:"step_interval_days"`
@@ -253,7 +253,7 @@ func (r *RampSchedule) IsComplete() bool {
 }
 
 // PurchaseExecution represents a single execution of a purchase plan.
-type PurchaseExecution struct { //nolint:govet // fieldalignment: reorder would break API/readability
+type PurchaseExecution struct {
 	PlanID           string                 `json:"plan_id" dynamodbav:"plan_id"`
 	ExecutionID      string                 `json:"execution_id" dynamodbav:"execution_id"`
 	Status           string                 `json:"status" dynamodbav:"status"` // pending, notified, approved, canceled, completed, failed
@@ -370,7 +370,7 @@ func (e *PurchaseExecution) IsCancelable() bool {
 }
 
 // RecommendationRecord stores a recommendation with purchase status.
-type RecommendationRecord struct { //nolint:govet // fieldalignment: reorder would break API/readability
+type RecommendationRecord struct {
 	ID           string `json:"id" dynamodbav:"id"`
 	Provider     string `json:"provider" dynamodbav:"provider"`
 	Service      string `json:"service" dynamodbav:"service"`
@@ -499,7 +499,7 @@ type RecommendationRecord struct { //nolint:govet // fieldalignment: reorder wou
 // documentation. Written inside the same transaction as the execution
 // insert; deleted inside the same transaction as a cancel/expire status
 // transition.
-type PurchaseSuppression struct { //nolint:govet // fieldalignment: reorder would break API/readability
+type PurchaseSuppression struct {
 	ID              string    `json:"id"`
 	ExecutionID     string    `json:"execution_id"`
 	AccountID       string    `json:"account_id"`
@@ -525,7 +525,7 @@ type PurchaseSuppression struct { //nolint:govet // fieldalignment: reorder woul
 // threshold are returned. 0 means no floor. Applied in-process after the DB
 // query rather than in SQL (avoids a computed column). These two filters are
 // independent and can be combined.
-type RecommendationFilter struct { //nolint:govet // fieldalignment: reorder would break API/readability
+type RecommendationFilter struct {
 	Provider      string   // "aws" / "azure" / "gcp" / "" (all)
 	Service       string   // "" = all services
 	Region        string   // "" = all regions
@@ -569,7 +569,7 @@ type RecommendationsFreshness struct {
 // the same generated-column rule that applies to inserts, so ambient
 // rows are evicted independently of any registered-account rows under
 // the same provider.
-type SuccessfulCollect struct { //nolint:govet // fieldalignment: reorder would break API/readability
+type SuccessfulCollect struct {
 	Provider       string
 	CloudAccountID *string
 }
@@ -580,7 +580,7 @@ type SuccessfulCollect struct { //nolint:govet // fieldalignment: reorder would 
 // opaque here so the config package stays free of AWS-provider types.
 // TTL freshness is evaluated in the caller (api-layer cache wrapper)
 // based on FetchedAt vs. a caller-supplied TTL.
-type RIUtilizationCacheEntry struct { //nolint:govet // fieldalignment: reorder would break API/readability
+type RIUtilizationCacheEntry struct {
 	Region       string
 	LookbackDays int
 	Payload      []byte
@@ -592,7 +592,7 @@ type RIUtilizationCacheEntry struct { //nolint:govet // fieldalignment: reorder 
 // zero-valued filter selects all rows (same plan-shape as
 // GetAllPurchaseHistory). See the implementation docstring for the per-field
 // semantics and the dual-column account predicate.
-type PurchaseHistoryFilter struct { //nolint:govet // fieldalignment: reorder would break API/readability
+type PurchaseHistoryFilter struct {
 	// Provider matches purchase_history.provider exactly. Empty skips the clause.
 	Provider string
 	// AccountIDs matches purchase_history.cloud_account_id (the cloud_accounts
@@ -652,7 +652,7 @@ func RevocationWindowClosesAtFor(provider string, purchaseTime time.Time) *time.
 // see (and cancel) in-flight approvals. Status is the discriminator — the DB
 // layer never writes it (tag `dynamodbav:"-"` keeps it out of persistence),
 // and the API layer populates it as "completed" or "pending" before returning.
-type PurchaseHistoryRecord struct { //nolint:govet // fieldalignment: reorder would break API/readability
+type PurchaseHistoryRecord struct {
 	AccountID    string    `json:"account_id" dynamodbav:"account_id"`
 	PurchaseID   string    `json:"purchase_id" dynamodbav:"purchase_id"`
 	Timestamp    time.Time `json:"timestamp" dynamodbav:"timestamp"`
@@ -781,7 +781,7 @@ type PurchaseHistoryRecord struct { //nolint:govet // fieldalignment: reorder wo
 }
 
 // RIExchangeRecord represents a record in the ri_exchange_history table.
-type RIExchangeRecord struct { //nolint:govet // fieldalignment: reorder would break API/readability
+type RIExchangeRecord struct {
 	ID                 string   `json:"id"`
 	AccountID          string   `json:"account_id"`
 	ExchangeID         string   `json:"exchange_id"`
@@ -826,7 +826,7 @@ type RIExchangeRecord struct { //nolint:govet // fieldalignment: reorder would b
 }
 
 // ConfigSetting represents a configuration setting for the defaults system.
-type ConfigSetting struct { //nolint:revive,govet // exported: doc comment style intentional; fieldalignment: reorder would break API
+type ConfigSetting struct { //nolint:revive // exported: doc comment style intentional
 	Key         string    `json:"key"`
 	Value       any       `json:"value"`
 	Type        string    `json:"type"` // int, float, bool, string, json
@@ -836,7 +836,7 @@ type ConfigSetting struct { //nolint:revive,govet // exported: doc comment style
 }
 
 // CloudAccount represents a single managed cloud account/subscription/project.
-type CloudAccount struct { //nolint:govet // fieldalignment: reorder would break API/readability
+type CloudAccount struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
 	Description  string `json:"description,omitempty"`
@@ -881,7 +881,7 @@ type CloudAccount struct { //nolint:govet // fieldalignment: reorder would break
 }
 
 // CloudAccountFilter for ListCloudAccounts queries.
-type CloudAccountFilter struct { //nolint:govet // fieldalignment: reorder would break API/readability
+type CloudAccountFilter struct {
 	Provider  *string
 	Enabled   *bool
 	Search    string  // substring match on name or external_id
@@ -890,7 +890,7 @@ type CloudAccountFilter struct { //nolint:govet // fieldalignment: reorder would
 
 // AccountServiceOverride is a sparse per-account override on top of the global ServiceConfig.
 // Nil pointer fields inherit the global value.
-type AccountServiceOverride struct { //nolint:govet // fieldalignment: reorder would break API/readability
+type AccountServiceOverride struct {
 	ID             string    `json:"id"`
 	AccountID      string    `json:"account_id"`
 	Provider       string    `json:"provider"`
@@ -913,7 +913,7 @@ type AccountServiceOverride struct { //nolint:govet // fieldalignment: reorder w
 // AccountRegistration represents a self-service registration request from a
 // target account owner. Submitted via POST /api/register during Terraform apply
 // of the federation IaC, then approved or rejected by a CUDly admin.
-type AccountRegistration struct { //nolint:govet // fieldalignment: reorder would break API/readability
+type AccountRegistration struct {
 	ID                   string     `json:"id"`
 	ReferenceToken       string     `json:"reference_token"`
 	Status               string     `json:"status"` // pending, approved, rejected

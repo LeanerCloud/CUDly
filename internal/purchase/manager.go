@@ -42,7 +42,7 @@ type ManagerConfig struct {
 }
 
 // Manager handles purchase workflow.
-type Manager struct { //nolint:govet // fieldalignment: reorder would break API/readability
+type Manager struct {
 	config          config.StoreInterface
 	email           email.SenderInterface
 	stsClient       STSClient
@@ -98,7 +98,7 @@ type NotificationResult struct {
 }
 
 // NewManager creates a new purchase manager.
-func NewManager(cfg ManagerConfig) *Manager { //nolint:gocritic // hugeParam: by-value per calling convention
+func NewManager(cfg ManagerConfig) *Manager {
 	factory := cfg.ProviderFactory
 	if factory == nil {
 		factory = &provider.DefaultFactory{}
@@ -285,7 +285,7 @@ func allRecsSafeToRedrive(exec *config.PurchaseExecution) bool {
 // recIsSafeToRedrive reports whether a single recommendation can be safely
 // re-driven. Extracted from allRecsSafeToRedrive to keep that function under
 // the gocyclo budget and to make per-rec exclusions explicit.
-func recIsSafeToRedrive(rec config.RecommendationRecord) bool { //nolint:gocritic // hugeParam: by-value per calling convention
+func recIsSafeToRedrive(rec config.RecommendationRecord) bool {
 	switch rec.Provider {
 	case "", "aws":
 		// Empty provider is legacy AWS. All AWS services honor IdempotencyToken.

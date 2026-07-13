@@ -205,7 +205,7 @@ func newAzureSenderFromEnv(ctx context.Context) (SenderInterface, error) {
 }
 
 // NewSenderWithConfig creates an email sender with explicit configuration.
-func NewSenderWithConfig(ctx context.Context, cfg FactoryConfig) (SenderInterface, error) { //nolint:gocritic // hugeParam: by-value per calling convention
+func NewSenderWithConfig(ctx context.Context, cfg FactoryConfig) (SenderInterface, error) {
 	switch cfg.Provider {
 	case ProviderAWS:
 		return NewSender(SenderConfig{

@@ -82,7 +82,7 @@ func (rl *InMemoryRateLimiter) evictIfAtCap(now time.Time) {
 // evictOldest removes the oldest live entries until the map is at 80% of cap.
 // Must be called with rl.mu held.
 func (rl *InMemoryRateLimiter) evictOldest() {
-	type kv struct { //nolint:govet // fieldalignment: reorder would break API/readability
+	type kv struct {
 		key string
 		t   time.Time
 	}

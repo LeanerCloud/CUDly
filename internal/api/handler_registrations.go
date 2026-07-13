@@ -237,7 +237,7 @@ func (h *Handler) encryptRegistrationCredential(payload string) (string, error) 
 
 // notifyRegistrant sends an email about an approval or rejection.
 // Errors are logged but not propagated (matching sendPurchaseApprovalEmail pattern).
-func (h *Handler) notifyRegistrant(reg *config.AccountRegistration, data email.RegistrationDecisionData) { //nolint:gocritic // hugeParam: by-value per calling convention
+func (h *Handler) notifyRegistrant(reg *config.AccountRegistration, data email.RegistrationDecisionData) {
 	if h.emailNotifier == nil || reg.ContactEmail == "" {
 		return
 	}

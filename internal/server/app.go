@@ -225,7 +225,7 @@ func runMigrationsBoundedWith(pool *pgxpool.Pool, migrationsPath, adminEmail, ad
 // deployment. CUDLY_ISSUER_URL (set by the infra module to the
 // Function URL / Container App URL / Cloud Run URL) wins; DashboardURL
 // is the backstop.
-func resolveOIDCIssuerURL(cfg ApplicationConfig) string { //nolint:gocritic // hugeParam: by-value per calling convention
+func resolveOIDCIssuerURL(cfg ApplicationConfig) string {
 	if cfg.IssuerURL != "" {
 		return strings.TrimRight(cfg.IssuerURL, "/")
 	}
@@ -267,7 +267,7 @@ func LoadApplicationConfig() ApplicationConfig {
 // flow into the purchase manager as system-wide defaults; a typo propagates
 // silently into every purchase unless we reject it here (issue #1026).
 // Empty values are always valid (means "use the purchase manager's built-in default").
-func validateAppConfigEnvDefaults(cfg ApplicationConfig) error { //nolint:gocritic // hugeParam: by-value per calling convention
+func validateAppConfigEnvDefaults(cfg ApplicationConfig) error {
 	if err := config.ValidatePaymentOptionEnv(cfg.DefaultPaymentOption); err != nil {
 		return fmt.Errorf("invalid DEFAULT_PAYMENT_OPTION: %w", err)
 	}
@@ -294,7 +294,7 @@ func validateAppConfigEnvDefaults(cfg ApplicationConfig) error { //nolint:gocrit
 // SCHEDULED_TASK_SECRET_NAME (secret-store path) are set, we warn loudly
 // because the plaintext value is visible in Lambda env / Terraform state.
 // The secret-store path is always preferred when both are present.
-func resolveScheduledTaskSecret(ctx context.Context, cfg ApplicationConfig, resolver secrets.Resolver) (string, error) { //nolint:gocritic // hugeParam: by-value per calling convention
+func resolveScheduledTaskSecret(ctx context.Context, cfg ApplicationConfig, resolver secrets.Resolver) (string, error) {
 	if cfg.ScheduledTaskSecretName != "" && cfg.ScheduledTaskSecret != "" {
 		log.Printf("SECURITY WARNING: both SCHEDULED_TASK_SECRET (plaintext) and " +
 			"SCHEDULED_TASK_SECRET_NAME are set. The plaintext value is visible in " +
@@ -324,7 +324,7 @@ func (envSourceOS) Get(key string) string { return os.Getenv(key) }
 // a pre-loaded scheduledauth.Config. The bearer secret is injected from cfg
 // rather than re-read from env — in production cfg.ScheduledTaskSecret was
 // already resolved from Key Vault / Secrets Manager by the caller.
-func buildScheduledAuthFromConfig(cfg ApplicationConfig, saCfg scheduledauth.Config) (*scheduledauth.Validator, error) { //nolint:gocritic // hugeParam: by-value per calling convention
+func buildScheduledAuthFromConfig(cfg ApplicationConfig, saCfg scheduledauth.Config) (*scheduledauth.Validator, error) {
 	// In bearer mode, override the env-supplied secret with the one
 	// already resolved from KV / SM. LoadConfig reads SCHEDULED_TASK_SECRET
 	// directly which is fine for local dev where the env carries the
@@ -365,7 +365,7 @@ func initScheduledAuth(ctx context.Context, cfg *ApplicationConfig, resolver sec
 
 // NewApplicationFromDeps creates an Application from pre-built configuration and dependencies.
 // This is the testable constructor - all external I/O is done before calling this.
-func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps ExternalDeps) (*Application, error) { //nolint:gocritic // hugeParam: by-value per calling convention
+func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps ExternalDeps) (*Application, error) {
 	if deps.DBConfig == nil {
 		return nil, fmt.Errorf("database configuration required: DBConfig must be provided")
 	}

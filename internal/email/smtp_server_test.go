@@ -28,7 +28,7 @@ type mockSMTPServer struct {
 
 // newMockSMTPServer creates a new mock SMTP server.
 func newMockSMTPServer(t *testing.T, authFail bool) *mockSMTPServer {
-	listener, err := net.Listen("tcp", "127.0.0.1:0") //nolint:noctx // test helper; background context is appropriate
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
 	addr := listener.Addr().(*net.TCPAddr)
@@ -475,7 +475,7 @@ func TestSMTPSender_SendToEmail_WithMockServer_LongContent(t *testing.T) {
 // startFlexSMTPServer starts a mock SMTP server with configurable failure behavior.
 func startFlexSMTPServer(t *testing.T, behavior string) (string, func()) {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0") //nolint:noctx // test helper; background context is appropriate
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
 	addr := listener.Addr().String()

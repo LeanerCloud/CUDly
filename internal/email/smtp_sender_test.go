@@ -307,12 +307,12 @@ func TestSendRegistrationReceivedNotification_SubjectHeaderInjection(t *testing.
 	data := RegistrationNotificationData{
 		AccountName:    injectedName,
 		Provider:       injectedProvider,
-		RecipientEmail: "", //nolint:govet // unusedwrite: falls back to notifyEmail; set for test completeness
+		RecipientEmail: "",
 	}
 
 	s := &SMTPSender{
-		fromEmail:   "noreply@example.com", //nolint:govet // unusedwrite: field set for test completeness
-		notifyEmail: "admin@example.com",   //nolint:govet // unusedwrite: field set for test completeness
+		fromEmail:   "noreply@example.com",
+		notifyEmail: "admin@example.com",
 	}
 
 	// Build the subject the same way the method does, then verify it is clean.
@@ -345,7 +345,7 @@ func TestSMTPStartTLS_MinVersionTLS12(t *testing.T) {
 	}
 
 	// Build the config the same way sendMailTLS does and confirm MinVersion.
-	cfg := &tls.Config{ServerName: "smtp.example.com", MinVersion: tls.VersionTLS12} //nolint:govet // unusedwrite: field set for test completeness
+	cfg := &tls.Config{ServerName: "smtp.example.com", MinVersion: tls.VersionTLS12}
 	if cfg.MinVersion != tls.VersionTLS12 {
 		t.Errorf("TLS config MinVersion is %d; want tls.VersionTLS12 (%d) (regression of #410)",
 			cfg.MinVersion, tls.VersionTLS12)

@@ -362,13 +362,13 @@ func TestCreateHTTPServer(t *testing.T) {
 		defer ts.Close()
 
 		// Health endpoint should respond 200
-		resp, err := http.Get(ts.URL + "/health") //nolint:noctx // test: background context is appropriate
+		resp, err := http.Get(ts.URL + "/health")
 		testutil.AssertNoError(t, err)
 		defer resp.Body.Close()
 		testutil.AssertEqual(t, http.StatusOK, resp.StatusCode)
 
 		// Root endpoint should respond (API handler)
-		resp2, err := http.Get(ts.URL + "/api/test") //nolint:noctx // test: background context is appropriate
+		resp2, err := http.Get(ts.URL + "/api/test")
 		testutil.AssertNoError(t, err)
 		defer resp2.Body.Close()
 		testutil.AssertTrue(t, resp2.StatusCode > 0, "Should get a status code from root handler")
@@ -405,7 +405,7 @@ func TestHTTPTransportServesOIDCEndpoints(t *testing.T) {
 	} {
 		path := path
 		t.Run(path, func(t *testing.T) {
-			resp, err := http.Get(ts.URL + path) //nolint:noctx // test: background context is appropriate
+			resp, err := http.Get(ts.URL + path)
 			testutil.AssertNoError(t, err)
 			defer resp.Body.Close()
 

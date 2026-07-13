@@ -25,7 +25,7 @@ import (
 )
 
 // Handler processes HTTP requests.
-type Handler struct { //nolint:govet // fieldalignment: reorder would break API/readability
+type Handler struct {
 	config             config.StoreInterface
 	credStore          credentials.CredentialStore
 	purchase           PurchaseManagerInterface
@@ -135,7 +135,7 @@ func (h *Handler) getRIUtilizationCache() *riUtilizationCache {
 }
 
 // NewHandler creates a new API handler.
-func NewHandler(cfg HandlerConfig) *Handler { //nolint:gocritic // hugeParam: by-value per calling convention
+func NewHandler(cfg HandlerConfig) *Handler {
 	corsOrigin := cfg.CORSAllowedOrigin
 	if corsOrigin == "" {
 		// Security: CORS must be explicitly configured

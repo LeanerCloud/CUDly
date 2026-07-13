@@ -143,7 +143,7 @@ func (h *Handler) fetchCommitmentRecords(ctx context.Context, asOf time.Time, se
 // response-layer InventoryCommitment. The ID is namespaced by account so
 // the JSON payload is globally unique without a DB schema change —
 // purchase_id alone is only unique within an account.
-func buildInventoryCommitment(p config.PurchaseHistoryRecord, accountName string) InventoryCommitment { //nolint:gocritic // hugeParam: by-value per calling convention
+func buildInventoryCommitment(p config.PurchaseHistoryRecord, accountName string) InventoryCommitment {
 	return InventoryCommitment{
 		ID:               p.AccountID + ":" + p.PurchaseID,
 		Provider:         p.Provider,
@@ -291,7 +291,7 @@ func aggregateOnDemandByKey(recs []config.RecommendationRecord, providerFilter s
 // its recurring MonthlyCost. The scheduler only writes Term >= 1 rows, so this
 // guard matches analytics.Collector's skip-bad-term defense rather than papering
 // over real data.
-func commitmentCoveredMonthly(p config.PurchaseHistoryRecord) float64 { //nolint:gocritic // hugeParam: by-value per calling convention
+func commitmentCoveredMonthly(p config.PurchaseHistoryRecord) float64 {
 	var covered float64
 	if p.MonthlyCost != nil {
 		covered += *p.MonthlyCost

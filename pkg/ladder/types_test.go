@@ -490,7 +490,7 @@ func TestParseRunStatus(t *testing.T) {
 		{"executing", RunStatusExecuting, false},
 		{"completed", RunStatusCompleted, false},
 		{"failed", RunStatusFailed, false},
-		{"cancelled", RunStatusCancelled, false}, //nolint:misspell // matches existing DB status spelling ("cancelled")
+		{"cancelled", RunStatusCancelled, false},
 		{"expired", RunStatusExpired, false},
 		{"bogus", "", true},
 		{"", "", true},
@@ -523,7 +523,7 @@ func TestParseTrancheStatus(t *testing.T) {
 		{"scheduled", TrancheStatusScheduled, false},
 		{"fired", TrancheStatusFired, false},
 		{"completed", TrancheStatusCompleted, false},
-		{"cancelled", TrancheStatusCancelled, false}, //nolint:misspell // matches existing DB status spelling ("cancelled")
+		{"cancelled", TrancheStatusCancelled, false},
 		{"failed", TrancheStatusFailed, false},
 		{"bogus", "", true},
 		{"", "", true},

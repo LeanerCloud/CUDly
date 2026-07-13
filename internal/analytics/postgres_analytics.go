@@ -218,7 +218,7 @@ func (s *PostgresAnalyticsStore) BulkInsertSnapshots(ctx context.Context, snapsh
 }
 
 // QuerySavings retrieves savings snapshots based on query parameters.
-func (s *PostgresAnalyticsStore) QuerySavings(ctx context.Context, req QueryRequest) ([]SavingsSnapshot, error) { //nolint:gocritic // hugeParam: by-value per calling convention
+func (s *PostgresAnalyticsStore) QuerySavings(ctx context.Context, req QueryRequest) ([]SavingsSnapshot, error) {
 	accountClause, args := accountFilterClause(req.AccountUUIDs, req.AccountExternalIDsByProvider, []any{req.StartDate, req.EndDate})
 
 	// #nosec G201 — accountClause references only parameter placeholders built

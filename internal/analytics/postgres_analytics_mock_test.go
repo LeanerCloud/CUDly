@@ -20,7 +20,7 @@ func TestSaveSnapshotMarshalError(t *testing.T) {
 	t.Run("invalid metadata causes marshal error", func(t *testing.T) {
 		// Create snapshot with unmarshallable metadata
 		snapshot := &SavingsSnapshot{
-			ID:       "test-id", //nolint:govet // unusedwrite: field set for test completeness
+			ID:       "test-id",
 			Metadata: map[string]interface{}{"channel": make(chan int)},
 		}
 

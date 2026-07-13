@@ -231,7 +231,7 @@ func insertRecommendationsBatch(ctx context.Context, tx pgx.Tx, collectedAt time
 // for ListStoredRecommendations. Extracted to keep the caller below the
 // gocyclo threshold; also makes the SQL builder testable in isolation if
 // needed.
-func buildRecommendationFilter(filter RecommendationFilter) (string, []any) { //nolint:gocritic // hugeParam: by-value per calling convention
+func buildRecommendationFilter(filter RecommendationFilter) (whereClause string, queryArgs []any) {
 	var conds []string
 	var args []any
 	add := func(cond string, val any) {
@@ -359,7 +359,7 @@ func recOnDemandBaseline(rec *RecommendationRecord) (float64, bool) {
 // MinSavingsUSD) are applied in SQL so Postgres prunes the rows; the
 // MinSavingsPct filter is applied in-process because the on-demand
 // baseline lives inside the JSONB payload (not a native column).
-func (s *PostgresStore) ListStoredRecommendations(ctx context.Context, filter RecommendationFilter) ([]RecommendationRecord, error) { //nolint:gocritic // hugeParam: by-value per calling convention
+func (s *PostgresStore) ListStoredRecommendations(ctx context.Context, filter RecommendationFilter) ([]RecommendationRecord, error) {
 	whereClause, args := buildRecommendationFilter(filter)
 	rows, err := s.db.Query(ctx, `SELECT payload FROM recommendations`+whereClause, args...)
 	if err != nil {

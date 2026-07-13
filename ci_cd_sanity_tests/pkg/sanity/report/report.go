@@ -32,7 +32,7 @@ type Report struct {
 	Results   []CheckResult `json:"results"`
 }
 
-func (r *Report) Add(res CheckResult) { //nolint:gocritic // hugeParam: by-value per calling convention
+func (r *Report) Add(res CheckResult) {
 	r.Results = append(r.Results, res)
 }
 

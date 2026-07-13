@@ -361,8 +361,8 @@ func TestGCPResolver_Close_NilClient(t *testing.T) {
 	// The production code calls r.client.Close() without nil check
 	// This test documents that behavior
 	resolver := &GCPResolver{
-		client:    nil,            //nolint:govet // unusedwrite: field set for test completeness
-		projectID: "test-project", //nolint:govet // unusedwrite: field set for test completeness
+		client:    nil,
+		projectID: "test-project",
 	}
 
 	// Close with nil client will panic since it calls r.client.Close()

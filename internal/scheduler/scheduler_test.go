@@ -178,8 +178,8 @@ func TestSchedulerConfig(t *testing.T) {
 
 	cfg := SchedulerConfig{
 		ConfigStore:     mockStore,
-		PurchaseManager: nil, //nolint:govet // unusedwrite: nil; mock types don't match test interface
-		EmailSender:     nil, //nolint:govet // unusedwrite: nil; mock types don't match test interface
+		PurchaseManager: nil,
+		EmailSender:     nil,
 		DashboardURL:    "https://dashboard.example.com",
 	}
 

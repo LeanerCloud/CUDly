@@ -99,7 +99,7 @@ type Scheduler struct {
 const defaultCacheTTL = 6 * time.Hour
 
 // NewScheduler creates a new scheduler.
-func NewScheduler(cfg SchedulerConfig) *Scheduler { //nolint:gocritic // hugeParam: by-value per calling convention
+func NewScheduler(cfg SchedulerConfig) *Scheduler {
 	factory := cfg.ProviderFactory
 	if factory == nil {
 		factory = &provider.DefaultFactory{}
@@ -693,7 +693,7 @@ func (s *Scheduler) collectGCPAmbient(ctx context.Context) ([]config.Recommendat
 	return s.convertRecommendations(recs, "gcp"), nil
 }
 
-func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.GlobalConfig, acct config.CloudAccount) ([]config.RecommendationRecord, error) { //nolint:gocritic // hugeParam: by-value per calling convention
+func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.GlobalConfig, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
 	// Self-account (role_arn with no role ARN) or ambient modes use ambient credentials
 	if acct.AWSRoleARN == "" {
 		prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "aws", nil)
@@ -750,7 +750,7 @@ func (s *Scheduler) collectAzureRecommendations(ctx context.Context, _ *config.G
 	return recs, outcome.SucceededAccountIDs, nil
 }
 
-func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) { //nolint:gocritic // hugeParam: by-value per calling convention
+func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
 	azCred, err := credentials.ResolveAzureTokenCredentialWithOpts(ctx, &acct, s.credStore, credentials.AzureResolveOptions{
 		Signer:    s.oidcSigner,
 		IssuerURL: s.oidcIssuerURL,
@@ -811,7 +811,7 @@ func (s *Scheduler) collectGCPRecommendations(ctx context.Context, _ *config.Glo
 	return recs, outcome.SucceededAccountIDs, nil
 }
 
-func (s *Scheduler) collectGCPForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) { //nolint:gocritic // hugeParam: by-value per calling convention
+func (s *Scheduler) collectGCPForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
 	gcpTS, err := credentials.ResolveGCPTokenSourceWithOpts(ctx, &acct, s.credStore, credentials.GCPResolveOptions{
 		Signer:    s.oidcSigner,
 		IssuerURL: s.oidcIssuerURL,
@@ -913,7 +913,7 @@ func (s *Scheduler) tagAccount(recs []config.RecommendationRecord, accountID str
 //     aren't on Lambda, kick off a background CollectRecommendations so
 //     the NEXT read sees fresh data. Lambda skips this (goroutines freeze
 //     between invocations); the scheduled cron is Lambda's refresh path.
-func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) { //nolint:gocritic // hugeParam: by-value per calling convention
+func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	logging.Info("Reading recommendations from cache...")
 
 	freshness, err := s.config.GetRecommendationsFreshness(ctx)
@@ -1253,7 +1253,7 @@ func extractEngine(details common.ServiceDetails) string {
 // without Details and falls through to the graceful-degradation path in
 // common.DecodeServiceDetailsFor. Extracted from convertRecommendations
 // to keep that function under the gocyclo budget.
-func marshalRecDetails(rec common.Recommendation, providerName string) []byte { //nolint:gocritic // hugeParam: by-value per calling convention
+func marshalRecDetails(rec common.Recommendation, providerName string) []byte {
 	blob, err := common.MarshalServiceDetails(rec.Details)
 	if err != nil {
 		logging.Warnf("Failed to marshal service details for %s/%s rec (%s): %v — persisting without Details",

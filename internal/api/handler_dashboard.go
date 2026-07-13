@@ -278,7 +278,7 @@ type cellRepresentative struct {
 // variants so the backend by_service rollup and the frontend per-cell grouping
 // agree. A nil CloudAccountID maps to the empty segment, matching the
 // frontend's nullish-coalescing of cloud_account_id to an empty string.
-func recCellKey(rec config.RecommendationRecord) string { //nolint:gocritic // hugeParam: by-value per calling convention
+func recCellKey(rec config.RecommendationRecord) string {
 	account := ""
 	if rec.CloudAccountID != nil {
 		account = *rec.CloudAccountID
@@ -322,7 +322,7 @@ func bestVariantPerCell(
 // scaledSavings returns rec.Savings * min(max(coverage, 0), 100) / 100 when
 // a coverage entry exists for the rec's (account, provider, service) triple.
 // Otherwise returns rec.Savings unchanged.
-func scaledSavings(rec config.RecommendationRecord, coverageByKey map[string]float64) float64 { //nolint:gocritic // hugeParam: by-value per calling convention
+func scaledSavings(rec config.RecommendationRecord, coverageByKey map[string]float64) float64 {
 	if rec.CloudAccountID == nil || coverageByKey == nil {
 		return rec.Savings
 	}
@@ -542,7 +542,7 @@ func (h *Handler) getDeploymentInfo(ctx context.Context, _ *events.LambdaFunctio
 // place). One year is approximated as 365 days — matches the original
 // dashboard arithmetic verbatim; leap-year precision isn't material for
 // a multi-year RI/SP/CUD term.
-func commitmentExpiry(p config.PurchaseHistoryRecord) time.Time { //nolint:gocritic // hugeParam: by-value per calling convention
+func commitmentExpiry(p config.PurchaseHistoryRecord) time.Time {
 	termDuration := time.Duration(p.Term) * 365 * 24 * time.Hour
 	return p.Timestamp.Add(termDuration)
 }
@@ -557,7 +557,7 @@ func commitmentExpiry(p config.PurchaseHistoryRecord) time.Time { //nolint:gocri
 //
 // Same predicate shared by the dashboard aggregate and the per-commitment
 // inventory endpoint. Status values: see PurchaseHistoryRecord.Status doc.
-func isActiveCommitment(p config.PurchaseHistoryRecord, now time.Time) bool { //nolint:gocritic // hugeParam: by-value per calling convention
+func isActiveCommitment(p config.PurchaseHistoryRecord, now time.Time) bool {
 	// Status is unpersisted (dynamodbav:"-"); DB rows always read back as "".
 	// Synthesized rows set it to "failed", "expired", "canceled", "pending",
 	// "notified", "approved", "running", or "paused". Only "" and "completed"

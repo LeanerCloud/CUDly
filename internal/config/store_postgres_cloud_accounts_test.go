@@ -158,25 +158,25 @@ func TestCloudAccountFilter_WithAllFields(t *testing.T) {
 
 func TestCloudAccount_CredentialsConfiguredDefaultsFalse(t *testing.T) {
 	a := CloudAccount{
-		ID:         "id",           //nolint:govet // unusedwrite: field set for test completeness
-		Name:       "Test",         //nolint:govet // unusedwrite: field set for test completeness
-		Provider:   "aws",          //nolint:govet // unusedwrite: field set for test completeness
-		ExternalID: "123456789012", //nolint:govet // unusedwrite: field set for test completeness
-		Enabled:    true,           //nolint:govet // unusedwrite: field set for test completeness
+		ID:         "id",
+		Name:       "Test",
+		Provider:   "aws",
+		ExternalID: "123456789012",
+		Enabled:    true,
 	}
 	assert.False(t, a.CredentialsConfigured)
 }
 
 func TestCloudAccount_AWSFieldsOptional(t *testing.T) {
 	a := CloudAccount{
-		ID:           "id",           //nolint:govet // unusedwrite: field set for test completeness
-		Name:         "Test",         //nolint:govet // unusedwrite: field set for test completeness
-		Provider:     "aws",          //nolint:govet // unusedwrite: field set for test completeness
-		ExternalID:   "123456789012", //nolint:govet // unusedwrite: field set for test completeness
-		Enabled:      true,           //nolint:govet // unusedwrite: field set for test completeness
+		ID:           "id",
+		Name:         "Test",
+		Provider:     "aws",
+		ExternalID:   "123456789012",
+		Enabled:      true,
 		AWSAuthMode:  "role_arn",
 		AWSRoleARN:   "arn:aws:iam::123456789012:role/CUDly",
-		AWSIsOrgRoot: false, //nolint:govet // unusedwrite: field set for test completeness
+		AWSIsOrgRoot: false,
 	}
 	assert.Equal(t, "role_arn", a.AWSAuthMode)
 	assert.Equal(t, "arn:aws:iam::123456789012:role/CUDly", a.AWSRoleARN)

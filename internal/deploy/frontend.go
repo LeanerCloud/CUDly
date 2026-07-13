@@ -205,7 +205,7 @@ func (s *FrontendService) findDistributionForBucket(ctx context.Context, bucketN
 	return "", nil
 }
 
-func (s *FrontendService) checkDistributionOrigins(dist cftypes.DistributionSummary, bucketName string) string { //nolint:gocritic // hugeParam: by-value per calling convention
+func (s *FrontendService) checkDistributionOrigins(dist cftypes.DistributionSummary, bucketName string) string {
 	if dist.Origins == nil || dist.Origins.Items == nil {
 		return ""
 	}

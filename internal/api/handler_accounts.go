@@ -348,7 +348,7 @@ var validAccountProviders = map[string]bool{
 }
 
 // validateCloudAccountRequest checks required fields and allowed values.
-func validateCloudAccountRequest(req CloudAccountRequest) error { //nolint:gocritic // hugeParam: by-value per calling convention
+func validateCloudAccountRequest(req CloudAccountRequest) error {
 	if req.Name == "" {
 		return NewClientError(400, "name is required")
 	}
@@ -369,7 +369,7 @@ func validateCloudAccountRequest(req CloudAccountRequest) error { //nolint:gocri
 }
 
 // validateAuthMode checks that the provider-specific auth mode is a known value.
-func validateAuthMode(req CloudAccountRequest) error { //nolint:gocritic // hugeParam: by-value per calling convention
+func validateAuthMode(req CloudAccountRequest) error {
 	switch req.Provider {
 	case "aws":
 		return validateAWSAuthMode(req)
@@ -409,7 +409,7 @@ func validateAuthMode(req CloudAccountRequest) error { //nolint:gocritic // huge
 // identity via the token subject claim (see resolveWebIdentityProvider
 // in internal/credentials/resolver.go), and stscreds.WebIdentityRoleOptions
 // has no ExternalID field. access_keys doesn't assume a role at all.
-func validateAWSAuthMode(req CloudAccountRequest) error { //nolint:gocritic // hugeParam: by-value per calling convention
+func validateAWSAuthMode(req CloudAccountRequest) error {
 	if req.AWSAuthMode != "" && !validAWSAuthModes[req.AWSAuthMode] {
 		return NewClientError(400, "invalid aws_auth_mode")
 	}
@@ -489,7 +489,7 @@ func isValidAWSExternalIDCharset(s string) bool {
 }
 
 // cloudAccountFromRequest maps a CloudAccountRequest to a config.CloudAccount.
-func cloudAccountFromRequest(req CloudAccountRequest) *config.CloudAccount { //nolint:gocritic // hugeParam: by-value per calling convention
+func cloudAccountFromRequest(req CloudAccountRequest) *config.CloudAccount {
 	a := &config.CloudAccount{
 		Name:                    req.Name,
 		Description:             req.Description,
@@ -1099,7 +1099,7 @@ func (h *Handler) saveAccountServiceOverride(ctx context.Context, httpReq *event
 }
 
 // buildServiceOverride constructs an AccountServiceOverride from request and existing data.
-func buildServiceOverride(accountID, provider, service string, req AccountServiceOverrideRequest, existing *config.AccountServiceOverride, now time.Time) *config.AccountServiceOverride { //nolint:gocritic // hugeParam: by-value per calling convention
+func buildServiceOverride(accountID, provider, service string, req AccountServiceOverrideRequest, existing *config.AccountServiceOverride, now time.Time) *config.AccountServiceOverride {
 	override := &config.AccountServiceOverride{
 		AccountID: accountID,
 		Provider:  provider,
@@ -1121,12 +1121,12 @@ func buildServiceOverride(accountID, provider, service string, req AccountServic
 }
 
 // applyServiceOverrideFields copies sparse request fields onto an override.
-func applyServiceOverrideFields(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) { //nolint:gocritic // hugeParam: by-value per calling convention
+func applyServiceOverrideFields(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) {
 	applyOverrideScalars(o, req)
 	applyOverrideSlices(o, req)
 }
 
-func applyOverrideScalars(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) { //nolint:gocritic // hugeParam: by-value per calling convention
+func applyOverrideScalars(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) {
 	if req.Enabled != nil {
 		o.Enabled = req.Enabled
 	}
@@ -1144,7 +1144,7 @@ func applyOverrideScalars(o *config.AccountServiceOverride, req AccountServiceOv
 	}
 }
 
-func applyOverrideSlices(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) { //nolint:gocritic // hugeParam: by-value per calling convention
+func applyOverrideSlices(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) {
 	if req.IncludeEngines != nil {
 		o.IncludeEngines = req.IncludeEngines
 	}
@@ -1480,7 +1480,7 @@ func (h *Handler) buildOrgRootAWSConfig(ctx context.Context, root *config.CloudA
 // runOrgDiscovery dispatches to the configured discovery function — the
 // injectable seam Handler.discoverOrgFn for tests, falling back to the real
 // accounts.DiscoverOrgAccounts in production.
-func (h *Handler) runOrgDiscovery(ctx context.Context, cfg aws.Config) (*accounts.OrgDiscoveryResult, error) { //nolint:gocritic // hugeParam: by-value per calling convention
+func (h *Handler) runOrgDiscovery(ctx context.Context, cfg aws.Config) (*accounts.OrgDiscoveryResult, error) {
 	discoverFn := h.discoverOrgFn
 	if discoverFn == nil {
 		discoverFn = accounts.DiscoverOrgAccounts

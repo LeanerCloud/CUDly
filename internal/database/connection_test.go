@@ -342,7 +342,7 @@ func TestConnectionMethods(t *testing.T) {
 
 	t.Run("Connection struct has expected fields", func(t *testing.T) {
 		conn := &Connection{
-			pool:   nil, //nolint:govet // unusedwrite: field set for test completeness
+			pool:   nil,
 			config: &Config{},
 		}
 		assert.NotNil(t, conn.config)

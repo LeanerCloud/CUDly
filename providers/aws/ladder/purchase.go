@@ -32,8 +32,6 @@ import (
 // errors.Is(err, common.ErrCommitmentPurchaseNotSupported) at the engine.
 // The client's PurchaseResult is returned alongside the error because the
 // concrete clients populate result.Error and partial state on failure.
-//
-//nolint:gocritic // hugeParam: Recommendation is large but the LadderCapability interface contract requires value, not pointer
 func (a *AWSLadder) PurchaseLayer(ctx context.Context, layer ladder.LayerType, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	if a.riPurchase == nil || a.spPurchase == nil {
 		return common.PurchaseResult{}, fmt.Errorf("PurchaseLayer: %w", errWriteNotWired)

@@ -126,7 +126,7 @@ func TestBuildDiscovery(t *testing.T) {
 }
 
 func TestBigEndianExponent(t *testing.T) {
-	cases := []struct { //nolint:govet // fieldalignment: reorder would break API/readability
+	cases := []struct {
 		in   int
 		want []byte
 	}{

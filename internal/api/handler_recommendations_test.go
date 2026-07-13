@@ -575,7 +575,7 @@ func TestGetRecommendations_MinSavingsFilters(t *testing.T) {
 }
 
 func TestConfidenceBucketFor(t *testing.T) {
-	cases := []struct { //nolint:govet // fieldalignment: reorder would break API/readability
+	cases := []struct {
 		name    string
 		savings float64
 		count   int

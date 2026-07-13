@@ -127,7 +127,7 @@ func (app *Application) executeRIExchangeReshape(ctx context.Context, cfg *confi
 
 // resolveAccountID fetches the AWS account ID via STS. Returns "unknown" on failure
 // since account_id is stored for audit trail only and is not used to scope queries.
-func resolveAccountID(ctx context.Context, awsCfg aws.Config) string { //nolint:gocritic // hugeParam: by-value per calling convention
+func resolveAccountID(ctx context.Context, awsCfg aws.Config) string {
 	stsClient := sts.NewFromConfig(awsCfg)
 	identity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
@@ -230,7 +230,7 @@ func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboar
 // Used to populate exchange.RIInfo.MonthlyCost so the cross-family
 // dollar-units pre-filter compares apples-to-apples against per-target
 // offering costs.
-func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) float64 { //nolint:gocritic // hugeParam: by-value per calling convention
+func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) float64 {
 	if ri.Duration <= 0 {
 		return 0
 	}

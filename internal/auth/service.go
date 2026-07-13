@@ -64,7 +64,7 @@ type ServiceConfig struct {
 }
 
 // NewService creates a new auth service.
-func NewService(cfg ServiceConfig) *Service { //nolint:gocritic // hugeParam: by-value per calling convention
+func NewService(cfg ServiceConfig) *Service {
 	if cfg.SessionDuration == 0 {
 		cfg.SessionDuration = time.Duration(DefaultSessionDurationHours) * time.Hour
 	}

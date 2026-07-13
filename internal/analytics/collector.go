@@ -72,7 +72,7 @@ type aggregateData struct {
 // aggKey is the bucket identity. cloudAccountID is dereferenced (or "" when
 // nil) so two rows for the same provider account but differing UUID-vs-NULL
 // don't merge across the tenant boundary.
-func aggKey(p config.PurchaseHistoryRecord, commitmentType string) string { //nolint:gocritic // hugeParam: by-value per calling convention
+func aggKey(p config.PurchaseHistoryRecord, commitmentType string) string {
 	cloud := ""
 	if p.CloudAccountID != nil {
 		cloud = *p.CloudAccountID

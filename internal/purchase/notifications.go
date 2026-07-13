@@ -36,7 +36,7 @@ func (m *Manager) SendUpcomingPurchaseNotifications(ctx context.Context) (*Notif
 }
 
 // shouldNotifyPlan checks if a plan should trigger a notification.
-func (m *Manager) shouldNotifyPlan(plan config.PurchasePlan) bool { //nolint:gocritic // hugeParam: by-value per calling convention
+func (m *Manager) shouldNotifyPlan(plan config.PurchasePlan) bool {
 	if !plan.Enabled || !plan.AutoPurchase {
 		return false
 	}
@@ -142,7 +142,7 @@ func (m *Manager) getOrCreateExecution(ctx context.Context, plan *config.Purchas
 // buildNotificationData creates notification data from plan and execution.
 // notifyEmail is the global notification address from GlobalConfig; it is set
 // as RecipientEmail so the token-bearing body routes through targeted SES.
-func (m *Manager) buildNotificationData(plan config.PurchasePlan, exec *config.PurchaseExecution, daysUntil int, notifyEmail string) email.NotificationData { //nolint:gocritic // hugeParam: by-value per calling convention
+func (m *Manager) buildNotificationData(plan config.PurchasePlan, exec *config.PurchaseExecution, daysUntil int, notifyEmail string) email.NotificationData {
 	data := email.NotificationData{
 		DashboardURL:      m.dashboardURL,
 		ApprovalToken:     exec.ApprovalToken,

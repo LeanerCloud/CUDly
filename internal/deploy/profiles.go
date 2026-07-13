@@ -177,7 +177,7 @@ func (c *DeploymentConfig) SetActiveProfile(name string) error {
 }
 
 // AddProfile adds a new profile to the configuration.
-func (c *DeploymentConfig) AddProfile(name string, profile ProfileConfig) error { //nolint:gocritic // hugeParam: by-value per calling convention
+func (c *DeploymentConfig) AddProfile(name string, profile ProfileConfig) error {
 	if name == "" {
 		return fmt.Errorf("profile name cannot be empty")
 	}
@@ -197,7 +197,7 @@ func (c *DeploymentConfig) AddProfile(name string, profile ProfileConfig) error 
 }
 
 // UpdateProfile updates an existing profile.
-func (c *DeploymentConfig) UpdateProfile(name string, profile ProfileConfig) error { //nolint:gocritic // hugeParam: by-value per calling convention
+func (c *DeploymentConfig) UpdateProfile(name string, profile ProfileConfig) error {
 	if _, exists := c.Profiles[name]; !exists {
 		return fmt.Errorf("profile %q does not exist", name)
 	}

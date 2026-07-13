@@ -54,7 +54,7 @@ type reshapeRecsClient interface {
 // buildReshapeEC2Client honors the injected factory when set, falling
 // back to the direct AWS SDK constructor otherwise. Tests inject a
 // stub via Handler.reshapeEC2Factory; prod leaves the field nil.
-func (h *Handler) buildReshapeEC2Client(cfg aws.Config) reshapeEC2Client { //nolint:gocritic // hugeParam: by-value per calling convention
+func (h *Handler) buildReshapeEC2Client(cfg aws.Config) reshapeEC2Client {
 	if h.reshapeEC2Factory != nil {
 		return h.reshapeEC2Factory(cfg)
 	}
@@ -63,7 +63,7 @@ func (h *Handler) buildReshapeEC2Client(cfg aws.Config) reshapeEC2Client { //nol
 
 // buildReshapeRecsClient mirrors buildReshapeEC2Client for the
 // recommendations adapter.
-func (h *Handler) buildReshapeRecsClient(cfg aws.Config) reshapeRecsClient { //nolint:gocritic // hugeParam: by-value per calling convention
+func (h *Handler) buildReshapeRecsClient(cfg aws.Config) reshapeRecsClient {
 	if h.reshapeRecsFactory != nil {
 		return h.reshapeRecsFactory(cfg)
 	}
@@ -80,7 +80,7 @@ type targetOfferingsEC2Client interface {
 
 // buildTargetOfferingsEC2Client honors the injected factory when set,
 // falling back to the direct AWS SDK constructor otherwise.
-func (h *Handler) buildTargetOfferingsEC2Client(cfg aws.Config) targetOfferingsEC2Client { //nolint:gocritic // hugeParam: by-value per calling convention
+func (h *Handler) buildTargetOfferingsEC2Client(cfg aws.Config) targetOfferingsEC2Client {
 	if h.targetOfferingsEC2Factory != nil {
 		return h.targetOfferingsEC2Factory(cfg)
 	}
@@ -448,7 +448,7 @@ func parseThresholdParam(params map[string]string) (float64, error) {
 // Used to populate exchange.RIInfo.MonthlyCost so the cross-family
 // dollar-units pre-filter can compare against per-target offering
 // costs computed with the same formula.
-func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) float64 { //nolint:gocritic // hugeParam: by-value per calling convention
+func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) float64 {
 	if ri.Duration <= 0 {
 		return 0
 	}
@@ -690,7 +690,7 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 // Extracted from executeExchange to keep the handler below the
 // cyclomatic-complexity threshold; every branch here becomes a
 // separate test case so the logic stays inspectable.
-func validateExecuteExchangeBody(body ExchangeExecuteRequestBody) error { //nolint:gocritic // hugeParam: by-value per calling convention
+func validateExecuteExchangeBody(body ExchangeExecuteRequestBody) error {
 	if len(body.RIIDs) == 0 {
 		return NewClientError(400, "ri_ids is required")
 	}
