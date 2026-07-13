@@ -333,6 +333,9 @@ func (m *mockConfigStoreForHealth) UpsertLadderConfig(_ context.Context, cfg *co
 func (m *mockConfigStoreForHealth) SaveLadderRun(_ context.Context, run *config.LadderRunDB) (*config.LadderRunDB, error) {
 	return run, nil
 }
+func (m *mockConfigStoreForHealth) SaveLadderRunWithTranches(_ context.Context, run *config.LadderRunDB, _ []config.LadderTrancheDB) (*config.LadderRunDB, error) {
+	return run, nil
+}
 func (m *mockConfigStoreForHealth) GetLadderRun(_ context.Context, _ string) (*config.LadderRunDB, error) {
 	return nil, nil
 }

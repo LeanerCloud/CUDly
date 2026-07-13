@@ -9,6 +9,7 @@ import (
 	"time"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/google/uuid"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
@@ -111,15 +112,14 @@ func (app *Application) handleLadderRun(ctx context.Context) (*LadderRunResult, 
 		return &LadderRunResult{}, nil
 	}
 
-	// Q1: single-account only. Resolve the Lambda's own AWS account ID via STS
-	// to match against each config's cloud account. Configs belonging to a
-	// different account are skipped with a visible log line (not silently).
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
+	// Q1: single-account only. Resolve the Lambda's own AWS account ID STRICTLY:
+	// this ID scopes which configs run, so an unresolved account must abort the
+	// whole task (fail loud) rather than fall through and skip every config as
+	// multi-account, which would report a false success on a money path.
+	ownAccountID, region, err := app.resolveLadderAccount(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("ladder_run: failed to load AWS config: %w", err)
+		return nil, fmt.Errorf("ladder_run: could not resolve caller AWS account for the single-account gate: %w", err)
 	}
-	ownAccountID := resolveAccountID(ctx, awsCfg)
-	region := awsCfg.Region
 
 	now := time.Now().UTC()
 	result := app.runLadderConfigs(ctx, allConfigs, ownAccountID, region, term, paymentOpt, now)
@@ -127,6 +127,39 @@ func (app *Application) handleLadderRun(ctx context.Context) (*LadderRunResult, 
 	log.Printf("ladder_run done: planned=%d skipped_cadence=%d skipped_disabled=%d skipped_multi_account=%d errored=%d",
 		result.Planned, result.SkippedCadence, result.SkippedDisabled, result.SkippedMultiAccount, result.Errored)
 	return result, nil
+}
+
+// resolveLadderAccount resolves the caller AWS account ID and region for the
+// single-account gate. It delegates to the injected LadderAccountResolver (used
+// by tests) or the default STS-backed resolver. Any error is returned to the
+// caller so handleLadderRun can fail loud.
+func (app *Application) resolveLadderAccount(ctx context.Context) (accountID, region string, err error) {
+	if app.LadderAccountResolver != nil {
+		return app.LadderAccountResolver(ctx)
+	}
+	return defaultLadderAccountResolver(ctx)
+}
+
+// defaultLadderAccountResolver resolves the Lambda's own AWS account ID via STS
+// STRICTLY: unlike resolveAccountID (which returns the "unknown" sentinel for
+// audit-only use in the RI-exchange path), this returns an error when the
+// account cannot be determined. The ladder path uses the account ID to SCOPE
+// which configs run, so a fabricated/"unknown" value is unsafe: it would skip
+// every config as multi-account and report a false success.
+func defaultLadderAccountResolver(ctx context.Context) (string, string, error) {
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
+	if err != nil {
+		return "", "", fmt.Errorf("load AWS config: %w", err)
+	}
+	stsClient := sts.NewFromConfig(awsCfg)
+	identity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	if err != nil {
+		return "", "", fmt.Errorf("resolve caller account via STS: %w", err)
+	}
+	if identity.Account == nil || *identity.Account == "" {
+		return "", "", fmt.Errorf("STS GetCallerIdentity returned no account ID")
+	}
+	return *identity.Account, awsCfg.Region, nil
 }
 
 // runLadderConfigs processes every ladder_config entry, isolating each one:
@@ -183,8 +216,16 @@ func (app *Application) processOneLadderConfig(
 		return outcomeSkippedMultiAccount
 	}
 
-	// Cadence self-gate: skip if a run already started within the window.
-	if skip, reason := ladderWithinCadenceWindow(ctx, app.Config, dbCfg, now); skip {
+	// Cadence self-gate: skip if a run already started within the window. Fail
+	// CLOSED on a lookup error: if we cannot tell whether a recent run exists,
+	// running anyway risks a duplicate money action, so count the config Errored
+	// (visible in LadderRunResult.Errored) instead of proceeding silently.
+	within, reason, err := ladderWithinCadenceWindow(ctx, app.Config, dbCfg, now)
+	if err != nil {
+		log.Printf("ladder_run: config %s: cadence lookup failed, skipping to avoid a possible double-run: %v", dbCfg.ID, err)
+		return outcomeErrored
+	}
+	if within {
 		log.Printf("ladder_run: config %s: %s", dbCfg.ID, reason)
 		return outcomeSkippedCadence
 	}
@@ -323,19 +364,20 @@ func (app *Application) persistLadderRun(
 		TotalHourlyCommit: allocTotalHourlyCommit(allocResult.Allocations),
 	}
 
-	// Persist the run row first; tranches reference the run ID.
-	savedRun, err := app.Config.SaveLadderRun(ctx, runRow)
-	if err != nil {
-		return fmt.Errorf("SaveLadderRun: %w", err)
-	}
-
-	// Persist the tranche audit rows (status=scheduled; no firing in PR-2).
-	trancheRows, err := buildTrancheDBRows(trancheResult.Tranches, savedRun.ID, &cfgID)
+	// Build the tranche audit rows (status=scheduled; no firing in PR-2). The
+	// run ID is known up front (runRow.ID), so tranches can reference it before
+	// the insert.
+	trancheRows, err := buildTrancheDBRows(trancheResult.Tranches, runRow.ID, &cfgID)
 	if err != nil {
 		return fmt.Errorf("buildTrancheDBRows: %w", err)
 	}
-	if err := app.Config.SaveLadderTranches(ctx, trancheRows); err != nil {
-		return fmt.Errorf("SaveLadderTranches: %w", err)
+
+	// Persist the run row AND its tranches in a single transaction so a
+	// tranche-insert failure can never leave a status=planned run with no
+	// tranches (which the 20h cadence gate would then suppress a retry of).
+	savedRun, err := app.Config.SaveLadderRunWithTranches(ctx, runRow, trancheRows)
+	if err != nil {
+		return fmt.Errorf("SaveLadderRunWithTranches: %w", err)
 	}
 
 	log.Printf("ladder_run: config %s: persisted run %s (status=%s, allocations=%d, tranches=%d, holds=%d)",
@@ -344,36 +386,41 @@ func (app *Application) persistLadderRun(
 	return nil
 }
 
-// ladderWithinCadenceWindow returns (true, reason) when a new run should be
-// skipped because a recent run already covers the cadence window. It queries
-// LatestLadderRunStartedAt for the config; on DB error it returns (false, "")
-// so the run proceeds (fail-open on measurement failure is safer than
-// silently skipping a scheduled run forever).
-func ladderWithinCadenceWindow(ctx context.Context, store config.StoreInterface, dbCfg *config.LadderConfigDB, now time.Time) (bool, string) {
+// ladderWithinCadenceWindow reports whether a new run should be skipped because
+// a recent run already covers the cadence window. It queries
+// LatestLadderRunStartedAt for the config and returns:
+//   - (true, reason, nil)  when a recent run is within the window (skip),
+//   - (false, "", nil)     when the config is eligible to run,
+//   - (false, "", err)     when the lookup itself failed.
+//
+// The lookup error is propagated (NOT swallowed) so the caller can fail CLOSED:
+// if we cannot determine whether a recent run exists, proceeding risks a
+// duplicate money action, so the caller counts the config Errored rather than
+// running it.
+func ladderWithinCadenceWindow(ctx context.Context, store config.StoreInterface, dbCfg *config.LadderConfigDB, now time.Time) (bool, string, error) {
 	latest, err := store.LatestLadderRunStartedAt(ctx, dbCfg.ID)
 	if err != nil {
-		log.Printf("ladder_run: config %s: LatestLadderRunStartedAt error (proceeding): %v", dbCfg.ID, err)
-		return false, ""
+		return false, "", fmt.Errorf("LatestLadderRunStartedAt: %w", err)
 	}
 	if latest == nil {
-		return false, "" // no previous run, always eligible
+		return false, "", nil // no previous run, always eligible
 	}
 	elapsed := now.Sub(*latest)
 	switch dbCfg.Cadence {
 	case string(pkgladder.CadenceDaily):
 		if elapsed < cadenceDailyMin {
-			return true, fmt.Sprintf("cadence=daily: last run %v ago (threshold %v), skipping", elapsed.Round(time.Minute), cadenceDailyMin)
+			return true, fmt.Sprintf("cadence=daily: last run %v ago (threshold %v), skipping", elapsed.Round(time.Minute), cadenceDailyMin), nil
 		}
 	case string(pkgladder.CadenceWeekly):
 		if elapsed < cadenceWeeklyMin {
-			return true, fmt.Sprintf("cadence=weekly: last run %v ago (threshold %v), skipping", elapsed.Round(time.Minute), cadenceWeeklyMin)
+			return true, fmt.Sprintf("cadence=weekly: last run %v ago (threshold %v), skipping", elapsed.Round(time.Minute), cadenceWeeklyMin), nil
 		}
 	default:
 		// Unknown cadence: log but do not block the run. The LadderConfig
 		// validator will surface this as an error during Allocate.
 		log.Printf("ladder_run: config %s: unknown cadence=%q, proceeding without cadence gate", dbCfg.ID, dbCfg.Cadence)
 	}
-	return false, ""
+	return false, "", nil
 }
 
 // ladderConfigToEngine converts a LadderConfigDB row to a pkg/ladder LadderConfig.

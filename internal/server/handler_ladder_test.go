@@ -180,6 +180,22 @@ func (s *ladderTestStore) SaveLadderTranches(_ context.Context, tranches []confi
 	return nil
 }
 
+// SaveLadderRunWithTranches models the single-transaction persist the handler
+// now uses. It mirrors atomicity: if either the run or the tranche insert is
+// configured to fail, NOTHING is captured (the transaction rolls back).
+func (s *ladderTestStore) SaveLadderRunWithTranches(_ context.Context, run *config.LadderRunDB, tranches []config.LadderTrancheDB) (*config.LadderRunDB, error) {
+	if s.saveLadderRunErr != nil {
+		return nil, s.saveLadderRunErr
+	}
+	if s.saveLadderTranchesErr != nil {
+		return nil, s.saveLadderTranchesErr
+	}
+	s.savedRun = run
+	s.savedRuns = append(s.savedRuns, run)
+	s.savedTranches = tranches
+	return run, nil
+}
+
 // ============================================================
 // Shared test helpers
 // ============================================================
@@ -287,6 +303,37 @@ func TestHandleLadderRun_GlobalConfigError(t *testing.T) {
 	assert.Contains(t, err.Error(), "db error")
 }
 
+// B1: a strict caller-account resolution failure (e.g. transient STS error)
+// must fail the WHOLE task loud. It must NOT fall through and skip every config
+// as multi-account (which would return success and let EventBridge see a
+// false no-op on a money path). Nothing may be persisted or marked skipped.
+func TestHandleLadderRun_AccountResolutionFailure(t *testing.T) {
+	ctx := testutil.TestContext(t)
+	dbCfg := validTestDBConfig("cfg-1")
+	store := &ladderTestStore{
+		globalCfg:     validTestGlobalCfg(),
+		ladderConfigs: []config.LadderConfigDB{dbCfg},
+	}
+	app := &Application{
+		Config: store,
+		LadderAccountResolver: func(_ context.Context) (string, string, error) {
+			return "", "", errors.New("STS GetCallerIdentity failed")
+		},
+		LadderCapabilityFactory: func(_ context.Context, _, _ string) (pkgladder.LadderCapability, error) {
+			t.Fatal("factory must not be called when account resolution fails")
+			return nil, nil
+		},
+	}
+
+	result, err := app.handleLadderRun(ctx)
+
+	require.Error(t, err, "an unresolved caller account must fail the task loud")
+	assert.Contains(t, err.Error(), "resolve caller AWS account")
+	assert.Nil(t, result, "no result struct on a hard failure (not a false success)")
+	assert.Nil(t, store.savedRun, "nothing may be persisted when the account is unresolved")
+	assert.Empty(t, store.savedRuns)
+}
+
 // ============================================================
 // handleLadderRun: per-config disabled/multi-account skipping
 // ============================================================
@@ -302,6 +349,10 @@ func TestHandleLadderRun_AllConfigsDisabled(t *testing.T) {
 	}
 	app := &Application{
 		Config: store,
+		// Inject a stub resolver so the strict account gate does not hit STS.
+		LadderAccountResolver: func(_ context.Context) (string, string, error) {
+			return "123456789012", "us-east-1", nil
+		},
 		// No LadderCapabilityFactory: must not be reached.
 		LadderCapabilityFactory: func(_ context.Context, _, _ string) (pkgladder.LadderCapability, error) {
 			t.Fatal("factory called on a disabled config")
@@ -567,8 +618,9 @@ func TestLadderWithinCadenceWindow_Daily_TooRecent(t *testing.T) {
 	recent := now.Add(-19 * time.Hour) // 19h ago < 20h threshold
 	store := &ladderTestStore{latestRunAt: &recent}
 
-	skip, reason := ladderWithinCadenceWindow(ctx, store, &dbCfg, now)
+	skip, reason, err := ladderWithinCadenceWindow(ctx, store, &dbCfg, now)
 
+	require.NoError(t, err)
 	assert.True(t, skip, "must skip a daily config run within 20h of the last run")
 	assert.Contains(t, reason, "cadence=daily")
 }
@@ -582,8 +634,9 @@ func TestLadderWithinCadenceWindow_Daily_Eligible(t *testing.T) {
 	lastRun := now.Add(-25 * time.Hour) // 25h ago > 20h threshold
 	store := &ladderTestStore{latestRunAt: &lastRun}
 
-	skip, _ := ladderWithinCadenceWindow(ctx, store, &dbCfg, now)
+	skip, _, err := ladderWithinCadenceWindow(ctx, store, &dbCfg, now)
 
+	require.NoError(t, err)
 	assert.False(t, skip, "must run a daily config when last run was > 20h ago")
 }
 
@@ -596,8 +649,9 @@ func TestLadderWithinCadenceWindow_Weekly_TooRecent(t *testing.T) {
 	recent := now.Add(-5 * 24 * time.Hour) // 5 days ago < 6d20h threshold
 	store := &ladderTestStore{latestRunAt: &recent}
 
-	skip, reason := ladderWithinCadenceWindow(ctx, store, &dbCfg, now)
+	skip, reason, err := ladderWithinCadenceWindow(ctx, store, &dbCfg, now)
 
+	require.NoError(t, err)
 	assert.True(t, skip, "must skip a weekly config run within 6d20h of the last run")
 	assert.Contains(t, reason, "cadence=weekly")
 }
@@ -610,9 +664,55 @@ func TestLadderWithinCadenceWindow_NoHistory_AlwaysEligible(t *testing.T) {
 
 	store := &ladderTestStore{latestRunAt: nil} // no previous run
 
-	skip, _ := ladderWithinCadenceWindow(ctx, store, &dbCfg, now)
+	skip, _, err := ladderWithinCadenceWindow(ctx, store, &dbCfg, now)
 
+	require.NoError(t, err)
 	assert.False(t, skip, "must always run when there is no previous ladder run")
+}
+
+// B4: a LatestLadderRunStartedAt lookup error must fail CLOSED (propagate the
+// error) so the caller can count the config Errored instead of double-running.
+func TestLadderWithinCadenceWindow_DBError_FailsClosed(t *testing.T) {
+	ctx := testutil.TestContext(t)
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	dbCfg := validTestDBConfig("cfg-cadence-dberr")
+	dbCfg.Cadence = "daily"
+
+	store := &ladderTestStore{latestRunAtErr: errors.New("db unavailable")}
+
+	skip, _, err := ladderWithinCadenceWindow(ctx, store, &dbCfg, now)
+
+	require.Error(t, err, "a lookup error must be propagated, not swallowed")
+	assert.False(t, skip, "must not signal skip on a lookup error")
+	assert.Contains(t, err.Error(), "LatestLadderRunStartedAt")
+}
+
+// B4 (handler level): a config whose cadence lookup errors must be counted
+// Errored with no run persisted (fail closed, per-config isolation).
+func TestProcessOneLadderConfig_CadenceDBError_Errored(t *testing.T) {
+	ctx := testutil.TestContext(t)
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	const ownAccount = "123456789012"
+	dbCfg := validTestDBConfig("cfg-cadence-dberr")
+
+	store := &ladderTestStore{
+		cloudAcct:      validTestCloudAccount(ownAccount),
+		latestRunAtErr: errors.New("db unavailable"),
+	}
+	app := &Application{
+		Config: store,
+		LadderCapabilityFactory: func(_ context.Context, _, _ string) (pkgladder.LadderCapability, error) {
+			t.Fatal("factory must not be called when the cadence gate fails closed")
+			return nil, nil
+		},
+	}
+
+	result := app.runLadderConfigs(ctx, []config.LadderConfigDB{dbCfg}, ownAccount, "us-east-1", pkgladder.Term1Year, pkgladder.PaymentNoUpfront, now)
+
+	assert.Equal(t, 1, result.Errored, "a cadence lookup error must count the config Errored")
+	assert.Equal(t, 0, result.Planned)
+	assert.Equal(t, 0, result.SkippedCadence, "a lookup error is not a cadence skip")
+	assert.Nil(t, store.savedRun, "no run may be persisted when the cadence gate fails closed")
 }
 
 // ============================================================

@@ -62,6 +62,14 @@ type Application struct {
 	// with a fake factory that returns a hermetic LadderCapability.
 	LadderCapabilityFactory func(ctx context.Context, region, accountID string) (pkgladder.LadderCapability, error)
 
+	// LadderAccountResolver resolves the Lambda's own AWS account ID and region
+	// for the single-account ladder gate (Q1). It MUST fail loud when the
+	// account cannot be determined: the account ID gates which configs run, so a
+	// transient STS failure must abort the whole ladder_run rather than silently
+	// skip every config as multi-account. Nil in production -> the default
+	// STS-backed resolver (defaultLadderAccountResolver); tests inject a stub.
+	LadderAccountResolver func(ctx context.Context) (accountID, region string, err error)
+
 	// Static file serving directory (from STATIC_DIR env var)
 	staticDir string
 

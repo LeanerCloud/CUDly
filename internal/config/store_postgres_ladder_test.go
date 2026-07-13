@@ -290,3 +290,72 @@ func TestPostgresStore_TransitionLadderRunStatus_CAS(t *testing.T) {
 			"a lost CAS must not mutate the row")
 	})
 }
+
+// TestPostgresStore_SaveLadderRunWithTranches_Atomicity proves the run+tranche
+// persist is transactional (B2): on success both land, and on a tranche-insert
+// failure the run row is rolled back too (never a status=planned run with no
+// tranches, which the cadence gate would then suppress a retry of).
+func TestPostgresStore_SaveLadderRunWithTranches_Atomicity(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	store := setupLadderStore(ctx, t)
+	configID := seedLadderConfig(ctx, t, store)
+	cfgID := configID
+	fire := time.Now().UTC().Add(7 * 24 * time.Hour).Truncate(time.Microsecond)
+
+	newTranche := func(runID *string, id string) LadderTrancheDB {
+		return LadderTrancheDB{
+			ID:            id,
+			ConfigID:      &cfgID,
+			RunID:         runID,
+			LayerType:     ladder.LayerConvertibleRI,
+			Term:          ladder.Term1Year,
+			PaymentOption: ladder.PaymentNoUpfront,
+			Status:        ladder.TrancheStatusScheduled,
+			AmountUSDHr:   1.5,
+			ScheduledDate: fire,
+		}
+	}
+
+	t.Run("success: run and tranches both persist", func(t *testing.T) {
+		runID := uuid.New().String()
+		run := &LadderRunDB{ID: runID, ConfigID: &cfgID, StartedAt: time.Now().UTC(), Status: ladder.RunStatusPlanned}
+		tranches := []LadderTrancheDB{newTranche(&runID, uuid.New().String()), newTranche(&runID, uuid.New().String())}
+
+		saved, err := store.SaveLadderRunWithTranches(ctx, run, tranches)
+		require.NoError(t, err)
+		require.NotNil(t, saved)
+
+		got, err := store.GetLadderRun(ctx, runID)
+		require.NoError(t, err)
+		require.NotNil(t, got, "the run row must be persisted")
+
+		var count int
+		require.NoError(t, store.db.QueryRow(ctx,
+			`SELECT count(*) FROM ladder_tranches WHERE run_id = $1`, runID).Scan(&count))
+		assert.Equal(t, 2, count, "both tranches must be persisted in the same tx")
+	})
+
+	t.Run("rollback: a duplicate tranche ID rolls back the run row too", func(t *testing.T) {
+		runID := uuid.New().String()
+		run := &LadderRunDB{ID: runID, ConfigID: &cfgID, StartedAt: time.Now().UTC(), Status: ladder.RunStatusPlanned}
+		// Two tranches with the SAME id: the second insert violates the PK,
+		// failing the transaction after the run row was inserted.
+		dupID := uuid.New().String()
+		tranches := []LadderTrancheDB{newTranche(&runID, dupID), newTranche(&runID, dupID)}
+
+		saved, err := store.SaveLadderRunWithTranches(ctx, run, tranches)
+		require.Error(t, err, "a duplicate tranche ID must fail the transaction")
+		assert.Nil(t, saved)
+
+		// The run row must NOT exist: the whole tx rolled back.
+		got, err := store.GetLadderRun(ctx, runID)
+		require.NoError(t, err)
+		assert.Nil(t, got, "the run row must be rolled back when a tranche insert fails")
+
+		var count int
+		require.NoError(t, store.db.QueryRow(ctx,
+			`SELECT count(*) FROM ladder_tranches WHERE run_id = $1`, runID).Scan(&count))
+		assert.Equal(t, 0, count, "no tranche may survive a rolled-back transaction")
+	})
+}

@@ -183,42 +183,45 @@ func scanLadderConfig(row scannable) (LadderConfigDB, error) {
 // LADDER RUN / TRANCHE STORE METHODS
 // ==========================================
 
-// SaveLadderRun inserts a new ladder_runs row. If run.ID is empty a fresh UUID
-// is generated. Returns the persisted row with all DB-stamped fields populated.
-func (s *PostgresStore) SaveLadderRun(ctx context.Context, run *LadderRunDB) (*LadderRunDB, error) {
-	if run.ID == "" {
-		run.ID = uuid.New().String()
+// ladderRunInsertQuery INSERTs one ladder_runs row and RETURNs the full row for
+// scanLadderRun. Shared by SaveLadderRun and SaveLadderRunWithTranches so the
+// column list has a single definition.
+const ladderRunInsertQuery = `
+	INSERT INTO ladder_runs (
+		id, config_id, started_at, completed_at, status, mode, cadence,
+		baseline_usd_hr, target_usd_hr, existing_usd_hr, gap_usd_hr,
+		plan, total_hourly_commit, total_upfront_cost, estimated_savings,
+		approval_token_hash, approval_token_expires_at,
+		approved_by, cancelled_by, fire_at,
+		created_at, updated_at
+	) VALUES (
+		$1, $2, $3, $4, $5, $6, $7,
+		$8, $9, $10, $11,
+		$12, $13, $14, $15,
+		$16, $17, $18, $19, $20,
+		NOW(), NOW()
+	)
+	RETURNING id, config_id, started_at, completed_at, status, mode, cadence,
+	          baseline_usd_hr, target_usd_hr, existing_usd_hr, gap_usd_hr,
+	          plan, total_hourly_commit, total_upfront_cost, estimated_savings,
+	          approval_token_hash, approval_token_expires_at,
+	          approved_by, cancelled_by, fire_at,
+	          created_at, updated_at
+`
+
+// ladderRunPlanJSON returns the plan blob to persist, defaulting an empty plan
+// to the JSONB '{}' the schema expects (NOT NULL DEFAULT '{}').
+func ladderRunPlanJSON(run *LadderRunDB) json.RawMessage {
+	if len(run.Plan) == 0 {
+		return json.RawMessage(`{}`)
 	}
+	return run.Plan
+}
 
-	planJSON := run.Plan
-	if len(planJSON) == 0 {
-		planJSON = json.RawMessage(`{}`)
-	}
-
-	query := `
-		INSERT INTO ladder_runs (
-			id, config_id, started_at, completed_at, status, mode, cadence,
-			baseline_usd_hr, target_usd_hr, existing_usd_hr, gap_usd_hr,
-			plan, total_hourly_commit, total_upfront_cost, estimated_savings,
-			approval_token_hash, approval_token_expires_at,
-			approved_by, cancelled_by, fire_at,
-			created_at, updated_at
-		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7,
-			$8, $9, $10, $11,
-			$12, $13, $14, $15,
-			$16, $17, $18, $19, $20,
-			NOW(), NOW()
-		)
-		RETURNING id, config_id, started_at, completed_at, status, mode, cadence,
-		          baseline_usd_hr, target_usd_hr, existing_usd_hr, gap_usd_hr,
-		          plan, total_hourly_commit, total_upfront_cost, estimated_savings,
-		          approval_token_hash, approval_token_expires_at,
-		          approved_by, cancelled_by, fire_at,
-		          created_at, updated_at
-	`
-
-	row := s.db.QueryRow(ctx, query,
+// ladderRunInsertArgs returns the positional args for ladderRunInsertQuery in
+// column order. Nullable monetary fields stay as *float64 so NULL != $0.
+func ladderRunInsertArgs(run *LadderRunDB, planJSON json.RawMessage) []any {
+	return []any{
 		run.ID,
 		run.ConfigID,
 		run.StartedAt,
@@ -239,7 +242,16 @@ func (s *PostgresStore) SaveLadderRun(ctx context.Context, run *LadderRunDB) (*L
 		run.ApprovedBy,
 		run.CancelledBy,
 		run.FireAt,
-	)
+	}
+}
+
+// SaveLadderRun inserts a new ladder_runs row. If run.ID is empty a fresh UUID
+// is generated. Returns the persisted row with all DB-stamped fields populated.
+func (s *PostgresStore) SaveLadderRun(ctx context.Context, run *LadderRunDB) (*LadderRunDB, error) {
+	if run.ID == "" {
+		run.ID = uuid.New().String()
+	}
+	row := s.db.QueryRow(ctx, ladderRunInsertQuery, ladderRunInsertArgs(run, ladderRunPlanJSON(run))...)
 	result, err := scanLadderRun(row)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert ladder_run id=%s: %w", run.ID, err)
@@ -271,6 +283,41 @@ func (s *PostgresStore) GetLadderRun(ctx context.Context, id string) (*LadderRun
 	return &result, nil
 }
 
+// insertLadderTranchesTx inserts every tranche within the given transaction.
+// Each tranche must carry a non-empty ID; duplicate IDs are rejected at the DB
+// PRIMARY KEY constraint. Shared by SaveLadderTranches and
+// SaveLadderRunWithTranches so both go through identical insert logic.
+func insertLadderTranchesTx(ctx context.Context, tx pgx.Tx, tranches []LadderTrancheDB) error {
+	for i := range tranches {
+		tr := &tranches[i]
+		if tr.ID == "" {
+			return fmt.Errorf("ladder_tranche at index %d has an empty ID; every tranche must carry a unique non-empty ID", i)
+		}
+		_, err := tx.Exec(ctx, `
+			INSERT INTO ladder_tranches (
+				id, config_id, run_id, layer_type, amount_usd_hr,
+				term, payment_option, scheduled_date, status, execution_id,
+				created_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+		`,
+			tr.ID,
+			tr.ConfigID,
+			tr.RunID,
+			string(tr.LayerType),
+			tr.AmountUSDHr,
+			string(tr.Term),
+			string(tr.PaymentOption),
+			tr.ScheduledDate,
+			string(tr.Status),
+			tr.ExecutionID,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to insert ladder_tranche id=%s run_id=%v: %w", tr.ID, tr.RunID, err)
+		}
+	}
+	return nil
+}
+
 // SaveLadderTranches inserts a batch of ladder_tranches rows within a
 // single transaction. Each tranche must carry a non-empty ID; duplicate
 // IDs are rejected at the DB UNIQUE PRIMARY KEY constraint. An empty
@@ -280,35 +327,38 @@ func (s *PostgresStore) SaveLadderTranches(ctx context.Context, tranches []Ladde
 		return nil
 	}
 	return s.WithTx(ctx, func(tx pgx.Tx) error {
-		for i := range tranches {
-			tr := &tranches[i]
-			if tr.ID == "" {
-				return fmt.Errorf("ladder_tranche at index %d has an empty ID; every tranche must carry a unique non-empty ID before SaveLadderTranches", i)
-			}
-			_, err := tx.Exec(ctx, `
-				INSERT INTO ladder_tranches (
-					id, config_id, run_id, layer_type, amount_usd_hr,
-					term, payment_option, scheduled_date, status, execution_id,
-					created_at
-				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
-			`,
-				tr.ID,
-				tr.ConfigID,
-				tr.RunID,
-				string(tr.LayerType),
-				tr.AmountUSDHr,
-				string(tr.Term),
-				string(tr.PaymentOption),
-				tr.ScheduledDate,
-				string(tr.Status),
-				tr.ExecutionID,
-			)
-			if err != nil {
-				return fmt.Errorf("failed to insert ladder_tranche id=%s run_id=%v: %w", tr.ID, tr.RunID, err)
-			}
+		return insertLadderTranchesTx(ctx, tx, tranches)
+	})
+}
+
+// SaveLadderRunWithTranches inserts the ladder_runs row AND its ladder_tranches
+// rows in ONE transaction. If any tranche insert fails, the whole transaction
+// (including the run row) is rolled back, so a run is never persisted without
+// its tranches. This prevents a status=planned run with zero tranches, which
+// the cadence self-gate (keyed on any run's started_at) would otherwise use to
+// suppress the retry for the full cadence window. If run.ID is empty a fresh
+// UUID is generated. Returns the persisted run row.
+func (s *PostgresStore) SaveLadderRunWithTranches(ctx context.Context, run *LadderRunDB, tranches []LadderTrancheDB) (*LadderRunDB, error) {
+	if run.ID == "" {
+		run.ID = uuid.New().String()
+	}
+	var result LadderRunDB
+	err := s.WithTx(ctx, func(tx pgx.Tx) error {
+		row := tx.QueryRow(ctx, ladderRunInsertQuery, ladderRunInsertArgs(run, ladderRunPlanJSON(run))...)
+		scanned, err := scanLadderRun(row)
+		if err != nil {
+			return fmt.Errorf("failed to insert ladder_run id=%s: %w", run.ID, err)
 		}
+		if err := insertLadderTranchesTx(ctx, tx, tranches); err != nil {
+			return err
+		}
+		result = scanned
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 // LatestLadderRunStartedAt returns the maximum started_at for the given
