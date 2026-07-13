@@ -18,9 +18,9 @@ import (
 // raw JSON payload + fetched_at so the cache layer exercises the same
 // marshaling path as the real Postgres store.
 type fakeRIUtilCacheStore struct {
-	mu      sync.Mutex
-	entries map[string]config.RIUtilizationCacheEntry
 	getErr  error
+	entries map[string]config.RIUtilizationCacheEntry
+	mu      sync.Mutex
 }
 
 func newFakeRIUtilCacheStore() *fakeRIUtilCacheStore {

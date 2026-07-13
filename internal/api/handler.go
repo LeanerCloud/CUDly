@@ -24,8 +24,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
-// Handler processes HTTP requests
-type Handler struct {
+// Handler processes HTTP requests.
+type Handler struct { //nolint:govet // fieldalignment: reorder would break API/readability
 	config             config.StoreInterface
 	credStore          credentials.CredentialStore
 	purchase           PurchaseManagerInterface
@@ -68,7 +68,7 @@ type Handler struct {
 	// to stubs that satisfy the narrow interfaces declared in
 	// `handler_ri_exchange.go` (reshapeEC2Client / reshapeRecsClient)
 	// so the test can exercise the handler end-to-end without live
-	// AWS credentials. Prod behaviour is unchanged because both
+	// AWS credentials. Prod behavior is unchanged because both
 	// fields stay nil.
 	reshapeEC2Factory  func(aws.Config) reshapeEC2Client
 	reshapeRecsFactory func(aws.Config) reshapeRecsClient
@@ -122,7 +122,7 @@ type Handler struct {
 }
 
 // getRIUtilizationCache returns the Postgres-backed TTL cache for Cost
-// Explorer results, lazy-initialised on first call so tests that never
+// Explorer results, lazy-initialized on first call so tests that never
 // exercise the RI Exchange paths don't need to wire it up. Lambda
 // detection happens here (once) via runtime.IsLambda so SWR is gated
 // off on Lambda where background goroutines freeze between
@@ -134,8 +134,8 @@ func (h *Handler) getRIUtilizationCache() *riUtilizationCache {
 	return h.riUtilizationCache
 }
 
-// NewHandler creates a new API handler
-func NewHandler(cfg HandlerConfig) *Handler {
+// NewHandler creates a new API handler.
+func NewHandler(cfg HandlerConfig) *Handler { //nolint:gocritic // hugeParam: by-value per calling convention
 	corsOrigin := cfg.CORSAllowedOrigin
 	if corsOrigin == "" {
 		// Security: CORS must be explicitly configured
@@ -300,7 +300,7 @@ func (h *Handler) getAllowedAccounts(ctx context.Context, session *Session) ([]s
 	return h.auth.GetAllowedAccountsAPI(ctx, session.UserID)
 }
 
-// setSecurityHeaders adds comprehensive security headers to the response
+// setSecurityHeaders adds comprehensive security headers to the response.
 func setSecurityHeaders(headers map[string]string) map[string]string {
 	// Content Security Policy - restrictive for API responses
 	// Only allow connections to same origin, block all other resources
@@ -327,7 +327,7 @@ func setSecurityHeaders(headers map[string]string) map[string]string {
 	return headers
 }
 
-// HandleRequest processes a Lambda Function URL request
+// HandleRequest processes a Lambda Function URL request.
 func (h *Handler) HandleRequest(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.LambdaFunctionURLResponse, error) {
 	if req == nil {
 		return h.buildResponse(400, h.buildResponseHeaders(), map[string]string{"error": "nil request"}, nil), nil
@@ -352,7 +352,7 @@ func (h *Handler) HandleRequest(ctx context.Context, req *events.LambdaFunctionU
 	return h.executeRequest(ctx, method, path, req, corsHeaders)
 }
 
-// buildResponseHeaders creates response headers with security and CORS settings
+// buildResponseHeaders creates response headers with security and CORS settings.
 func (h *Handler) buildResponseHeaders() map[string]string {
 	corsHeaders := map[string]string{
 		"Content-Type": "application/json",
@@ -370,7 +370,7 @@ func (h *Handler) buildResponseHeaders() map[string]string {
 	return corsHeaders
 }
 
-// validateRequest validates the incoming request and returns error response if validation fails
+// validateRequest validates the incoming request and returns error response if validation fails.
 func (h *Handler) validateRequest(ctx context.Context, req *events.LambdaFunctionURLRequest, method, path string, corsHeaders map[string]string) *events.LambdaFunctionURLResponse {
 	// Validate request body size
 	if err := validateRequestBodySize(req.Body); err != nil {
@@ -391,7 +391,7 @@ func (h *Handler) validateRequest(ctx context.Context, req *events.LambdaFunctio
 	return nil
 }
 
-// validateSecurity validates authentication and CSRF token
+// validateSecurity validates authentication and CSRF token.
 func (h *Handler) validateSecurity(ctx context.Context, req *events.LambdaFunctionURLRequest, method, path string, corsHeaders map[string]string) *events.LambdaFunctionURLResponse {
 	if h.isPublicEndpoint(path) {
 		return nil
@@ -411,7 +411,7 @@ func (h *Handler) validateSecurity(ctx context.Context, req *events.LambdaFuncti
 	return nil
 }
 
-// executeRequest routes and executes the API request
+// executeRequest routes and executes the API request.
 func (h *Handler) executeRequest(ctx context.Context, method, path string, req *events.LambdaFunctionURLRequest, corsHeaders map[string]string) (*events.LambdaFunctionURLResponse, error) {
 	response, err := h.routeRequest(ctx, method, path, req)
 
@@ -423,8 +423,8 @@ func (h *Handler) executeRequest(ctx context.Context, method, path string, req *
 	return h.buildResponse(statusCode, corsHeaders, response, nil), nil
 }
 
-// handleRequestError converts an error to status code and response
-func (h *Handler) handleRequestError(err error) (int, any) {
+// handleRequestError converts an error to status code and response.
+func (h *Handler) handleRequestError(err error) (int, any) { //nolint:gocritic // unnamedResult: stable internal API, adding names would require body renaming in impl
 	if IsNotFoundError(err) {
 		return 404, map[string]string{"error": "Not found"}
 	}
@@ -674,7 +674,7 @@ func (h *Handler) resolveAWSAccountID(ctx context.Context) (string, error) {
 // hosts with a broken SDK config surface the load error so the
 // multi-tenant scope filter in resolveAWSCloudAccountID fails closed
 // instead of degrading into an unscoped read.
-func (h *Handler) resolveAWSCallerIdentity(ctx context.Context) (string, string, error) {
+func (h *Handler) resolveAWSCallerIdentity(ctx context.Context) (string, string, error) { //nolint:gocritic // unnamedResult: internal helper; naming would conflict with body's accountID/partition locals
 	if sourceCloud() != "aws" {
 		// Azure/GCP host: short-circuit before any AWS SDK work.
 		return "", "", nil
@@ -705,7 +705,7 @@ func (h *Handler) resolveAWSCallerIdentity(ctx context.Context) (string, string,
 
 // parseArnPartition extracts the partition segment from an AWS ARN.
 // ARN format: arn:<partition>:<service>:<region>:<account>:<resource>.
-// Returns "" for inputs that aren't recognisable ARNs so the caller can
+// Returns "" for inputs that aren't recognizable ARNs so the caller can
 // fall back to a default. Only the three known AWS partitions are
 // accepted — anything else is treated as malformed to avoid forwarding
 // attacker-controlled tokens into a JSON snippet the operator copy-

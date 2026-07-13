@@ -13,7 +13,7 @@ type RateLimitConfig struct {
 }
 
 // NewRateLimitConfig creates a new RateLimitConfig.
-func NewRateLimitConfig(maxAttempts int, windowSecs int) RateLimitConfig {
+func NewRateLimitConfig(maxAttempts int, windowSecs int) RateLimitConfig { //nolint:gocritic // paramTypeCombine: explicit types aid readability
 	return RateLimitConfig{
 		MaxAttempts: maxAttempts,
 		WindowSecs:  windowSecs,

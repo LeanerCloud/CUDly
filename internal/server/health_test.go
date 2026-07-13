@@ -137,10 +137,10 @@ func createHealthyAuthService() *auth.Service {
 
 func TestHandleHealthCheck(t *testing.T) {
 	tests := []struct {
-		name           string
 		setupApp       func(*Application)
-		expectedStatus int
+		name           string
 		expectedHealth string
+		expectedStatus int
 	}{
 		{
 			name: "healthy application",
@@ -199,7 +199,7 @@ func TestHandleHealthCheck(t *testing.T) {
 				tt.setupApp(app)
 			}
 
-			req := httptest.NewRequest("GET", "/health", nil)
+			req := httptest.NewRequestWithContext(context.Background(), "GET", "/health", nil)
 			w := httptest.NewRecorder()
 
 			app.handleHealthCheck(w, req)
@@ -233,7 +233,7 @@ func TestHealthCheckSecurityHeaders(t *testing.T) {
 		},
 	}
 
-	req := httptest.NewRequest("GET", "/health", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/health", nil)
 	w := httptest.NewRecorder()
 	app.handleHealthCheck(w, req)
 
@@ -267,7 +267,7 @@ func TestHealthCheckNoCORSWhenNotConfigured(t *testing.T) {
 		Auth:    createHealthyAuthService(),
 	}
 
-	req := httptest.NewRequest("GET", "/health", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/health", nil)
 	w := httptest.NewRecorder()
 	app.handleHealthCheck(w, req)
 

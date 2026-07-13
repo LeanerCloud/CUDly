@@ -59,9 +59,8 @@ func (h *Handler) postRefreshRecommendations(ctx context.Context, req *events.La
 		return nil, err
 	}
 
-	// Read current freshness so we can include last_collected_at in the 202 body.
-	freshness, err := h.config.GetRecommendationsFreshness(ctx)
-	if err != nil {
+	// Pre-check freshness store is reachable before acquiring the collection slot.
+	if _, err := h.config.GetRecommendationsFreshness(ctx); err != nil {
 		return nil, fmt.Errorf("failed to read freshness: %w", err)
 	}
 
@@ -75,7 +74,7 @@ func (h *Handler) postRefreshRecommendations(ctx context.Context, req *events.La
 		return nil, NewClientError(409, "recommendation collection already in progress; try again in a few minutes")
 	}
 
-	freshness, err = h.runMarkedCollection(ctx)
+	freshness, err := h.runMarkedCollection(ctx)
 	if err != nil {
 		return nil, err
 	}

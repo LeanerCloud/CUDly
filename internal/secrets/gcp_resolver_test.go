@@ -17,9 +17,9 @@ import (
 
 // MockSecretIterator implements the iterator interface for testing.
 type MockSecretIterator struct {
+	err     error
 	secrets []*secretmanagerpb.Secret
 	index   int
-	err     error
 }
 
 func (m *MockSecretIterator) Next() (*secretmanagerpb.Secret, error) {
@@ -361,8 +361,8 @@ func TestGCPResolver_Close_NilClient(t *testing.T) {
 	// The production code calls r.client.Close() without nil check
 	// This test documents that behavior
 	resolver := &GCPResolver{
-		client:    nil,
-		projectID: "test-project",
+		client:    nil,            //nolint:govet // unusedwrite: field set for test completeness
+		projectID: "test-project", //nolint:govet // unusedwrite: field set for test completeness
 	}
 
 	// Close with nil client will panic since it calls r.client.Close()

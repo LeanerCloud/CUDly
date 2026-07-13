@@ -49,7 +49,7 @@ func TestDefaultSettings_ExpectedKeys(t *testing.T) {
 }
 
 func TestDefaultSettings_PurchaseDefaults(t *testing.T) {
-	tests := []struct {
+	tests := []struct { //nolint:govet // fieldalignment: reorder would break API/readability
 		key           string
 		expectedType  string
 		expectedValue interface{}
@@ -72,7 +72,7 @@ func TestDefaultSettings_PurchaseDefaults(t *testing.T) {
 }
 
 func TestDefaultSettings_Notification(t *testing.T) {
-	tests := []struct {
+	tests := []struct { //nolint:govet // fieldalignment: reorder would break API/readability
 		key           string
 		expectedType  string
 		expectedValue interface{}
@@ -116,7 +116,7 @@ func TestDefaultSettings_Providers(t *testing.T) {
 }
 
 func TestDefaultSettings_Security(t *testing.T) {
-	tests := []struct {
+	tests := []struct { //nolint:govet // fieldalignment: reorder would break API/readability
 		key           string
 		expectedType  string
 		expectedValue interface{}
@@ -142,7 +142,7 @@ func TestDefaultSettings_Security(t *testing.T) {
 }
 
 func TestDefaultSettings_Scheduling(t *testing.T) {
-	tests := []struct {
+	tests := []struct { //nolint:govet // fieldalignment: reorder would break API/readability
 		key           string
 		expectedType  string
 		expectedValue interface{}
@@ -165,7 +165,7 @@ func TestDefaultSettings_Scheduling(t *testing.T) {
 }
 
 func TestDefaultSettings_AWS(t *testing.T) {
-	tests := []struct {
+	tests := []struct { //nolint:govet // fieldalignment: reorder would break API/readability
 		key           string
 		expectedType  string
 		expectedValue interface{}
@@ -191,7 +191,7 @@ func TestDefaultSettings_AWS(t *testing.T) {
 }
 
 func TestDefaultSettings_Thresholds(t *testing.T) {
-	tests := []struct {
+	tests := []struct { //nolint:govet // fieldalignment: reorder would break API/readability
 		key           string
 		expectedType  string
 		expectedValue interface{}
@@ -234,7 +234,7 @@ func TestDefaultSettings_Retention(t *testing.T) {
 }
 
 func TestDefaultSettings_API(t *testing.T) {
-	tests := []struct {
+	tests := []struct { //nolint:govet // fieldalignment: reorder would break API/readability
 		key           string
 		expectedType  string
 		expectedValue interface{}
@@ -256,7 +256,7 @@ func TestDefaultSettings_API(t *testing.T) {
 }
 
 func TestGetDefaultValue(t *testing.T) {
-	tests := []struct {
+	tests := []struct { //nolint:govet // fieldalignment: reorder would break API/readability
 		key           string
 		expectedValue interface{}
 	}{

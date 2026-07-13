@@ -15,9 +15,9 @@ func pf(v float64) *float64 { return &v }
 // TestTimeFromTTL tests the timeFromTTL helper function.
 func TestTimeFromTTL(t *testing.T) {
 	tests := []struct {
+		expected interface{}
 		name     string
 		ttl      int64
-		expected interface{}
 	}{
 		{
 			name:     "zero TTL returns nil",
@@ -52,8 +52,8 @@ func TestTimeFromTTL(t *testing.T) {
 // TestTtlFromTime tests the ttlFromTime helper function.
 func TestTtlFromTime(t *testing.T) {
 	tests := []struct {
-		name     string
 		time     time.Time
+		name     string
 		expected int64
 	}{
 		{

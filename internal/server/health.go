@@ -11,10 +11,10 @@ import (
 
 // HealthStatus represents the overall health of the application.
 type HealthStatus struct {
-	Status    string                 `json:"status"`
-	Version   string                 `json:"version"`
 	Timestamp time.Time              `json:"timestamp"`
 	Checks    map[string]CheckResult `json:"checks"`
+	Status    string                 `json:"status"`
+	Version   string                 `json:"version"`
 }
 
 // CheckResult represents the result of a health check.

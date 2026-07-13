@@ -58,12 +58,9 @@ const azureRefundSafetyMargin = 1 * time.Hour
 // revokeQuoteResult is the JSON body returned by
 // GET /api/purchases/revoke/calculate/{id}.
 type revokeQuoteResult struct {
-	// RefundAmount is the amount Azure will refund (from CalculateRefund).
-	RefundAmount float64 `json:"refund_amount"`
-	// RefundCurrency is the ISO-4217 currency code (e.g. "USD").
-	RefundCurrency string `json:"refund_currency"`
-	// QuotedAt is an RFC3339 timestamp of when this quote was generated.
-	QuotedAt string `json:"quoted_at"`
+	RefundCurrency string  `json:"refund_currency"`
+	QuotedAt       string  `json:"quoted_at"`
+	RefundAmount   float64 `json:"refund_amount"`
 }
 
 // revokeConfirmBody is the JSON body expected on
@@ -110,8 +107,8 @@ type revokePurchaseResult struct {
 // with no retry button (issue #290 Finding #6).
 type revokeReconcilePendingResult struct {
 	Code          string `json:"code"`
-	AzureReturned bool   `json:"azure_returned"`
 	Message       string `json:"message"`
+	AzureReturned bool   `json:"azure_returned"`
 }
 
 // revokeMarkRetryBackoffs are the sleep durations between consecutive
@@ -227,7 +224,7 @@ func (h *Handler) loadAndRevokePurchaseHistory(ctx context.Context, req *events.
 //
 // The method enforces revoke-any/revoke-own RBAC (same permissions as the
 // completed-purchase revoke path), then atomically transitions the execution
-// to "cancelled" and removes its purchase_suppressions.
+// to "canceled" and removes its purchase_suppressions.
 //
 // Returns 410 Gone only when the CAS observes the row already transitioned out
 // of "scheduled" (the scheduler fired the SDK call between our SELECT and the
@@ -247,7 +244,7 @@ func (h *Handler) revokeScheduledExecution(ctx context.Context, session *Session
 		return nil, err
 	}
 
-	// Atomically transition from scheduled -> cancelled and remove suppressions.
+	// Atomically transition from scheduled -> canceled and remove suppressions.
 	var cancelledBy *string
 	if session.Email != "" {
 		e := session.Email
@@ -286,8 +283,8 @@ func (h *Handler) revokeScheduledExecution(ctx context.Context, session *Session
 	logging.Infof("revokeScheduledExecution: execution_id=%s canceled before SDK call (free cancel)", execution.ExecutionID)
 
 	return map[string]string{
-		"status":  "cancelled",
-		"message": "Purchase cancelled. No cloud API call was made; no cost incurred.",
+		"status":  "canceled",
+		"message": "Purchase canceled. No cloud API call was made; no cost incurred.",
 	}, nil
 }
 
@@ -452,7 +449,7 @@ func (h *Handler) calculateAzureRevoke(ctx context.Context, req *events.LambdaFu
 // parse the reservation order/ID from the ARM path. Extracted to keep
 // calculateAzureRevoke under the cyclomatic-complexity limit. Returns the loaded
 // record plus the parsed orderID, reservationID, and commitment count.
-func (h *Handler) validateAzureRevokeRequest(ctx context.Context, req *events.LambdaFunctionURLRequest, purchaseID string) (*config.PurchaseHistoryRecord, string, string, int, error) {
+func (h *Handler) validateAzureRevokeRequest(ctx context.Context, req *events.LambdaFunctionURLRequest, purchaseID string) (*config.PurchaseHistoryRecord, string, string, int, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	if purchaseID == "" {
 		return nil, "", "", 0, NewClientError(400, "purchase_id is required")
 	}
@@ -473,7 +470,8 @@ func (h *Handler) validateAzureRevokeRequest(ctx context.Context, req *events.La
 		return nil, "", "", 0, NewClientError(404, "purchase not found")
 	}
 
-	if err := h.authorizeSessionRevoke(ctx, session, record); err != nil {
+	err = h.authorizeSessionRevoke(ctx, session, record)
+	if err != nil {
 		return nil, "", "", 0, err
 	}
 
@@ -488,7 +486,7 @@ func (h *Handler) validateAzureRevokeRequest(ctx context.Context, req *events.La
 // window check, then parses the reservation order/ID from the ARM path.
 // Extracted from validateAzureRevokeRequest to keep both under the cyclomatic-
 // complexity limit. Returns 422 ClientErrors for every reject case.
-func azureRevokeWindowAndIDs(record *config.PurchaseHistoryRecord) (string, string, error) {
+func azureRevokeWindowAndIDs(record *config.PurchaseHistoryRecord) (string, string, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	if record.Provider != "azure" {
 		return "", "", NewClientError(422, fmt.Sprintf("provider %q does not support refund calculation", record.Provider))
 	}
@@ -519,7 +517,7 @@ func azureRevokeWindowAndIDs(record *config.PurchaseHistoryRecord) (string, stri
 // extractAzureRefundQuote pulls the refund amount and currency out of a
 // CalculateRefund response, guarding every nil pointer in the chain. Returns
 // zero values when the response carries no billing-refund amount.
-func extractAzureRefundQuote(resp armreservations.CalculateRefundClientPostResponse) (float64, string) {
+func extractAzureRefundQuote(resp armreservations.CalculateRefundClientPostResponse) (float64, string) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	var refundAmount float64
 	var refundCurrency string
 	if resp.Properties != nil && resp.Properties.BillingRefundAmount != nil {
@@ -655,7 +653,7 @@ func (h *Handler) callAzureReturn(
 // azureCalculateRefund runs the CalculateRefund step and parses out the session
 // ID (required by Return) and the quoted refund amount/currency (for the TOCTOU
 // check). Errors are classified into 400 (client) vs 500 (transient).
-func (h *Handler) azureCalculateRefund(ctx context.Context, calcClient azureCalculateRefundClient, orderID, reservationID string, quantity int32) (string, *float64, string, error) {
+func (h *Handler) azureCalculateRefund(ctx context.Context, calcClient azureCalculateRefundClient, orderID, reservationID string, quantity int32) (string, *float64, string, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	calcResp, err := calcClient.Post(ctx, orderID, armreservations.CalculateRefundRequest{
 		Properties: &armreservations.CalculateRefundRequestProperties{
 			ReservationToReturn: &armreservations.ReservationToReturn{

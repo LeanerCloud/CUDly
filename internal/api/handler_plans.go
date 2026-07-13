@@ -166,7 +166,8 @@ func (h *Handler) getPlan(ctx context.Context, req *events.LambdaFunctionURLRequ
 		return nil, err
 	}
 
-	if err := h.requirePlanAccess(ctx, session, planID); err != nil {
+	err = h.requirePlanAccess(ctx, session, planID)
+	if err != nil {
 		return nil, err
 	}
 
@@ -194,12 +195,14 @@ func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunction
 		return nil, err
 	}
 
-	if err := h.requirePlanAccess(ctx, session, planID); err != nil {
+	err = h.requirePlanAccess(ctx, session, planID)
+	if err != nil {
 		return nil, err
 	}
 
 	var req PlanRequest
-	if err := json.Unmarshal([]byte(httpReq.Body), &req); err != nil {
+	err = json.Unmarshal([]byte(httpReq.Body), &req)
+	if err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
@@ -271,7 +274,8 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 		return nil, err
 	}
 
-	if err := h.requirePlanAccess(ctx, session, planID); err != nil {
+	err = h.requirePlanAccess(ctx, session, planID)
+	if err != nil {
 		return nil, err
 	}
 
@@ -434,7 +438,7 @@ type PatchPlanRequest struct {
 // applyPatchFields applies validated partial-update fields to a plan.
 func applyPatchFields(plan *config.PurchasePlan, req PatchPlanRequest) error {
 	if req.Name != nil {
-		if len(*req.Name) == 0 {
+		if *req.Name == "" {
 			return NewClientError(400, "plan name cannot be empty")
 		}
 		if len(*req.Name) > 255 {
@@ -468,12 +472,14 @@ func (h *Handler) patchPlan(ctx context.Context, httpReq *events.LambdaFunctionU
 		return nil, err
 	}
 
-	if err := h.requirePlanAccess(ctx, session, planID); err != nil {
+	err = h.requirePlanAccess(ctx, session, planID)
+	if err != nil {
 		return nil, err
 	}
 
 	var req PatchPlanRequest
-	if err := json.Unmarshal([]byte(httpReq.Body), &req); err != nil {
+	err = json.Unmarshal([]byte(httpReq.Body), &req)
+	if err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 

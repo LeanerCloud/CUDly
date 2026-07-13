@@ -29,9 +29,9 @@ func ConcurrencyFromEnv() int {
 
 // Result holds the outcome of running an operation against a single account.
 type Result[T any] struct {
-	AccountID string
 	Value     T
 	Err       error
+	AccountID string
 }
 
 // DefaultMaxConcurrency is the default cap on parallel account goroutines.
@@ -126,7 +126,7 @@ func FanOutWithConcurrency[T any](
 }
 
 // Partition splits a Result slice into successes and failures.
-func Partition[T any](results []Result[T]) (successes []Result[T], failures []Result[T]) {
+func Partition[T any](results []Result[T]) (successes []Result[T], failures []Result[T]) { //nolint:gocritic // paramTypeCombine: explicit types aid readability
 	for _, r := range results {
 		if r.Err != nil {
 			failures = append(failures, r)

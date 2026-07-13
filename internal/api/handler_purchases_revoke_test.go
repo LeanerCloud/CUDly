@@ -39,7 +39,7 @@ func (s *stubReturnClient) Post(ctx context.Context, orderID string, body armres
 }
 
 // sessionReq builds a minimal request with a bearer token.
-func sessionReq(token string) *events.LambdaFunctionURLRequest {
+func sessionReq(token string) *events.LambdaFunctionURLRequest { //nolint:unparam // param intentional for interface consistency/future use
 	return &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"Authorization": "Bearer " + token},
 	}
@@ -410,7 +410,7 @@ func TestParseAzureReservationIDs(t *testing.T) {
 			wantResID:   "",
 		},
 		{
-			name:       "unrecognised path",
+			name:       "unrecognized path",
 			purchaseID: "some-plain-id",
 			wantErr:    true,
 		},
@@ -521,7 +521,7 @@ func TestAuthorizeSessionRevoke_NoPermission(t *testing.T) {
 }
 
 // TestAuthorizeSessionRevoke_RevokeOwn_NilAccountID verifies the fail-closed
-// behaviour: a revoke-own caller must be denied when the purchase row carries
+// behavior: a revoke-own caller must be denied when the purchase row carries
 // no cloud_account_id (legacy/unscoped row), because ownership cannot be
 // verified without an account association.
 func TestAuthorizeSessionRevoke_RevokeOwn_NilAccountID(t *testing.T) {
@@ -563,7 +563,7 @@ func scheduledExecution(executionID string, createdByUserID string) *config.Purc
 }
 
 // TestRevokePurchase_ScheduledExecution_AdminFreeCancel verifies that revoking
-// a scheduled execution as admin transitions it to cancelled without any
+// a scheduled execution as admin transitions it to canceled without any
 // provider SDK call (no MarkPurchaseRevoked expected).
 func TestRevokePurchase_ScheduledExecution_AdminFreeCancel(t *testing.T) {
 	t.Parallel()
@@ -581,14 +581,14 @@ func TestRevokePurchase_ScheduledExecution_AdminFreeCancel(t *testing.T) {
 	exec := scheduledExecution(execID, "")
 	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	// CancelExecutionAtomic and DeleteSuppressionsByExecutionTx use mock defaults
-	// (WithTx calls fn(nil), CancelExecutionAtomic returns true/"cancelled"/nil).
+	// (WithTx calls fn(nil), CancelExecutionAtomic returns true/"canceled"/nil).
 
 	h := &Handler{config: mockStore, auth: mockAuth}
 	result, err := h.revokePurchase(ctx, sessionReq("tok"), execID)
 	require.NoError(t, err)
 	m, ok := result.(map[string]string)
 	require.True(t, ok)
-	assert.Equal(t, "cancelled", m["status"])
+	assert.Equal(t, "canceled", m["status"])
 	assert.Contains(t, m["message"], "No cloud API call")
 }
 
@@ -621,7 +621,7 @@ func TestRevokePurchase_ScheduledExecution_PastTimestampStillCancellable(t *test
 	}
 	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	mockStore.On("CancelScheduledExecutionAtomic", ctx, mock.Anything, execID, mock.Anything).
-		Return(true, "cancelled", nil).Once()
+		Return(true, "canceled", nil).Once()
 	mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, execID).Return(nil).Once()
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -629,7 +629,7 @@ func TestRevokePurchase_ScheduledExecution_PastTimestampStillCancellable(t *test
 	require.NoError(t, err)
 	m, ok := result.(map[string]string)
 	require.True(t, ok)
-	assert.Equal(t, "cancelled", m["status"])
+	assert.Equal(t, "canceled", m["status"])
 	assert.Contains(t, m["message"], "No cloud API call")
 }
 
@@ -670,7 +670,7 @@ func TestRevokePurchase_ScheduledExecution_CASRace(t *testing.T) {
 // dispatched into CancelExecutionAtomic. That method's SQL guard is
 // status IN ('pending','notified'), which never matches a scheduled row, so
 // EVERY revoke attempt on a scheduled execution returned 410 -- including the
-// happy path. Mock-default success ("true,cancelled,nil") in MockConfigStore
+// happy path. Mock-default success ("true,canceled,nil") in MockConfigStore
 // hid the bug; the handler now calls CancelScheduledExecutionAtomic instead.
 //
 // This test pins the expected mock method explicitly with a captured assertion
@@ -692,7 +692,7 @@ func TestRevokePurchase_ScheduledExecution_BugReg_HappyPathCAS(t *testing.T) {
 	exec := scheduledExecution(execID, "")
 	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	mockStore.On("CancelScheduledExecutionAtomic", ctx, mock.Anything, execID, mock.Anything).
-		Return(true, "cancelled", nil).Once()
+		Return(true, "canceled", nil).Once()
 	// Suppression cleanup must run inside the same tx as the CAS.
 	mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, execID).Return(nil).Once()
 
@@ -704,7 +704,7 @@ func TestRevokePurchase_ScheduledExecution_BugReg_HappyPathCAS(t *testing.T) {
 	require.NoError(t, err)
 	m, ok := result.(map[string]string)
 	require.True(t, ok)
-	assert.Equal(t, "cancelled", m["status"])
+	assert.Equal(t, "canceled", m["status"])
 	assert.Contains(t, m["message"], "No cloud API call")
 }
 
@@ -736,7 +736,7 @@ func TestRevokePurchase_ScheduledExecution_RevokeOwnCreator(t *testing.T) {
 	require.NoError(t, err)
 	m, ok := result.(map[string]string)
 	require.True(t, ok)
-	assert.Equal(t, "cancelled", m["status"])
+	assert.Equal(t, "canceled", m["status"])
 }
 
 // TestRevokePurchase_ScheduledExecution_RevokeOwnWrongCreator verifies that
@@ -784,7 +784,7 @@ func TestAuthorizeSessionRevokeExecution_Admin(t *testing.T) {
 }
 
 // TestAuthorizeSessionRevokeExecution_NilCreatorDenied verifies fail-closed
-// behaviour: a revoke-own caller with no CreatedByUserID on the execution is
+// behavior: a revoke-own caller with no CreatedByUserID on the execution is
 // denied.
 func TestAuthorizeSessionRevokeExecution_NilCreatorDenied(t *testing.T) {
 	t.Parallel()
@@ -811,9 +811,9 @@ func TestAuthorizeSessionRevokeExecution_NilCreatorDenied(t *testing.T) {
 // stubCalcRefundClientWithAmount is a CalculateRefund stub that returns a
 // specified refund amount + currency.
 type stubCalcRefundClientWithAmount struct {
-	amount   float64
 	currency string
 	sessID   string
+	amount   float64
 }
 
 func (s *stubCalcRefundClientWithAmount) Post(_ context.Context, _ string, _ armreservations.CalculateRefundRequest, _ *armreservations.CalculateRefundClientPostOptions) (armreservations.CalculateRefundClientPostResponse, error) {
@@ -1094,8 +1094,8 @@ func TestCallAzureReturn_JustOutsideSafetyMargin(t *testing.T) {
 func TestIsAzureWindowEdgeError(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name    string
 		err     error
+		name    string
 		wantYes bool
 	}{
 		{
@@ -1349,11 +1349,11 @@ func TestRevokePurchase_GetExecutionByIDDBError_Returns500(t *testing.T) {
 
 // TestRevokePurchase_ConcurrentScheduledRevoke_OneWinsOneGets410 verifies that
 // two parallel revoke requests for the same scheduled execution produce the
-// correct outcomes: the first CAS wins (cancelled), the second CAS loses and
+// correct outcomes: the first CAS wins (canceled), the second CAS loses and
 // returns 410 (Finding B, second-wave CR).
 //
 // The fix drops the racy "status == scheduled" pre-check and lets
-// CancelScheduledExecutionAtomic decide. A second call with !cancelled means
+// CancelScheduledExecutionAtomic decide. A second call with !canceled means
 // the scheduler (or first caller) already transitioned the row.
 func TestRevokePurchase_ConcurrentScheduledRevoke_OneWinsOneGets410(t *testing.T) {
 	t.Parallel()
@@ -1376,7 +1376,7 @@ func TestRevokePurchase_ConcurrentScheduledRevoke_OneWinsOneGets410(t *testing.T
 		exec := scheduledExecution(execID, "")
 		mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 		mockStore.On("CancelScheduledExecutionAtomic", ctx, mock.Anything, execID, mock.Anything).
-			Return(true, "cancelled", nil).Once()
+			Return(true, "canceled", nil).Once()
 		mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, execID).Return(nil).Once()
 
 		h := &Handler{config: mockStore, auth: mockAuth}
@@ -1384,10 +1384,10 @@ func TestRevokePurchase_ConcurrentScheduledRevoke_OneWinsOneGets410(t *testing.T
 		require.NoError(t, err)
 		m, ok := result.(map[string]string)
 		require.True(t, ok)
-		assert.Equal(t, "cancelled", m["status"])
+		assert.Equal(t, "canceled", m["status"])
 	})
 
-	// --- Second caller: CAS returns !cancelled (scheduler or first caller won) ---
+	// --- Second caller: CAS returns !canceled (scheduler or first caller won) ---
 	t.Run("second caller gets 410", func(t *testing.T) {
 		t.Parallel()
 		mockStore := new(MockConfigStore)
@@ -1400,7 +1400,7 @@ func TestRevokePurchase_ConcurrentScheduledRevoke_OneWinsOneGets410(t *testing.T
 		mockAuth.On("ValidateSession", ctx, "tok").Return(adminSess, nil)
 		exec := scheduledExecution(execID, "")
 		mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
-		// CAS returns !cancelled because the row was already transitioned.
+		// CAS returns !canceled because the row was already transitioned.
 		mockStore.On("CancelScheduledExecutionAtomic", ctx, mock.Anything, execID, mock.Anything).
 			Return(false, "completed", nil).Once()
 

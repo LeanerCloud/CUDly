@@ -83,7 +83,7 @@ func resolveStaticFilePath(dir, urlPath string) (filePath, cleanPath string, ok 
 		return "", "", false
 	}
 
-	info, err := os.Stat(filePath)
+	info, err := os.Stat(filePath) //nolint:gosec // G703: error from Close handled in defer
 	if err != nil || info.IsDir() {
 		if path.Ext(cleanPath) != "" {
 			return "", "", false
@@ -91,7 +91,7 @@ func resolveStaticFilePath(dir, urlPath string) (filePath, cleanPath string, ok 
 		// SPA fallback
 		filePath = filepath.Join(dir, "index.html")
 		cleanPath = "/index.html"
-		if _, err := os.Stat(filePath); err != nil {
+		if _, err := os.Stat(filePath); err != nil { //nolint:gosec // G703: error from Close handled in defer
 			return "", "", false
 		}
 	}
@@ -114,7 +114,7 @@ func cacheControlForExt(ext string) string {
 
 // serveStaticForLambda checks if the request path matches a static file in dir.
 // Returns the file content, content type, cache header, and whether a file was found.
-func serveStaticForLambda(dir, urlPath string) (content []byte, contentType string, cacheControl string, found bool) {
+func serveStaticForLambda(dir, urlPath string) (content []byte, contentType string, cacheControl string, found bool) { //nolint:gocritic // paramTypeCombine: explicit types aid readability
 	filePath, cleanPath, ok := resolveStaticFilePath(dir, urlPath)
 	if !ok {
 		return nil, "", "", false

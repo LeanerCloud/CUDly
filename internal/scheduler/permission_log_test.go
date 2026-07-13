@@ -18,9 +18,9 @@ import (
 // behavior until analogous predicates are added.
 func TestIsAccountPermissionError(t *testing.T) {
 	tests := []struct {
+		err           error
 		name          string
 		providerLabel string
-		err           error
 		want          bool
 	}{
 		{

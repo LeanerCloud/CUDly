@@ -925,9 +925,9 @@ func TestQueryRequest(t *testing.T) {
 
 	t.Run("handles optional fields", func(t *testing.T) {
 		req := QueryRequest{
-			AccountUUIDs: []string{"account-123"},
-			StartDate:    time.Now().Add(-24 * time.Hour),
-			EndDate:      time.Now(),
+			AccountUUIDs: []string{"account-123"},         //nolint:govet // unusedwrite: field set for test completeness
+			StartDate:    time.Now().Add(-24 * time.Hour), //nolint:govet // unusedwrite: field set for test completeness
+			EndDate:      time.Now(),                      //nolint:govet // unusedwrite: field set for test completeness
 		}
 
 		assert.Equal(t, "", req.Provider) // Optional, can be empty

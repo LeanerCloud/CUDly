@@ -10,7 +10,7 @@ import (
 )
 
 // GlobalConfig represents the global CUDly configuration.
-type GlobalConfig struct {
+type GlobalConfig struct { //nolint:govet // fieldalignment: reorder would break API/readability
 	EnabledProviders       []string `json:"enabled_providers" dynamodbav:"enabled_providers"`
 	NotificationEmail      *string  `json:"notification_email,omitempty" dynamodbav:"notification_email,omitempty"`
 	AutoCollect            bool     `json:"auto_collect"`
@@ -149,7 +149,7 @@ func (g *GlobalConfig) GracePeriodFor(provider string) int {
 }
 
 // ServiceConfig represents per-service configuration.
-type ServiceConfig struct {
+type ServiceConfig struct { //nolint:govet // fieldalignment: reorder would break API/readability
 	Provider       string   `json:"provider" dynamodbav:"provider"`
 	Service        string   `json:"service" dynamodbav:"service"`
 	Enabled        bool     `json:"enabled" dynamodbav:"enabled"`
@@ -173,7 +173,7 @@ type ServiceConfig struct {
 }
 
 // PurchasePlan represents a saved purchase plan for automated execution.
-type PurchasePlan struct {
+type PurchasePlan struct { //nolint:govet // fieldalignment: reorder would break API/readability
 	ID                     string                   `json:"id" dynamodbav:"id"`
 	Name                   string                   `json:"name" dynamodbav:"name"`
 	Enabled                bool                     `json:"enabled" dynamodbav:"enabled"`
@@ -197,7 +197,7 @@ type PurchasePlan struct {
 }
 
 // RampSchedule defines how purchases are spread over time.
-type RampSchedule struct {
+type RampSchedule struct { //nolint:govet // fieldalignment: reorder would break API/readability
 	Type             string    `json:"type" dynamodbav:"type"` // immediate, weekly, monthly, custom
 	PercentPerStep   float64   `json:"percent_per_step" dynamodbav:"percent_per_step"`
 	StepIntervalDays int       `json:"step_interval_days" dynamodbav:"step_interval_days"`
@@ -253,10 +253,10 @@ func (r *RampSchedule) IsComplete() bool {
 }
 
 // PurchaseExecution represents a single execution of a purchase plan.
-type PurchaseExecution struct {
+type PurchaseExecution struct { //nolint:govet // fieldalignment: reorder would break API/readability
 	PlanID           string                 `json:"plan_id" dynamodbav:"plan_id"`
 	ExecutionID      string                 `json:"execution_id" dynamodbav:"execution_id"`
-	Status           string                 `json:"status" dynamodbav:"status"` // pending, notified, approved, cancelled, completed, failed
+	Status           string                 `json:"status" dynamodbav:"status"` // pending, notified, approved, canceled, completed, failed
 	StepNumber       int                    `json:"step_number" dynamodbav:"step_number"`
 	ScheduledDate    time.Time              `json:"scheduled_date" dynamodbav:"scheduled_date"`
 	NotificationSent *time.Time             `json:"notification_sent,omitempty" dynamodbav:"notification_sent,omitempty"`
@@ -279,7 +279,7 @@ type PurchaseExecution struct {
 	// handler / History UI falls back to the notification email as the
 	// accountable party in that case. Nullable TEXT in Postgres.
 	ApprovedBy  *string `json:"approved_by,omitempty" dynamodbav:"approved_by,omitempty"`
-	CancelledBy *string `json:"cancelled_by,omitempty" dynamodbav:"cancelled_by,omitempty"`
+	CancelledBy *string `json:"canceled_by,omitempty" dynamodbav:"canceled_by,omitempty"`
 	// CreatedByUserID is the UUID of the session-authenticated user who
 	// triggered this execution (e.g. clicked Execute on the Recommendations
 	// page or submitted the bulk-purchase modal). NULL on rows created
@@ -355,11 +355,11 @@ type PurchaseExecution struct {
 	ScheduledExecutionAt *time.Time `json:"scheduled_execution_at,omitempty" dynamodbav:"scheduled_execution_at,omitempty"`
 }
 
-// IsCancelable reports whether an execution may still be cancelled. Only the
+// IsCancelable reports whether an execution may still be canceled. Only the
 // pre-purchase states ("pending"/"notified"/"scheduled") qualify: once a row
 // reaches "approved" or "running" the AWS commitment is being or has been
-// created, so cancelling would leave the DB and the cloud out of sync;
-// "cancelled", "completed", "failed", "expired", and "paused" are likewise
+// created, so canceling would leave the DB and the cloud out of sync;
+// "canceled", "completed", "failed", "expired", and "paused" are likewise
 // non-cancelable. The "scheduled" state is cancellable because the cloud SDK
 // has not been called yet (issue #291 wave-2).
 // Both cancel paths (purchase.Manager.CancelExecution on the email-token flow
@@ -370,7 +370,7 @@ func (e *PurchaseExecution) IsCancelable() bool {
 }
 
 // RecommendationRecord stores a recommendation with purchase status.
-type RecommendationRecord struct {
+type RecommendationRecord struct { //nolint:govet // fieldalignment: reorder would break API/readability
 	ID           string `json:"id" dynamodbav:"id"`
 	Provider     string `json:"provider" dynamodbav:"provider"`
 	Service      string `json:"service" dynamodbav:"service"`
@@ -499,7 +499,7 @@ type RecommendationRecord struct {
 // documentation. Written inside the same transaction as the execution
 // insert; deleted inside the same transaction as a cancel/expire status
 // transition.
-type PurchaseSuppression struct {
+type PurchaseSuppression struct { //nolint:govet // fieldalignment: reorder would break API/readability
 	ID              string    `json:"id"`
 	ExecutionID     string    `json:"execution_id"`
 	AccountID       string    `json:"account_id"`
@@ -525,7 +525,7 @@ type PurchaseSuppression struct {
 // threshold are returned. 0 means no floor. Applied in-process after the DB
 // query rather than in SQL (avoids a computed column). These two filters are
 // independent and can be combined.
-type RecommendationFilter struct {
+type RecommendationFilter struct { //nolint:govet // fieldalignment: reorder would break API/readability
 	Provider      string   // "aws" / "azure" / "gcp" / "" (all)
 	Service       string   // "" = all services
 	Region        string   // "" = all regions
@@ -569,7 +569,7 @@ type RecommendationsFreshness struct {
 // the same generated-column rule that applies to inserts, so ambient
 // rows are evicted independently of any registered-account rows under
 // the same provider.
-type SuccessfulCollect struct {
+type SuccessfulCollect struct { //nolint:govet // fieldalignment: reorder would break API/readability
 	Provider       string
 	CloudAccountID *string
 }
@@ -580,7 +580,7 @@ type SuccessfulCollect struct {
 // opaque here so the config package stays free of AWS-provider types.
 // TTL freshness is evaluated in the caller (api-layer cache wrapper)
 // based on FetchedAt vs. a caller-supplied TTL.
-type RIUtilizationCacheEntry struct {
+type RIUtilizationCacheEntry struct { //nolint:govet // fieldalignment: reorder would break API/readability
 	Region       string
 	LookbackDays int
 	Payload      []byte
@@ -592,7 +592,7 @@ type RIUtilizationCacheEntry struct {
 // zero-valued filter selects all rows (same plan-shape as
 // GetAllPurchaseHistory). See the implementation docstring for the per-field
 // semantics and the dual-column account predicate.
-type PurchaseHistoryFilter struct {
+type PurchaseHistoryFilter struct { //nolint:govet // fieldalignment: reorder would break API/readability
 	// Provider matches purchase_history.provider exactly. Empty skips the clause.
 	Provider string
 	// AccountIDs matches purchase_history.cloud_account_id (the cloud_accounts
@@ -652,7 +652,7 @@ func RevocationWindowClosesAtFor(provider string, purchaseTime time.Time) *time.
 // see (and cancel) in-flight approvals. Status is the discriminator — the DB
 // layer never writes it (tag `dynamodbav:"-"` keeps it out of persistence),
 // and the API layer populates it as "completed" or "pending" before returning.
-type PurchaseHistoryRecord struct {
+type PurchaseHistoryRecord struct { //nolint:govet // fieldalignment: reorder would break API/readability
 	AccountID    string    `json:"account_id" dynamodbav:"account_id"`
 	PurchaseID   string    `json:"purchase_id" dynamodbav:"purchase_id"`
 	Timestamp    time.Time `json:"timestamp" dynamodbav:"timestamp"`
@@ -735,7 +735,7 @@ type PurchaseHistoryRecord struct {
 	// CreatedByUserEmail is the email address of the user who created the
 	// underlying execution, resolved from CreatedByUserID via the auth
 	// service. Populated only on synthesized execution rows (pending,
-	// notified, failed, expired, cancelled) when a valid user ID is
+	// notified, failed, expired, canceled) when a valid user ID is
 	// present; empty for scheduler-driven executions, legacy NULL-creator
 	// rows, and completed purchase_history rows. Excluded from DB
 	// persistence (resolved at read time). The UI renders this in the
@@ -781,7 +781,7 @@ type PurchaseHistoryRecord struct {
 }
 
 // RIExchangeRecord represents a record in the ri_exchange_history table.
-type RIExchangeRecord struct {
+type RIExchangeRecord struct { //nolint:govet // fieldalignment: reorder would break API/readability
 	ID                 string   `json:"id"`
 	AccountID          string   `json:"account_id"`
 	ExchangeID         string   `json:"exchange_id"`
@@ -826,7 +826,7 @@ type RIExchangeRecord struct {
 }
 
 // ConfigSetting represents a configuration setting for the defaults system.
-type ConfigSetting struct {
+type ConfigSetting struct { //nolint:revive,govet // exported: doc comment style intentional; fieldalignment: reorder would break API
 	Key         string    `json:"key"`
 	Value       any       `json:"value"`
 	Type        string    `json:"type"` // int, float, bool, string, json
@@ -836,7 +836,7 @@ type ConfigSetting struct {
 }
 
 // CloudAccount represents a single managed cloud account/subscription/project.
-type CloudAccount struct {
+type CloudAccount struct { //nolint:govet // fieldalignment: reorder would break API/readability
 	ID           string `json:"id"`
 	Name         string `json:"name"`
 	Description  string `json:"description,omitempty"`
@@ -881,7 +881,7 @@ type CloudAccount struct {
 }
 
 // CloudAccountFilter for ListCloudAccounts queries.
-type CloudAccountFilter struct {
+type CloudAccountFilter struct { //nolint:govet // fieldalignment: reorder would break API/readability
 	Provider  *string
 	Enabled   *bool
 	Search    string  // substring match on name or external_id
@@ -890,7 +890,7 @@ type CloudAccountFilter struct {
 
 // AccountServiceOverride is a sparse per-account override on top of the global ServiceConfig.
 // Nil pointer fields inherit the global value.
-type AccountServiceOverride struct {
+type AccountServiceOverride struct { //nolint:govet // fieldalignment: reorder would break API/readability
 	ID             string    `json:"id"`
 	AccountID      string    `json:"account_id"`
 	Provider       string    `json:"provider"`
@@ -913,7 +913,7 @@ type AccountServiceOverride struct {
 // AccountRegistration represents a self-service registration request from a
 // target account owner. Submitted via POST /api/register during Terraform apply
 // of the federation IaC, then approved or rejected by a CUDly admin.
-type AccountRegistration struct {
+type AccountRegistration struct { //nolint:govet // fieldalignment: reorder would break API/readability
 	ID                   string     `json:"id"`
 	ReferenceToken       string     `json:"reference_token"`
 	Status               string     `json:"status"` // pending, approved, rejected

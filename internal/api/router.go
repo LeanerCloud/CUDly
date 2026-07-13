@@ -50,26 +50,18 @@ const (
 
 // Route defines a routing rule.
 type Route struct {
-	// Pattern matching fields
-	ExactPath  string // Exact path match (e.g., "/api/health")
-	PathPrefix string // Path must start with this (e.g., "/api/users/")
-	PathSuffix string // Path must end with this (e.g., "/revoke")
-	Method     string // HTTP method (e.g., "GET", "POST")
-
-	// Handler function
-	Handler RouteHandler
-
-	// Auth controls authentication level. REQUIRED — leaving this unset
-	// (zero value) causes NewRouter to panic at startup so every route
-	// author makes an explicit AuthAdmin / AuthUser / AuthPublic choice.
-	// See AuthLevel doc for the history behind the mandatory-field rule.
-	Auth AuthLevel
+	Handler    RouteHandler
+	ExactPath  string
+	PathPrefix string
+	PathSuffix string
+	Method     string
+	Auth       AuthLevel
 }
 
 // Router manages request routing.
 type Router struct {
-	routes []Route
 	h      *Handler
+	routes []Route
 }
 
 // NewRouter creates a new router with all routes configured.
@@ -398,7 +390,7 @@ func (r *Router) Route(ctx context.Context, method, path string, req *events.Lam
 }
 
 // matches checks if a route matches the given method and path.
-func (r *Router) matches(route Route, method, path string) bool {
+func (r *Router) matches(route Route, method, path string) bool { //nolint:gocritic // hugeParam: by-value per calling convention
 	// Check method (if specified)
 	if route.Method != "" && route.Method != method {
 		return false
@@ -422,7 +414,7 @@ func (r *Router) matches(route Route, method, path string) bool {
 }
 
 // extractParams extracts path parameters from the route.
-func (r *Router) extractParams(route Route, path string) map[string]string {
+func (r *Router) extractParams(route Route, path string) map[string]string { //nolint:gocritic // hugeParam: by-value per calling convention
 	params := make(map[string]string)
 
 	// Extract ID from prefix-based routes

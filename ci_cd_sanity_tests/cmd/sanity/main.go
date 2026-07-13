@@ -29,7 +29,6 @@ func main() {
 	requireInt32Range("--max-list", *maxList)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
 
 	rep, err := aws.Run(ctx, aws.Options{
 		Region:          *region,
@@ -37,19 +36,23 @@ func main() {
 		MaxList:         int32(*maxList), // #nosec G115 -- range-validated above (1 <= maxList <= math.MaxInt32); int->int32 cannot overflow
 	})
 	if err != nil {
+		cancel()
 		fmt.Fprintf(os.Stderr, "sanity run failed: %v\n", err)
 		os.Exit(2)
 	}
 
 	if err := rep.WriteJSON(*outPath); err != nil {
+		cancel()
 		fmt.Fprintf(os.Stderr, "write report failed: %v\n", err)
 		os.Exit(2)
 	}
 
 	if rep.HasFailures() {
+		cancel()
 		fmt.Fprintf(os.Stderr, "sanity checks: FAIL (see %s)\n", *outPath)
 		os.Exit(1)
 	}
 
+	cancel()
 	fmt.Printf("sanity checks: PASS (see %s)\n", *outPath)
 }

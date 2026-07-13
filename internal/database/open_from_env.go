@@ -28,9 +28,9 @@ func OpenFromEnv(ctx context.Context) (*Connection, error) {
 	var sr SecretResolver
 	if dbConfig.PasswordSecret != "" {
 		secretConfig := secrets.LoadConfigFromEnv()
-		resolver, err := secrets.NewResolver(ctx, secretConfig)
-		if err != nil {
-			return nil, fmt.Errorf("database: create secret resolver: %w", err)
+		resolver, resolverErr := secrets.NewResolver(ctx, secretConfig)
+		if resolverErr != nil {
+			return nil, fmt.Errorf("database: create secret resolver: %w", resolverErr)
 		}
 		// NewConnection resolves the password synchronously before returning, so
 		// the resolver is safe to close immediately after the connection is open.

@@ -9,7 +9,7 @@ import (
 )
 
 // TestNewAWSResolver_ConfigError attempts to trigger AWS config loading error
-// by manipulating AWS_CONFIG_FILE to point to an invalid file
+// by manipulating AWS_CONFIG_FILE to point to an invalid file.
 func TestNewAWSResolver_ConfigError(t *testing.T) {
 	ctx := context.Background()
 
@@ -63,7 +63,7 @@ func TestNewAWSResolver_ConfigError(t *testing.T) {
 	}
 }
 
-// TestNewGCPResolver_ConfigError attempts to trigger GCP config loading error
+// TestNewGCPResolver_ConfigError attempts to trigger GCP config loading error.
 func TestNewGCPResolver_ConfigError(t *testing.T) {
 	ctx := context.Background()
 
@@ -93,7 +93,7 @@ func TestNewGCPResolver_ConfigError(t *testing.T) {
 	}
 }
 
-// TestNewAzureResolver_ConfigError attempts to trigger Azure config loading error
+// TestNewAzureResolver_ConfigError attempts to trigger Azure config loading error.
 func TestNewAzureResolver_ConfigError(t *testing.T) {
 	ctx := context.Background()
 
@@ -137,7 +137,7 @@ func TestNewAzureResolver_ConfigError(t *testing.T) {
 	}
 }
 
-// TestNewAWSResolver_CancelledContext tests constructor with canceled context
+// TestNewAWSResolver_CancelledContext tests constructor with canceled context.
 func TestNewAWSResolver_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
@@ -153,7 +153,7 @@ func TestNewAWSResolver_CancelledContext(t *testing.T) {
 	}
 }
 
-// TestNewGCPResolver_CancelledContext tests constructor with canceled context
+// TestNewGCPResolver_CancelledContext tests constructor with canceled context.
 func TestNewGCPResolver_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -170,7 +170,7 @@ func TestNewGCPResolver_CancelledContext(t *testing.T) {
 	}
 }
 
-// TestNewAzureResolver_CancelledContext tests constructor with canceled context
+// TestNewAzureResolver_CancelledContext tests constructor with canceled context.
 func TestNewAzureResolver_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

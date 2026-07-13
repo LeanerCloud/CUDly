@@ -24,11 +24,11 @@ func TestMigration_SplitSavingsPlans(t *testing.T) {
 
 	type spRow struct {
 		service      string
-		term         int
 		payment      string
-		enabled      bool
-		coverage     float64
 		rampSchedule string
+		term         int
+		coverage     float64
+		enabled      bool
 	}
 
 	// queryAWSSPRows returns a map keyed by service slug for every

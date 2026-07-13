@@ -27,7 +27,7 @@ func RenderTable(result scorer.ScoredResult) string {
 	fmt.Fprintln(w, "Cloud\tAccount\tRegion\tService\tType\tTerm\tCount\tEst.Cost\tEst.Savings\tSavings%\tBreak-even\tCommitment")
 	fmt.Fprintln(w, "-----\t-------\t------\t-------\t----\t----\t-----\t--------\t-----------\t---------\t----------\t----------")
 
-	for _, rec := range result.Passed {
+	for _, rec := range result.Passed { //nolint:gocritic // rangeValCopy: acceptable value copy
 		breakEven := "-"
 		if rec.BreakEvenMonths > 0 {
 			breakEven = fmt.Sprintf("%.1f mo", rec.BreakEvenMonths)
@@ -63,7 +63,7 @@ func RenderExcluded(result scorer.ScoredResult) string {
 	fmt.Fprintln(w, "Cloud\tAccount\tRegion\tService\tType\tTerm\tSavings%\tFilterReason")
 	fmt.Fprintln(w, "-----\t-------\t------\t-------\t----\t----\t---------\t------------")
 
-	for _, fr := range result.Filtered {
+	for _, fr := range result.Filtered { //nolint:gocritic // rangeValCopy: acceptable value copy
 		rec := fr.Recommendation
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%.1f%%\t%s\n",
 			rec.Provider,
@@ -88,7 +88,7 @@ func RenderExcluded(result scorer.ScoredResult) string {
 // upfront portion (one-time), so the two figures are NOT on the same timescale.
 func RenderSummary(result scorer.ScoredResult) string {
 	var totalSavings, totalCost float64
-	for _, rec := range result.Passed {
+	for _, rec := range result.Passed { //nolint:gocritic // rangeValCopy: acceptable value copy
 		totalSavings += rec.EstimatedSavings
 		totalCost += rec.CommitmentCost
 	}
@@ -100,7 +100,7 @@ func RenderSummary(result scorer.ScoredResult) string {
 	if len(result.Filtered) > 0 {
 		// Group filtered reasons
 		reasons := make(map[string]int)
-		for _, fr := range result.Filtered {
+		for _, fr := range result.Filtered { //nolint:gocritic // rangeValCopy: acceptable value copy
 			// Use the first word as the reason category
 			key := firstWord(fr.FilterReason)
 			reasons[key]++

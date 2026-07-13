@@ -1732,7 +1732,7 @@ func TestConfigSetting_DifferentValueTypes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			setting := ConfigSetting{
-				Key:   "test." + tt.dataType,
+				Key:   "test." + tt.dataType, //nolint:govet // unusedwrite: field set for test completeness
 				Value: tt.value,
 				Type:  tt.dataType,
 			}

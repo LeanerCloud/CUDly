@@ -431,7 +431,7 @@ func (p *PurchasePlan) Validate() error {
 	if p.Enabled && len(p.Services) == 0 {
 		return fmt.Errorf("plan must have at least one service")
 	}
-	for key, svc := range p.Services {
+	for key, svc := range p.Services { //nolint:gocritic // rangeValCopy: acceptable value copy
 		if err := svc.Validate(); err != nil {
 			return fmt.Errorf("invalid service config '%s': %w", key, err)
 		}

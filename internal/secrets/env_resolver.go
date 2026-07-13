@@ -32,7 +32,7 @@ func (r *EnvResolver) GetSecret(ctx context.Context, secretID string) (string, e
 
 // PutSecret is not supported for environment variables.
 // EnvResolver is read-only; use a real secret provider (aws/gcp/azure) for writes.
-func (r *EnvResolver) PutSecret(_ context.Context, _ string, _ string) error {
+func (r *EnvResolver) PutSecret(_ context.Context, _ string, _ string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
 	return fmt.Errorf("EnvResolver does not support writing secrets")
 }
 

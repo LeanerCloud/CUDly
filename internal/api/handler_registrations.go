@@ -237,7 +237,7 @@ func (h *Handler) encryptRegistrationCredential(payload string) (string, error) 
 
 // notifyRegistrant sends an email about an approval or rejection.
 // Errors are logged but not propagated (matching sendPurchaseApprovalEmail pattern).
-func (h *Handler) notifyRegistrant(reg *config.AccountRegistration, data email.RegistrationDecisionData) {
+func (h *Handler) notifyRegistrant(reg *config.AccountRegistration, data email.RegistrationDecisionData) { //nolint:gocritic // hugeParam: by-value per calling convention
 	if h.emailNotifier == nil || reg.ContactEmail == "" {
 		return
 	}
@@ -467,7 +467,7 @@ func generateReferenceToken() (string, error) {
 //
 // The account's own ContactEmail is NOT included in the approver set
 // because the submitter can't review their own registration.
-func (h *Handler) resolveRegistrationRecipients(ctx context.Context) (to string, cc []string, approvers []string) {
+func (h *Handler) resolveRegistrationRecipients(ctx context.Context) (to string, cc []string, approvers []string) { //nolint:gocritic // paramTypeCombine: explicit types aid readability
 	adminEmails := h.gatherAdminEmails(ctx)
 	globalNotify := h.globalNotificationEmail(ctx)
 

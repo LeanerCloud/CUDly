@@ -39,7 +39,7 @@ const azureProbeHourlyCommitment float64 = 0.001
 // defined in the SDK constants but is not sold in practice. The probe
 // includes P5Y and drops it if ValidatePurchase rejects it, so the persisted
 // combos always reflect live API reality rather than the SDK enum.
-var azureCandidateCombos = []struct {
+var azureCandidateCombos = []struct { //nolint:govet // fieldalignment: reorder would break API/readability
 	termYears   int
 	azureTerm   armbillingbenefits.Term
 	azurePlan   *armbillingbenefits.BillingPlan

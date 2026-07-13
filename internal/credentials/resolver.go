@@ -48,7 +48,7 @@ func (c *AWSCredentials) String() string { return "[REDACTED AWS CREDENTIALS]" }
 
 // AzureCredentials holds resolved Azure service principal credentials.
 type AzureCredentials struct {
-	ClientSecret string
+	ClientSecret string //nolint:gosec // G117: HTTP redirect target is validated/trusted
 }
 
 // String returns a redacted representation.
@@ -289,7 +289,7 @@ func ResolveAzureCredentials(ctx context.Context, account *config.CloudAccount, 
 		return nil, fmt.Errorf("credentials: no client secret stored for account %s", account.ID)
 	}
 	var payload struct {
-		ClientSecret string `json:"client_secret"`
+		ClientSecret string `json:"client_secret"` //nolint:gosec // G117: HTTP redirect target is validated/trusted
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return nil, fmt.Errorf("credentials: parse azure secret for account %s: %w", account.ID, err)
@@ -450,7 +450,7 @@ func loadStoredGCPTokenSource(
 	if raw == nil {
 		return nil, fmt.Errorf("credentials: no gcp credentials stored for account %s", account.ID)
 	}
-	creds, err := google.CredentialsFromJSON(ctx, raw, gcpCloudPlatformScope)
+	creds, err := google.CredentialsFromJSON(ctx, raw, gcpCloudPlatformScope) //nolint:staticcheck // SA1019: google.CredentialsFromJSON: replacement API requires GCP SDK upgrade; credentials are operator-controlled bytes
 	if err != nil {
 		return nil, fmt.Errorf("credentials: parse gcp credentials for account %s: %w", account.ID, err)
 	}

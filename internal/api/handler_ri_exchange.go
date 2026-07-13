@@ -54,7 +54,7 @@ type reshapeRecsClient interface {
 // buildReshapeEC2Client honors the injected factory when set, falling
 // back to the direct AWS SDK constructor otherwise. Tests inject a
 // stub via Handler.reshapeEC2Factory; prod leaves the field nil.
-func (h *Handler) buildReshapeEC2Client(cfg aws.Config) reshapeEC2Client {
+func (h *Handler) buildReshapeEC2Client(cfg aws.Config) reshapeEC2Client { //nolint:gocritic // hugeParam: by-value per calling convention
 	if h.reshapeEC2Factory != nil {
 		return h.reshapeEC2Factory(cfg)
 	}
@@ -63,7 +63,7 @@ func (h *Handler) buildReshapeEC2Client(cfg aws.Config) reshapeEC2Client {
 
 // buildReshapeRecsClient mirrors buildReshapeEC2Client for the
 // recommendations adapter.
-func (h *Handler) buildReshapeRecsClient(cfg aws.Config) reshapeRecsClient {
+func (h *Handler) buildReshapeRecsClient(cfg aws.Config) reshapeRecsClient { //nolint:gocritic // hugeParam: by-value per calling convention
 	if h.reshapeRecsFactory != nil {
 		return h.reshapeRecsFactory(cfg)
 	}
@@ -80,7 +80,7 @@ type targetOfferingsEC2Client interface {
 
 // buildTargetOfferingsEC2Client honors the injected factory when set,
 // falling back to the direct AWS SDK constructor otherwise.
-func (h *Handler) buildTargetOfferingsEC2Client(cfg aws.Config) targetOfferingsEC2Client {
+func (h *Handler) buildTargetOfferingsEC2Client(cfg aws.Config) targetOfferingsEC2Client { //nolint:gocritic // hugeParam: by-value per calling convention
 	if h.targetOfferingsEC2Factory != nil {
 		return h.targetOfferingsEC2Factory(cfg)
 	}
@@ -448,7 +448,7 @@ func parseThresholdParam(params map[string]string) (float64, error) {
 // Used to populate exchange.RIInfo.MonthlyCost so the cross-family
 // dollar-units pre-filter can compare against per-target offering
 // costs computed with the same formula.
-func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) float64 {
+func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) float64 { //nolint:gocritic // hugeParam: by-value per calling convention
 	if ri.Duration <= 0 {
 		return 0
 	}
@@ -462,7 +462,7 @@ func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) float64 {
 // convertToExchangeTypes converts provider-specific types to the exchange package types.
 func convertToExchangeTypes(instances []ec2svc.ConvertibleRI, utilData []recommendations.RIUtilization) ([]exchange.RIInfo, []exchange.UtilizationInfo) {
 	riInfos := make([]exchange.RIInfo, len(instances))
-	for i, inst := range instances {
+	for i, inst := range instances { //nolint:gocritic // rangeValCopy: acceptable value copy
 		riInfos[i] = exchange.RIInfo{
 			ID:                  inst.ReservedInstanceID,
 			InstanceType:        inst.InstanceType,
@@ -492,9 +492,9 @@ func convertToExchangeTypes(instances []ec2svc.ConvertibleRI, utilData []recomme
 
 // reshapeRequestParams groups parsed query parameters for getReshapeRecommendations.
 type reshapeRequestParams struct {
+	region       string
 	threshold    float64
 	lookbackDays int
-	region       string
 }
 
 // parseReshapeParams parses the threshold, lookback_days, and region query
@@ -614,7 +614,7 @@ func (h *Handler) attachReshapeStaleness(ctx context.Context, resp *ReshapeRecom
 // populated value is sufficient and avoids a noisy mismatch panic when
 // some entries are missing the field.
 func firstNonEmptyCurrency(instances []ec2svc.ConvertibleRI) string {
-	for _, inst := range instances {
+	for _, inst := range instances { //nolint:gocritic // rangeValCopy: acceptable value copy
 		if inst.CurrencyCode != "" {
 			return inst.CurrencyCode
 		}
@@ -690,7 +690,7 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 // Extracted from executeExchange to keep the handler below the
 // cyclomatic-complexity threshold; every branch here becomes a
 // separate test case so the logic stays inspectable.
-func validateExecuteExchangeBody(body ExchangeExecuteRequestBody) error {
+func validateExecuteExchangeBody(body ExchangeExecuteRequestBody) error { //nolint:gocritic // hugeParam: by-value per calling convention
 	if len(body.RIIDs) == 0 {
 		return NewClientError(400, "ri_ids is required")
 	}
@@ -723,10 +723,12 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 	}
 
 	var body ExchangeExecuteRequestBody
-	if err := json.Unmarshal([]byte(req.Body), &body); err != nil {
+	err = json.Unmarshal([]byte(req.Body), &body)
+	if err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
-	if err := validateExecuteExchangeBody(body); err != nil {
+	err = validateExecuteExchangeBody(body)
+	if err != nil {
 		return nil, err
 	}
 
@@ -755,13 +757,14 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 	if cloudAccountID == "" {
 		cloudAccountID = unattributedAccountConstraint
 	}
-	if err := h.requirePermissionConstraints(ctx, session, "execute", "ri-exchange", []auth.PermissionConstraints{{
+	err = h.requirePermissionConstraints(ctx, session, "execute", "ri-exchange", []auth.PermissionConstraints{{
 		AccountIDs:        []string{cloudAccountID},
 		Providers:         []string{string(common.ProviderAWS)},
 		Services:          []string{string(common.ServiceEC2)},
 		Regions:           []string{region},
 		MaxPurchaseAmount: maxPayment,
-	}}); err != nil {
+	}})
+	if err != nil {
 		return nil, err
 	}
 
@@ -836,9 +839,9 @@ type RIUtilizationResponse struct {
 // RecsCollectedAt carries the raw timestamp so the frontend can build
 // its own relative-time label ("last collected 23h ago").
 type ReshapeRecommendationsResponse struct {
-	Recommendations []exchange.ReshapeRecommendation `json:"recommendations"`
-	RecsStaleness   string                           `json:"recs_staleness,omitempty"`
 	RecsCollectedAt *time.Time                       `json:"recs_collected_at,omitempty"`
+	RecsStaleness   string                           `json:"recs_staleness,omitempty"`
+	Recommendations []exchange.ReshapeRecommendation `json:"recommendations"`
 }
 
 // reshapeSoftStaleThreshold is the age at which the reshape recs banner
@@ -878,11 +881,11 @@ type ExchangeTargetBody struct {
 // both are present, `targets` wins. Exactly one of them must be
 // provided (or the handler returns 400).
 type ExchangeQuoteRequestBody struct {
+	TargetOfferingID string               `json:"target_offering_id,omitempty"`
+	Region           string               `json:"region,omitempty"`
 	RIIDs            []string             `json:"ri_ids"`
 	Targets          []ExchangeTargetBody `json:"targets,omitempty"`
-	TargetOfferingID string               `json:"target_offering_id,omitempty"`
 	TargetCount      int32                `json:"target_count,omitempty"`
-	Region           string               `json:"region,omitempty"`
 }
 
 // ExchangeExecuteRequestBody is the request body for the execute endpoint.
@@ -892,12 +895,12 @@ type ExchangeQuoteRequestBody struct {
 // checking naturally becomes a total when `targets[]` has multiple
 // entries.
 type ExchangeExecuteRequestBody struct {
-	RIIDs            []string             `json:"ri_ids"`
-	Targets          []ExchangeTargetBody `json:"targets,omitempty"`
 	TargetOfferingID string               `json:"target_offering_id,omitempty"`
-	TargetCount      int32                `json:"target_count,omitempty"`
 	MaxPaymentDueUSD string               `json:"max_payment_due_usd"`
 	Region           string               `json:"region,omitempty"`
+	RIIDs            []string             `json:"ri_ids"`
+	Targets          []ExchangeTargetBody `json:"targets,omitempty"`
+	TargetCount      int32                `json:"target_count,omitempty"`
 }
 
 // toExchangeTargets converts the HTTP-shaped targets into the
@@ -917,8 +920,8 @@ func toExchangeTargets(targets []ExchangeTargetBody) []exchange.TargetConfig {
 
 // ExchangeExecuteResponse is the response from a successful exchange execution.
 type ExchangeExecuteResponse struct {
-	ExchangeID string                         `json:"exchange_id"`
 	Quote      *exchange.ExchangeQuoteSummary `json:"quote"`
+	ExchangeID string                         `json:"exchange_id"`
 }
 
 // getRIExchangeConfig returns the current RI exchange automation settings.
@@ -1003,7 +1006,7 @@ func (h *Handler) getRIExchangeHistory(ctx context.Context, req *events.LambdaFu
 	if !auth.IsUnrestrictedAccess(allowed) {
 		nameByID := h.resolveAccountNamesByID(ctx)
 		filtered := records[:0]
-		for _, r := range records {
+		for _, r := range records { //nolint:gocritic // rangeValCopy: acceptable value copy
 			if auth.MatchesAccount(allowed, r.AccountID, nameByID[r.AccountID]) {
 				filtered = append(filtered, r)
 			}
@@ -1363,35 +1366,35 @@ func (h *Handler) rejectRIExchange(ctx context.Context, id, token string) (any, 
 	}
 
 	// Token-based rejection: no session user, so transitioned_by = NULL.
-	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "cancelled", nil)
+	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "canceled", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
 	}
 	if transitioned == nil {
-		return nil, NewClientError(409, "exchange already processed, expired, or was cancelled")
+		return nil, NewClientError(409, "exchange already processed, expired, or was canceled")
 	}
 
-	return map[string]string{"status": "cancelled"}, nil
+	return map[string]string{"status": "canceled"}, nil
 }
 
 // RIExchangeConfigResponse is the response for GET /api/ri-exchange/config.
 type RIExchangeConfigResponse struct {
-	AutoExchangeEnabled      bool    `json:"auto_exchange_enabled"`
 	Mode                     string  `json:"mode"`
 	UtilizationThreshold     float64 `json:"utilization_threshold"`
 	MaxPaymentPerExchangeUSD float64 `json:"max_payment_per_exchange_usd"`
 	MaxPaymentDailyUSD       float64 `json:"max_payment_daily_usd"`
 	LookbackDays             int     `json:"lookback_days"`
+	AutoExchangeEnabled      bool    `json:"auto_exchange_enabled"`
 }
 
 // RIExchangeConfigUpdateRequest is the request body for PUT /api/ri-exchange/config.
 type RIExchangeConfigUpdateRequest struct {
-	AutoExchangeEnabled      bool    `json:"auto_exchange_enabled"`
 	Mode                     string  `json:"mode"`
 	UtilizationThreshold     float64 `json:"utilization_threshold"`
 	MaxPaymentPerExchangeUSD float64 `json:"max_payment_per_exchange_usd"`
 	MaxPaymentDailyUSD       float64 `json:"max_payment_daily_usd"`
 	LookbackDays             int     `json:"lookback_days"`
+	AutoExchangeEnabled      bool    `json:"auto_exchange_enabled"`
 }
 
 func (r *RIExchangeConfigUpdateRequest) validate() error {

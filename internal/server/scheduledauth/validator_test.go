@@ -436,7 +436,7 @@ func TestValidate_OIDC_KeyRotation_RefreshOnUnknownKid(t *testing.T) {
 	// real cause. Surfacing the swap failure here keeps the diagnostic
 	// chain short.
 	jwksB := jwks(keyB)
-	swap, err := http.NewRequest(http.MethodPost, srv.URL+"/swap", strings.NewReader(string(jwksB)))
+	swap, err := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/swap", strings.NewReader(string(jwksB)))
 	if err != nil {
 		t.Fatalf("build swap request: %v", err)
 	}
@@ -651,7 +651,7 @@ func TestMiddleware_OIDC_RejectsAndLogsButDoesNotCallNext(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true })
 	mw := v.Middleware(next)
 
-	req := httptest.NewRequest("POST", "/api/scheduled/foo", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "POST", "/api/scheduled/foo", nil)
 	rr := httptest.NewRecorder()
 	mw.ServeHTTP(rr, req)
 
@@ -680,7 +680,7 @@ func TestMiddleware_OIDC_AllowsAndCallsNextOnSuccess(t *testing.T) {
 	})
 	mw := v.Middleware(next)
 
-	req := httptest.NewRequest("POST", "/api/scheduled/foo", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "POST", "/api/scheduled/foo", nil)
 	req.Header.Set("Authorization", "Bearer "+tok)
 	rr := httptest.NewRecorder()
 	mw.ServeHTTP(rr, req)
@@ -705,7 +705,7 @@ func TestMiddleware_Disabled_PassesThroughWithWarn(t *testing.T) {
 	})
 	mw := v.Middleware(next)
 
-	req := httptest.NewRequest("POST", "/api/scheduled/foo", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "POST", "/api/scheduled/foo", nil)
 	rr := httptest.NewRecorder()
 	mw.ServeHTTP(rr, req)
 

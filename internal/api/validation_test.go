@@ -169,7 +169,7 @@ func TestValidateUUID(t *testing.T) {
 
 func TestValidateContentType(t *testing.T) {
 	t.Parallel()
-	tests := []struct {
+	tests := []struct { //nolint:govet // fieldalignment: reorder would break API/readability
 		name      string
 		method    string
 		body      string

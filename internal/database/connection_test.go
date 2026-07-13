@@ -169,8 +169,8 @@ func TestBuildPoolConfig(t *testing.T) {
 
 // MockSecretResolver implements SecretResolver for testing.
 type MockSecretResolver struct {
-	SecretValue string
 	SecretError error
+	SecretValue string
 	GetCalls    int
 	CloseCalls  int
 }
@@ -342,7 +342,7 @@ func TestConnectionMethods(t *testing.T) {
 
 	t.Run("Connection struct has expected fields", func(t *testing.T) {
 		conn := &Connection{
-			pool:   nil,
+			pool:   nil, //nolint:govet // unusedwrite: field set for test completeness
 			config: &Config{},
 		}
 		assert.NotNil(t, conn.config)

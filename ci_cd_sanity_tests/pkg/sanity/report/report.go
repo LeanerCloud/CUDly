@@ -15,12 +15,12 @@ const (
 )
 
 type CheckResult struct {
+	StartedAt time.Time         `json:"started_at"`
+	EndedAt   time.Time         `json:"ended_at"`
+	Details   map[string]string `json:"details,omitempty"`
 	Name      string            `json:"name"`
 	Status    Status            `json:"status"`
 	Message   string            `json:"message,omitempty"`
-	Details   map[string]string `json:"details,omitempty"`
-	StartedAt time.Time         `json:"started_at"`
-	EndedAt   time.Time         `json:"ended_at"`
 }
 
 type Report struct {
@@ -32,7 +32,7 @@ type Report struct {
 	Results   []CheckResult `json:"results"`
 }
 
-func (r *Report) Add(res CheckResult) {
+func (r *Report) Add(res CheckResult) { //nolint:gocritic // hugeParam: by-value per calling convention
 	r.Results = append(r.Results, res)
 }
 

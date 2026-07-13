@@ -16,7 +16,7 @@ import (
 // / out-of-range / disallowed-charset values are rejected with 400s on
 // both create and update.
 func TestValidateAWSExternalID(t *testing.T) {
-	cases := []struct {
+	cases := []struct { //nolint:govet // fieldalignment: reorder would break API/readability
 		name        string
 		input       string
 		wantError   bool

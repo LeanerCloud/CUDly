@@ -1299,8 +1299,8 @@ func TestHandler_mfaRegenerateRecoveryCodes_HappyPath(t *testing.T) {
 // auth package (errors.go); the api package's login handler maps
 // them via errors.Is(). Here we just wrap them so the mocked Login
 // returns the same value the real service would.
-func ErrMFARequired_test() error    { return mfaRequiredSentinel }
-func ErrInvalidMFACode_test() error { return mfaInvalidSentinel }
+func ErrMFARequired_test() error    { return mfaRequiredSentinel } //nolint:revive // var-naming: underscore in test helper is intentional
+func ErrInvalidMFACode_test() error { return mfaInvalidSentinel }  //nolint:revive // var-naming: underscore in test helper is intentional
 
 // Tests for GET /api/auth/me/permissions (issue #917).
 

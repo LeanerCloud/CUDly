@@ -262,7 +262,7 @@ func TestManager_ProcessScheduledPurchases_CancelledExecution(t *testing.T) {
 		{
 			ExecutionID:   "exec-123",
 			PlanID:        "plan-456",
-			Status:        "cancelled",
+			Status:        "canceled",
 			ScheduledDate: pastDate,
 		},
 	}
@@ -279,7 +279,7 @@ func TestManager_ProcessScheduledPurchases_CancelledExecution(t *testing.T) {
 	result, err := manager.ProcessScheduledPurchases(ctx)
 	require.NoError(t, err)
 
-	// Cancelled executions are skipped without being re-executed; processed counter
+	// Canceled executions are skipped without being re-executed; processed counter
 	// reflects only actually-attempted executions, not skipped ones.
 	assert.Equal(t, 0, result.Processed)
 	assert.Equal(t, 0, result.Executed)
@@ -412,7 +412,7 @@ func TestManager_RecoverStrandedApprovals_FreshRowUntouched(t *testing.T) {
 
 // TestManager_RecoverStrandedApprovals_AWSOnlyRedrives is the regression test for
 // issue #632 Option 5: a stranded AWS-only execution with a durable ExecutionID is
-// re-driven via executeAndFinalize rather than failed. All AWS executors honour
+// re-driven via executeAndFinalize rather than failed. All AWS executors honor
 // opts.IdempotencyToken via DeriveIdempotencyToken(exec.ExecutionID, i), so the
 // second call is a safe no-op on the AWS side and the row transitions directly to
 // "completed" without requiring a manual Retry.
@@ -813,7 +813,7 @@ func TestManager_RecoverStrandedApprovals_LateCompletionNotClobbered(t *testing.
 	// When TransitionExecutionStatus fails the manager calls GetExecutionByID to
 	// distinguish a race (row already left "approved") from a real store error.
 	// Returning a "completed" row causes RecoverStrandedApprovals to skip the
-	// execution, which is the behaviour this test asserts.
+	// execution, which is the behavior this test asserts.
 	mockStore.On("GetExecutionByID", ctx, "exec-raced").
 		Return(&config.PurchaseExecution{ExecutionID: "exec-raced", Status: "completed"}, nil)
 

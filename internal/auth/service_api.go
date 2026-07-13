@@ -19,11 +19,11 @@ import (
 type APIUser struct {
 	ID         string   `json:"id"`
 	Email      string   `json:"email"`
-	Groups     []string `json:"groups"`
-	MFAEnabled bool     `json:"mfa_enabled"`
 	CreatedAt  string   `json:"created_at,omitempty"`
 	UpdatedAt  string   `json:"updated_at,omitempty"`
 	LastLogin  string   `json:"last_login,omitempty"`
+	Groups     []string `json:"groups"`
+	MFAEnabled bool     `json:"mfa_enabled"`
 }
 
 // APIGroup is the group type for API responses.
@@ -34,17 +34,17 @@ type APIGroup struct {
 	ID              string          `json:"id"`
 	Name            string          `json:"name"`
 	Description     string          `json:"description,omitempty"`
-	Permissions     []APIPermission `json:"permissions"`
-	AllowedAccounts []string        `json:"allowed_accounts"`
 	CreatedAt       string          `json:"created_at,omitempty"`
 	UpdatedAt       string          `json:"updated_at,omitempty"`
+	Permissions     []APIPermission `json:"permissions"`
+	AllowedAccounts []string        `json:"allowed_accounts"`
 }
 
 // APIPermission is the permission type for API responses.
 type APIPermission struct {
+	Constraints *APIPermissionConstraint `json:"constraints,omitempty"`
 	Action      string                   `json:"action"`
 	Resource    string                   `json:"resource"`
-	Constraints *APIPermissionConstraint `json:"constraints,omitempty"`
 }
 
 // APIPermissionConstraint is the permission constraint type for API responses.
@@ -60,7 +60,7 @@ type APIPermissionConstraint struct {
 // Groups must be non-empty: authorization is group-membership-only (issue #907).
 type APICreateUserRequest struct {
 	Email    string   `json:"email"`
-	Password string   `json:"password"`
+	Password string   `json:"password"` //nolint:gosec // G117: HTTP redirect target is validated/trusted
 	Groups   []string `json:"groups,omitempty"`
 }
 
@@ -407,7 +407,7 @@ func (s *Service) GetUserPermissionsAPI(ctx context.Context, userID string) (any
 // the frontend renders as a QR code). Wraps MFASetup; thin shim
 // exists so the api package can refer to a stable signature without
 // importing the auth package's internal MFASetupResult type.
-func (s *Service) MFASetupAPI(ctx context.Context, userID, password string) (string, string, error) {
+func (s *Service) MFASetupAPI(ctx context.Context, userID, password string) (string, string, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	result, err := s.MFASetup(ctx, userID, password)
 	if err != nil {
 		return "", "", err

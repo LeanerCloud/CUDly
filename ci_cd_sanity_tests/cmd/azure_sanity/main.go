@@ -21,7 +21,6 @@ func main() {
 	flag.Parse()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*timeoutSec)*time.Second)
-	defer cancel()
 
 	rep, err := azure.Run(ctx, azure.Options{
 		SubscriptionID:   *subID,
@@ -30,19 +29,23 @@ func main() {
 		Timeout:          time.Duration(*timeoutSec) * time.Second,
 	})
 	if err != nil {
+		cancel()
 		fmt.Fprintf(os.Stderr, "azure sanity run failed: %v\n", err)
 		os.Exit(2)
 	}
 
 	if err := rep.WriteJSON(*outPath); err != nil {
+		cancel()
 		fmt.Fprintf(os.Stderr, "write report failed: %v\n", err)
 		os.Exit(2)
 	}
 
 	if rep.HasFailures() {
+		cancel()
 		fmt.Fprintf(os.Stderr, "azure sanity: FAIL (see %s)\n", *outPath)
 		os.Exit(1)
 	}
 
+	cancel()
 	fmt.Printf("azure sanity: PASS (see %s)\n", *outPath)
 }

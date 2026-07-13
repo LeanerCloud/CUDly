@@ -266,7 +266,7 @@ func TestRouter_discoverOrgAccountsHandler(t *testing.T) {
 	// handler. The handler itself returns 400 on the empty body the
 	// router test sends — that's fine for proving dispatch worked
 	// (the call reached past auth and into the body parser). Full
-	// behaviour is exercised in handler_accounts_test.go.
+	// behavior is exercised in handler_accounts_test.go.
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 	adminSession := &Session{UserID: "uid"}
@@ -496,9 +496,9 @@ func TestHandler_updateRIExchangeConfig_ValidationError(t *testing.T) {
 func TestHandler_getRIExchangeConfigUpdateRequest_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
+		errMsg  string
 		req     RIExchangeConfigUpdateRequest
 		wantErr bool
-		errMsg  string
 	}{
 		{
 			name:    "valid manual mode",
@@ -784,18 +784,18 @@ func TestHandler_rejectRIExchange_ValidTokenAndRecord(t *testing.T) {
 			ApprovalToken: "tok",
 			Status:        "pending",
 		}, nil)
-	// rejectRIExchange transitions to "cancelled", not "rejected"
-	mockStore.On("TransitionRIExchangeStatus", ctx, "11111111-1111-1111-1111-111111111111", "pending", "cancelled", mock.Anything).
+	// rejectRIExchange transitions to "canceled", not "rejected"
+	mockStore.On("TransitionRIExchangeStatus", ctx, "11111111-1111-1111-1111-111111111111", "pending", "canceled", mock.Anything).
 		Return(&config.RIExchangeRecord{
 			ID:     "11111111-1111-1111-1111-111111111111",
-			Status: "cancelled",
+			Status: "canceled",
 		}, nil)
 
 	h := &Handler{config: mockStore}
 	result, err := h.rejectRIExchange(ctx, "11111111-1111-1111-1111-111111111111", "tok")
 	require.NoError(t, err)
 	m := result.(map[string]string)
-	assert.Equal(t, "cancelled", m["status"])
+	assert.Equal(t, "canceled", m["status"])
 }
 
 // ---------------------------------------------------------------------------
@@ -909,7 +909,7 @@ func TestHandler_docsHandler_OpenAPISpec(t *testing.T) {
 	_ = err // may return error if file not found; we just ensure no panic
 }
 
-// Ensure we hit the time.Now path in getRIExchangeHistory
+// Ensure we hit the time.Now path in getRIExchangeHistory.
 func TestHandler_getRIExchangeHistory_SinceTime(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)

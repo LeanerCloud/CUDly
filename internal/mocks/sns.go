@@ -9,7 +9,7 @@ import (
 )
 
 // MockSNSClient is a mock implementation of SNS client.
-type MockSNSClient struct {
+type MockSNSClient struct { //nolint:revive // exported: doc comment style intentional
 	mock.Mock
 }
 

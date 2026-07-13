@@ -27,41 +27,38 @@ import (
 
 // CloudAccountRequest is the request body for create/update account endpoints.
 type CloudAccountRequest struct {
-	Name         string `json:"name"`
-	Description  string `json:"description"`
-	ContactEmail string `json:"contact_email"`
-	Provider     string `json:"provider"`
-	ExternalID   string `json:"external_id"`
-	Enabled      *bool  `json:"enabled"`
-	// AWS
+	Enabled                 *bool  `json:"enabled"`
+	AWSWebIdentityTokenFile string `json:"aws_web_identity_token_file"`
+	AzureClientID           string `json:"azure_client_id"`
+	Provider                string `json:"provider"`
+	Name                    string `json:"name"`
+	Description             string `json:"description"`
 	AWSAuthMode             string `json:"aws_auth_mode"`
 	AWSRoleARN              string `json:"aws_role_arn"`
 	AWSExternalID           string `json:"aws_external_id"`
+	ContactEmail            string `json:"contact_email"`
+	GCPWIFAudience          string `json:"gcp_wif_audience"`
+	ExternalID              string `json:"external_id"`
+	AzureSubscriptionID     string `json:"azure_subscription_id"`
+	AzureTenantID           string `json:"azure_tenant_id"`
 	AWSBastionID            string `json:"aws_bastion_id"`
-	AWSWebIdentityTokenFile string `json:"aws_web_identity_token_file"`
+	AzureAuthMode           string `json:"azure_auth_mode"`
+	GCPProjectID            string `json:"gcp_project_id"`
+	GCPClientEmail          string `json:"gcp_client_email"`
+	GCPAuthMode             string `json:"gcp_auth_mode"`
 	AWSIsOrgRoot            bool   `json:"aws_is_org_root"`
-	// Azure
-	AzureSubscriptionID string `json:"azure_subscription_id"`
-	AzureTenantID       string `json:"azure_tenant_id"`
-	AzureClientID       string `json:"azure_client_id"`
-	AzureAuthMode       string `json:"azure_auth_mode"`
-	// GCP
-	GCPProjectID   string `json:"gcp_project_id"`
-	GCPClientEmail string `json:"gcp_client_email"`
-	GCPAuthMode    string `json:"gcp_auth_mode"`
-	GCPWIFAudience string `json:"gcp_wif_audience"` // Full WIF provider resource, secret-free path only.
 }
 
 // CredentialsRequest is the request body for the save-credentials endpoint.
 type CredentialsRequest struct {
-	CredentialType string                 `json:"credential_type"`
 	Payload        map[string]interface{} `json:"payload"`
+	CredentialType string                 `json:"credential_type"`
 }
 
 // AccountTestResult is the response for the test-credentials endpoint.
 type AccountTestResult struct {
-	OK      bool   `json:"ok"`
 	Message string `json:"message"`
+	OK      bool   `json:"ok"`
 }
 
 // AccountServiceOverrideRequest is the request body for service override endpoints.
@@ -96,7 +93,7 @@ func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionUR
 
 	filter := buildAccountFilter(req.QueryStringParameters)
 
-	accounts, err := h.config.ListCloudAccounts(ctx, filter)
+	accounts, err := h.config.ListCloudAccounts(ctx, filter) //nolint:gocritic // importShadow: local var name matches package; clear in context
 	if err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
@@ -114,7 +111,7 @@ func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionUR
 	}
 	if !auth.IsUnrestrictedAccess(allowedAccounts) {
 		filtered := accounts[:0]
-		for _, acct := range accounts {
+		for _, acct := range accounts { //nolint:gocritic // rangeValCopy: acceptable value copy
 			if auth.MatchesAccount(allowedAccounts, acct.ID, acct.Name) {
 				filtered = append(filtered, acct)
 			}
@@ -159,7 +156,7 @@ func (h *Handler) listAccountsMinimal(ctx context.Context, req *events.LambdaFun
 
 	filter := buildAccountFilter(req.QueryStringParameters)
 
-	accounts, err := h.config.ListCloudAccounts(ctx, filter)
+	accounts, err := h.config.ListCloudAccounts(ctx, filter) //nolint:gocritic // importShadow: local var name matches package; clear in context
 	if err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
@@ -190,7 +187,7 @@ func (h *Handler) listAccountsMinimal(ctx context.Context, req *events.LambdaFun
 }
 
 // markSelfAccount sets IsSelf=true on the account matching the source identity.
-func (h *Handler) markSelfAccount(ctx context.Context, accounts []config.CloudAccount) {
+func (h *Handler) markSelfAccount(ctx context.Context, accounts []config.CloudAccount) { //nolint:gocritic // importShadow: local var name matches package; clear in context
 	si := h.resolveSourceIdentity(ctx)
 	if si == nil || si.ExternalID() == "" {
 		return
@@ -351,7 +348,7 @@ var validAccountProviders = map[string]bool{
 }
 
 // validateCloudAccountRequest checks required fields and allowed values.
-func validateCloudAccountRequest(req CloudAccountRequest) error {
+func validateCloudAccountRequest(req CloudAccountRequest) error { //nolint:gocritic // hugeParam: by-value per calling convention
 	if req.Name == "" {
 		return NewClientError(400, "name is required")
 	}
@@ -372,7 +369,7 @@ func validateCloudAccountRequest(req CloudAccountRequest) error {
 }
 
 // validateAuthMode checks that the provider-specific auth mode is a known value.
-func validateAuthMode(req CloudAccountRequest) error {
+func validateAuthMode(req CloudAccountRequest) error { //nolint:gocritic // hugeParam: by-value per calling convention
 	switch req.Provider {
 	case "aws":
 		return validateAWSAuthMode(req)
@@ -412,7 +409,7 @@ func validateAuthMode(req CloudAccountRequest) error {
 // identity via the token subject claim (see resolveWebIdentityProvider
 // in internal/credentials/resolver.go), and stscreds.WebIdentityRoleOptions
 // has no ExternalID field. access_keys doesn't assume a role at all.
-func validateAWSAuthMode(req CloudAccountRequest) error {
+func validateAWSAuthMode(req CloudAccountRequest) error { //nolint:gocritic // hugeParam: by-value per calling convention
 	if req.AWSAuthMode != "" && !validAWSAuthModes[req.AWSAuthMode] {
 		return NewClientError(400, "invalid aws_auth_mode")
 	}
@@ -492,7 +489,7 @@ func isValidAWSExternalIDCharset(s string) bool {
 }
 
 // cloudAccountFromRequest maps a CloudAccountRequest to a config.CloudAccount.
-func cloudAccountFromRequest(req CloudAccountRequest) *config.CloudAccount {
+func cloudAccountFromRequest(req CloudAccountRequest) *config.CloudAccount { //nolint:gocritic // hugeParam: by-value per calling convention
 	a := &config.CloudAccount{
 		Name:                    req.Name,
 		Description:             req.Description,
@@ -553,11 +550,13 @@ func (h *Handler) updateAccount(ctx context.Context, httpReq *events.LambdaFunct
 	}
 
 	var req CloudAccountRequest
-	if err := json.Unmarshal([]byte(httpReq.Body), &req); err != nil {
+	err = json.Unmarshal([]byte(httpReq.Body), &req)
+	if err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	if err := validateCloudAccountRequest(req); err != nil {
+	err = validateCloudAccountRequest(req)
+	if err != nil {
 		return nil, err
 	}
 
@@ -599,7 +598,8 @@ func (h *Handler) deleteAccount(ctx context.Context, req *events.LambdaFunctionU
 
 	// Verify the user can access this account AND that it exists. Returns 404
 	// for both "doesn't exist" and "out of scope" to avoid existence leakage.
-	if _, err := h.requireAccountAccess(ctx, session, id); err != nil {
+	_, err = h.requireAccountAccess(ctx, session, id)
+	if err != nil {
 		return nil, err
 	}
 
@@ -693,7 +693,8 @@ func (h *Handler) saveAccountCredentials(ctx context.Context, httpReq *events.La
 	// Must precede the credStore-nil check so missing/out-of-scope accounts
 	// return 404 rather than a 500 about credential store configuration.
 	// Returns errNotFound for both cases to avoid existence disclosure.
-	if _, err := h.requireAccountAccess(ctx, session, id); err != nil {
+	_, err = h.requireAccountAccess(ctx, session, id)
+	if err != nil {
 		return nil, err
 	}
 
@@ -874,7 +875,7 @@ func runGCPFederatedTokenExchange(ctx context.Context, ts oauth2.TokenSource) Ac
 // gcpTokenExchangeAttempt runs one Token() call with a 15s deadline.
 // Returns (result, nil, _) on success, (_, err, true) on a retriable
 // IAM propagation error, (_, err, false) on any other failure.
-func gcpTokenExchangeAttempt(ctx context.Context, ts oauth2.TokenSource) (AccountTestResult, error, bool) {
+func gcpTokenExchangeAttempt(ctx context.Context, ts oauth2.TokenSource) (AccountTestResult, error, bool) { //nolint:revive // error-return: error position is part of established calling convention
 	tokCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	tokenChan := make(chan tokenResult, 1)
@@ -1028,7 +1029,8 @@ func (h *Handler) listAccountServiceOverrides(ctx context.Context, req *events.L
 		return nil, err
 	}
 
-	if _, err := h.requireAccountAccess(ctx, session, id); err != nil {
+	_, err = h.requireAccountAccess(ctx, session, id)
+	if err != nil {
 		return nil, err
 	}
 
@@ -1057,12 +1059,14 @@ func (h *Handler) saveAccountServiceOverride(ctx context.Context, httpReq *event
 		return nil, err
 	}
 
-	if _, err := h.requireAccountAccess(ctx, session, accountID); err != nil {
+	_, err = h.requireAccountAccess(ctx, session, accountID)
+	if err != nil {
 		return nil, err
 	}
 
 	var req AccountServiceOverrideRequest
-	if err := json.Unmarshal([]byte(httpReq.Body), &req); err != nil {
+	err = json.Unmarshal([]byte(httpReq.Body), &req)
+	if err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
@@ -1095,7 +1099,7 @@ func (h *Handler) saveAccountServiceOverride(ctx context.Context, httpReq *event
 }
 
 // buildServiceOverride constructs an AccountServiceOverride from request and existing data.
-func buildServiceOverride(accountID, provider, service string, req AccountServiceOverrideRequest, existing *config.AccountServiceOverride, now time.Time) *config.AccountServiceOverride {
+func buildServiceOverride(accountID, provider, service string, req AccountServiceOverrideRequest, existing *config.AccountServiceOverride, now time.Time) *config.AccountServiceOverride { //nolint:gocritic // hugeParam: by-value per calling convention
 	override := &config.AccountServiceOverride{
 		AccountID: accountID,
 		Provider:  provider,
@@ -1117,12 +1121,12 @@ func buildServiceOverride(accountID, provider, service string, req AccountServic
 }
 
 // applyServiceOverrideFields copies sparse request fields onto an override.
-func applyServiceOverrideFields(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) {
+func applyServiceOverrideFields(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) { //nolint:gocritic // hugeParam: by-value per calling convention
 	applyOverrideScalars(o, req)
 	applyOverrideSlices(o, req)
 }
 
-func applyOverrideScalars(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) {
+func applyOverrideScalars(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) { //nolint:gocritic // hugeParam: by-value per calling convention
 	if req.Enabled != nil {
 		o.Enabled = req.Enabled
 	}
@@ -1140,7 +1144,7 @@ func applyOverrideScalars(o *config.AccountServiceOverride, req AccountServiceOv
 	}
 }
 
-func applyOverrideSlices(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) {
+func applyOverrideSlices(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) { //nolint:gocritic // hugeParam: by-value per calling convention
 	if req.IncludeEngines != nil {
 		o.IncludeEngines = req.IncludeEngines
 	}
@@ -1346,7 +1350,7 @@ func (h *Handler) listPlanAccounts(ctx context.Context, req *events.LambdaFuncti
 		return nil, err
 	}
 
-	accounts, err := h.config.GetPlanAccounts(ctx, id)
+	accounts, err := h.config.GetPlanAccounts(ctx, id) //nolint:gocritic // importShadow: local var name matches package; clear in context
 	if err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
@@ -1476,7 +1480,7 @@ func (h *Handler) buildOrgRootAWSConfig(ctx context.Context, root *config.CloudA
 // runOrgDiscovery dispatches to the configured discovery function — the
 // injectable seam Handler.discoverOrgFn for tests, falling back to the real
 // accounts.DiscoverOrgAccounts in production.
-func (h *Handler) runOrgDiscovery(ctx context.Context, cfg aws.Config) (*accounts.OrgDiscoveryResult, error) {
+func (h *Handler) runOrgDiscovery(ctx context.Context, cfg aws.Config) (*accounts.OrgDiscoveryResult, error) { //nolint:gocritic // hugeParam: by-value per calling convention
 	discoverFn := h.discoverOrgFn
 	if discoverFn == nil {
 		discoverFn = accounts.DiscoverOrgAccounts

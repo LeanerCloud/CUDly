@@ -166,8 +166,8 @@ func TestSanitizeLogData_ArgsKeyStrippedAtDebugByDefault(t *testing.T) {
 	t.Setenv("DB_LOG_BIND_PARAMETERS", "")
 
 	tests := []struct {
-		name          string
 		inputData     map[string]any
+		name          string
 		level         tracelog.LogLevel
 		wantArgsInOut bool
 	}{

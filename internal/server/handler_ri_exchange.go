@@ -127,7 +127,7 @@ func (app *Application) executeRIExchangeReshape(ctx context.Context, cfg *confi
 
 // resolveAccountID fetches the AWS account ID via STS. Returns "unknown" on failure
 // since account_id is stored for audit trail only and is not used to scope queries.
-func resolveAccountID(ctx context.Context, awsCfg aws.Config) string {
+func resolveAccountID(ctx context.Context, awsCfg aws.Config) string { //nolint:gocritic // hugeParam: by-value per calling convention
 	stsClient := sts.NewFromConfig(awsCfg)
 	identity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
@@ -195,7 +195,7 @@ func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboar
 	allOutcomes = append(allOutcomes, result.Pending...)
 	allOutcomes = append(allOutcomes, result.Failed...)
 
-	for _, o := range allOutcomes {
+	for _, o := range allOutcomes { //nolint:gocritic // rangeValCopy: acceptable value copy
 		data.Exchanges = append(data.Exchanges, email.RIExchangeItem{
 			RecordID:           o.RecordID,
 			ApprovalToken:      o.ApprovalToken,
@@ -230,7 +230,7 @@ func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboar
 // Used to populate exchange.RIInfo.MonthlyCost so the cross-family
 // dollar-units pre-filter compares apples-to-apples against per-target
 // offering costs.
-func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) float64 {
+func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) float64 { //nolint:gocritic // hugeParam: by-value per calling convention
 	if ri.Duration <= 0 {
 		return 0
 	}
@@ -247,7 +247,7 @@ func convertForAutoExchange(instances []ec2svc.ConvertibleRI, utilData []recomme
 	riInfos := make([]exchange.RIInfo, len(instances))
 	riMetadata := make(map[string]exchange.RIMetadataInfo, len(instances))
 
-	for i, inst := range instances {
+	for i, inst := range instances { //nolint:gocritic // rangeValCopy: acceptable value copy
 		riInfos[i] = exchange.RIInfo{
 			ID:                  inst.ReservedInstanceID,
 			InstanceType:        inst.InstanceType,
@@ -305,7 +305,7 @@ func (a *configExchangeStoreAdapter) GetStaleProcessingExchanges(ctx context.Con
 		return nil, err
 	}
 	result := make([]exchange.ExchangeRecord, len(cfgRecords))
-	for i, r := range cfgRecords {
+	for i, r := range cfgRecords { //nolint:gocritic // rangeValCopy: acceptable value copy
 		result[i] = configToExchangeRecord(&r)
 	}
 	return result, nil
@@ -315,11 +315,11 @@ func (a *configExchangeStoreAdapter) GetRIExchangeDailySpend(ctx context.Context
 	return a.store.GetRIExchangeDailySpend(ctx, date)
 }
 
-func (a *configExchangeStoreAdapter) CompleteRIExchange(ctx context.Context, id string, exchangeID string) error {
+func (a *configExchangeStoreAdapter) CompleteRIExchange(ctx context.Context, id string, exchangeID string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
 	return a.store.CompleteRIExchange(ctx, id, exchangeID)
 }
 
-func (a *configExchangeStoreAdapter) FailRIExchange(ctx context.Context, id string, errorMsg string) error {
+func (a *configExchangeStoreAdapter) FailRIExchange(ctx context.Context, id string, errorMsg string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
 	return a.store.FailRIExchange(ctx, id, errorMsg)
 }
 

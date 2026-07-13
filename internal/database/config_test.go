@@ -251,7 +251,7 @@ func TestGetEnvDuration(t *testing.T) {
 }
 
 func TestConfigDSN(t *testing.T) {
-	tests := []struct {
+	tests := []struct { //nolint:govet // fieldalignment: reorder would break API/readability
 		name             string
 		config           Config
 		passwordOverride string
@@ -324,11 +324,11 @@ func TestConfigDSN(t *testing.T) {
 }
 
 func TestConfigValidate(t *testing.T) {
-	tests := []struct {
-		name        string
+	tests := []struct { //nolint:govet // fieldalignment: reorder would break API/readability
 		config      Config
-		expectError bool
+		name        string
 		errorMsg    string
+		expectError bool
 	}{
 		{
 			name: "valid config with password",
@@ -676,11 +676,11 @@ func TestConfigStruct(t *testing.T) {
 }
 
 func TestValidateRequiredFields(t *testing.T) {
-	tests := []struct {
-		name        string
+	tests := []struct { //nolint:govet // fieldalignment: reorder would break API/readability
 		config      Config
-		expectError bool
+		name        string
 		errorMsg    string
+		expectError bool
 	}{
 		{
 			name: "all required fields present",
@@ -751,11 +751,11 @@ func TestValidateRequiredFields(t *testing.T) {
 }
 
 func TestValidatePoolSettings(t *testing.T) {
-	tests := []struct {
-		name        string
+	tests := []struct { //nolint:govet // fieldalignment: reorder would break API/readability
 		config      Config
-		expectError bool
+		name        string
 		errorMsg    string
+		expectError bool
 	}{
 		{
 			name: "valid pool settings",

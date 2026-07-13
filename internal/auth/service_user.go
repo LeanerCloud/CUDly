@@ -26,11 +26,12 @@ func (s *Service) SetupAdmin(ctx context.Context, req SetupAdminRequest) (*Login
 		return nil, ErrAdminExists
 	}
 
-	if _, err := mail.ParseAddress(req.Email); err != nil {
+	if _, parseErr := mail.ParseAddress(req.Email); parseErr != nil {
 		return nil, ErrInvalidEmail
 	}
 
-	if err := s.validatePassword(req.Password); err != nil {
+	err = s.validatePassword(req.Password)
+	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrPasswordPolicy, err)
 	}
 
@@ -487,7 +488,7 @@ func (s *Service) GetUser(ctx context.Context, userID string) (*User, error) {
 }
 
 // UpdateUserProfile allows a user to update their own email and password.
-func (s *Service) UpdateUserProfile(ctx context.Context, userID string, email string, currentPassword string, newPassword string) error {
+func (s *Service) UpdateUserProfile(ctx context.Context, userID string, email string, currentPassword string, newPassword string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -503,7 +504,8 @@ func (s *Service) UpdateUserProfile(ctx context.Context, userID string, email st
 		return ErrCurrentPasswordIncorrect
 	}
 
-	if err := s.updateUserEmail(ctx, user, email); err != nil {
+	err = s.updateUserEmail(ctx, user, email)
+	if err != nil {
 		return err
 	}
 

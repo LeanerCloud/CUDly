@@ -43,7 +43,7 @@ func main() {
 	defer cancel()
 
 	if err := run(ctx); err != nil {
-		log.Fatalf("rekey: %v", err)
+		log.Fatalf("rekey: %v", err) //nolint:gocritic // exitAfterDefer: intentional fatal; cancel() best-effort on timeout
 	}
 }
 

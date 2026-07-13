@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func accountJSON(id, tenantID, name, state string) []byte {
+func accountJSON(id, tenantID, name, state string) []byte { //nolint:unparam // param intentional for interface consistency/future use
 	b, err := json.Marshal(azAccountShow{
 		ID:       id,
 		TenantID: tenantID,
@@ -25,10 +25,10 @@ func accountJSON(id, tenantID, name, state string) []byte {
 func TestValidateAccountExpectations(t *testing.T) {
 	tests := []struct {
 		name        string
+		wantStatus  report.Status
+		wantMsgPart string
 		opts        Options
 		accountOut  []byte
-		wantStatus  report.Status
-		wantMsgPart string // substring expected in Message when non-empty
 	}{
 		{
 			name: "valid json, no expectations",

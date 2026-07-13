@@ -10,8 +10,8 @@ import (
 
 func TestRampSchedule_GetCurrentCoverage(t *testing.T) {
 	tests := []struct {
-		name         string
 		schedule     RampSchedule
+		name         string
 		baseCoverage float64
 		expected     float64
 	}{
@@ -98,9 +98,9 @@ func TestRampSchedule_GetNextPurchaseDate(t *testing.T) {
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	tests := []struct {
-		name     string
 		schedule RampSchedule
 		expected time.Time
+		name     string
 	}{
 		{
 			name: "zero start date returns now",
@@ -157,8 +157,8 @@ func TestRampSchedule_GetNextPurchaseDate(t *testing.T) {
 
 func TestRampSchedule_IsComplete(t *testing.T) {
 	tests := []struct {
-		name     string
 		schedule RampSchedule
+		name     string
 		expected bool
 	}{
 		{
@@ -280,7 +280,7 @@ func TestPurchasePlan_Defaults(t *testing.T) {
 }
 
 func TestPurchaseExecution_Statuses(t *testing.T) {
-	validStatuses := []string{"pending", "notified", "approved", "cancelled", "completed", "failed"}
+	validStatuses := []string{"pending", "notified", "approved", "canceled", "completed", "failed"}
 
 	for _, status := range validStatuses {
 		exec := PurchaseExecution{Status: status}

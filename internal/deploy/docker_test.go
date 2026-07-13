@@ -283,8 +283,8 @@ func TestDockerService_TagValidation(t *testing.T) {
 // references (with dots, colons, slashes, hyphens) are accepted.
 func TestDockerService_TagValidation_ValidRefs(t *testing.T) {
 	cases := []struct {
-		name string
 		fn   func(*DockerService) error
+		name string
 	}{
 		{
 			name: "ECR-style tag",

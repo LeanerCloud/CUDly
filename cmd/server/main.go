@@ -61,7 +61,7 @@ func main() {
 		result, err := app.HandleScheduledTask(taskCtx, taskType)
 		cancel()
 		if err != nil {
-			log.Fatalf("Scheduled task %q failed: %v", *task, err)
+			log.Fatalf("Scheduled task %q failed: %v", *task, err) //nolint:gocritic // exitAfterDefer: intentional fatal; app.Close() not needed on task failure
 		}
 		log.Printf("Scheduled task %q completed successfully: %v", *task, result)
 		return

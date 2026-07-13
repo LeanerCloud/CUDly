@@ -130,7 +130,7 @@ func (m *Manager) ReapStuckExecutions(ctx context.Context, reapAfter time.Durati
 	}
 
 	now := time.Now()
-	for _, exec := range stuck {
+	for _, exec := range stuck { //nolint:gocritic // rangeValCopy: acceptable value copy
 		m.reapOne(ctx, &exec, reapAfter, now, result)
 	}
 

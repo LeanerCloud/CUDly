@@ -178,8 +178,8 @@ func TestSchedulerConfig(t *testing.T) {
 
 	cfg := SchedulerConfig{
 		ConfigStore:     mockStore,
-		PurchaseManager: nil, // We'd use mockPurchase but types don't match in test
-		EmailSender:     nil, // We'd use mockEmail but types don't match in test
+		PurchaseManager: nil, //nolint:govet // unusedwrite: nil; mock types don't match test interface
+		EmailSender:     nil, //nolint:govet // unusedwrite: nil; mock types don't match test interface
 		DashboardURL:    "https://dashboard.example.com",
 	}
 
@@ -1276,8 +1276,8 @@ func TestScheduler_ConvertRecommendations_IDUniqueness(t *testing.T) {
 	// "only Details.Engine differs" property holds at every level
 	// (Service / ResourceType already match across the pair).
 	cases := []struct {
-		name string
 		recs func() (common.Recommendation, common.Recommendation)
+		name string
 	}{
 		{
 			name: "term: 1yr vs 3yr (issue #188 — AWS 1yr recs were vanishing)",
@@ -1606,8 +1606,8 @@ func TestScheduler_CollectAWSRecommendations_FallbackToFiltered(t *testing.T) {
 // fields are set by each test case to drive the GetCallerIdentity response
 // shape (success with an account ID, or an error).
 type fakeSTSClient struct {
-	accountID string
 	err       error
+	accountID string
 }
 
 func (f *fakeSTSClient) GetCallerIdentity(ctx context.Context, _ *sts.GetCallerIdentityInput, _ ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error) {

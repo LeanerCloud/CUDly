@@ -18,17 +18,17 @@ import (
 // mockSMTPServer is a simple mock SMTP server for testing.
 type mockSMTPServer struct {
 	listener    net.Listener
-	port        int
-	authFail    bool
-	wg          sync.WaitGroup
 	receivedMsg string
+	wg          sync.WaitGroup
+	port        int
 	mu          sync.Mutex
+	authFail    bool
 	inData      bool
 }
 
 // newMockSMTPServer creates a new mock SMTP server.
 func newMockSMTPServer(t *testing.T, authFail bool) *mockSMTPServer {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", "127.0.0.1:0") //nolint:noctx // test helper; background context is appropriate
 	require.NoError(t, err)
 
 	addr := listener.Addr().(*net.TCPAddr)
@@ -475,7 +475,7 @@ func TestSMTPSender_SendToEmail_WithMockServer_LongContent(t *testing.T) {
 // startFlexSMTPServer starts a mock SMTP server with configurable failure behavior.
 func startFlexSMTPServer(t *testing.T, behavior string) (string, func()) {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", "127.0.0.1:0") //nolint:noctx // test helper; background context is appropriate
 	require.NoError(t, err)
 
 	addr := listener.Addr().String()

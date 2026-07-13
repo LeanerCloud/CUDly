@@ -20,7 +20,7 @@ type Options struct {
 	MaxList         int32  // used for EC2; RDS will clamp to valid range
 }
 
-func checkIdentity(ctx context.Context, cfg aws.Config, expectedAccount string) (map[string]string, error) {
+func checkIdentity(ctx context.Context, cfg aws.Config, expectedAccount string) (map[string]string, error) { //nolint:gocritic // hugeParam: by-value per calling convention
 	out, err := sts.NewFromConfig(cfg).GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
 		return nil, err
@@ -36,7 +36,7 @@ func checkIdentity(ctx context.Context, cfg aws.Config, expectedAccount string) 
 	return d, nil
 }
 
-func checkRegions(ctx context.Context, cfg aws.Config) (map[string]string, error) {
+func checkRegions(ctx context.Context, cfg aws.Config) (map[string]string, error) { //nolint:gocritic // hugeParam: by-value per calling convention
 	out, err := ec2.NewFromConfig(cfg).DescribeRegions(ctx, &ec2.DescribeRegionsInput{})
 	if err != nil {
 		return nil, err
@@ -44,7 +44,7 @@ func checkRegions(ctx context.Context, cfg aws.Config) (map[string]string, error
 	return map[string]string{"regions_count": fmt.Sprintf("%d", len(out.Regions))}, nil
 }
 
-func checkInstances(ctx context.Context, cfg aws.Config, maxList int32) (map[string]string, error) {
+func checkInstances(ctx context.Context, cfg aws.Config, maxList int32) (map[string]string, error) { //nolint:gocritic // hugeParam: by-value per calling convention
 	if maxList <= 0 {
 		maxList = 5
 	}
@@ -61,16 +61,16 @@ func checkInstances(ctx context.Context, cfg aws.Config, maxList int32) (map[str
 	return map[string]string{"instances_seen": fmt.Sprintf("%d", instances)}, nil
 }
 
-func checkRDS(ctx context.Context, cfg aws.Config, maxList int32) (map[string]string, error) {
-	max := maxList
-	if max < 20 {
-		max = 20
+func checkRDS(ctx context.Context, cfg aws.Config, maxList int32) (map[string]string, error) { //nolint:gocritic // hugeParam: by-value per calling convention
+	limit := maxList
+	if limit < 20 {
+		limit = 20
 	}
-	if max > 100 {
-		max = 100
+	if limit > 100 {
+		limit = 100
 	}
 	out, err := rds.NewFromConfig(cfg).DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{
-		MaxRecords: aws.Int32(max),
+		MaxRecords: aws.Int32(limit),
 	})
 	if err != nil {
 		return nil, err

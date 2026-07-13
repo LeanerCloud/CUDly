@@ -880,7 +880,7 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 			plan_id, execution_id, status, step_number, scheduled_date,
 			notification_sent, approval_token, recommendations,
 			total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-			cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
+			cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 			created_by_user_id, retry_execution_id, retry_attempt_n,
 			approval_token_expires_at,
 			executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -899,7 +899,7 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 			cloud_account_id = $14,
 			source = $15,
 			approved_by = $16,
-			cancelled_by = $17,
+			canceled_by = $17,
 			capacity_percent = $18,
 			retry_execution_id = $20,
 			approval_token_expires_at = $22,
@@ -981,7 +981,7 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 		RETURNING plan_id, execution_id, status, step_number, scheduled_date,
 		          notification_sent, approval_token, recommendations,
 		          total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		          cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
+		          cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 		          created_by_user_id, retry_execution_id, retry_attempt_n,
 		          approval_token_expires_at,
 		          executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -1016,12 +1016,12 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 }
 
 // CancelExecutionAtomic atomically transitions an execution from
-// pending or notified to cancelled, setting cancelled_by to the supplied
+// pending or notified to canceled, setting canceled_by to the supplied
 // actor (NULL when actor is nil). The UPDATE is conditional on
 // status IN ('pending','notified') so a concurrent approve that has
 // already transitioned the row to 'approved' causes zero rows to be
 // affected and the method returns (false, currentStatus, nil) with the
-// live status fetched via a follow-up SELECT. Returns (true, "cancelled",
+// live status fetched via a follow-up SELECT. Returns (true, "canceled",
 // nil) on success and (false, "", err) on a real DB error.
 //
 // The 'scheduled' status is intentionally NOT accepted here -- the
@@ -1039,7 +1039,7 @@ func (s *PostgresStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, ex
 	q := `
 		UPDATE purchase_executions
 		   SET status       = 'cancelled',
-		       cancelled_by = $2,
+		       canceled_by = $2,
 		       updated_at   = NOW()
 		 WHERE execution_id = $1
 		   AND status IN ('pending', 'notified')
@@ -1076,10 +1076,10 @@ func (s *PostgresStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, ex
 }
 
 // CancelScheduledExecutionAtomic atomically transitions an execution from
-// 'scheduled' to 'cancelled', setting cancelled_by to the supplied actor
+// 'scheduled' to 'cancelled', setting canceled_by to the supplied actor
 // (NULL when actor is nil). Used by the Gmail-style pre-fire delay revoke
 // path (issue #290 / #291 wave-2): an approved-but-not-yet-fired execution
-// can be revoked at $0 by flipping it to cancelled before the scheduler
+// can be revoked at $0 by flipping it to canceled before the scheduler
 // fires the cloud SDK call.
 //
 // The 'scheduled' status is the only accepted source. A concurrent
@@ -1089,14 +1089,14 @@ func (s *PostgresStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, ex
 // ("revocation window has closed") so the frontend can fall through to
 // the post-execution Azure direct-cancel API path.
 //
-// Returns (true, "cancelled", nil) on success and (false, "", err) on a
+// Returns (true, "canceled", nil) on success and (false, "", err) on a
 // real DB error. Must be called inside a WithTx block so the suppression
 // cleanup commits atomically with the status flip.
 func (s *PostgresStore) CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (canceled bool, currentStatus string, err error) {
 	q := `
 		UPDATE purchase_executions
 		   SET status       = 'cancelled',
-		       cancelled_by = $2,
+		       canceled_by = $2,
 		       updated_at   = NOW()
 		 WHERE execution_id = $1
 		   AND status = 'scheduled'
@@ -1151,7 +1151,7 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
+		       cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -1192,7 +1192,7 @@ func (s *PostgresStore) GetPlannedExecutions(ctx context.Context, statuses []str
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
+		       cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -1217,7 +1217,7 @@ func (s *PostgresStore) GetStaleApprovedExecutions(ctx context.Context, olderTha
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
+		       cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -1259,7 +1259,7 @@ func (s *PostgresStore) ListStuckExecutions(ctx context.Context, statuses []stri
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
+		       cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -1280,7 +1280,7 @@ func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExe
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
+		       cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -1304,7 +1304,7 @@ func (s *PostgresStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) (
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
+		       cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -1334,7 +1334,7 @@ func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
+		       cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -1361,7 +1361,7 @@ func (s *PostgresStore) GetExecutionByPlanAndDate(ctx context.Context, planID st
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
+		       cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -1545,7 +1545,7 @@ func (s *PostgresStore) GetScheduledExecutionsDue(ctx context.Context) ([]Purcha
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
+		       cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -1745,7 +1745,7 @@ func (s *PostgresStore) GetActivePurchaseHistory(ctx context.Context, asOf time.
 // number, unknown provider) matches account_id with no provider gate. Providers
 // are sorted for deterministic SQL. The OR is wrapped in parentheses so it
 // composes with the surrounding AND chain.
-func appendAccountPredicate(conds []string, args []any, accountIDs []string, externalIDsByProvider map[string][]string) ([]string, []any) {
+func appendAccountPredicate(conds []string, args []any, accountIDs []string, externalIDsByProvider map[string][]string) ([]string, []any) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	if len(accountIDs) == 0 && len(externalIDsByProvider) == 0 {
 		return conds, args
 	}
@@ -2031,7 +2031,7 @@ func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purc
 // the purchase_history row identified by purchaseID. The UPDATE is a no-op
 // when revoked_at is already non-null (idempotency guard). Returns a not-found
 // error when zero rows are affected and revoked_at was previously NULL.
-func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error {
+func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
 	var supportCaseIDPtr *string
 	if supportCaseID != "" {
 		supportCaseIDPtr = &supportCaseID
@@ -2325,7 +2325,7 @@ func (s *PostgresStore) GetRIExchangeHistory(ctx context.Context, since time.Tim
 // Uses a single UPDATE...WHERE...RETURNING for atomicity, then diagnoses failure
 // only if zero rows are returned.
 // actor is the UUID of the user performing the transition (nil for system-initiated paths).
-func (s *PostgresStore) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*RIExchangeRecord, error) {
+func (s *PostgresStore) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*RIExchangeRecord, error) { //nolint:gocritic // paramTypeCombine: explicit types aid readability
 	query := `
 		UPDATE ri_exchange_history
 		SET status = $3, updated_at = NOW(),
@@ -2372,7 +2372,7 @@ func (s *PostgresStore) diagnoseTransitionFailure(ctx context.Context, id, fromS
 }
 
 // CompleteRIExchange marks an RI exchange as completed.
-func (s *PostgresStore) CompleteRIExchange(ctx context.Context, id string, exchangeID string) error {
+func (s *PostgresStore) CompleteRIExchange(ctx context.Context, id string, exchangeID string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
 	query := `
 		UPDATE ri_exchange_history
 		SET status = 'completed', exchange_id = $2, completed_at = NOW()
@@ -2395,7 +2395,7 @@ func (s *PostgresStore) CompleteRIExchange(ctx context.Context, id string, excha
 // (issue #300). Called after CompleteRIExchange when approval came from a
 // session-authed user. The stamping is best-effort (log + continue on failure
 // so the exchange itself isn't rolled back just because the audit stamp failed).
-func (s *PostgresStore) StampRIExchangeApprovedBy(ctx context.Context, id string, approverEmail string) error {
+func (s *PostgresStore) StampRIExchangeApprovedBy(ctx context.Context, id string, approverEmail string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
 	query := `
 		UPDATE ri_exchange_history
 		SET approved_by = $2
@@ -2413,7 +2413,7 @@ func (s *PostgresStore) StampRIExchangeApprovedBy(ctx context.Context, id string
 }
 
 // FailRIExchange marks an RI exchange as failed.
-func (s *PostgresStore) FailRIExchange(ctx context.Context, id string, errorMsg string) error {
+func (s *PostgresStore) FailRIExchange(ctx context.Context, id string, errorMsg string) error { //nolint:gocritic // paramTypeCombine: explicit types aid readability
 	query := `
 		UPDATE ri_exchange_history
 		SET status = 'failed', error = $2
@@ -3129,7 +3129,8 @@ func (s *PostgresStore) SetPlanAccounts(ctx context.Context, planID string, acco
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	if err = s.validatePlanAccountProvidersTx(ctx, tx, planID, accountIDs); err != nil {
+	err = s.validatePlanAccountProvidersTx(ctx, tx, planID, accountIDs)
+	if err != nil {
 		return err
 	}
 
@@ -3207,7 +3208,7 @@ type planAccountProviderMismatch struct {
 	Provider string
 }
 
-func (s *PostgresStore) findPlanAccountProviderMismatchesTx(ctx context.Context, tx pgx.Tx, accountIDs []string, expected []string) ([]planAccountProviderMismatch, error) {
+func (s *PostgresStore) findPlanAccountProviderMismatchesTx(ctx context.Context, tx pgx.Tx, accountIDs []string, expected []string) ([]planAccountProviderMismatch, error) { //nolint:gocritic // paramTypeCombine: explicit types aid readability
 	expectedSet := make(map[string]struct{}, len(expected))
 	for _, provider := range expected {
 		expectedSet[provider] = struct{}{}

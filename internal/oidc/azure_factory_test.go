@@ -15,9 +15,9 @@ import (
 // fakeAzureKeyVaultClient is a minimal AzureKeyVaultClient backed by an
 // in-process RSA key. Used to exercise resolveOnce without a real Key Vault.
 type fakeAzureKeyVaultClient struct {
-	key     *rsa.PublicKey
-	eBytes  []byte // raw bytes for the public exponent (override for M6 tests)
 	signErr error
+	key     *rsa.PublicKey
+	eBytes  []byte
 }
 
 func (f *fakeAzureKeyVaultClient) Sign(_ context.Context, _, _ string, _ azkeys.SignParameters, _ *azkeys.SignOptions) (azkeys.SignResponse, error) {
@@ -52,9 +52,9 @@ func TestAzureSigner_ExponentRange(t *testing.T) {
 
 	cases := []struct {
 		name      string
-		eBytes    []byte // raw bytes sent as the exponent
-		wantErr   bool
 		errSubstr string
+		eBytes    []byte
+		wantErr   bool
 	}{
 		{
 			name:    "normal exponent 65537 accepted",
@@ -107,9 +107,9 @@ func TestNewSignerFromEnv_AzureHalfConfigured(t *testing.T) {
 		name      string
 		vaultURL  string
 		keyName   string
+		errSubstr string
 		wantErr   bool
 		wantNil   bool
-		errSubstr string
 	}{
 		{
 			name:    "both empty = disabled (nil, nil)",

@@ -72,7 +72,7 @@ const docsPageCSP = "default-src 'none'; " +
 // serveDocsUI returns a self-contained HTML page with Swagger UI loaded from CDN.
 // The response carries a relaxed Content-Security-Policy (docsPageCSP) so the
 // CDN assets and bootstrap script actually run; without it the page is blank.
-func (h *Handler) serveDocsUI(_ context.Context, _ *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
+func (h *Handler) serveDocsUI(_ context.Context, _ *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) { //nolint:unparam // error return is part of router handler interface; always nil here
 	html := `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -99,7 +99,7 @@ func (h *Handler) serveDocsUI(_ context.Context, _ *events.LambdaFunctionURLRequ
 }
 
 // serveOpenAPISpec returns the raw OpenAPI YAML specification.
-func (h *Handler) serveOpenAPISpec(_ context.Context, _ *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
+func (h *Handler) serveOpenAPISpec(_ context.Context, _ *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) { //nolint:unparam // error return is part of router handler interface; always nil here
 	return &rawResponse{
 		contentType: "application/yaml; charset=utf-8",
 		body:        string(openapiSpec),

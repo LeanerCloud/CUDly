@@ -72,7 +72,7 @@ type aggregateData struct {
 // aggKey is the bucket identity. cloudAccountID is dereferenced (or "" when
 // nil) so two rows for the same provider account but differing UUID-vs-NULL
 // don't merge across the tenant boundary.
-func aggKey(p config.PurchaseHistoryRecord, commitmentType string) string {
+func aggKey(p config.PurchaseHistoryRecord, commitmentType string) string { //nolint:gocritic // hugeParam: by-value per calling convention
 	cloud := ""
 	if p.CloudAccountID != nil {
 		cloud = *p.CloudAccountID
@@ -134,7 +134,7 @@ func (c *Collector) Collect(ctx context.Context) error {
 func aggregatePurchases(ctx context.Context, purchases []config.PurchaseHistoryRecord, now time.Time) (serviceMap map[string]*aggregateData, activePurchases, skippedBadTerm int, err error) {
 	serviceMap = make(map[string]*aggregateData)
 
-	for _, p := range purchases {
+	for _, p := range purchases { //nolint:gocritic // rangeValCopy: acceptable value copy
 		if err := ctx.Err(); err != nil {
 			return nil, 0, 0, fmt.Errorf("collection canceled after %d rows: %w", activePurchases, err)
 		}

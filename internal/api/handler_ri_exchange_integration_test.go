@@ -100,7 +100,7 @@ func reshapeRequest() *events.LambdaFunctionURLRequest {
 // recommendations directly into the store so the reshape lookup has
 // something to read. Bypasses the scheduler so the test only exercises
 // the read-side mapping logic.
-func seedRecsForRegion(ctx context.Context, t *testing.T, store *config.PostgresStore, region string, recs []config.RecommendationRecord) {
+func seedRecsForRegion(ctx context.Context, t *testing.T, store *config.PostgresStore, region string, recs []config.RecommendationRecord) { //nolint:unparam // param intentional for interface consistency/future use
 	t.Helper()
 	require.NoError(t, store.ReplaceRecommendations(ctx, time.Now(), recs),
 		"seeding recommendations into the test container failed")

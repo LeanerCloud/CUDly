@@ -40,7 +40,8 @@ func TestLocalSignerMintAndVerify(t *testing.T) {
 		t.Fatalf("decode header: %v", err)
 	}
 	var header map[string]any
-	if err := json.Unmarshal(headerBytes, &header); err != nil {
+	err = json.Unmarshal(headerBytes, &header)
+	if err != nil {
 		t.Fatalf("unmarshal header: %v", err)
 	}
 	if header["alg"] != "RS256" {
@@ -59,7 +60,8 @@ func TestLocalSignerMintAndVerify(t *testing.T) {
 		t.Fatalf("decode claims: %v", err)
 	}
 	var decoded map[string]any
-	if err := json.Unmarshal(claimsBytes, &decoded); err != nil {
+	err = json.Unmarshal(claimsBytes, &decoded)
+	if err != nil {
 		t.Fatalf("unmarshal claims: %v", err)
 	}
 	if decoded["iss"] != claims["iss"] {
@@ -124,7 +126,7 @@ func TestBuildDiscovery(t *testing.T) {
 }
 
 func TestBigEndianExponent(t *testing.T) {
-	cases := []struct {
+	cases := []struct { //nolint:govet // fieldalignment: reorder would break API/readability
 		in   int
 		want []byte
 	}{

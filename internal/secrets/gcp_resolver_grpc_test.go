@@ -44,7 +44,7 @@ func newTestGCPResolver(t *testing.T, mock *mockSecretManagerServer) (*GCPResolv
 	t.Helper()
 
 	// Start a gRPC server on a random port
-	lis, err := net.Listen("tcp", "localhost:0")
+	lis, err := net.Listen("tcp", "localhost:0") //nolint:noctx // test helper; background context is appropriate
 	require.NoError(t, err)
 
 	grpcServer := grpc.NewServer()

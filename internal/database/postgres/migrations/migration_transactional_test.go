@@ -52,7 +52,7 @@ const noTransactionMarker = "-- migrate:no-transaction"
 // forbiddenPatterns are statements PostgreSQL cannot run inside a transaction
 // block. Each is matched case-insensitively against the comment-and-body-stripped
 // SQL with whitespace tolerance and word boundaries.
-var forbiddenPatterns = []struct {
+var forbiddenPatterns = []struct { //nolint:govet // fieldalignment: reorder would break API/readability
 	name string
 	re   *regexp.Regexp
 }{

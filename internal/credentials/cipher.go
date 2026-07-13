@@ -86,7 +86,7 @@ func DevKey() []byte {
 	return k
 }
 
-func loadKey(ctx context.Context, resolver secrets.Resolver) ([]byte, string, error) {
+func loadKey(ctx context.Context, resolver secrets.Resolver) ([]byte, string, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	// Detect multiple-set misconfiguration upfront.
 	var set []string
 	for _, name := range []string{EnvSecretARN, EnvSecretName, EnvSecretID, EnvRawKey} {

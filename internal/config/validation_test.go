@@ -10,9 +10,9 @@ import (
 func TestGlobalConfig_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
+		errMsg  string
 		config  GlobalConfig
 		wantErr bool
-		errMsg  string
 	}{
 		{
 			name: "valid empty config",
@@ -281,9 +281,9 @@ func TestGlobalConfig_Validate(t *testing.T) {
 func TestServiceConfig_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
+		errMsg  string
 		config  ServiceConfig
 		wantErr bool
-		errMsg  string
 	}{
 		{
 			name: "valid config",
@@ -559,10 +559,10 @@ func TestServiceConfig_Validate(t *testing.T) {
 
 func TestRampSchedule_Validate(t *testing.T) {
 	tests := []struct {
-		name    string
 		sched   RampSchedule
-		wantErr bool
+		name    string
 		errMsg  string
+		wantErr bool
 	}{
 		{
 			name:    "valid empty schedule",
@@ -734,10 +734,10 @@ func TestRampSchedule_Validate(t *testing.T) {
 
 func TestPurchasePlan_Validate(t *testing.T) {
 	tests := []struct {
-		name    string
 		plan    PurchasePlan
-		wantErr bool
+		name    string
 		errMsg  string
+		wantErr bool
 	}{
 		{
 			name: "valid plan",

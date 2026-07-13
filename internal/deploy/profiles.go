@@ -13,31 +13,31 @@ import (
 
 // ProfileConfig holds configuration for a single deployment profile.
 type ProfileConfig struct {
-	Provider          string  `yaml:"provider"`         // Cloud provider: aws, azure, gcp
-	ComputePlatform   string  `yaml:"compute_platform"` // Compute platform: lambda/fargate, container-apps/aks, cloud-run/gke
-	StackName         string  `yaml:"stack_name"`
-	Region            string  `yaml:"region"`
-	AWSProfile        string  `yaml:"aws_profile"`
-	Email             string  `yaml:"email"`
-	Term              int     `yaml:"term"`
-	PaymentOption     string  `yaml:"payment_option"`
-	Coverage          float64 `yaml:"coverage"`
-	RampSchedule      string  `yaml:"ramp_schedule"`
-	NotifyDays        int     `yaml:"notify_days"`
-	EnableDashboard   bool    `yaml:"enable_dashboard"`
 	DashboardDomain   string  `yaml:"dashboard_domain,omitempty"`
 	HostedZoneID      string  `yaml:"hosted_zone_id,omitempty"`
-	Architecture      string  `yaml:"architecture"`
-	MemorySize        int     `yaml:"memory_size"`
-	ImageTag          string  `yaml:"image_tag,omitempty"`
-	CORSAllowedOrigin string  `yaml:"cors_allowed_origin,omitempty"`
+	StackName         string  `yaml:"stack_name"`
+	RampSchedule      string  `yaml:"ramp_schedule"`
+	AWSProfile        string  `yaml:"aws_profile"`
+	Email             string  `yaml:"email"`
 	AdminEmail        string  `yaml:"admin_email,omitempty"`
+	PaymentOption     string  `yaml:"payment_option"`
+	ComputePlatform   string  `yaml:"compute_platform"`
+	CORSAllowedOrigin string  `yaml:"cors_allowed_origin,omitempty"`
+	Region            string  `yaml:"region"`
+	ImageTag          string  `yaml:"image_tag,omitempty"`
+	Provider          string  `yaml:"provider"`
+	Architecture      string  `yaml:"architecture"`
+	Coverage          float64 `yaml:"coverage"`
+	MemorySize        int     `yaml:"memory_size"`
+	NotifyDays        int     `yaml:"notify_days"`
+	Term              int     `yaml:"term"`
+	EnableDashboard   bool    `yaml:"enable_dashboard"`
 }
 
 // DeploymentConfig holds all deployment profiles.
 type DeploymentConfig struct {
-	ActiveProfile string                   `yaml:"active_profile"`
 	Profiles      map[string]ProfileConfig `yaml:"profiles"`
+	ActiveProfile string                   `yaml:"active_profile"`
 }
 
 // GetConfigPath returns the path to the deployment configuration file.
@@ -177,7 +177,7 @@ func (c *DeploymentConfig) SetActiveProfile(name string) error {
 }
 
 // AddProfile adds a new profile to the configuration.
-func (c *DeploymentConfig) AddProfile(name string, profile ProfileConfig) error {
+func (c *DeploymentConfig) AddProfile(name string, profile ProfileConfig) error { //nolint:gocritic // hugeParam: by-value per calling convention
 	if name == "" {
 		return fmt.Errorf("profile name cannot be empty")
 	}
@@ -197,7 +197,7 @@ func (c *DeploymentConfig) AddProfile(name string, profile ProfileConfig) error 
 }
 
 // UpdateProfile updates an existing profile.
-func (c *DeploymentConfig) UpdateProfile(name string, profile ProfileConfig) error {
+func (c *DeploymentConfig) UpdateProfile(name string, profile ProfileConfig) error { //nolint:gocritic // hugeParam: by-value per calling convention
 	if _, exists := c.Profiles[name]; !exists {
 		return fmt.Errorf("profile %q does not exist", name)
 	}

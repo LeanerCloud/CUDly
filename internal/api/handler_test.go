@@ -839,7 +839,7 @@ func TestHandler_HandleRequest_CancelPurchase(t *testing.T) {
 	var body map[string]string
 	err = json.Unmarshal([]byte(resp.Body), &body)
 	require.NoError(t, err)
-	assert.Equal(t, "cancelled", body["status"])
+	assert.Equal(t, "canceled", body["status"])
 }
 
 func TestHandler_HandleRequest_GetHistory(t *testing.T) {
@@ -904,7 +904,7 @@ func TestHandler_HandleRequest_Error(t *testing.T) {
 	assert.Equal(t, "Internal server error", body["error"])
 }
 
-// Integration tests for dashboard endpoints
+// Integration tests for dashboard endpoints.
 func TestHandler_HandleRequest_GetDashboardSummary(t *testing.T) {
 	ctx := context.Background()
 	mockScheduler := new(MockScheduler)
@@ -1172,8 +1172,8 @@ func TestHandler_HandleRequest_DeletePlannedPurchase(t *testing.T) {
 	mockAuth.grantAdmin()
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
-	cancelled := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "cancelled"}
-	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "cancelled", mock.Anything).Return(cancelled, nil)
+	canceled := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "canceled"}
+	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "canceled", mock.Anything).Return(canceled, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, corsAllowedOrigin: "*", apiKey: "test-key"}
 
@@ -1239,7 +1239,7 @@ func TestHandler_HandleRequest_CreatePlannedPurchases(t *testing.T) {
 	assert.Equal(t, 200, resp.StatusCode)
 }
 
-// Tests for edge cases in getPlan
+// Tests for edge cases in getPlan.
 func TestHandler_HandleRequest_GetPlan_Error(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -1271,7 +1271,7 @@ func TestHandler_HandleRequest_GetPlan_Error(t *testing.T) {
 	assert.Equal(t, 500, resp.StatusCode)
 }
 
-// Test for deleteUser edge case - self deletion prevention
+// Test for deleteUser edge case - self deletion prevention.
 func TestHandler_HandleRequest_DeleteUser_SelfDeletion(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
@@ -1310,7 +1310,7 @@ func TestHandler_HandleRequest_DeleteUser_SelfDeletion(t *testing.T) {
 	assert.Equal(t, "cannot delete your own account", body["error"])
 }
 
-// Test for listPlans error case
+// Test for listPlans error case.
 func TestHandler_HandleRequest_ListPlans_Error(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -1405,7 +1405,7 @@ func TestHandler_HandleRequest_ListPlans_UnassignedFlagged(t *testing.T) {
 	assert.True(t, lp.Unassigned, "zero-account plan must have unassigned=true")
 }
 
-// Test for updateConfig error case - invalid JSON returns 500 (not 400)
+// Test for updateConfig error case - invalid JSON returns 500 (not 400).
 func TestHandler_HandleRequest_UpdateConfig_InvalidJSON(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
@@ -1438,7 +1438,7 @@ func TestHandler_HandleRequest_UpdateConfig_InvalidJSON(t *testing.T) {
 	assert.Equal(t, 400, resp.StatusCode)
 }
 
-// Nil-body success responses (e.g. DELETE /accounts/:id) must serialise as
+// Nil-body success responses (e.g. DELETE /accounts/:id) must serialize as
 // "{}" rather than the empty string. Empty-string bodies caused
 // `response.json()` in the frontend to throw SyntaxError, surfacing as a
 // "JSON format error" toast even though the underlying delete succeeded.
@@ -1449,7 +1449,7 @@ func TestHandler_buildResponse_NilBodyEmitsEmptyJSONObject(t *testing.T) {
 	// buildResponse never returns an error; converts all failure modes to 500 body.
 	resp := h.buildResponse(200, headers, nil, nil)
 	assert.Equal(t, 200, resp.StatusCode)
-	assert.Equal(t, "{}", resp.Body, "nil-body success must serialise as {} so the frontend's response.json() doesn't throw")
+	assert.Equal(t, "{}", resp.Body, "nil-body success must serialize as {} so the frontend's response.json() doesn't throw")
 }
 
 func TestHandler_buildResponse_BodyMarshalsAsBefore(t *testing.T) {

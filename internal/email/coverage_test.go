@@ -129,9 +129,9 @@ func TestSMTPSender_AllNotificationMethods_NoFromEmail(t *testing.T) {
 func TestSMTPSender_ConfigVariations(t *testing.T) {
 	tests := []struct {
 		name        string
+		errorMsg    string
 		cfg         SMTPConfig
 		expectError bool
-		errorMsg    string
 	}{
 		{
 			name: "valid config with all fields",

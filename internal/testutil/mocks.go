@@ -23,7 +23,7 @@ func (m *MockScheduler) CollectRecommendations(ctx context.Context) (*scheduler.
 	return &scheduler.CollectResult{}, nil
 }
 
-func (m *MockScheduler) ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+func (m *MockScheduler) ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) { //nolint:gocritic // hugeParam: by-value per calling convention
 	if m.ListRecommendationsFunc != nil {
 		return m.ListRecommendationsFunc(ctx, filter)
 	}

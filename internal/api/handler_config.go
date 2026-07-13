@@ -162,7 +162,7 @@ func (h *Handler) propagateGlobalDefaults(ctx context.Context, cfg *config.Globa
 // the save isn't AWS, or the combo is valid. Errors from Validate are
 // logged and swallowed (permissive) so a transient DB blip never blocks
 // a settings save.
-func (h *Handler) checkCommitmentOptionCombo(ctx context.Context, cfg config.ServiceConfig) error {
+func (h *Handler) checkCommitmentOptionCombo(ctx context.Context, cfg config.ServiceConfig) error { //nolint:gocritic // hugeParam: by-value per calling convention
 	if h.commitmentOpts == nil || cfg.Provider != "aws" || cfg.Term <= 0 || cfg.Payment == "" {
 		return nil
 	}
@@ -205,7 +205,7 @@ var serviceConfigFilterKeys = []string{
 // A "not found" error means no existing record — cfg is returned unchanged.
 // Any other DB error is returned to prevent a partial write from clobbering
 // previously configured filter fields.
-func mergeServiceConfig(ctx context.Context, store config.StoreInterface, cfg config.ServiceConfig, body string) (config.ServiceConfig, error) {
+func mergeServiceConfig(ctx context.Context, store config.StoreInterface, cfg config.ServiceConfig, body string) (config.ServiceConfig, error) { //nolint:gocritic // hugeParam: by-value per calling convention
 	existing, err := store.GetServiceConfig(ctx, cfg.Provider, cfg.Service)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {

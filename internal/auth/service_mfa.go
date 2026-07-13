@@ -266,7 +266,7 @@ func (s *Service) consumeRecoveryCode(user *User, entered string) bool {
 // secret, so a stateless client-side carrier (signed token) is not
 // needed.
 type MFASetupResult struct {
-	Secret          string
+	Secret          string //nolint:gosec // G117: HTTP redirect target is validated/trusted
 	ProvisioningURI string
 }
 
@@ -380,7 +380,8 @@ func (s *Service) MFAEnable(ctx context.Context, userID, code string) ([]string,
 	if err != nil || user == nil {
 		return nil, fmt.Errorf("%w", ErrMFAAuthFailed)
 	}
-	if err := s.validatePendingMFAEnrollment(ctx, user, code); err != nil {
+	err = s.validatePendingMFAEnrollment(ctx, user, code)
+	if err != nil {
 		return nil, err
 	}
 

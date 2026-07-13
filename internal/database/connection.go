@@ -283,7 +283,7 @@ func (c *Connection) Begin(ctx context.Context) (pgx.Tx, error) {
 }
 
 // BeginTx starts a new transaction with options.
-func (c *Connection) BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error) {
+func (c *Connection) BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error) { //nolint:gocritic // hugeParam: by-value per calling convention
 	return c.pool.BeginTx(ctx, txOptions)
 }
 

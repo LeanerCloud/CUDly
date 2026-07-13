@@ -38,7 +38,7 @@ func TestValidatePurchaseRecommendation(t *testing.T) {
 		f(&r)
 		return r
 	}
-	tests := []struct {
+	tests := []struct { //nolint:govet // fieldalignment: reorder would break API/readability
 		name      string
 		rec       config.RecommendationRecord
 		wantError bool

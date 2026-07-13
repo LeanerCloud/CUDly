@@ -27,10 +27,10 @@ func (f failingRoundTripper) RoundTrip(_ *http.Request) (*http.Response, error) 
 // so tests can assert region / account / provider scoping landed in the
 // SQL query. Returns a configurable result set or error.
 type fakeRecsLister struct {
-	gotFilter config.RecommendationFilter
-	calls     int
-	out       []config.RecommendationRecord
 	err       error
+	gotFilter config.RecommendationFilter
+	out       []config.RecommendationRecord
+	calls     int
 }
 
 func (f *fakeRecsLister) ListStoredRecommendations(_ context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {

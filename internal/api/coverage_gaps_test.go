@@ -482,11 +482,11 @@ func TestHandler_requiresCSRFValidation(t *testing.T) {
 
 func TestAmbientCredResult(t *testing.T) {
 	tests := []struct {
-		name        string
 		acct        *config.CloudAccount
+		name        string
+		msgContains string
 		wantOK      bool
 		wantFound   bool
-		msgContains string
 	}{
 		{
 			name:        "aws workload_identity_federation no ARN",
@@ -885,8 +885,8 @@ func TestHandler_sendPurchaseApprovalEmail_ResponseRecipientFallsBackToContactEm
 // mockCredStoreHas is a credential store stub where HasCredential is configurable.
 type mockCredStoreHas struct {
 	MockCredentialStore
-	has bool
 	err error
+	has bool
 }
 
 func (m *mockCredStoreHas) HasCredential(_ context.Context, _, _ string) (bool, error) {

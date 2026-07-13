@@ -25,53 +25,53 @@ func (m *MockEmailSender) SendToEmail(ctx context.Context, toEmail, subject, bod
 }
 
 // SendNewRecommendationsNotification mocks the SendNewRecommendationsNotification operation.
-func (m *MockEmailSender) SendNewRecommendationsNotification(ctx context.Context, data email.NotificationData) error {
+func (m *MockEmailSender) SendNewRecommendationsNotification(ctx context.Context, data email.NotificationData) error { //nolint:gocritic // hugeParam: by-value per calling convention
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
 // SendScheduledPurchaseNotification mocks the SendScheduledPurchaseNotification operation.
-func (m *MockEmailSender) SendScheduledPurchaseNotification(ctx context.Context, data email.NotificationData) error {
+func (m *MockEmailSender) SendScheduledPurchaseNotification(ctx context.Context, data email.NotificationData) error { //nolint:gocritic // hugeParam: by-value per calling convention
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
 // SendPurchaseConfirmation mocks the SendPurchaseConfirmation operation.
-func (m *MockEmailSender) SendPurchaseConfirmation(ctx context.Context, data email.NotificationData) error {
+func (m *MockEmailSender) SendPurchaseConfirmation(ctx context.Context, data email.NotificationData) error { //nolint:gocritic // hugeParam: by-value per calling convention
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
 // SendPurchaseFailedNotification mocks the SendPurchaseFailedNotification operation.
-func (m *MockEmailSender) SendPurchaseFailedNotification(ctx context.Context, data email.NotificationData) error {
+func (m *MockEmailSender) SendPurchaseFailedNotification(ctx context.Context, data email.NotificationData) error { //nolint:gocritic // hugeParam: by-value per calling convention
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
 // SendPasswordResetEmail mocks the SendPasswordResetEmail operation.
-func (m *MockEmailSender) SendPasswordResetEmail(ctx context.Context, email, resetURL string) error {
+func (m *MockEmailSender) SendPasswordResetEmail(ctx context.Context, email, resetURL string) error { //nolint:gocritic // importShadow: local var name matches package; clear in context
 	args := m.Called(ctx, email, resetURL)
 	return args.Error(0)
 }
 
 // SendWelcomeEmail mocks the SendWelcomeEmail operation.
-func (m *MockEmailSender) SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error {
+func (m *MockEmailSender) SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error { //nolint:gocritic // importShadow: local var name matches package; clear in context
 	args := m.Called(ctx, email, dashboardURL, role)
 	return args.Error(0)
 }
 
 // SendPurchaseApprovalRequest mocks the SendPurchaseApprovalRequest operation.
-func (m *MockEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data email.NotificationData) error {
+func (m *MockEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data email.NotificationData) error { //nolint:gocritic // hugeParam: by-value per calling convention
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
-func (m *MockEmailSender) SendRegistrationReceivedNotification(ctx context.Context, data email.RegistrationNotificationData) error {
+func (m *MockEmailSender) SendRegistrationReceivedNotification(ctx context.Context, data email.RegistrationNotificationData) error { //nolint:gocritic // hugeParam: by-value per calling convention
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
-func (m *MockEmailSender) SendRegistrationDecisionNotification(ctx context.Context, toEmail string, data email.RegistrationDecisionData) error {
+func (m *MockEmailSender) SendRegistrationDecisionNotification(ctx context.Context, toEmail string, data email.RegistrationDecisionData) error { //nolint:gocritic // hugeParam: by-value per calling convention
 	args := m.Called(ctx, toEmail, data)
 	return args.Error(0)
 }
