@@ -216,7 +216,7 @@ type AuthServiceInterface interface {
 // Auth request/response types (to avoid import cycle with auth package).
 type LoginRequest struct {
 	Email    string `json:"email"`
-	Password string `json:"password"` //nolint:gosec // G117: HTTP redirect target is validated/trusted
+	Password string `json:"password"` //nolint:gosec // G117: intentional credential field in request/response struct -- value is supplied by the authenticated caller or returned once at creation; not re-stored downstream
 	MFACode  string `json:"mfa_code,omitempty"`
 }
 
@@ -236,7 +236,7 @@ type UserInfo struct {
 
 type SetupAdminRequest struct {
 	Email    string `json:"email"`
-	Password string `json:"password"` //nolint:gosec // G117: HTTP redirect target is validated/trusted
+	Password string `json:"password"` //nolint:gosec // G117: intentional credential field in request/response struct -- value is supplied by the authenticated caller or returned once at creation; not re-stored downstream
 }
 
 type PasswordResetRequest struct {
@@ -266,7 +266,7 @@ type User struct {
 // non-empty: authorization is group-membership-only (issue #907).
 type CreateUserRequest struct {
 	Email    string   `json:"email"`
-	Password string   `json:"password"` //nolint:gosec // G117: HTTP redirect target is validated/trusted
+	Password string   `json:"password"` //nolint:gosec // G117: intentional credential field in request/response struct -- value is supplied by the authenticated caller or returned once at creation; not re-stored downstream
 	Groups   []string `json:"groups,omitempty"`
 }
 
@@ -444,7 +444,7 @@ type UserPermissionsResponse struct {
 // required as defense-in-depth — a stolen session alone shouldn't
 // be enough to swap a user's MFA secret.
 type MFASetupRequest struct {
-	Password string `json:"password"` //nolint:gosec // G117: HTTP redirect target is validated/trusted
+	Password string `json:"password"` //nolint:gosec // G117: intentional credential field in request/response struct -- value is supplied by the authenticated caller or returned once at creation; not re-stored downstream
 }
 
 // MFASetupResponse returns the freshly-generated secret + the
@@ -452,7 +452,7 @@ type MFASetupRequest struct {
 // already persisted server-side as the pending secret; clients do
 // not need to round-trip it back on enable.
 type MFASetupResponse struct {
-	Secret          string `json:"secret"` //nolint:gosec // G117: HTTP redirect target is validated/trusted
+	Secret          string `json:"secret"` //nolint:gosec // G117: intentional credential field in request/response struct -- value is supplied by the authenticated caller or returned once at creation; not re-stored downstream
 	ProvisioningURI string `json:"provisioning_uri"`
 }
 
@@ -472,7 +472,7 @@ type MFAEnableResponse struct {
 // MFADisableRequest turns off MFA. Requires the current password AND
 // a fresh proof-of-possession (TOTP code or unused recovery code).
 type MFADisableRequest struct {
-	Password string `json:"password"` //nolint:gosec // G117: HTTP redirect target is validated/trusted
+	Password string `json:"password"` //nolint:gosec // G117: intentional credential field in request/response struct -- value is supplied by the authenticated caller or returned once at creation; not re-stored downstream
 	Code     string `json:"code"`
 }
 
@@ -547,22 +547,25 @@ type ServiceSavings struct {
 // The field stays in the response shape so a future "expiring soon"
 // sub-state has a slot without a breaking API change.
 type InventoryCommitment struct {
-	StartDate        time.Time `json:"start_date"`
-	EndDate          time.Time `json:"end_date"`
-	MonthlyCost      *float64  `json:"monthly_cost"`
-	Provider         string    `json:"provider"`
-	AccountID        string    `json:"account_id"`
-	AccountName      string    `json:"account_name,omitempty"`
-	Service          string    `json:"service"`
-	ResourceType     string    `json:"resource_type,omitempty"`
-	Region           string    `json:"region"`
-	Status           string    `json:"status"`
-	ID               string    `json:"id"`
-	PaymentOption    string    `json:"payment_option,omitempty"`
-	TermYears        int       `json:"term_years"`
-	UpfrontCost      float64   `json:"upfront_cost"`
-	EstimatedSavings float64   `json:"estimated_savings"`
-	Count            int       `json:"count"`
+	StartDate time.Time `json:"start_date"`
+	EndDate   time.Time `json:"end_date"`
+	// MonthlyCost is nil when the source purchase_history row has a NULL
+	// monthly_cost (provider did not return a monthly breakdown). The
+	// frontend renders "--" for nil and "$X.XX" when non-nil.
+	MonthlyCost      *float64 `json:"monthly_cost"`
+	Provider         string   `json:"provider"`
+	AccountID        string   `json:"account_id"`
+	AccountName      string   `json:"account_name,omitempty"`
+	Service          string   `json:"service"`
+	ResourceType     string   `json:"resource_type,omitempty"`
+	Region           string   `json:"region"`
+	Status           string   `json:"status"`
+	ID               string   `json:"id"`
+	PaymentOption    string   `json:"payment_option,omitempty"`
+	TermYears        int      `json:"term_years"`
+	UpfrontCost      float64  `json:"upfront_cost"`
+	EstimatedSavings float64  `json:"estimated_savings"`
+	Count            int      `json:"count"`
 }
 
 // InventoryCommitmentsResponse is the envelope returned by
@@ -625,6 +628,14 @@ type UpcomingPurchaseResponse struct {
 // aggressive — operators usually want "skip this scheduled run", not
 // "nuke the recurring template".
 type UpcomingPurchase struct {
+	// CreatedByUserID propagates the underlying execution's
+	// created_by_user_id so the dashboard widget can apply the same
+	// creator-scope ownership gate the Plans page uses (issue #950).
+	// Without it the widget renders a "Cancel" button on every row
+	// while the backend now 403s for non-owners -- a UX hole that
+	// surfaces as a confusing toast on click. Mirrors the field on
+	// PlannedPurchase / PurchaseHistoryEntry. omitempty so legacy
+	// NULL-creator rows keep the JSON shape they had pre-fix.
 	CreatedByUserID  *string `json:"created_by_user_id,omitempty"`
 	ExecutionID      string  `json:"execution_id"`
 	PlanID           string  `json:"plan_id"`
@@ -644,6 +655,10 @@ type PlannedPurchasesResponse struct {
 
 // PlannedPurchase represents a scheduled purchase from a plan.
 type PlannedPurchase struct {
+	// CreatedByUserID is the UUID of the user who created the scheduled
+	// purchase, mirroring PurchaseHistoryRecord.CreatedByUserID. The
+	// frontend gates the row action buttons on creator-scope ownership
+	// (issue #950); omitted for legacy rows with a NULL creator.
 	CreatedByUserID  *string `json:"created_by_user_id,omitempty"`
 	Status           string  `json:"status"`
 	PlanID           string  `json:"plan_id"`

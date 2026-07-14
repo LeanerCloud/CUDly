@@ -266,7 +266,7 @@ func (s *Service) consumeRecoveryCode(user *User, entered string) bool {
 // secret, so a stateless client-side carrier (signed token) is not
 // needed.
 type MFASetupResult struct {
-	Secret          string //nolint:gosec // G117: HTTP redirect target is validated/trusted
+	Secret          string //nolint:gosec // G117: intentional one-time MFA secret response -- returned to the caller exactly once during enrollment setup; persisted separately and not re-serialized
 	ProvisioningURI string
 }
 

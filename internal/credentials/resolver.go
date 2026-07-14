@@ -48,7 +48,7 @@ func (c *AWSCredentials) String() string { return "[REDACTED AWS CREDENTIALS]" }
 
 // AzureCredentials holds resolved Azure service principal credentials.
 type AzureCredentials struct {
-	ClientSecret string //nolint:gosec // G117: HTTP redirect target is validated/trusted
+	ClientSecret string //nolint:gosec // G117: intentional Azure client-secret field crossing the secure-store boundary; value is resolved from the credential store and used directly for API authentication
 }
 
 // String returns a redacted representation.
@@ -289,7 +289,7 @@ func ResolveAzureCredentials(ctx context.Context, account *config.CloudAccount, 
 		return nil, fmt.Errorf("credentials: no client secret stored for account %s", account.ID)
 	}
 	var payload struct {
-		ClientSecret string `json:"client_secret"` //nolint:gosec // G117: HTTP redirect target is validated/trusted
+		ClientSecret string `json:"client_secret"` //nolint:gosec // G117: intentional unmarshal of stored Azure client-secret from the credential store
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return nil, fmt.Errorf("credentials: parse azure secret for account %s: %w", account.ID, err)

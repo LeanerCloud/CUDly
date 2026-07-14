@@ -390,9 +390,10 @@ func TestManager_CancelExecution_AlreadyCompleted(t *testing.T) {
 // guard for issue #645: the token/email cancel path previously rejected only
 // completed/canceled, so an email-link holder could cancel an
 // approved/running/paused/failed/expired execution that the dashboard
-// (session) path refuses. Each non-pending/notified status must now be
-// rejected with no write to the store — approved/running rows in particular
-// are mid-execution and canceling them would desync the DB from the cloud.
+// (session) path refuses. Each non-cancelable status must now be rejected with
+// no write to the store — approved/running rows in particular are mid-execution
+// and canceling them would desync the DB from the cloud. Pending, notified, and
+// scheduled are cancelable; all other states are not.
 func TestManager_CancelExecution_RejectsNonCancelableStatus(t *testing.T) {
 	rejected := []string{"approved", "running", "paused", "failed", "expired", "completed", "canceled"}
 	for _, status := range rejected {
@@ -428,12 +429,14 @@ func TestManager_CancelExecution_RejectsNonCancelableStatus(t *testing.T) {
 }
 
 // TestManager_CancelExecution_AllowsCancelableStatus confirms the inverse of
-// the #645 guard: genuinely-pending and notified rows are still cancelable on
+// the #645 guard: pending, notified, and scheduled rows are all cancelable on
 // the token path, and the cancel commits (status flip + suppression cleanup)
 // in a single tx. Without this the alignment fix could silently over-restrict
 // and break the legitimate email-link cancel of a row awaiting approval.
+// "scheduled" is included because the cloud SDK has not been called yet (issue
+// #291 wave-2) and IsCancelable already permits it.
 func TestManager_CancelExecution_AllowsCancelableStatus(t *testing.T) {
-	allowed := []string{"pending", "notified"}
+	allowed := []string{"pending", "notified", "scheduled"}
 	for _, status := range allowed {
 		t.Run(status, func(t *testing.T) {
 			ctx := context.Background()

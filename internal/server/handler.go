@@ -82,7 +82,7 @@ var scheduledEventActions = map[string]ScheduledTaskType{
 // HandleScheduledTask processes a scheduled task by type.
 // It acquires a PostgreSQL advisory lock to prevent concurrent execution of the same task.
 func (app *Application) HandleScheduledTask(ctx context.Context, taskType ScheduledTaskType) (any, error) {
-	log.Printf("Handling scheduled task: %s", taskType) // #nosec G706 -- taskType validated to contain no '/' before dispatch; informational audit log
+	log.Printf("Handling scheduled task: %q", taskType) // #nosec G706 -- taskType is looked up from a known-value map; %q quotes the value to prevent CR/LF log injection
 
 	if err := app.ensureDB(ctx); err != nil {
 		return nil, fmt.Errorf("database connection failed: %w", err)
@@ -96,7 +96,7 @@ func (app *Application) HandleScheduledTask(ctx context.Context, taskType Schedu
 			return nil, fmt.Errorf("failed to check task lock: %w", err)
 		}
 		if !acquired {
-			log.Printf("Task %s already running (advisory lock held), skipping", taskType) // #nosec G706 -- taskType validated before dispatch; informational audit log
+			log.Printf("Task %q already running (advisory lock held), skipping", taskType) // #nosec G706 -- taskType is looked up from a known-value map; %q quotes the value to prevent CR/LF log injection
 			return map[string]string{"status": "skipped", "reason": "already_running"}, nil
 		}
 		defer locker.ReleaseAdvisoryLock(ctx, lockID)

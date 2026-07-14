@@ -60,7 +60,7 @@ type APIPermissionConstraint struct {
 // Groups must be non-empty: authorization is group-membership-only (issue #907).
 type APICreateUserRequest struct {
 	Email    string   `json:"email"`
-	Password string   `json:"password"` //nolint:gosec // G117: HTTP redirect target is validated/trusted
+	Password string   `json:"password"` //nolint:gosec // G117: intentional credential field -- password supplied by caller for user creation; not re-stored downstream
 	Groups   []string `json:"groups,omitempty"`
 }
 

@@ -26,8 +26,8 @@ const bcryptCost = 12
 //
 // Generated once at compile time with cost bcryptCost (12).
 //
-//nolint:gosec // this is a public sentinel hash, not a credential
-var dummyPasswordHash = "$2a$12$iAMeexq41AwZ2Dj9oAvGfeVHQxK5ffLPPTNxwPB8bsf7olA730dxO" // #nosec G101 -- public sentinel hash for constant-time compare on missing accounts; not a real credential //nolint:gosec
+//nolint:gosec // G101: this is a public sentinel hash for constant-time compare, not a real credential
+const dummyPasswordHash = "$2a$12$iAMeexq41AwZ2Dj9oAvGfeVHQxK5ffLPPTNxwPB8bsf7olA730dxO"
 
 // Password validation constants following NIST guidelines.
 const (
