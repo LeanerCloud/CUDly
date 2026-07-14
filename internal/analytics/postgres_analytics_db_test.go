@@ -30,8 +30,6 @@ func skipIfNoDocker(t *testing.T) {
 	if os.Getenv("SKIP_DB_TESTS") != "" {
 		t.Skip("Skipping database tests (SKIP_DB_TESTS is set)")
 	}
-
-	// Skip if running in CI without Docker - error caught when setting up the container.
 }
 
 // getMigrationsPath returns the absolute path to migrations directory.

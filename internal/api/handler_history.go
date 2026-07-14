@@ -114,7 +114,10 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 // wave-2) appear in the History view with a Revoke button before the cloud SDK
 // call fires. Without this entry the row is invisible to the History UI, making
 // the Revoke button unreachable (issue #290, second-wave CR Finding E).
-var historyExecutionStatuses = []string{"pending", "notified", "scheduled", "approved", "running", "paused", "completed", "partially_completed", "failed", "expired", "canceled"}
+// historyExecutionStatuses includes both "canceled" (new canonical spelling) and
+// "cancelled" (DB-stored value written by CancelExecutionAtomic until migration
+// #1277 renames the column). Both spellings must be accepted until that migration lands.
+var historyExecutionStatuses = []string{"pending", "notified", "scheduled", "approved", "running", "paused", "completed", "partially_completed", "failed", "expired", "canceled", "cancelled"}
 
 // approvalExpiryWindow is how long a pending approval stays actionable
 // before the History view flips it to "expired". Aligns with the
@@ -329,7 +332,7 @@ func annotateHistoryRowByStatus(row *config.PurchaseHistoryRecord, exec config.P
 		row.StatusDescription = exec.Error
 	case "expired":
 		row.StatusDescription = "approval link expired (not approved within 7 days)"
-	case "canceled":
+	case "canceled", "cancelled": // both spellings until migration #1277 renames the DB column
 		annotateCancelled(row, exec, approver)
 	default:
 		// In-flight (approved/running/scheduled/paused) and audit-gap
@@ -1006,7 +1009,7 @@ func summarizePurchaseHistory(purchases []config.PurchaseHistoryRecord) HistoryS
 		case "expired":
 			summary.TotalExpired++
 			continue
-		case "canceled":
+		case "canceled", "cancelled": // both spellings until migration #1277 renames the DB column
 			// A canceled purchase represents zero committed spend and zero
 			// realized savings (issue #736). Exclude from all dollar KPIs and
 			// from TotalCompleted — the money was never committed.

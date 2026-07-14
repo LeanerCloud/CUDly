@@ -12,7 +12,7 @@ type CreateAPIKeyRequest struct {
 // CreateAPIKeyResponse returns the newly created API key (only shown once).
 type CreateAPIKeyResponse struct {
 	Info   *APIKeyInfo `json:"info"`
-	APIKey string      `json:"api_key"` //nolint:gosec // G117: HTTP redirect target is validated/trusted
+	APIKey string      `json:"api_key"` //nolint:gosec // G117: intentional one-time serialization -- this response returns the newly created key to its owner; the key is never re-stored or re-serialized
 	KeyID  string      `json:"key_id"`
 }
 

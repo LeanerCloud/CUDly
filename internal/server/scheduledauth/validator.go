@@ -294,7 +294,7 @@ func (v *Validator) Middleware(next http.Handler) http.Handler {
 
 		authz := r.Header.Get("Authorization")
 		if err := v.Validate(r.Context(), authz); err != nil {
-			log.Printf("scheduledauth: rejected %s %s: %v", r.Method, r.URL.Path, err) // #nosec G706 -- HTTP method and path logged for auth audit; Go net/http normalizes paths before handler dispatch
+			log.Printf("scheduledauth: rejected %s %s: %v", r.Method, r.URL.Path, err) // #nosec G706 -- HTTP method and path logged for auth audit; Go net/http normalizes paths before handler dispatch; err is constructed by Validate() which quotes token-derived values via %q before embedding them
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -358,7 +358,7 @@ func (v *Validator) validateOIDC(ctx context.Context, authz string) error {
 	// allow-list. The token typically has exactly one audience but the
 	// spec permits multiple.
 	if !audienceMatches(idToken.Audience, v.audiences) {
-		return fmt.Errorf("%w: audience %v not in allowlist", ErrUnauthorized, idToken.Audience)
+		return fmt.Errorf("%w: audience %q not in allowlist", ErrUnauthorized, idToken.Audience)
 	}
 
 	// Subject pinning: required defense-in-depth — any GCP SA in the
@@ -368,7 +368,7 @@ func (v *Validator) validateOIDC(ctx context.Context, authz string) error {
 		return fmt.Errorf("%w: subject %q not in allowlist", ErrUnauthorized, idToken.Subject)
 	}
 
-	log.Printf("scheduledauth: oidc token accepted (sub=%s, aud=%v)", idToken.Subject, idToken.Audience) // #nosec G706 -- subject is validated against a pre-configured allowlist before this log; informational audit entry
+	log.Printf("scheduledauth: oidc token accepted (sub=%s, aud=%q)", idToken.Subject, idToken.Audience) // #nosec G706 -- subject is validated against allowlist; audience is quoted (%q) to prevent log injection from attacker-controlled OIDC claim values
 	return nil
 }
 
