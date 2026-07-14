@@ -203,7 +203,7 @@ type Session struct {
 // LoginRequest represents a login attempt.
 type LoginRequest struct {
 	Email    string `json:"email"`
-	Password string `json:"password"` //nolint:gosec // G117: HTTP redirect target is validated/trusted
+	Password string `json:"password"` //nolint:gosec // G117: intentional credential field in request/response struct -- value is supplied by the authenticated caller or returned once at creation; it is not re-stored or re-serialized downstream
 	MFACode  string `json:"mfa_code,omitempty"`
 }
 
@@ -238,7 +238,7 @@ type PasswordResetConfirm struct {
 // one group: authorization derives entirely from group membership (issue #907).
 type CreateUserRequest struct {
 	Email    string   `json:"email"`
-	Password string   `json:"password"` //nolint:gosec // G117: HTTP redirect target is validated/trusted
+	Password string   `json:"password"` //nolint:gosec // G117: intentional credential field in request/response struct -- value is supplied by the authenticated caller or returned once at creation; it is not re-stored or re-serialized downstream
 	GroupIDs []string `json:"group_ids,omitempty"`
 }
 
@@ -267,7 +267,7 @@ type ChangePasswordRequest struct {
 // SetupAdminRequest for first-time admin setup with API key.
 type SetupAdminRequest struct {
 	Email    string `json:"email"`
-	Password string `json:"password"` //nolint:gosec // G117: HTTP redirect target is validated/trusted
+	Password string `json:"password"` //nolint:gosec // G117: intentional credential field in request/response struct -- value is supplied by the authenticated caller or returned once at creation; it is not re-stored or re-serialized downstream
 }
 
 // CreateAPIKeyRequest for creating a new user API key.
@@ -280,7 +280,7 @@ type CreateAPIKeyRequest struct {
 // CreateAPIKeyResponse returns the newly created API key (only shown once).
 type CreateAPIKeyResponse struct {
 	Info   *UserAPIKey `json:"info"`
-	APIKey string      `json:"api_key"` //nolint:gosec // G117: HTTP redirect target is validated/trusted
+	APIKey string      `json:"api_key"` //nolint:gosec // G117: intentional credential field in request/response struct -- value is supplied by the authenticated caller or returned once at creation; it is not re-stored or re-serialized downstream
 	KeyID  string      `json:"key_id"`
 }
 

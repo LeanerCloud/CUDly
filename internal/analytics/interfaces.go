@@ -50,12 +50,15 @@ type QueryRequest struct {
 type MonthlySummary struct {
 	Month          time.Time `json:"month"`
 	CloudAccountID *string   `json:"cloud_account_id,omitempty"`
-	AvgCoverage    *float64  `json:"avg_coverage,omitempty"`
-	AccountID      string    `json:"account_id"`
-	Provider       string    `json:"provider"`
-	Service        string    `json:"service"`
-	TotalSavings   float64   `json:"total_savings"`
-	SnapshotCount  int       `json:"snapshot_count"`
+	// AvgCoverage is the average reservation coverage for the month.
+	// A nil value means coverage data is absent for this period and must
+	// not be treated as zero coverage by consumers.
+	AvgCoverage   *float64 `json:"avg_coverage,omitempty"`
+	AccountID     string   `json:"account_id"`
+	Provider      string   `json:"provider"`
+	Service       string   `json:"service"`
+	TotalSavings  float64  `json:"total_savings"`
+	SnapshotCount int      `json:"snapshot_count"`
 }
 
 // ProviderBreakdown represents savings breakdown by provider.

@@ -195,8 +195,8 @@ func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboar
 	allOutcomes = append(allOutcomes, result.Pending...)
 	allOutcomes = append(allOutcomes, result.Failed...)
 
-	for _rvc := range allOutcomes {
-		o := allOutcomes[_rvc]
+	for i := range allOutcomes {
+		o := allOutcomes[i]
 		data.Exchanges = append(data.Exchanges, email.RIExchangeItem{
 			RecordID:           o.RecordID,
 			ApprovalToken:      o.ApprovalToken,
