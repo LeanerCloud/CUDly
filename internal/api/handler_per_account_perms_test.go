@@ -507,12 +507,10 @@ func TestPerAccountPerms_DashboardSummary_AggregatesAllowedSubsetOnly(t *testing
 	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return((*config.ServiceConfig)(nil), nil)
 	// Issue #956: a restricted session with no explicit account filter scopes the
 	// commitment metrics to its allowed_accounts (permsAccA), so the handler calls
-	// GetPurchaseHistoryFiltered scoped to account A — NOT GetAllPurchaseHistory.
+	// GetActivePurchaseHistory scoped to account A — NOT an unscoped all-accounts read.
 	// permsAccA has no ExternalID, so only the UUID half of the filter is set.
-	mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{
-		AccountIDs: []string{permsAccA},
-		Limit:      1000,
-	}).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"),
+		[]string{permsAccA}, map[string][]string(nil)).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
 	}
@@ -534,6 +532,10 @@ func TestPerAccountPerms_DashboardSummary_AggregatesAllowedSubsetOnly(t *testing
 	// Issue #956 regression: the all-accounts fast path must NOT be taken for a
 	// restricted session, or commitment KPIs would leak other accounts' data.
 	mockStore.AssertNotCalled(t, "GetAllPurchaseHistory", mock.Anything, mock.Anything)
+	// Positively assert the scoped read happened: without this the test could
+	// pass if commitment metrics were skipped entirely.
+	mockStore.AssertCalled(t, "GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"),
+		[]string{permsAccA}, map[string][]string(nil))
 }
 
 // TestPerAccountPerms_DashboardSummary_CommitmentMetricsExcludeOtherAccounts is
@@ -558,10 +560,8 @@ func TestPerAccountPerms_DashboardSummary_CommitmentMetricsExcludeOtherAccounts(
 
 	mockStore := new(MockConfigStore)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
-	mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{
-		AccountIDs: []string{permsAccA},
-		Limit:      1000,
-	}).Return(accountARows, nil)
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"),
+		[]string{permsAccA}, map[string][]string(nil)).Return(accountARows, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
 	}
@@ -809,6 +809,12 @@ func TestPerAccountPerms_PlannedPurchase_CrossAccountPlanRejected404(t *testing.
 // getCoverageBreakdown's recommendations leg, the account-B savings (200)
 // pollute onDemandByKey and the aws:ec2 on_demand_monthly in the response rises
 // from 200 to 400, lowering the coverage% from 50% to 33%.
+//
+// The commitments leg must also scope the SQL read itself: with no explicit
+// account_id, fetchCommitmentRecords resolves the session's allowed_accounts
+// (permsAccA) and passes them to GetActivePurchaseHistory, NOT an unscoped
+// nil/nil read that pulls every tenant's rows into memory first (issue #956
+// contract, PR #1221 review). The mock expectation pins the scoped args.
 func TestPerAccountPerms_CoverageBreakdown_RecsFilteredByAllowedAccounts(t *testing.T) {
 	ctx := context.Background()
 
@@ -846,11 +852,15 @@ func TestPerAccountPerms_CoverageBreakdown_RecsFilteredByAllowedAccounts(t *test
 		Return([]config.RecommendationRecord{recA, recB}, nil)
 
 	mockStore := new(MockConfigStore)
-	mockStore.On("GetAllPurchaseHistory", ctx, config.MaxListLimit).
+	// Scoped session, no account_id param: the store read must already be
+	// scoped to the allowed account's UUID (permsAccA has no ExternalID in the
+	// fixture, so only the UUID half of the dual-column filter is set).
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string{permsAccA}, map[string][]string(nil)).
 		Return([]config.PurchaseHistoryRecord{purchaseA}, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
 	}
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	handler := &Handler{
 		auth:      scopedAuthMock(ctx),
@@ -917,7 +927,7 @@ func TestPerAccountPerms_CoverageBreakdown_AdminSeesAll(t *testing.T) {
 		Return([]config.RecommendationRecord{recA, recB}, nil)
 
 	mockStore := new(MockConfigStore)
-	mockStore.On("GetAllPurchaseHistory", ctx, config.MaxListLimit).
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string(nil)).
 		Return([]config.PurchaseHistoryRecord{purchaseA}, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
@@ -951,6 +961,104 @@ func TestPerAccountPerms_CoverageBreakdown_AdminSeesAll(t *testing.T) {
 	require.NotNil(t, aws.Services[0].CoveragePct)
 	assert.InDelta(t, 33.333, *aws.Services[0].CoveragePct, 0.01,
 		"admin coverage = 200/(200+400) * 100 = 33.3%%")
+}
+
+// ─── 9b. GET /inventory/commitments ──────────────────────────────────────────
+
+// TestPerAccountPerms_InventoryCommitments_ScopedSQLRead asserts that a
+// restricted session with no explicit account_id scopes the active-commitments
+// SQL read itself to its allowed_accounts: fetchCommitmentRecords must call
+// GetActivePurchaseHistory with the resolved allowed-account scope
+// ([permsAccA], nil; the fixture account has no ExternalID), never the
+// unscoped nil/nil read that pulls every tenant's active commitments into
+// memory before filterPurchaseHistoryByAllowedAccounts trims them (issue #956
+// contract, PR #1221 review).
+//
+// Regression: pre-fix the handler called GetActivePurchaseHistory(ctx, asOf,
+// nil, nil) for this exact request shape; the pinned mock args make that call
+// panic the test.
+func TestPerAccountPerms_InventoryCommitments_ScopedSQLRead(t *testing.T) {
+	ctx := context.Background()
+
+	now := time.Now()
+	purchaseA := config.PurchaseHistoryRecord{
+		AccountID:        permsAccA,
+		PurchaseID:       "p-inv-a",
+		Provider:         "aws",
+		Service:          "ec2",
+		Timestamp:        now.AddDate(0, -6, 0),
+		Term:             1,
+		Count:            1,
+		MonthlyCost:      float64Ptr(80.0),
+		EstimatedSavings: 120.0,
+	}
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string{permsAccA}, map[string][]string(nil)).
+		Return([]config.PurchaseHistoryRecord{purchaseA}, nil)
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return permsAccountList(), nil
+	}
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	handler := &Handler{
+		auth:   scopedAuthMock(ctx),
+		config: mockStore,
+	}
+
+	result, err := handler.listActiveCommitments(ctx, scopedReq(), map[string]string{})
+	require.NoError(t, err)
+
+	resp, ok := result.(InventoryCommitmentsResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Commitments, 1,
+		"scoped user must see exactly the allowed account's commitment")
+	assert.Equal(t, permsAccA+":p-inv-a", resp.Commitments[0].ID)
+}
+
+// TestPerAccountPerms_InventoryCommitments_ZeroAllowedAccountsNoQuery asserts
+// the zero-account sentinel: a restricted session whose allowed_accounts match
+// no cloud account must get an empty commitments list WITHOUT the store being
+// queried at all: an empty scope passed to GetActivePurchaseHistory would
+// emit no account predicate and match every tenant's rows (the same
+// short-circuit fetchCommitmentPurchases applies on the dashboard path).
+func TestPerAccountPerms_InventoryCommitments_ZeroAllowedAccountsNoQuery(t *testing.T) {
+	ctx := context.Background()
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, permsScopedToken).Return(&Session{
+		UserID: permsScopedUserID,
+		Email:  "scoped@example.com",
+	}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, permsScopedUserID, mock.Anything, mock.Anything).Return(true, nil)
+	// Allowed entry matches neither fixture account, so the resolved scope is
+	// the non-nil-but-empty sentinel.
+	mockAuth.On("GetAllowedAccountsAPI", ctx, permsScopedUserID).
+		Return([]string{"dddddddd-dddd-4ddd-dddd-dddddddddddd"}, nil)
+
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() {
+		mockStore.AssertExpectations(t)
+		mockAuth.AssertExpectations(t)
+	})
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return permsAccountList(), nil
+	}
+
+	handler := &Handler{
+		auth:   mockAuth,
+		config: mockStore,
+	}
+
+	result, err := handler.listActiveCommitments(ctx, scopedReq(), map[string]string{})
+	require.NoError(t, err)
+
+	resp, ok := result.(InventoryCommitmentsResponse)
+	require.True(t, ok)
+	assert.Empty(t, resp.Commitments,
+		"zero accessible accounts must yield an empty list, not all-accounts data")
+	mockStore.AssertNotCalled(t, "GetActivePurchaseHistory",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestPerAccountPerms_PlannedPurchase_AllowedAccountPlanSucceeds is the paired

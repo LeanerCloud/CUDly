@@ -2,12 +2,14 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,7 +37,7 @@ func TestHandler_listActiveCommitments_Empty(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 
-	mockStore.On("GetAllPurchaseHistory", ctx, config.MaxListLimit).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string(nil)).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return []config.CloudAccount{}, nil
 	}
@@ -92,7 +94,7 @@ func TestHandler_listActiveCommitments_FiltersExpired(t *testing.T) {
 		},
 	}
 
-	mockStore.On("GetAllPurchaseHistory", ctx, config.MaxListLimit).Return(purchases, nil)
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string(nil)).Return(purchases, nil)
 	// Use realistic fixtures: CloudAccount.ID is a UUID; CloudAccount.ExternalID is
 	// the provider external ID (e.g. AWS account number) that matches
 	// PurchaseHistoryRecord.AccountID. The name lookup in resolveAccountNamesByID
@@ -131,8 +133,9 @@ func TestHandler_listActiveCommitments_FiltersExpired(t *testing.T) {
 }
 
 // TestHandler_listActiveCommitments_AccountFilter verifies the account_id
-// query param routes through the dual-column GetPurchaseHistoryFiltered
-// instead of GetAllPurchaseHistory, and the response respects the filter.
+// query param routes through the dual-column account scope of
+// GetActivePurchaseHistory instead of an unscoped read, and the response
+// respects the filter.
 // "acc-1" is a known cloud_accounts UUID (no external id in this fixture), so
 // it is matched on cloud_account_id only (issue #701/#498/#866).
 func TestHandler_listActiveCommitments_AccountFilter(t *testing.T) {
@@ -154,7 +157,7 @@ func TestHandler_listActiveCommitments_AccountFilter(t *testing.T) {
 		},
 	}
 
-	mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{AccountIDs: []string{"acc-1"}, Limit: config.MaxListLimit}).Return(purchases, nil)
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string{"acc-1"}, map[string][]string(nil)).Return(purchases, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return []config.CloudAccount{{ID: "acc-1", Name: "Account One"}}, nil
 	}
@@ -206,7 +209,7 @@ func TestHandler_listActiveCommitments_ProviderFilter(t *testing.T) {
 		},
 	}
 
-	mockStore.On("GetAllPurchaseHistory", ctx, config.MaxListLimit).Return(purchases, nil)
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string(nil)).Return(purchases, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return []config.CloudAccount{{ID: "acc-1", Name: "Account One"}}, nil
 	}
@@ -267,7 +270,7 @@ func TestHandler_listActiveCommitments_SortedByExpiry(t *testing.T) {
 		},
 	}
 
-	mockStore.On("GetAllPurchaseHistory", ctx, config.MaxListLimit).Return(purchases, nil)
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string(nil)).Return(purchases, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return []config.CloudAccount{{ID: "acc-1", Name: "Account One"}}, nil
 	}
@@ -443,7 +446,7 @@ func TestHandler_getCoverageBreakdown_Integration(t *testing.T) {
 		{Provider: "aws", Service: "ec2", Savings: 350.0},
 	}
 
-	mockStore.On("GetAllPurchaseHistory", ctx, config.MaxListLimit).Return(purchases, nil)
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string(nil)).Return(purchases, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return []config.CloudAccount{}, nil
 	}
@@ -530,7 +533,7 @@ func TestHandler_getCoverageBreakdown_ProviderAndAccountChip(t *testing.T) {
 		{Provider: "azure", Service: "compute", Savings: 999.0, CloudAccountID: strPtr("acc-1")},
 	}
 
-	mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{AccountIDs: []string{"acc-1"}, Limit: config.MaxListLimit}).Return(acc1Purchases, nil)
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string{"acc-1"}, map[string][]string(nil)).Return(acc1Purchases, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return []config.CloudAccount{
 			{ID: "acc-1", Name: "Account One"},
@@ -643,7 +646,7 @@ func TestHandler_getCoverageBreakdown_AzureAllUpfrontConsistency(t *testing.T) {
 		"dashboard must count the active Azure commitment (EstimatedSavings)")
 
 	// --- Consistency leg 2: the Coverage tab must reflect the same commitment ---
-	mockStore.On("GetAllPurchaseHistory", ctx, config.MaxListLimit).Return(purchases, nil)
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string(nil)).Return(purchases, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return []config.CloudAccount{}, nil
 	}
@@ -687,4 +690,80 @@ func TestHandler_getCoverageBreakdown_AzureAllUpfrontConsistency(t *testing.T) {
 
 	require.NotNil(t, azure.OverallCoveragePct)
 	assert.InDelta(t, 100.0, *azure.OverallCoveragePct, 0.001)
+}
+
+// TestHandler_listActiveCommitments_NoTruncationBeyond1000 is the regression
+// test for issue #1140 (review finding PERF-01) on the inventory endpoint:
+// /api/inventory/commitments used a newest-first MaxListLimit-capped
+// GetAllPurchaseHistory read and filtered "active" in Go, so once
+// purchase_history exceeded the cap, the FIRST rows dropped were exactly the
+// oldest still-active 1y/3y commitments and they silently vanished from the
+// renew-next list (and from /api/inventory/coverage, which shares
+// fetchCommitmentRecords).
+//
+// The data shape replicates the real failure: 1000 newer-but-expired rows plus
+// one older still-active 3-year commitment outside the newest-1000 window. The
+// mocks emulate the store contract for each read: the capped all-history page
+// returns only the newest 1000 rows (active row truncated away), while
+// GetActivePurchaseHistory returns the complete SQL-filtered active set with
+// no cap. Pre-fix the handler took the capped path and returned an empty list;
+// post-fix the old commitment must be present.
+func TestHandler_listActiveCommitments_NoTruncationBeyond1000(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	now := time.Now()
+
+	// Oldest row: 3-year commitment purchased ~2.5 years ago, still active.
+	oldActive := config.PurchaseHistoryRecord{
+		AccountID:        "111122223333",
+		PurchaseID:       "p-old-active",
+		Provider:         "aws",
+		Service:          "ec2",
+		Term:             3,
+		Count:            1,
+		Timestamp:        now.AddDate(0, -30, 0),
+		MonthlyCost:      float64Ptr(80.0),
+		EstimatedSavings: 120.0,
+	}
+	// 1000 newer rows: 1-year commitments purchased ~2 years ago, all expired.
+	newestFirst := make([]config.PurchaseHistoryRecord, 0, config.MaxListLimit)
+	for i := config.MaxListLimit - 1; i >= 0; i-- {
+		newestFirst = append(newestFirst, config.PurchaseHistoryRecord{
+			AccountID:        "111122223333",
+			PurchaseID:       fmt.Sprintf("p-expired-%04d", i),
+			Provider:         "aws",
+			Service:          "ec2",
+			Term:             1,
+			Count:            1,
+			Timestamp:        now.AddDate(-2, 0, 0).Add(time.Duration(i) * time.Minute),
+			EstimatedSavings: 10.0,
+		})
+	}
+
+	// Old capped read (documentation-only): ORDER BY timestamp DESC LIMIT
+	// MaxListLimit kept only the newer (expired) rows; the still-active oldest
+	// row was truncated away. Maybe() so AssertExpectations does not require it
+	// to be called — the whole point of the test is that it must NOT be called
+	// post-fix. AssertNotCalled below pins that explicitly.
+	mockStore.On("GetAllPurchaseHistory", ctx, config.MaxListLimit).Return(newestFirst, nil).Maybe()
+	// SQL active-only read: no cap, returns exactly the live commitments.
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string(nil)).
+		Return([]config.PurchaseHistoryRecord{oldActive}, nil)
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return []config.CloudAccount{}, nil
+	}
+
+	mockAuth, req := adminInventoryReq(ctx)
+	handler := &Handler{auth: mockAuth, config: mockStore}
+
+	result, err := handler.listActiveCommitments(ctx, req, map[string]string{})
+	require.NoError(t, err)
+
+	resp := result.(InventoryCommitmentsResponse)
+	require.Len(t, resp.Commitments, 1,
+		"the still-active 3y commitment beyond the old row cap must be listed")
+	assert.Equal(t, "111122223333:p-old-active", resp.Commitments[0].ID)
+	assert.Equal(t, 120.0, resp.Commitments[0].EstimatedSavings)
+	mockStore.AssertNotCalled(t, "GetAllPurchaseHistory", mock.Anything, mock.Anything)
 }

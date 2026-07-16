@@ -123,7 +123,7 @@ func (m *mockAnalyticsStore) Close() error {
 type mockConfigStore struct {
 	getPurchaseHistoryFunc             func(ctx context.Context, accountID string, limit int) ([]config.PurchaseHistoryRecord, error)
 	getAllPurchaseHistoryFunc          func(ctx context.Context, limit int) ([]config.PurchaseHistoryRecord, error)
-	getActivePurchaseHistoryFunc       func(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error)
+	getActivePurchaseHistoryFunc       func(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, error)
 	getPurchaseHistoryByPurchaseIDFunc func(ctx context.Context, purchaseID string) (*config.PurchaseHistoryRecord, error)
 	markPurchaseRevokedFunc            func(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string) error
 }
@@ -222,9 +222,9 @@ func (m *mockConfigStore) GetAllPurchaseHistory(ctx context.Context, limit int) 
 	return nil, nil
 }
 
-func (m *mockConfigStore) GetActivePurchaseHistory(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
+func (m *mockConfigStore) GetActivePurchaseHistory(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, error) {
 	if m.getActivePurchaseHistoryFunc != nil {
-		return m.getActivePurchaseHistoryFunc(ctx, asOf)
+		return m.getActivePurchaseHistoryFunc(ctx, asOf, accountIDs, externalIDsByProvider)
 	}
 	return nil, nil
 }
@@ -480,7 +480,7 @@ func TestCollectorCollect(t *testing.T) {
 	t.Run("returns error when GetAllPurchaseHistory fails", func(t *testing.T) {
 		store := &mockAnalyticsStore{}
 		cfgStore := &mockConfigStore{
-			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
+			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, error) {
 				return nil, errors.New("database connection failed")
 			},
 		}
@@ -493,7 +493,7 @@ func TestCollectorCollect(t *testing.T) {
 	t.Run("handles empty purchase history", func(t *testing.T) {
 		store := &mockAnalyticsStore{}
 		cfgStore := &mockConfigStore{
-			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
+			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, error) {
 				return []config.PurchaseHistoryRecord{}, nil
 			},
 		}
@@ -509,7 +509,7 @@ func TestCollectorCollect(t *testing.T) {
 			Term: 1, EstimatedSavings: 100, UpfrontCost: 500,
 		}
 		cfgStore := &mockConfigStore{
-			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
+			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, error) {
 				return []config.PurchaseHistoryRecord{expired}, nil
 			},
 		}
@@ -520,7 +520,7 @@ func TestCollectorCollect(t *testing.T) {
 	t.Run("processes active purchases and creates snapshots", func(t *testing.T) {
 		store := &mockAnalyticsStore{}
 		cfgStore := &mockConfigStore{
-			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
+			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, error) {
 				return []config.PurchaseHistoryRecord{activeRecord("aws", "rds", "us-east-1", 1, 720, 1000)}, nil
 			},
 		}
@@ -538,7 +538,7 @@ func TestCollectorCollect(t *testing.T) {
 	t.Run("aggregates multiple purchases for same bucket", func(t *testing.T) {
 		store := &mockAnalyticsStore{}
 		cfgStore := &mockConfigStore{
-			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
+			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, error) {
 				return []config.PurchaseHistoryRecord{
 					activeRecord("aws", "rds", "us-east-1", 1, 100, 500),
 					activeRecord("aws", "rds", "us-east-1", 1, 200, 1000),
@@ -553,7 +553,7 @@ func TestCollectorCollect(t *testing.T) {
 	t.Run("creates separate snapshots per region and provider", func(t *testing.T) {
 		store := &mockAnalyticsStore{}
 		cfgStore := &mockConfigStore{
-			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
+			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, error) {
 				return []config.PurchaseHistoryRecord{
 					activeRecord("aws", "rds", "us-east-1", 1, 100, 500),
 					activeRecord("aws", "rds", "us-west-2", 1, 150, 700),
@@ -568,7 +568,7 @@ func TestCollectorCollect(t *testing.T) {
 	t.Run("sets SavingsPlan commitment type for SavingsPlans service", func(t *testing.T) {
 		store := &mockAnalyticsStore{}
 		cfgStore := &mockConfigStore{
-			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
+			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, error) {
 				return []config.PurchaseHistoryRecord{activeRecord("aws", "SavingsPlans", "us-east-1", 1, 500, 2000)}, nil
 			},
 		}
@@ -584,7 +584,7 @@ func TestCollectorCollect(t *testing.T) {
 			},
 		}
 		cfgStore := &mockConfigStore{
-			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
+			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, error) {
 				return []config.PurchaseHistoryRecord{activeRecord("aws", "rds", "us-east-1", 1, 100, 500)}, nil
 			},
 		}
@@ -597,7 +597,7 @@ func TestCollectorCollect(t *testing.T) {
 		store := &mockAnalyticsStore{}
 		const monthlySavings, upfront = 720.0, 8760.0
 		cfgStore := &mockConfigStore{
-			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
+			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, error) {
 				return []config.PurchaseHistoryRecord{activeRecord("aws", "rds", "us-east-1", 1, monthlySavings, upfront)}, nil
 			},
 		}
@@ -614,7 +614,7 @@ func TestCollectorCollect(t *testing.T) {
 		good := activeRecord("aws", "rds", "us-east-1", 1, 100, 500)
 		badTerm := activeRecord("aws", "rds", "us-east-1", 0, 999, 999) // Term==0 -> +Inf commitment pre-fix
 		cfgStore := &mockConfigStore{
-			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
+			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, error) {
 				return []config.PurchaseHistoryRecord{good, badTerm}, nil
 			},
 		}
@@ -631,7 +631,7 @@ func TestCollectorCollect(t *testing.T) {
 	t.Run("H1: a negative Term is also skipped", func(t *testing.T) {
 		store := &mockAnalyticsStore{}
 		cfgStore := &mockConfigStore{
-			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
+			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, error) {
 				return []config.PurchaseHistoryRecord{activeRecord("aws", "rds", "us-east-1", -1, 100, 500)}, nil
 			},
 		}
@@ -646,7 +646,7 @@ func TestCollectorCollect(t *testing.T) {
 		noCost := activeRecord("aws", "ec2", "us-east-1", 1, 100, 500)     // MonthlyCost nil
 
 		cfgStore := &mockConfigStore{
-			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
+			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, error) {
 				return []config.PurchaseHistoryRecord{withCost, noCost}, nil
 			},
 		}
@@ -677,7 +677,7 @@ func TestCollectorCollect(t *testing.T) {
 		tenantB.AccountID = tenantA.AccountID
 
 		cfgStore := &mockConfigStore{
-			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
+			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, error) {
 				return []config.PurchaseHistoryRecord{tenantA, tenantB}, nil
 			},
 		}
@@ -695,7 +695,7 @@ func TestCollectorCollect(t *testing.T) {
 	t.Run("ctx cancellation is terminal and surfaces an error", func(t *testing.T) {
 		store := &mockAnalyticsStore{}
 		cfgStore := &mockConfigStore{
-			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
+			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, error) {
 				return []config.PurchaseHistoryRecord{activeRecord("aws", "rds", "us-east-1", 1, 100, 500)}, nil
 			},
 		}
