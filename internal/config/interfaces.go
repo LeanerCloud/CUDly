@@ -386,12 +386,20 @@ type StoreInterface interface {
 	//  3. Inserts the new ladder_tranches rows.
 	// This guarantees at most one generation of scheduled tranches per config
 	// exists at any point; a partial failure rolls back all three steps.
+	// Callers invoke this ONLY when the run produced a materially new
+	// generation of scheduled tranches (>=1 new scheduled purchase tranche);
+	// a Hold run persists via the plain SaveLadderRunWithTranches path so the
+	// live scheduled ramp is preserved rather than cancelled every cadence.
 	//
 	// GetInFlightLadderCommitUSDHr returns the total hourly USD commitment in
-	// flight for the given config: the sum of amount_usd_hr for all tranches
-	// with status IN ('scheduled', 'fired'). Returns a non-nil pointer (zero
-	// when no in-flight tranches exist) so callers can pass it directly to
-	// AllocationInput.InFlightUSDPerHour. Never returns nil without an error.
+	// flight for the given config: the sum of amount_usd_hr for tranches with
+	// status = 'scheduled' ONLY. Fired/completed tranches are executed
+	// purchases already reflected in the engine's ExistingUSDPerHour (the
+	// provider adapters fold payment-pending and active commitments into E),
+	// so summing them here too would double-count and under-purchase. Returns
+	// a non-nil pointer (zero when no scheduled tranches exist) so callers can
+	// pass it directly to AllocationInput.InFlightUSDPerHour. Never returns
+	// nil without an error.
 	SaveLadderRun(ctx context.Context, run *LadderRunDB) (*LadderRunDB, error)
 	SaveLadderRunWithTranches(ctx context.Context, run *LadderRunDB, tranches []LadderTrancheDB) (*LadderRunDB, error)
 	SaveLadderRunWithTranchesAndSupersede(ctx context.Context, run *LadderRunDB, tranches []LadderTrancheDB) (*LadderRunDB, error)

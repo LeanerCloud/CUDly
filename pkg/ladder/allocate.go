@@ -35,15 +35,17 @@ func minAllocatableGap() *big.Rat {
 // and causes Allocate to return an error (fail loud: incomplete provider data
 // aborts the run).
 //
-// InFlightUSDPerHour is the total hourly commitment already in flight for
-// this config's scope: the sum of all scheduled (not-yet-fired) and fired
-// (not-yet-terminal) ladder tranches, plus any in-progress purchase
-// executions linked to this config's runs. It is required non-nil (fail
-// loud) so callers must always explicitly account for in-flight commitment.
-// A genuinely zero in-flight must be passed as a pointer to 0.0, not nil.
-// Subtracting in-flight from the gap prevents new runs from re-planning
-// commitment that is already en route, eliminating the pile-up that occurs
-// when multiple daily runs each see the full gap before prior tranches fire.
+// InFlightUSDPerHour is the hourly commitment already in flight for this
+// config's scope: the sum of its scheduled (not-yet-fired) ladder tranches
+// ONLY. Fired/completed tranches are deliberately excluded because they are
+// executed purchases already reflected in each layer's ExistingUSDPerHour;
+// counting them here as well would double-subtract and under-purchase. It is
+// required non-nil (fail loud) so callers must always explicitly account for
+// in-flight commitment. A genuinely zero in-flight must be passed as a pointer
+// to 0.0, not nil. Subtracting in-flight from the gap prevents new runs from
+// re-planning commitment that is already scheduled, eliminating the pile-up
+// that occurs when multiple daily runs each see the full gap before prior
+// scheduled tranches fire.
 //
 // DataSources lists the data feeds (e.g. "cost-explorer", "cloudwatch") used
 // to derive the inputs. The slice is propagated verbatim to every Allocation

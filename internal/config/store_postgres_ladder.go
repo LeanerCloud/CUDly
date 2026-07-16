@@ -362,9 +362,17 @@ func (s *PostgresStore) SaveLadderRunWithTranches(ctx context.Context, run *Ladd
 }
 
 // GetInFlightLadderCommitUSDHr returns the total hourly USD commitment already
-// in flight for the given config: the SUM of amount_usd_hr for all
-// ladder_tranches rows where config_id=$1 and status IN ('scheduled','fired').
-// Returns a non-nil *float64 (zero when no in-flight tranches exist); never
+// in flight for the given config: the SUM of amount_usd_hr for ladder_tranches
+// rows where config_id=$1 and status = 'scheduled'.
+//
+// SCHEDULED ONLY: fired/completed tranches are executed purchases already
+// counted in the engine's ExistingUSDPerHour (the provider adapters fold
+// payment-pending and active commitments into E). Summing them here as well
+// would double-subtract them from the gap and cause under-purchasing. Only
+// not-yet-fired (scheduled) tranches are genuinely "in flight" and absent
+// from E, so they alone must be netted out of the gap.
+//
+// Returns a non-nil *float64 (zero when no scheduled tranches exist); never
 // returns nil without a non-nil error, so callers can pass it directly to
 // AllocationInput.InFlightUSDPerHour without an extra nil-guard.
 func (s *PostgresStore) GetInFlightLadderCommitUSDHr(ctx context.Context, configID string) (*float64, error) {
@@ -373,8 +381,8 @@ func (s *PostgresStore) GetInFlightLadderCommitUSDHr(ctx context.Context, config
 		SELECT COALESCE(SUM(amount_usd_hr), 0)
 		FROM ladder_tranches
 		WHERE config_id = $1
-		  AND status IN ('scheduled', 'fired')
-	`, configID).Scan(&total)
+		  AND status = $2
+	`, configID, string(ladder.TrancheStatusScheduled)).Scan(&total)
 	if err != nil {
 		return nil, fmt.Errorf("GetInFlightLadderCommitUSDHr config_id=%s: %w", configID, err)
 	}
@@ -393,19 +401,25 @@ func (s *PostgresStore) GetInFlightLadderCommitUSDHr(ctx context.Context, config
 // If any step fails the whole transaction is rolled back. If run.ConfigID is
 // nil the cancel step is skipped (the run has no prior config context). If
 // run.ID is empty a fresh UUID is generated before the insert.
+//
+// Callers invoke this ONLY for a run that produced a materially new generation
+// of scheduled tranches; a Hold run must use the plain SaveLadderRunWithTranches
+// path so the existing scheduled ramp keeps its original fire dates.
 func (s *PostgresStore) SaveLadderRunWithTranchesAndSupersede(ctx context.Context, run *LadderRunDB, tranches []LadderTrancheDB) (*LadderRunDB, error) {
 	if run.ID == "" {
 		run.ID = uuid.New().String()
 	}
 	var result LadderRunDB
 	err := s.WithTx(ctx, func(tx pgx.Tx) error {
-		// Step 1: cancel prior scheduled tranches for this config.
+		// Step 1: cancel prior scheduled tranches for this config. Typed
+		// TrancheStatus constants (not raw string literals) keep the status
+		// set consistent with the engine and GetInFlightLadderCommitUSDHr.
 		if run.ConfigID != nil {
 			_, err := tx.Exec(ctx, `
 				UPDATE ladder_tranches
-				SET status = 'cancelled'
-				WHERE config_id = $1 AND status = 'scheduled'
-			`, *run.ConfigID)
+				SET status = $2
+				WHERE config_id = $1 AND status = $3
+			`, *run.ConfigID, string(ladder.TrancheStatusCancelled), string(ladder.TrancheStatusScheduled))
 			if err != nil {
 				return fmt.Errorf("cancel prior scheduled tranches for config_id=%s: %w", *run.ConfigID, err)
 			}

@@ -395,8 +395,9 @@ func seedLadderConfigWithExtID(ctx context.Context, t *testing.T, store *Postgre
 
 // TestPostgresStore_GetInFlightLadderCommitUSDHr tests the in-flight sum
 // query (L5 netting). It verifies:
-//   - zero is returned (not nil) when no tranches exist.
-//   - scheduled + fired tranches are summed; completed/cancelled/failed are excluded.
+//   - zero is returned (not nil) when no scheduled tranches exist.
+//   - SCHEDULED tranches ONLY are summed; fired/completed/cancelled/failed are
+//     all excluded (fired/completed are already in ExistingUSDPerHour).
 //   - tranches from a different config are not included.
 func TestPostgresStore_GetInFlightLadderCommitUSDHr(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -434,8 +435,8 @@ func TestPostgresStore_GetInFlightLadderCommitUSDHr(t *testing.T) {
 
 	// Insert tranches with various statuses for the main config.
 	insertTranche(t, &cfgID, 3.0, ladder.TrancheStatusScheduled) // included
-	insertTranche(t, &cfgID, 2.0, ladder.TrancheStatusFired)     // included
-	insertTranche(t, &cfgID, 5.0, ladder.TrancheStatusCompleted) // excluded (terminal)
+	insertTranche(t, &cfgID, 2.0, ladder.TrancheStatusFired)     // excluded (already in E)
+	insertTranche(t, &cfgID, 5.0, ladder.TrancheStatusCompleted) // excluded (already in E)
 	insertTranche(t, &cfgID, 1.0, ladder.TrancheStatusCancelled) // excluded (terminal)
 	insertTranche(t, &cfgID, 4.0, ladder.TrancheStatusFailed)    // excluded (terminal)
 
@@ -443,12 +444,14 @@ func TestPostgresStore_GetInFlightLadderCommitUSDHr(t *testing.T) {
 	otherID := otherConfigID
 	insertTranche(t, &otherID, 99.0, ladder.TrancheStatusScheduled)
 
-	t.Run("sums scheduled and fired only", func(t *testing.T) {
+	t.Run("sums scheduled only", func(t *testing.T) {
 		result, err := store.GetInFlightLadderCommitUSDHr(ctx, configID)
 		require.NoError(t, err)
 		require.NotNil(t, result)
-		// Only 3.0 (scheduled) + 2.0 (fired) = 5.0 must be returned.
-		assert.InDelta(t, 5.0, *result, 1e-6, "in-flight sum must include scheduled+fired only")
+		// Only the 3.0 scheduled tranche must be returned. Fired/completed are
+		// executed purchases already counted in ExistingUSDPerHour, so netting
+		// them again would double-subtract.
+		assert.InDelta(t, 3.0, *result, 1e-6, "in-flight sum must include scheduled tranches ONLY")
 	})
 
 	t.Run("other config is not contaminated", func(t *testing.T) {
