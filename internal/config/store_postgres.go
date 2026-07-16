@@ -1023,7 +1023,7 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 // touching any other column. This avoids the full-row overwrite that a
 // SavePurchaseExecution follow-up would perform, eliminating the lost-update
 // window between TransitionExecutionStatus and the attribution write (Finding #5).
-func (s *PostgresStore) SetCancelledBy(ctx context.Context, executionID string, cancelledBy string) error {
+func (s *PostgresStore) SetCancelledBy(ctx context.Context, executionID, cancelledBy string) error {
 	q := `UPDATE purchase_executions SET cancelled_by = $2, updated_at = NOW()
 	       WHERE execution_id = $1`
 	_, err := s.db.Exec(ctx, q, executionID, cancelledBy)

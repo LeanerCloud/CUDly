@@ -1025,7 +1025,7 @@ func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.Lamb
 // (AWS support-case path) is out of scope for this issue and is handled
 // by the sibling "AWS RI/SP revocation" issue.
 //
-// Present-day behaviour: calling this route within the AWS revocation
+// Present-day behavior: calling this route within the AWS revocation
 // window requests the cancellation and returns {"status":"revocation_requested"}.
 // Past the window it returns a friendly 409 with a plain-language message
 // rather than a stack trace.
@@ -1075,14 +1075,15 @@ func (h *Handler) revokeViaEmailToken(ctx context.Context, req *events.LambdaFun
 	}
 
 	// Only completed/partially_completed purchases have anything to revoke.
-	// A pending/notified purchase should be cancelled instead.
-	if err := checkRevokableStatus(execution); err != nil {
-		return nil, err
+	// A pending/notified purchase should be canceled instead.
+	if statusErr := checkRevokableStatus(execution); statusErr != nil {
+		return nil, statusErr
 	}
 
 	// Three-mode dispatch — same shape as cancelPurchase.
-	if result, handled, err := h.tryRevokeViaSession(ctx, req, execution); handled {
-		return result, err
+	result, handled, revokeErr := h.tryRevokeViaSession(ctx, req, execution)
+	if handled {
+		return result, revokeErr
 	}
 
 	if token == "" {
@@ -1094,13 +1095,13 @@ func (h *Handler) revokeViaEmailToken(ctx context.Context, req *events.LambdaFun
 	// (tryResolveActorEmail), not from the token's bound contact email. A
 	// recipient who clicks the link while logged out therefore gets a 401 and
 	// must sign in with the matching contact email first. This intentionally
-	// matches the existing approve/cancel email-link behaviour -- we do not
+	// matches the existing approve/cancel email-link behavior -- we do not
 	// widen the authz model here. True tokenless one-click (deriving the actor
 	// from a single-use, contact-bound token) is deferred to the sibling
 	// "AWS RI/SP revocation" work, which adds a dedicated revocation token.
 	//
 	// Token-authed path: validate the token (reusing the approval token for
-	// this iteration) and confirm the caller is the authorised contact email.
+	// this iteration) and confirm the caller is the authorized contact email.
 	actor, err := h.authorizeApprovalAction(ctx, req, execution)
 	if err != nil {
 		return nil, err
@@ -1141,7 +1142,7 @@ func renderRevokeConfirmPage(execID, token string) *rawResponse {
 // (nil, false, nil) when the session was absent or returned a permission-denied
 // error so the caller can fall through to the token branch. Extracted from
 // revokeViaEmailToken to keep that function under the cyclomatic limit.
-func (h *Handler) tryRevokeViaSession(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution) (any, bool, error) {
+func (h *Handler) tryRevokeViaSession(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution) (result any, handled bool, err error) {
 	session := h.tryGetSession(ctx, req)
 	if session == nil {
 		return nil, false, nil
@@ -1152,11 +1153,11 @@ func (h *Handler) tryRevokeViaSession(ctx context.Context, req *events.LambdaFun
 		// Enforce it here for the session-authed revoke sub-path, consistent
 		// with cancelPurchaseViaSession and approvePurchaseViaSession which both
 		// validate CSRF before mutating state (nit #1).
-		if err := h.validateCSRF(ctx, req); err != nil {
+		if csrfErr := h.validateCSRF(ctx, req); csrfErr != nil {
 			return nil, true, NewClientError(403, "CSRF validation failed")
 		}
-		result, err := h.revokeViaSession(ctx, execution, session.Email)
-		return result, true, err
+		res, revokeErr := h.revokeViaSession(ctx, execution, session.Email)
+		return res, true, revokeErr
 	case isPermissionDenied(sessErr):
 		// Fall through to the token branch.
 		return nil, false, nil
@@ -1282,9 +1283,9 @@ func (h *Handler) revokeViaSession(ctx context.Context, execution *config.Purcha
 		// Use a narrow SetCancelledBy UPDATE rather than a full-row
 		// SavePurchaseExecution to avoid clobbering concurrent writes
 		// between the TransitionExecutionStatus and this attribution step
-		// (Finding #5). The targeted UPDATE only touches cancelled_by so
-		// any other concurrent column change (e.g. a background webhook
-		// stamping a cloud reference) is preserved.
+		// (Finding #5). The targeted UPDATE only touches the cancellation
+		// attribution column so any other concurrent column change (e.g. a
+		// background webhook stamping a cloud reference) is preserved.
 		if err := h.config.SetCancelledBy(ctx, execution.ExecutionID, revokedBy); err != nil {
 			return nil, fmt.Errorf("failed to record revocation requester for execution %s: %w", execution.ExecutionID, err)
 		}
@@ -2544,7 +2545,7 @@ func (h *Handler) sendPurchaseExecutedEmail(ctx context.Context, req *events.Lam
 	}
 
 	// Look up the requester's email via their user ID (if available).
-	requesterEmail, requesterName := h.lookupRequesterInfo(ctx, execution)
+	requesterEmail := h.lookupRequesterInfo(ctx, execution)
 
 	// Build the deduplicated To / Cc list.
 	// Priority: contact emails are To (first one) + Cc (rest); global notify
@@ -2557,7 +2558,8 @@ func (h *Handler) sendPurchaseExecutedEmail(ctx context.Context, req *events.Lam
 	}
 
 	summaries := make([]email.RecommendationSummary, 0, len(execution.Recommendations))
-	for _, rec := range execution.Recommendations {
+	for i := range execution.Recommendations {
+		rec := &execution.Recommendations[i]
 		summaries = append(summaries, email.RecommendationSummary{
 			Service:        rec.Service,
 			ResourceType:   rec.ResourceType,
@@ -2589,10 +2591,12 @@ func (h *Handler) sendPurchaseExecutedEmail(ctx context.Context, req *events.Lam
 		// the enforced 24-hour window in validateRevokeToken (Finding #6).
 		RevocationWindowClosesAt: revocationWindowClosesAt(execution),
 		RequestedByEmail:         requesterEmail,
-		RequestedByName:          requesterName,
-		RequestedAt:              executionTimestamp(execution),
-		ExecutedBy:               executedByEmail,
-		ExecutedAt:               time.Now().UTC().Format(time.RFC3339),
+		// api.User has no display-name field yet; leave RequestedByName empty
+		// until a name source lands (the email template tolerates "").
+		RequestedByName: "",
+		RequestedAt:     executionTimestamp(execution),
+		ExecutedBy:      executedByEmail,
+		ExecutedAt:      time.Now().UTC().Format(time.RFC3339),
 	}
 	if dashboardBase != "" {
 		data.ArcheraEducationURL = dashboardBase + "/archera-insurance"
@@ -2613,25 +2617,27 @@ func globalNotifyEmail(globalCfg *config.GlobalConfig) string {
 	return ""
 }
 
-// lookupRequesterInfo resolves the email (and name, currently always "") for
-// the user who originally submitted the execution. The lookup is non-fatal:
-// when auth is unavailable or the user cannot be found, both fields are
-// returned empty and the notification is sent without them. Extracted from
-// sendPurchaseExecutedEmail to keep that function under the cyclomatic limit.
-func (h *Handler) lookupRequesterInfo(ctx context.Context, execution *config.PurchaseExecution) (email, name string) {
+// lookupRequesterInfo resolves the email for the user who originally submitted
+// the execution. The lookup is non-fatal: when auth is unavailable or the user
+// cannot be found, "" is returned and the notification is sent without it.
+// Extracted from sendPurchaseExecutedEmail to keep that function under the
+// cyclomatic limit. Only the email is returned -- api.User carries no display
+// name field, so the notification's RequestedByName is populated separately if
+// and when a name source lands.
+func (h *Handler) lookupRequesterInfo(ctx context.Context, execution *config.PurchaseExecution) (requesterEmail string) {
 	if h.auth == nil || execution.CreatedByUserID == nil || *execution.CreatedByUserID == "" {
-		return "", ""
+		return ""
 	}
 	u, err := h.auth.GetUser(ctx, *execution.CreatedByUserID)
 	if err != nil {
 		logging.Warnf("lookupRequesterInfo: GetUser(%s) failed: %v", *execution.CreatedByUserID, err)
-		return "", ""
+		return ""
 	}
 	if u == nil {
 		logging.Warnf("lookupRequesterInfo: GetUser(%s) returned nil user", *execution.CreatedByUserID)
-		return "", ""
+		return ""
 	}
-	return u.Email, ""
+	return u.Email
 }
 
 // resolveExecutedNotificationRecipients builds the To / Cc pair for the

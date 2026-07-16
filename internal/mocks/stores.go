@@ -226,7 +226,7 @@ func (m *MockConfigStore) TransitionExecutionStatus(ctx context.Context, executi
 }
 
 // SetCancelledBy mocks the SetCancelledBy targeted-update operation.
-func (m *MockConfigStore) SetCancelledBy(ctx context.Context, executionID string, cancelledBy string) error {
+func (m *MockConfigStore) SetCancelledBy(ctx context.Context, executionID, cancelledBy string) error {
 	args := m.Called(ctx, executionID, cancelledBy)
 	return args.Error(0)
 }

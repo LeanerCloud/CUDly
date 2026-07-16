@@ -37,8 +37,8 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 	}
 
 	// Validate token and TTL (Finding #4 + issue #397).
-	if err := validateApprovalToken(execution, token); err != nil {
-		return err
+	if tokErr := validateApprovalToken(execution, token); tokErr != nil {
+		return tokErr
 	}
 
 	// Preflight guard (issue #609): reject non-AWS orphan executions before
