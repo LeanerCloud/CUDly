@@ -141,7 +141,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	// Savings Plans — Azure has no stable public API for SP purchase
 	// recommendations (Benefits Recommendations API is still in preview).
 	// The call returns an empty slice so the service appears in the fan-out
-	// and will start returning data once the API stabilises without requiring
+	// and will start returning data once the API stabilizes without requiring
 	// a scheduler change.
 	if includeSP {
 		goService(&spErr, func() {
@@ -174,7 +174,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 		serviceResult{"cache", cacheRecs, cacheErr, includeCache},
 		serviceResult{"cosmosdb", cosmosRecs, cosmosErr, includeCosmos},
 		// The savingsplans client is a stub that unconditionally returns
-		// ([], nil) until the Benefits Recommendations API stabilises (see
+		// ([], nil) until the Benefits Recommendations API stabilizes (see
 		// services/savingsplans Client.GetRecommendations). Counting its
 		// built-in success as an attempted service would keep the
 		// all-attempted-failed guard from ever firing on a total provider

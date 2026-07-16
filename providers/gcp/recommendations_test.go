@@ -293,7 +293,7 @@ func TestMergeRegionResults_AllAttemptedFailed(t *testing.T) {
 }
 
 // TestMergeRegionResults_PartialFailureStillSucceeds pins the tolerated
-// partial-failure behaviour: a single successful (region, service) call is
+// partial-failure behavior: a single successful (region, service) call is
 // enough for the merge to return its recommendations with a nil error.
 func TestMergeRegionResults_PartialFailureStillSucceeds(t *testing.T) {
 	throttleErr := errors.New("googleapi: Error 429: quota exceeded")
@@ -318,7 +318,7 @@ func TestMergeRegionResults_PartialFailureStillSucceeds(t *testing.T) {
 
 // TestMergeRegionResults_NoAttemptsIsNotAFailure asserts the guard does not
 // fire when nothing was attempted (zero regions, or every service filtered
-// out by params): that case keeps the previous empty-success behaviour.
+// out by params): that case keeps the previous empty-success behavior.
 func TestMergeRegionResults_NoAttemptsIsNotAFailure(t *testing.T) {
 	recs, err := mergeRegionResults(nil, map[string]regionResult{})
 

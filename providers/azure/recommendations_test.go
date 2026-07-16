@@ -512,7 +512,7 @@ func TestMergeServiceResults_SkippedServicesDoNotMaskTotalFailure(t *testing.T) 
 }
 
 // TestMergeServiceResults_PartialFailureStillSucceeds pins the tolerated
-// partial-failure behaviour: one service succeeding is enough for the merge
+// partial-failure behavior: one service succeeding is enough for the merge
 // to return its recommendations with a nil error.
 func TestMergeServiceResults_PartialFailureStillSucceeds(t *testing.T) {
 	svcErr := errors.New("reservation API unavailable")
