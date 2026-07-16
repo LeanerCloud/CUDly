@@ -165,6 +165,18 @@ func TestPostgresStore_CancelAllPendingExchanges_NilDB(t *testing.T) {
 	assert.True(t, panicked, "expected panic with nil db connection")
 }
 
+// TestPostgresStore_CancelPendingExchangesByOrigin_NilDB exercises the method entry.
+func TestPostgresStore_CancelPendingExchangesByOrigin_NilDB(t *testing.T) {
+	store := NewPostgresStore(nil)
+	ctx := context.Background()
+
+	panicked := callWithRecover(func() {
+		_, _ = store.CancelPendingExchangesByOrigin(ctx, false)
+	})
+
+	assert.True(t, panicked, "expected panic with nil db connection")
+}
+
 // TestPostgresStore_GetStaleProcessingExchanges_NilDB exercises the method entry.
 func TestPostgresStore_GetStaleProcessingExchanges_NilDB(t *testing.T) {
 	store := NewPostgresStore(nil)

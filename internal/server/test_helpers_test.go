@@ -170,6 +170,10 @@ func (m *mockConfigStoreForHealth) GetRIExchangeDailySpend(ctx context.Context, 
 func (m *mockConfigStoreForHealth) CancelAllPendingExchanges(ctx context.Context) (int64, error) {
 	return 0, nil
 }
+
+func (m *mockConfigStoreForHealth) CancelPendingExchangesByOrigin(_ context.Context, _ bool) (int64, error) {
+	return 0, nil
+}
 func (m *mockConfigStoreForHealth) GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]config.RIExchangeRecord, error) {
 	return nil, nil
 }

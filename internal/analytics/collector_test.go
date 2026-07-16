@@ -320,6 +320,10 @@ func (m *mockConfigStore) GetRIExchangeDailySpend(ctx context.Context, date time
 func (m *mockConfigStore) CancelAllPendingExchanges(ctx context.Context) (int64, error) {
 	return 0, nil
 }
+
+func (m *mockConfigStore) CancelPendingExchangesByOrigin(_ context.Context, _ bool) (int64, error) {
+	return 0, nil
+}
 func (m *mockConfigStore) GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]config.RIExchangeRecord, error) {
 	return nil, nil
 }

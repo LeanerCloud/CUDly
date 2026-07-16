@@ -294,6 +294,10 @@ func (a *configExchangeStoreAdapter) CancelAllPendingExchanges(ctx context.Conte
 	return a.store.CancelAllPendingExchanges(ctx)
 }
 
+func (a *configExchangeStoreAdapter) CancelPendingExchangesByOrigin(ctx context.Context, ladderScoped bool) (int64, error) {
+	return a.store.CancelPendingExchangesByOrigin(ctx, ladderScoped)
+}
+
 func (a *configExchangeStoreAdapter) GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]exchange.ExchangeRecord, error) {
 	cfgRecords, err := a.store.GetStaleProcessingExchanges(ctx, olderThan)
 	if err != nil {
@@ -335,6 +339,7 @@ func exchangeToConfigRecord(r *exchange.ExchangeRecord) *config.RIExchangeRecord
 		ApprovalToken:      r.ApprovalToken,
 		Error:              r.Error,
 		Mode:               r.Mode,
+		LadderRunID:        r.LadderRunID,
 		CreatedAt:          r.CreatedAt,
 		UpdatedAt:          r.UpdatedAt,
 		CompletedAt:        r.CompletedAt,
@@ -359,6 +364,7 @@ func configToExchangeRecord(r *config.RIExchangeRecord) exchange.ExchangeRecord 
 		ApprovalToken:      r.ApprovalToken,
 		Error:              r.Error,
 		Mode:               r.Mode,
+		LadderRunID:        r.LadderRunID,
 		CreatedAt:          r.CreatedAt,
 		UpdatedAt:          r.UpdatedAt,
 		CompletedAt:        r.CompletedAt,

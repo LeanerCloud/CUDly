@@ -790,12 +790,13 @@ func TestExecuteRIExchangeReshape_DailyCapHitMidRun(t *testing.T) {
 // --- Mock types ---
 
 type mockConfigStoreForExchange struct {
-	mockConfigStoreForHealth // embed base mock for unused methods
-	globalConfig             *config.GlobalConfig
-	globalConfigErr          error
-	saveRIExchangeRecordFunc func(ctx context.Context, record *config.RIExchangeRecord) error
-	cancelAllPendingFunc     func(ctx context.Context) (int64, error)
-	getDailySpendFunc        func(ctx context.Context, date time.Time) (string, error)
+	mockConfigStoreForHealth  // embed base mock for unused methods
+	globalConfig              *config.GlobalConfig
+	globalConfigErr           error
+	saveRIExchangeRecordFunc  func(ctx context.Context, record *config.RIExchangeRecord) error
+	cancelAllPendingFunc      func(ctx context.Context) (int64, error)
+	cancelPendingByOriginFunc func(ctx context.Context, ladderScoped bool) (int64, error)
+	getDailySpendFunc         func(ctx context.Context, date time.Time) (string, error)
 }
 
 func (m *mockConfigStoreForExchange) GetGlobalConfig(ctx context.Context) (*config.GlobalConfig, error) {
@@ -818,6 +819,13 @@ func (m *mockConfigStoreForExchange) SaveRIExchangeRecord(ctx context.Context, r
 func (m *mockConfigStoreForExchange) CancelAllPendingExchanges(ctx context.Context) (int64, error) {
 	if m.cancelAllPendingFunc != nil {
 		return m.cancelAllPendingFunc(ctx)
+	}
+	return 0, nil
+}
+
+func (m *mockConfigStoreForExchange) CancelPendingExchangesByOrigin(ctx context.Context, ladderScoped bool) (int64, error) {
+	if m.cancelPendingByOriginFunc != nil {
+		return m.cancelPendingByOriginFunc(ctx, ladderScoped)
 	}
 	return 0, nil
 }

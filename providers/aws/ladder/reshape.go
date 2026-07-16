@@ -28,20 +28,19 @@ const unlimitedCapUSD = math.MaxFloat64
 // store, quote/execute client, offering lookup, and RI/utilization inventory
 // (the same wiring internal/server.executeRIExchangeReshape performs).
 //
-// WARNING — store-wide side effect: the underlying exchange.RunAutoExchange
-// begins by unconditionally canceling ALL pending exchange records in the
-// store (CancelAllPendingExchanges), including pendings created by the
-// standalone ri_exchange_reshape scheduled task. Callers MUST NOT run
-// ReshapeBuffer concurrently with that task against the same store; the
-// pipeline phase that invokes this method must coordinate with (or disable)
-// the standalone scheduler.
+// Origin-scoped cancellation: the underlying exchange.RunAutoExchange now
+// calls CancelPendingExchangesByOrigin(ctx, true) — cancelling only
+// ladder-linked pending records (ladder_run_id IS NOT NULL) — rather than the
+// former store-wide CancelAllPendingExchanges. This means the standalone
+// ri_exchange_reshape task's pending records are no longer affected by a ladder
+// reshape run (gap G10, issue #1348).
 //
-// DryRun is NOT supported: there is no true simulation mode in pkg/exchange
-// yet (tracked upstream), and mapping DryRun onto the exchange flow's manual
-// mode would be a false simulation — manual mode persists pending
-// ExchangeRecords with live approval tokens (actionable money instruments)
-// and still triggers the store-wide pending cancellation above. cfg.DryRun
-// therefore fails loud; the engine previews reshapes via ActionReshape
+// DryRun is NOT yet wired end-to-end in this method: pkg/exchange now supports
+// true dry-run (RunAutoExchangeParams.DryRun=true skips all mutations and
+// returns Simulated outcomes), but passing cfg.DryRun through to the exchange
+// runner requires the exchange runner parameter to be surfaced in the
+// ReshapeRunner interface, which is tracked in L16. Until L16 lands,
+// cfg.DryRun fails loud here; the engine previews reshapes via ActionReshape
 // rationales without calling ReshapeBuffer.
 //
 // Config mapping (BufferReshapeConfig -> exchange.RIExchangeConfig):

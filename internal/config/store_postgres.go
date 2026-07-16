@@ -2200,8 +2200,8 @@ func (s *PostgresStore) SaveRIExchangeRecord(ctx context.Context, record *RIExch
 			source_instance_type, source_count, target_offering_id,
 			target_instance_type, target_count, payment_due,
 			status, approval_token, error, mode, completed_at, expires_at,
-			created_at, updated_at, created_by_user_id
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+			created_at, updated_at, created_by_user_id, ladder_run_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 	`
 
 	_, err := s.db.Exec(ctx, query,
@@ -2225,6 +2225,7 @@ func (s *PostgresStore) SaveRIExchangeRecord(ctx context.Context, record *RIExch
 		record.CreatedAt,
 		record.UpdatedAt,
 		record.CreatedByUserID,
+		record.LadderRunID,
 	)
 
 	if err != nil {
@@ -2242,7 +2243,7 @@ func (s *PostgresStore) GetRIExchangeRecord(ctx context.Context, id string) (*RI
 		       target_instance_type, target_count, payment_due::text,
 		       status, approval_token, error, mode,
 		       created_at, updated_at, completed_at, expires_at,
-		       created_by_user_id, approved_by
+		       created_by_user_id, approved_by, ladder_run_id
 		FROM ri_exchange_history
 		WHERE id = $1
 	`
@@ -2267,7 +2268,7 @@ func (s *PostgresStore) GetRIExchangeRecordByToken(ctx context.Context, token st
 		       target_instance_type, target_count, payment_due::text,
 		       status, approval_token, error, mode,
 		       created_at, updated_at, completed_at, expires_at,
-		       created_by_user_id, approved_by
+		       created_by_user_id, approved_by, ladder_run_id
 		FROM ri_exchange_history
 		WHERE approval_token = $1
 	`
@@ -2292,7 +2293,7 @@ func (s *PostgresStore) GetRIExchangeHistory(ctx context.Context, since time.Tim
 		       target_instance_type, target_count, payment_due::text,
 		       status, approval_token, error, mode,
 		       created_at, updated_at, completed_at, expires_at,
-		       created_by_user_id, approved_by
+		       created_by_user_id, approved_by, ladder_run_id
 		FROM ri_exchange_history
 		WHERE created_at >= $1
 		ORDER BY created_at DESC
@@ -2317,7 +2318,7 @@ func (s *PostgresStore) TransitionRIExchangeStatus(ctx context.Context, id strin
 		          target_instance_type, target_count, payment_due::text,
 		          status, approval_token, error, mode,
 		          created_at, updated_at, completed_at, expires_at,
-		          created_by_user_id, approved_by
+		          created_by_user_id, approved_by, ladder_run_id
 	`
 
 	records, err := s.queryRIExchangeRecords(ctx, query, id, fromStatus, toStatus, actor)
@@ -2432,7 +2433,9 @@ func (s *PostgresStore) GetRIExchangeDailySpend(ctx context.Context, date time.T
 	return total, nil
 }
 
-// CancelAllPendingExchanges cancels all pending RI exchange records.
+// CancelAllPendingExchanges cancels all pending RI exchange records regardless
+// of origin. Kept for interface compatibility; new callers should prefer
+// CancelPendingExchangesByOrigin to avoid cross-origin contamination.
 func (s *PostgresStore) CancelAllPendingExchanges(ctx context.Context) (int64, error) {
 	query := `
 		UPDATE ri_exchange_history
@@ -2448,6 +2451,36 @@ func (s *PostgresStore) CancelAllPendingExchanges(ctx context.Context) (int64, e
 	return result.RowsAffected(), nil
 }
 
+// CancelPendingExchangesByOrigin cancels only pending records that match the
+// given origin scope (gap G10 / issue #1348):
+//   - ladderScoped=false (standalone): cancels WHERE ladder_run_id IS NULL
+//   - ladderScoped=true  (ladder):     cancels WHERE ladder_run_id IS NOT NULL
+func (s *PostgresStore) CancelPendingExchangesByOrigin(ctx context.Context, ladderScoped bool) (int64, error) {
+	var query string
+	if ladderScoped {
+		query = `
+			UPDATE ri_exchange_history
+			SET status = 'cancelled'
+			WHERE status = 'pending'
+			  AND ladder_run_id IS NOT NULL
+		`
+	} else {
+		query = `
+			UPDATE ri_exchange_history
+			SET status = 'cancelled'
+			WHERE status = 'pending'
+			  AND ladder_run_id IS NULL
+		`
+	}
+
+	result, err := s.db.Exec(ctx, query)
+	if err != nil {
+		return 0, fmt.Errorf("failed to cancel pending exchanges by origin (ladder_scoped=%v): %w", ladderScoped, err)
+	}
+
+	return result.RowsAffected(), nil
+}
+
 // GetStaleProcessingExchanges returns processing exchanges older than the given duration.
 func (s *PostgresStore) GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]RIExchangeRecord, error) {
 	query := `
@@ -2456,7 +2489,7 @@ func (s *PostgresStore) GetStaleProcessingExchanges(ctx context.Context, olderTh
 		       target_instance_type, target_count, payment_due::text,
 		       status, approval_token, error, mode,
 		       created_at, updated_at, completed_at, expires_at,
-		       created_by_user_id, approved_by
+		       created_by_user_id, approved_by, ladder_run_id
 		FROM ri_exchange_history
 		WHERE status = 'processing' AND updated_at < NOW() - $1::interval
 	`
@@ -2477,7 +2510,7 @@ func (s *PostgresStore) queryRIExchangeRecords(ctx context.Context, query string
 		var record RIExchangeRecord
 		var approvalToken, errStr sql.NullString
 		var completedAt, expiresAt sql.NullTime
-		var createdByUserID, approvedBy sql.NullString
+		var createdByUserID, approvedBy, ladderRunID sql.NullString
 
 		err := rows.Scan(
 			&record.ID,
@@ -2501,6 +2534,7 @@ func (s *PostgresStore) queryRIExchangeRecords(ctx context.Context, query string
 			&expiresAt,
 			&createdByUserID,
 			&approvedBy,
+			&ladderRunID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan ri exchange record: %w", err)
@@ -2518,12 +2552,9 @@ func (s *PostgresStore) queryRIExchangeRecords(ctx context.Context, query string
 		if expiresAt.Valid {
 			record.ExpiresAt = &expiresAt.Time
 		}
-		if createdByUserID.Valid {
-			record.CreatedByUserID = &createdByUserID.String
-		}
-		if approvedBy.Valid {
-			record.ApprovedBy = &approvedBy.String
-		}
+		record.CreatedByUserID = nullPtrFromNullString(createdByUserID)
+		record.ApprovedBy = nullPtrFromNullString(approvedBy)
+		record.LadderRunID = nullPtrFromNullString(ladderRunID)
 
 		records = append(records, record)
 	}
@@ -3242,4 +3273,14 @@ func nullStringFromString(s string) sql.NullString {
 		return sql.NullString{}
 	}
 	return sql.NullString{String: s, Valid: true}
+}
+
+// nullPtrFromNullString converts a scanned sql.NullString to a *string for
+// optional pointer fields. Returns nil when the DB value is NULL.
+func nullPtrFromNullString(ns sql.NullString) *string {
+	if !ns.Valid {
+		return nil
+	}
+	s := ns.String
+	return &s
 }

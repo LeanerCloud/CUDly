@@ -804,7 +804,13 @@ type RIExchangeRecord struct {
 	CreatedByUserID *string `json:"created_by_user_id,omitempty"`
 	// ApprovedBy carries the email of the session user who approved the exchange
 	// via the dashboard Approve button (issue #300). Nil for token-authed approvals.
-	ApprovedBy     *string    `json:"approved_by,omitempty"`
+	ApprovedBy *string `json:"approved_by,omitempty"`
+	// LadderRunID links this exchange record to the ladder run that created it
+	// (cudly-ladder engine). Nil for standalone ri_exchange_reshape task records.
+	// The database column ri_exchange_history.ladder_run_id was added in migration
+	// 000080 and is the authoritative source for origin scoping in
+	// CancelPendingExchangesByOrigin.
+	LadderRunID    *string    `json:"ladder_run_id,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 	CompletedAt    *time.Time `json:"completed_at,omitempty"`

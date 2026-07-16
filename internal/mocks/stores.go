@@ -526,6 +526,15 @@ func (m *MockConfigStore) CancelAllPendingExchanges(ctx context.Context) (int64,
 	return v, args.Error(1)
 }
 
+func (m *MockConfigStore) CancelPendingExchangesByOrigin(ctx context.Context, ladderScoped bool) (int64, error) {
+	args := m.Called(ctx, ladderScoped)
+	v, ok := args.Get(0).(int64)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected int64, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
 func (m *MockConfigStore) GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]config.RIExchangeRecord, error) {
 	args := m.Called(ctx, olderThan)
 	if args.Get(0) == nil {
