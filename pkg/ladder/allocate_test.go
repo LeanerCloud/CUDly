@@ -557,10 +557,20 @@ func TestAllocate_CapScaling(t *testing.T) {
 	}
 }
 
-func TestAllocate_MaxActionsExceeded(t *testing.T) {
+// TestAllocate_MaxActionsExceeded_Truncates is the primary regression test for
+// B3 / Q-TRUNC. Pre-fix: Allocate returned an error when the plan exceeded
+// MaxActionsPerRun; the config would stall permanently. Post-fix: it truncates,
+// keeps the largest-gap purchases, and emits ActionHold entries for dropped
+// ones so no money action is silently lost.
+//
+// Scenario: 3-layer AWS setup (EC2InstanceSP=$4/hr, ComputeSP=$5/hr,
+// ConvertibleRI=$1/hr), MaxActionsPerRun=2. The engine must return exactly 2
+// allocations (the two largest: ComputeSP and EC2InstanceSP) and one hold for
+// the dropped ConvertibleRI allocation.
+func TestAllocate_MaxActionsExceeded_Truncates(t *testing.T) {
 	t.Parallel()
 	cfg := validConfigAWS()
-	cfg.MaxActionsPerRun = 2 // 3 allocations will exceed this
+	cfg.MaxActionsPerRun = 2 // 3 allocations would normally be produced
 	layers := awsLayers()
 	in := &AllocationInput{
 		Config:      cfg,
@@ -568,13 +578,228 @@ func TestAllocate_MaxActionsExceeded(t *testing.T) {
 		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
 		LayerStates: zeroStates(layers),
 		Now:         nowFixed(),
+		DataSources: []string{"cost-explorer"},
 	}
-	_, err := Allocate(in)
-	if err == nil {
-		t.Fatal("expected error for max_actions_per_run exceeded, got nil")
+	result, err := Allocate(in)
+	// Regression: pre-fix this returned an error; post-fix must succeed.
+	if err != nil {
+		t.Fatalf("expected no error after truncation fix, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "max_actions_per_run") {
-		t.Errorf("error missing 'max_actions_per_run': %v", err)
+	// Exactly MaxActionsPerRun money actions returned.
+	total := len(result.Allocations) + len(result.Reshapes)
+	if total != cfg.MaxActionsPerRun {
+		t.Errorf("want %d money actions, got %d (allocs=%d reshapes=%d)",
+			cfg.MaxActionsPerRun, total, len(result.Allocations), len(result.Reshapes))
+	}
+	// Largest gaps kept: ComputeSP ($5/hr) and EC2InstanceSP ($4/hr).
+	kept := make(map[LayerType]bool, len(result.Allocations))
+	for _, a := range result.Allocations {
+		kept[a.Layer] = true
+	}
+	if !kept[LayerComputeSP] {
+		t.Error("ComputeSP ($5/hr gap, largest) must be kept")
+	}
+	if !kept[LayerEC2InstanceSP] {
+		t.Error("EC2InstanceSP ($4/hr gap, second largest) must be kept")
+	}
+	if kept[LayerConvertibleRI] {
+		t.Error("ConvertibleRI ($1/hr gap, smallest) must be dropped")
+	}
+	// Dropped allocation must produce an auditable hold, not be silently lost.
+	var truncHolds []PlannedAction
+	for _, h := range result.Holds {
+		if strings.Contains(h.Rationale, "max_actions_per_run") {
+			truncHolds = append(truncHolds, h)
+		}
+	}
+	if len(truncHolds) == 0 {
+		t.Error("expected at least one ActionHold for the dropped allocation")
+	}
+	for _, h := range truncHolds {
+		if h.Action != ActionHold {
+			t.Errorf("dropped allocation hold must have ActionHold, got %q", h.Action)
+		}
+		if !strings.Contains(h.Rationale, "max_actions_per_run=2") {
+			t.Errorf("hold rationale must contain max_actions_per_run=2: %q", h.Rationale)
+		}
+		if !strings.Contains(h.Rationale, "deferred to a later run") {
+			t.Errorf("hold rationale must contain 'deferred to a later run': %q", h.Rationale)
+		}
+	}
+}
+
+// truncatedHoldLayers returns the set of layers named by max_actions_per_run
+// truncation holds in the result, so tests can assert exactly which actions
+// were dropped (not merely how many).
+func truncatedHoldLayers(holds []PlannedAction) map[LayerType]bool {
+	out := make(map[LayerType]bool, len(holds))
+	for _, h := range holds {
+		if strings.Contains(h.Rationale, "max_actions_per_run") {
+			out[h.Layer] = true
+		}
+	}
+	return out
+}
+
+// TestAllocate_MaxActions_ReshapeRetained verifies that when reshapes and
+// purchases together exceed MaxActionsPerRun, reshapes are preferred over
+// purchases: the reshape is kept, the single remaining slot goes to the
+// largest-gap purchase, and every dropped purchase leaves a hold.
+//
+// Fixture: lowWater=10, stable=4, buffer_fraction=0.10, ConvertibleRI existing
+// $5/hr @ 50% util (-> reshape). gap = min(10-5, 10-5) = 5; coreGap = 4.5;
+// baseGap = min(4.5, stable 4) = 4.0 -> EC2InstanceSP; bufferGap = 0.5 ->
+// ConvertibleRI; flexGap = 0.5 -> ComputeSP. So the largest purchase is
+// EC2InstanceSP ($4/hr); ComputeSP and ConvertibleRI ($0.5/hr each) are dropped.
+// With cap=2 (1 reshape + 1 purchase), EC2InstanceSP survives.
+func TestAllocate_MaxActions_ReshapeRetained(t *testing.T) {
+	t.Parallel()
+	cfg := validConfigAWS()
+	cfg.MaxActionsPerRun = 2 // 2 slots: 1 reshape + 1 purchase (out of 3 allocs)
+	layers := awsLayers()
+	// ConvertibleRI has existing commitments with low utilization -> reshape.
+	states := zeroStates(layers)
+	states = withExisting(states, LayerConvertibleRI, 5.0)
+	states = withBufferUtilization(states, 50.0) // below 90% threshold -> reshape
+	in := &AllocationInput{
+		Config:      cfg,
+		Layers:      layers,
+		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates: states,
+		Now:         nowFixed(),
+		DataSources: []string{"cost-explorer"},
+	}
+	result, err := Allocate(in)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Exactly MaxActionsPerRun money actions: 1 reshape + 1 purchase.
+	total := len(result.Allocations) + len(result.Reshapes)
+	if total != cfg.MaxActionsPerRun {
+		t.Errorf("want %d money actions, got %d (allocs=%d reshapes=%d)",
+			cfg.MaxActionsPerRun, total, len(result.Allocations), len(result.Reshapes))
+	}
+	// Exactly one reshape, on the buffer layer (ConvertibleRI), retained.
+	if len(result.Reshapes) != 1 || result.Reshapes[0].Layer != LayerConvertibleRI {
+		t.Fatalf("want exactly one reshape on ConvertibleRI, got %+v", result.Reshapes)
+	}
+	// Exactly one surviving purchase, on the largest-gap layer (EC2InstanceSP).
+	if len(result.Allocations) != 1 {
+		t.Fatalf("want exactly one surviving purchase, got %d", len(result.Allocations))
+	}
+	if result.Allocations[0].Layer != LayerEC2InstanceSP {
+		t.Errorf("surviving purchase must be the largest-gap layer EC2InstanceSP, got %s",
+			result.Allocations[0].Layer)
+	}
+	// Exactly the two smaller purchases were dropped with holds.
+	held := truncatedHoldLayers(result.Holds)
+	wantHeld := map[LayerType]bool{LayerComputeSP: true, LayerConvertibleRI: true}
+	if !maps.Equal(held, wantHeld) {
+		t.Errorf("dropped-purchase hold layers = %v, want %v", held, wantHeld)
+	}
+}
+
+// TestAllocate_MaxActions_ReshapesFillCap is the regression for the CRITICAL
+// Fable finding: when reshapes alone fill (>=) the cap, every dropped purchase
+// must still leave an audit Hold. Pre-fix, this branch discarded all
+// allocations with ZERO holds (holds=0); post-fix each dropped purchase names
+// its layer + amount in a max_actions_per_run hold.
+//
+// Fixture matches TestAllocate_MaxActions_ReshapeRetained but with cap=1: the
+// single reshape (ConvertibleRI) consumes the only slot, so all three purchases
+// (EC2InstanceSP $4/hr, ComputeSP $0.5/hr, ConvertibleRI $0.5/hr) are dropped.
+func TestAllocate_MaxActions_ReshapesFillCap(t *testing.T) {
+	t.Parallel()
+	cfg := validConfigAWS()
+	cfg.MaxActionsPerRun = 1 // one slot, taken by the reshape
+	layers := awsLayers()
+	states := zeroStates(layers)
+	states = withExisting(states, LayerConvertibleRI, 5.0)
+	states = withBufferUtilization(states, 50.0) // below 90% threshold -> reshape
+	in := &AllocationInput{
+		Config:      cfg,
+		Layers:      layers,
+		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates: states,
+		Now:         nowFixed(),
+		DataSources: []string{"cost-explorer"},
+	}
+	result, err := Allocate(in)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Exactly one money action, the retained reshape; no purchases survive.
+	total := len(result.Allocations) + len(result.Reshapes)
+	if total != cfg.MaxActionsPerRun {
+		t.Errorf("want %d money action, got %d (allocs=%d reshapes=%d)",
+			cfg.MaxActionsPerRun, total, len(result.Allocations), len(result.Reshapes))
+	}
+	if len(result.Allocations) != 0 {
+		t.Errorf("no purchase may survive when the reshape fills the cap, got %d", len(result.Allocations))
+	}
+	if len(result.Reshapes) != 1 || result.Reshapes[0].Layer != LayerConvertibleRI {
+		t.Fatalf("want the ConvertibleRI reshape retained, got %+v", result.Reshapes)
+	}
+	// CRITICAL: every dropped purchase must leave an audit hold (pre-fix: 0).
+	held := truncatedHoldLayers(result.Holds)
+	wantHeld := map[LayerType]bool{
+		LayerEC2InstanceSP: true,
+		LayerComputeSP:     true,
+		LayerConvertibleRI: true,
+	}
+	if !maps.Equal(held, wantHeld) {
+		t.Errorf("dropped-purchase hold layers = %v, want %v", held, wantHeld)
+	}
+	// Each truncation hold must name its layer and the dropped amount.
+	var truncHolds int
+	for _, h := range result.Holds {
+		if !strings.Contains(h.Rationale, "max_actions_per_run") {
+			continue
+		}
+		truncHolds++
+		if h.Action != ActionHold {
+			t.Errorf("truncation hold must be ActionHold, got %q", h.Action)
+		}
+		if !strings.Contains(h.Rationale, string(h.Layer)) {
+			t.Errorf("hold rationale must name its layer %s: %q", h.Layer, h.Rationale)
+		}
+		if !strings.Contains(h.Rationale, "/hr") {
+			t.Errorf("hold rationale must name the dropped amount: %q", h.Rationale)
+		}
+	}
+	if truncHolds != 3 {
+		t.Errorf("want 3 truncation holds (one per dropped purchase), got %d", truncHolds)
+	}
+}
+
+// TestAllocate_ExactCap_Untouched verifies that a plan whose action count
+// exactly equals MaxActionsPerRun is returned unmodified with no truncation holds.
+func TestAllocate_ExactCap_Untouched(t *testing.T) {
+	t.Parallel()
+	cfg := validConfigAWS()
+	cfg.MaxActionsPerRun = 3 // exactly the number of allocations produced
+	layers := awsLayers()
+	in := &AllocationInput{
+		Config:      cfg,
+		Layers:      layers,
+		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates: zeroStates(layers),
+		Now:         nowFixed(),
+		DataSources: []string{"cost-explorer"},
+	}
+	result, err := Allocate(in)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// All 3 allocations must be kept at exact-cap.
+	if len(result.Allocations) != 3 {
+		t.Errorf("want 3 allocations at exact cap, got %d", len(result.Allocations))
+	}
+	// No truncation holds expected.
+	for _, h := range result.Holds {
+		if strings.Contains(h.Rationale, "max_actions_per_run") {
+			t.Errorf("unexpected truncation hold at exact cap: %q", h.Rationale)
+		}
 	}
 }
 

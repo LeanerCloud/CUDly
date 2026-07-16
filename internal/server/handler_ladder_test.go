@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -622,21 +623,34 @@ func TestExecuteLadderRun_ZeroGap_HoldPlan(t *testing.T) {
 	assert.Empty(t, store.savedTranches, "a zero-gap Hold run produces no tranches")
 }
 
-// TestExecuteLadderRun_MaxActionsExceeded covers Allocate erroring because the
-// split produces more allocations than MaxActionsPerRun allows. executeLadderRun
-// must fail loud and persist nothing.
-func TestExecuteLadderRun_MaxActionsExceeded(t *testing.T) {
+// TestExecuteLadderRun_MaxActionsExceeded_TruncatesAndPersists covers the
+// engine's truncation contract at MaxActionsPerRun: when the split produces
+// more allocations than the cap, Allocate no longer errors. It keeps the
+// largest-gap allocations, converts each dropped one into an ActionHold
+// ("deferred to a later run"), and executeLadderRun persists the truncated
+// plan normally. The over-cap config keeps running every cadence instead of
+// stalling forever.
+func TestExecuteLadderRun_MaxActionsExceeded_TruncatesAndPersists(t *testing.T) {
 	ctx := testutil.TestContext(t)
 	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 	dbCfg := validTestDBConfig("cfg-maxactions")
 	dbCfg.MaxActionsPerRun = 1 // base+flex split yields 2 allocations > 1
+	// A future-only ramp step so the kept allocation lands as a scheduled
+	// tranche row (an AfterDays==0 step becomes a BuyNow action instead,
+	// which produces no ladder_tranches rows).
+	rampJSON, err := json.Marshal(pkgladder.RampSchedule{
+		Steps: []pkgladder.RampStep{{AfterDays: 30, Fraction: 1.0}},
+	})
+	require.NoError(t, err)
+	dbCfg.RampSchedule = rampJSON
 
 	store := &ladderTestStore{}
 	app := &Application{Config: store}
 
 	// Stable (10) is far below the target (80% of low-water 100 = 80), so the
-	// base layer only absorbs up to stable and the remainder spills to flex,
-	// producing TWO allocations. With MaxActionsPerRun=1 the engine must error.
+	// base layer absorbs up to stable (10) and the remainder (70) spills to
+	// flex, producing TWO allocations. With MaxActionsPerRun=1 the engine
+	// keeps the larger flex allocation and holds the smaller base one.
 	cap := &fakeLadderCapability{
 		t: t,
 		baseline: pkgladder.UsageBaseline{
@@ -647,11 +661,46 @@ func TestExecuteLadderRun_MaxActionsExceeded(t *testing.T) {
 		},
 	}
 
-	err := app.executeLadderRun(ctx, &dbCfg, cap, "123456789012", pkgladder.Term1Year, pkgladder.PaymentNoUpfront, now)
-	require.Error(t, err, "Allocate must error when the split exceeds max_actions_per_run")
-	assert.Contains(t, err.Error(), "max_actions_per_run")
-	assert.Nil(t, store.savedRun, "no run may be persisted when Allocate errors")
-	assert.Nil(t, store.savedTranches, "no tranches may be persisted when Allocate errors")
+	err = app.executeLadderRun(ctx, &dbCfg, cap, "123456789012", pkgladder.Term1Year, pkgladder.PaymentNoUpfront, now)
+	require.NoError(t, err, "over-cap plans must truncate, not error (permanent-stall regression)")
+
+	require.NotNil(t, store.savedRun, "the truncated run must be persisted")
+	run := store.savedRun
+	assert.Equal(t, pkgladder.RunStatusPlanned, run.Status)
+
+	var planDTO ladderPlanJSONDTO
+	require.NoError(t, json.Unmarshal(run.Plan, &planDTO))
+
+	// Exactly ONE purchase survives: the larger-gap flex allocation ($70/hr on
+	// EC2InstanceSP, the fake's RoleFlex layer); the $10/hr base allocation is
+	// dropped. At least one hold must record the truncation for audit.
+	var purchases []ladderPlanJSONAction
+	var truncHolds []ladderPlanJSONAction
+	for _, a := range planDTO.Actions {
+		switch a.Action {
+		case string(pkgladder.ActionPurchase):
+			purchases = append(purchases, a)
+		case string(pkgladder.ActionHold):
+			if strings.Contains(a.Rationale, "max_actions_per_run=1") {
+				truncHolds = append(truncHolds, a)
+			}
+		}
+	}
+	require.Len(t, purchases, 1, "exactly MaxActionsPerRun purchase actions must survive")
+	assert.Equal(t, string(pkgladder.LayerEC2InstanceSP), purchases[0].Layer,
+		"the largest-gap (flex, $70/hr) allocation must be the survivor")
+	require.NotNil(t, purchases[0].AmountUSDHr)
+	assert.InDelta(t, 70.0, *purchases[0].AmountUSDHr, 1e-9)
+	require.NotEmpty(t, truncHolds, "each dropped allocation must leave a max_actions_per_run hold")
+	assert.Contains(t, truncHolds[0].Rationale, "deferred to a later run")
+
+	// TotalHourlyCommit counts only the KEPT allocation ($70/hr), not the full
+	// pre-truncation gap ($80/hr).
+	assert.InDelta(t, 70.0, run.TotalHourlyCommit, 1e-9,
+		"total_hourly_commit must reflect the truncated plan only")
+
+	// Tranches exist for the kept allocation.
+	assert.NotEmpty(t, store.savedTranches, "the kept allocation must produce tranches")
 }
 
 // ============================================================
