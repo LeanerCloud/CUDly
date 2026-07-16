@@ -1463,24 +1463,6 @@ func (m *MockConfigStore) GetInFlightLadderCommitUSDHr(ctx context.Context, conf
 	return v, args.Error(1)
 }
 
-// SaveLadderRunWithTranchesAndSupersede mocks the atomic cancel-and-replace
-// operation (L5 spec). Returns the run unchanged when no expectation is
-// registered, mirroring the SaveLadderRunWithTranches default.
-func (m *MockConfigStore) SaveLadderRunWithTranchesAndSupersede(ctx context.Context, run *config.LadderRunDB, tranches []config.LadderTrancheDB) (*config.LadderRunDB, error) {
-	if !isExpected(&m.Mock, "SaveLadderRunWithTranchesAndSupersede") {
-		return run, nil
-	}
-	args := m.Called(ctx, run, tranches)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	v, ok := args.Get(0).(*config.LadderRunDB)
-	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.LadderRunDB, got %T", args.Get(0)))
-	}
-	return v, args.Error(1)
-}
-
 // TransitionLadderRunStatus mocks the TransitionLadderRunStatus operation.
 // Returns (nil, nil) when no expectation is registered (CAS race-lost path).
 func (m *MockConfigStore) TransitionLadderRunStatus(ctx context.Context, id string, fromStatuses []ladder.RunStatus, toStatus ladder.RunStatus) (*config.LadderRunDB, error) {

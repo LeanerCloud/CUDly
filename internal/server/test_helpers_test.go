@@ -341,9 +341,6 @@ func (m *mockConfigStoreForHealth) SaveLadderRun(_ context.Context, run *config.
 func (m *mockConfigStoreForHealth) SaveLadderRunWithTranches(_ context.Context, run *config.LadderRunDB, _ []config.LadderTrancheDB) (*config.LadderRunDB, error) {
 	return run, nil
 }
-func (m *mockConfigStoreForHealth) SaveLadderRunWithTranchesAndSupersede(_ context.Context, run *config.LadderRunDB, _ []config.LadderTrancheDB) (*config.LadderRunDB, error) {
-	return run, nil
-}
 func (m *mockConfigStoreForHealth) GetInFlightLadderCommitUSDHr(_ context.Context, _ string) (*float64, error) {
 	zero := 0.0
 	return &zero, nil

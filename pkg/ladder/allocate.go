@@ -146,8 +146,11 @@ func Allocate(in *AllocationInput) (*AllocateResult, error) {
 	// The two-arm min is defensive: it guards against future target derivations
 	// exceeding the observed floor (today target<=lowWater always holds because
 	// TargetCoveragePct is validated to be <=100). Subtracting inFlight nets
-	// out scheduled/fired tranches that are already en route so repeated runs
+	// out scheduled-only tranches that are already en route so repeated runs
 	// on the same day do not re-plan commitment that is already in flight.
+	// Only scheduled (not-yet-fired) tranches are netted here; fired tranches
+	// are already reflected in existingTotal (E), so netting them too would
+	// double-count and under-commit.
 	preInflightGap := minRat(new(big.Rat).Sub(target, existingTotal), new(big.Rat).Sub(lowWater, existingTotal))
 	gap := new(big.Rat).Sub(preInflightGap, inFlight)
 	if gap.Cmp(minAllocatableGap()) <= 0 {

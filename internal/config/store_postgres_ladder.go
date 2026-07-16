@@ -389,60 +389,6 @@ func (s *PostgresStore) GetInFlightLadderCommitUSDHr(ctx context.Context, config
 	return &total, nil
 }
 
-// SaveLadderRunWithTranchesAndSupersede is the atomic cancel-and-replace
-// variant of SaveLadderRunWithTranches (L5 netting spec). Within a single
-// transaction it:
-//  1. Cancels all status=scheduled tranches for the run's config_id (sets
-//     status='cancelled'), ensuring exactly one generation of scheduled
-//     tranches exists per config after the call.
-//  2. Inserts the new ladder_runs row.
-//  3. Inserts the new ladder_tranches rows.
-//
-// If any step fails the whole transaction is rolled back. If run.ConfigID is
-// nil the cancel step is skipped (the run has no prior config context). If
-// run.ID is empty a fresh UUID is generated before the insert.
-//
-// Callers invoke this ONLY for a run that produced a materially new generation
-// of scheduled tranches; a Hold run must use the plain SaveLadderRunWithTranches
-// path so the existing scheduled ramp keeps its original fire dates.
-func (s *PostgresStore) SaveLadderRunWithTranchesAndSupersede(ctx context.Context, run *LadderRunDB, tranches []LadderTrancheDB) (*LadderRunDB, error) {
-	if run.ID == "" {
-		run.ID = uuid.New().String()
-	}
-	var result LadderRunDB
-	err := s.WithTx(ctx, func(tx pgx.Tx) error {
-		// Step 1: cancel prior scheduled tranches for this config. Typed
-		// TrancheStatus constants (not raw string literals) keep the status
-		// set consistent with the engine and GetInFlightLadderCommitUSDHr.
-		if run.ConfigID != nil {
-			_, err := tx.Exec(ctx, `
-				UPDATE ladder_tranches
-				SET status = $2
-				WHERE config_id = $1 AND status = $3
-			`, *run.ConfigID, string(ladder.TrancheStatusCancelled), string(ladder.TrancheStatusScheduled))
-			if err != nil {
-				return fmt.Errorf("cancel prior scheduled tranches for config_id=%s: %w", *run.ConfigID, err)
-			}
-		}
-		// Step 2: insert the new run row.
-		row := tx.QueryRow(ctx, ladderRunInsertQuery, ladderRunInsertArgs(run, ladderRunPlanJSON(run))...)
-		scanned, err := scanLadderRun(row)
-		if err != nil {
-			return fmt.Errorf("failed to insert ladder_run id=%s: %w", run.ID, err)
-		}
-		// Step 3: insert the new tranche rows.
-		if err := insertLadderTranchesTx(ctx, tx, tranches); err != nil {
-			return err
-		}
-		result = scanned
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &result, nil
-}
-
 // LatestLadderRunStartedAt returns the maximum started_at for the given
 // config_id, or nil when no run has been recorded yet. Drives the per-cadence
 // self-gate in handleLadderRun (Q6).

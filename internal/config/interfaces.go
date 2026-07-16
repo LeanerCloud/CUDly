@@ -379,17 +379,13 @@ type StoreInterface interface {
 	// status=planned run never persists without its tranches (which would let
 	// the cadence gate suppress the retry for a full window).
 	//
-	// SaveLadderRunWithTranchesAndSupersede is the atomic cancel-and-replace
-	// variant (L5 spec). Within a single transaction it:
-	//  1. Cancels all status=scheduled tranches for the run's config_id,
-	//  2. Inserts the new ladder_runs row, and
-	//  3. Inserts the new ladder_tranches rows.
-	// This guarantees at most one generation of scheduled tranches per config
-	// exists at any point; a partial failure rolls back all three steps.
-	// Callers invoke this ONLY when the run produced a materially new
-	// generation of scheduled tranches (>=1 new scheduled purchase tranche);
-	// a Hold run persists via the plain SaveLadderRunWithTranches path so the
-	// live scheduled ramp is preserved rather than cancelled every cadence.
+	// L5 append-only: every ladder run persists its new scheduled tranches via
+	// this method and leaves any existing scheduled tranches untouched. In-flight
+	// netting (GetInFlightLadderCommitUSDHr) already subtracts existing
+	// scheduled tranches from the gap, so each run appends exactly the delta
+	// needed to reach target-E. Appending (never superseding) keeps prior
+	// tranches' original fire dates, converges to target on drift-up (run N
+	// tops up the gap the netting leaves), and cannot oscillate.
 	//
 	// GetInFlightLadderCommitUSDHr returns the total hourly USD commitment in
 	// flight for the given config: the sum of amount_usd_hr for tranches with
@@ -402,7 +398,6 @@ type StoreInterface interface {
 	// nil without an error.
 	SaveLadderRun(ctx context.Context, run *LadderRunDB) (*LadderRunDB, error)
 	SaveLadderRunWithTranches(ctx context.Context, run *LadderRunDB, tranches []LadderTrancheDB) (*LadderRunDB, error)
-	SaveLadderRunWithTranchesAndSupersede(ctx context.Context, run *LadderRunDB, tranches []LadderTrancheDB) (*LadderRunDB, error)
 	GetInFlightLadderCommitUSDHr(ctx context.Context, configID string) (*float64, error)
 	GetLadderRun(ctx context.Context, id string) (*LadderRunDB, error)
 	SaveLadderTranches(ctx context.Context, tranches []LadderTrancheDB) error
