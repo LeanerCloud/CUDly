@@ -520,10 +520,24 @@ func (h *Handler) approveViaToken(ctx context.Context, req *events.LambdaFunctio
 	if err := h.purchase.ApproveExecution(ctx, execution.ExecutionID, token, actor); err != nil {
 		return nil, err
 	}
+	// Re-fetch the execution to pick up the fresh revocation token written by
+	// mintRevocationToken inside ApproveExecution. The stale pre-approve struct
+	// still carries the old approval token; passing it to sendPurchaseExecutedEmail
+	// would embed that now-overwritten token as RevocationToken, causing any
+	// subsequent revoke attempt to return 403 (validateRevokeToken checks the
+	// stored token, which mintRevocationToken has already replaced).
+	emailExec, fetchErr := h.config.GetExecutionByID(ctx, execution.ExecutionID)
+	if fetchErr != nil || emailExec == nil {
+		// Best-effort fallback: send without a valid revoke token rather than
+		// blocking the response. The purchase is complete regardless.
+		logging.Warnf("approveViaToken[%s]: re-fetch for email failed (%v); sending without valid revocation token",
+			execution.ExecutionID, fetchErr)
+		emailExec = execution
+	}
 	// Best-effort post-execution notification email (issue #291). Mirrors
 	// the session-authed path; errors are logged inside sendPurchaseExecutedEmail
 	// and never propagate — the purchase is already done at this point.
-	h.sendPurchaseExecutedEmail(ctx, req, execution, actor)
+	h.sendPurchaseExecutedEmail(ctx, req, emailExec, actor)
 	return map[string]string{"status": "completed"}, nil
 }
 
@@ -1126,6 +1140,13 @@ func (h *Handler) tryRevokeViaSession(ctx context.Context, req *events.LambdaFun
 	}
 	switch sessErr := h.authorizeSessionCancel(ctx, session, execution); {
 	case sessErr == nil:
+		// These endpoints are AuthPublic so the outer middleware skips CSRF.
+		// Enforce it here for the session-authed revoke sub-path, consistent
+		// with cancelPurchaseViaSession and approvePurchaseViaSession which both
+		// validate CSRF before mutating state (nit #1).
+		if err := h.validateCSRF(ctx, req); err != nil {
+			return nil, true, NewClientError(403, "CSRF validation failed")
+		}
 		result, err := h.revokeViaSession(ctx, execution, session.Email)
 		return result, true, err
 	case isPermissionDenied(sessErr):

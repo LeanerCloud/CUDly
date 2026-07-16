@@ -751,7 +751,7 @@ func TestManager_CancelExecution_ExpiredToken(t *testing.T) {
 // TestApproveExecution_RotatesApprovalToken verifies that after a successful
 // approve the ApprovalToken is cleared to prevent the same token from being
 // used to trigger a revoke (or any other action) later.
-func TestApproveExecution_RotatesApprovalToken(t *testing.T) {
+func TestApproveExecution_MintsRevocationToken(t *testing.T) {
 	ctx := context.Background()
 	manager, store, sender := newApproveManager(t)
 
@@ -768,6 +768,10 @@ func TestApproveExecution_RotatesApprovalToken(t *testing.T) {
 		ApprovalToken: "pre-rotate-token",
 	}
 
+	// GetExecutionByID is called twice: once in ApproveExecution itself and
+	// once inside mintRevocationToken (the rotation step). Both return the
+	// same pointer so mintRevocationToken's field mutations are visible after
+	// the call.
 	store.On("GetExecutionByID", ctx, "exec-rotate").Return(execution, nil)
 	store.On("TransitionExecutionStatus", ctx, "exec-rotate", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-rotate")
@@ -775,26 +779,32 @@ func TestApproveExecution_RotatesApprovalToken(t *testing.T) {
 	err := manager.ApproveExecution(ctx, "exec-rotate", "pre-rotate-token", "")
 	require.NoError(t, err)
 
-	// After approve, the token on the persisted execution must be empty.
-	// stubExecuteChain registers SavePurchaseExecution with
-	// mock.AnythingOfType so it consumes the rotation call too.
-	// Verify directly on the struct: rotateApprovalToken fetches by ID
-	// (returns the same pointer) and clears ApprovalToken on it.
-	assert.Equal(t, "", execution.ApprovalToken, "ApprovalToken must be cleared after successful approve")
-	assert.Nil(t, execution.ApprovalTokenExpiresAt, "ApprovalTokenExpiresAt must be nil after rotation")
+	// After approve, mintRevocationToken must have stamped a fresh token onto
+	// the execution row. The old approval token must be gone (proving the
+	// rotation happened), and the expiry must be set to the 24-hour
+	// revocation window.
+	// stubExecuteChain registers SavePurchaseExecution with AnythingOfType
+	// so it absorbs both the finalize write and the mintRevocationToken write.
+	assert.NotEmpty(t, execution.ApprovalToken,
+		"a fresh revocation token must be minted after successful approve (not cleared)")
+	assert.NotEqual(t, "pre-rotate-token", execution.ApprovalToken,
+		"fresh revocation token must differ from the consumed approval token")
+	assert.NotNil(t, execution.ApprovalTokenExpiresAt,
+		"revocation token expiry must be set to the 24-hour window")
 }
 
-// TestRotateApprovalToken_PersistsEmpty is a unit test for rotateApprovalToken
-// that verifies the helper clears both ApprovalToken and ApprovalTokenExpiresAt
-// on the persisted row.
-func TestRotateApprovalToken_PersistsEmpty(t *testing.T) {
+// TestClearApprovalToken_PersistsEmpty is a unit test for clearApprovalToken
+// (the cancel path) that verifies the helper clears both ApprovalToken and
+// ApprovalTokenExpiresAt on the persisted row. A canceled execution has no
+// valid follow-up action, so emptying the token is correct.
+func TestClearApprovalToken_PersistsEmpty(t *testing.T) {
 	ctx := context.Background()
 	manager, store, _ := newApproveManager(t)
 
 	future := time.Now().Add(24 * time.Hour)
 	execution := &config.PurchaseExecution{
 		ExecutionID:            "exec-tok-clear",
-		Status:                 "completed",
+		Status:                 "canceled",
 		ApprovalToken:          "some-token",
 		ApprovalTokenExpiresAt: &future,
 	}
@@ -803,7 +813,37 @@ func TestRotateApprovalToken_PersistsEmpty(t *testing.T) {
 		return e.ExecutionID == "exec-tok-clear" && e.ApprovalToken == "" && e.ApprovalTokenExpiresAt == nil
 	})).Return(nil)
 
-	err := manager.rotateApprovalToken(ctx, "exec-tok-clear")
+	err := manager.clearApprovalToken(ctx, "exec-tok-clear")
 	require.NoError(t, err)
 	store.AssertExpectations(t)
+}
+
+// TestMintRevocationToken_PersistsFreshToken is a unit test for
+// mintRevocationToken that verifies the helper writes a non-empty, changed
+// token with a future expiry on the persisted row.
+func TestMintRevocationToken_PersistsFreshToken(t *testing.T) {
+	ctx := context.Background()
+	manager, store, _ := newApproveManager(t)
+
+	execution := &config.PurchaseExecution{
+		ExecutionID:   "exec-mint",
+		Status:        "completed",
+		ApprovalToken: "old-approval-token",
+	}
+	store.On("GetExecutionByID", ctx, "exec-mint").Return(execution, nil)
+	store.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
+		// Fresh token must be non-empty, different from old, and expiry set.
+		return e.ExecutionID == "exec-mint" &&
+			e.ApprovalToken != "" &&
+			e.ApprovalToken != "old-approval-token" &&
+			e.ApprovalTokenExpiresAt != nil
+	})).Return(nil)
+
+	err := manager.mintRevocationToken(ctx, "exec-mint")
+	require.NoError(t, err)
+	store.AssertExpectations(t)
+	// Confirm the in-memory struct was mutated (used by the handler's re-fetch).
+	assert.NotEmpty(t, execution.ApprovalToken)
+	assert.NotEqual(t, "old-approval-token", execution.ApprovalToken)
+	assert.NotNil(t, execution.ApprovalTokenExpiresAt)
 }

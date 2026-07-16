@@ -9,9 +9,18 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/jackc/pgx/v5"
 )
+
+// revocationTokenWindow is the TTL stamped onto the fresh revocation token
+// minted after a token-authed approve. It matches the 24-hour AWS RI/SP
+// support-case window advertised in the post-execution email and enforced
+// in validateRevokeToken (handler_purchases.go). Keeping the two values
+// in sync is essential: a token that expires before the window closes would
+// silently block a valid revoke attempt.
+const revocationTokenWindow = 24 * time.Hour
 
 // ApproveExecution is the token-authenticated approve entry point used by
 // the legacy email-link flow and the SQS approve worker. After validating
@@ -57,17 +66,26 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 	} else {
 		logging.Infof("purchase[%s]: ApproveExecution (token path) completed in %s",
 			executionID, time.Since(t0))
-		// Token rotation (best-effort): clear the ApprovalToken after a
-		// successful approve so a leaked token cannot be replayed for a
-		// different action (e.g. revoke). We do this via a follow-up
-		// SavePurchaseExecution on a freshly-fetched row so we don't
-		// stomp a completed_at or other fields written by executeAndFinalize.
-		// The accept-small-race comment: if a concurrent read sees the pre-
-		// rotation row between this point and the save completing, it will
-		// find an empty-string token and reject the request, which is the
-		// desired security outcome even if the window is tiny.
-		if rotateErr := m.rotateApprovalToken(ctx, executionID); rotateErr != nil {
-			logging.Warnf("purchase[%s]: ApproveExecution: token rotation failed (best-effort): %v", executionID, rotateErr)
+		// Token rotation (best-effort): mint a fresh revocation token after a
+		// successful approve. The old approval token must not double as a
+		// revocation token: (a) it was consumed to authorize this approve action
+		// and (b) clearing it (old behavior) caused the post-execution email to
+		// embed an already-invalidated token, making every "Revoke" click return
+		// 403 (issue #291 wave-2 adversarial review finding).
+		//
+		// mintRevocationToken fetches the freshly-finalized row (so we don't
+		// stomp completed_at or other fields), generates a new random token with
+		// a 24-hour expiry matching the revocation window, and persists it.
+		// The handler re-fetches the execution after this call to obtain the
+		// fresh token for the email.
+		//
+		// Security: re-approval with the old token is still blocked by the status
+		// check in TransitionExecutionStatus (the row is now "completed", not
+		// "pending"/"notified"), so token rotation is NOT required to prevent
+		// approve-replay. The new token is scoped to revoke-only via the status
+		// check in checkRevokableStatus ("completed" required).
+		if rotateErr := m.mintRevocationToken(ctx, executionID); rotateErr != nil {
+			logging.Warnf("purchase[%s]: ApproveExecution: revocation token mint failed (best-effort): %v", executionID, rotateErr)
 		}
 	}
 	return err
@@ -259,26 +277,61 @@ func (m *Manager) CancelExecution(ctx context.Context, executionID, token, actor
 	}
 
 	logging.Infof("Execution %s canceled", executionID)
-	// Token rotation (best-effort): same rationale as in ApproveExecution.
-	if rotateErr := m.rotateApprovalToken(ctx, executionID); rotateErr != nil {
-		logging.Warnf("purchase[%s]: CancelExecution: token rotation failed (best-effort): %v", executionID, rotateErr)
+	// Token clear (best-effort): a canceled execution has no valid follow-up
+	// action, so the approval token is cleared to prevent replay. Unlike the
+	// approve path (which mints a fresh revocation token), cancel produces no
+	// usable successor action, so an empty token is correct here.
+	if rotateErr := m.clearApprovalToken(ctx, executionID); rotateErr != nil {
+		logging.Warnf("purchase[%s]: CancelExecution: token clear failed (best-effort): %v", executionID, rotateErr)
 	}
 	return nil
 }
 
-// rotateApprovalToken clears the ApprovalToken on the execution after a
-// successful approve or cancel. This prevents a leaked token from being
-// replayed for a different action (e.g. using an old approval token to
-// trigger a revoke). The rotation is best-effort: if the follow-up save
-// fails the operation (approve/cancel) has already landed, so we only
-// warn rather than surfacing an error to the caller.
-func (m *Manager) rotateApprovalToken(ctx context.Context, executionID string) error {
+// mintRevocationToken generates a fresh cryptographically-secure revocation
+// token, stamps it onto the execution with a revocationTokenWindow expiry,
+// and persists the update. Called after a successful token-authed approve so
+// the post-execution email carries a valid revoke-capable token rather than
+// the now-consumed approval token.
+//
+// The handler re-fetches the execution after ApproveExecution returns to
+// pick up the fresh token for embedding in the email.
+//
+// Best-effort: if the write fails the approve has already landed and the
+// handler will fall back to sending the email with an empty RevocationToken
+// (no revoke button), which is degraded but safe.
+func (m *Manager) mintRevocationToken(ctx context.Context, executionID string) error {
 	exec, err := m.config.GetExecutionByID(ctx, executionID)
 	if err != nil {
-		return fmt.Errorf("rotateApprovalToken: failed to fetch execution: %w", err)
+		return fmt.Errorf("mintRevocationToken: failed to fetch execution: %w", err)
 	}
 	if exec == nil {
-		return fmt.Errorf("rotateApprovalToken: execution not found: %s", executionID)
+		return fmt.Errorf("mintRevocationToken: execution not found: %s", executionID)
+	}
+	tok, err := common.GenerateApprovalToken()
+	if err != nil {
+		return fmt.Errorf("mintRevocationToken: failed to generate token: %w", err)
+	}
+	expiry := time.Now().Add(revocationTokenWindow)
+	exec.ApprovalToken = tok
+	exec.ApprovalTokenExpiresAt = &expiry
+	return m.config.SavePurchaseExecution(ctx, exec)
+}
+
+// clearApprovalToken clears the ApprovalToken on the execution after a
+// successful cancel. A canceled execution has no valid follow-up action, so
+// clearing the token prevents replay for any purpose. Unlike the approve path
+// (which mints a fresh revocation token for the revoke-window email link),
+// cancel produces no usable successor action.
+//
+// Best-effort: if the follow-up save fails the cancel has already landed, so
+// we only warn rather than surfacing an error to the caller.
+func (m *Manager) clearApprovalToken(ctx context.Context, executionID string) error {
+	exec, err := m.config.GetExecutionByID(ctx, executionID)
+	if err != nil {
+		return fmt.Errorf("clearApprovalToken: failed to fetch execution: %w", err)
+	}
+	if exec == nil {
+		return fmt.Errorf("clearApprovalToken: execution not found: %s", executionID)
 	}
 	exec.ApprovalToken = ""
 	exec.ApprovalTokenExpiresAt = nil

@@ -4234,6 +4234,9 @@ func TestHandler_revokePurchase_SessionAdminCancelAny(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").
 		Return(&Session{UserID: adminUserID, Email: adminEmail}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, adminUserID, "cancel-any", "purchases").Return(true, nil)
+	// CSRF is enforced for the session-authed revoke path (tryRevokeViaSession).
+	// No CSRF token header in this request, so csrfToken is "".
+	mockAuth.On("ValidateCSRFToken", ctx, "admin-token", "").Return(nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 	// No token query param: forces the tokenless session-auth path.
@@ -4274,6 +4277,8 @@ func TestHandler_revokePurchase_SessionOwnerCancelOwn(t *testing.T) {
 		Return(&Session{UserID: ownerUserID, Email: ownerEmail}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, ownerUserID, "cancel-any", "purchases").Return(false, nil)
 	mockAuth.On("HasPermissionAPI", ctx, ownerUserID, "cancel-own", "purchases").Return(true, nil)
+	// CSRF is enforced for the session-authed revoke path (tryRevokeViaSession).
+	mockAuth.On("ValidateCSRFToken", ctx, "owner-token", "").Return(nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
@@ -4498,26 +4503,52 @@ func TestRevokePOSTReadsTokenFromBody(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Finding #1: Revoke must reject a rotated (empty) approval token
+// Finding #1: Revoke must reject a cleared or mismatched ApprovalToken
 // ---------------------------------------------------------------------------
 
-// TestRevokePurchase_RejectsRotatedToken verifies that after approve/cancel
-// clears the ApprovalToken, an attempt to revoke with the original token
-// is rejected with 403. This guards against a leaked approval token being
-// replayed as a revocation token.
+// TestRevokePurchase_RejectsClearedToken verifies that after cancel clears
+// the ApprovalToken to "", any revoke attempt is rejected with 403. The cancel
+// path uses clearApprovalToken (not mintRevocationToken), so the stored token
+// is empty and no revoke is possible.
+func TestRevokePurchase_RejectsClearedToken(t *testing.T) {
+	exec := &config.PurchaseExecution{
+		ExecutionID:   "exec-post-cancel",
+		Status:        "completed",
+		ApprovalToken: "", // cleared by clearApprovalToken after cancel
+	}
+	err := validateRevokeToken(exec, "pre-cancel-token")
+	require.Error(t, err, "cleared (empty) stored token must be rejected")
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a ClientError")
+	assert.Equal(t, 403, ce.code, "must return 403 for a cleared token")
+}
+
+// TestRevokePurchase_RejectsRotatedToken verifies that after approve mints a
+// fresh revocation token (mintRevocationToken), the OLD approval token from the
+// approval email link can no longer be used for revocation. Only the fresh
+// token embedded in the executed-notification email is valid.
+//
+// This guards against a recipient of the approval-request email using that
+// link's token to also revoke the purchase after it executed.
 func TestRevokePurchase_RejectsRotatedToken(t *testing.T) {
-	// validateRevokeToken is the function under test: it must reject an
-	// empty stored token regardless of what the caller supplies.
+	freshToken := "fresh-revoke-token"
 	exec := &config.PurchaseExecution{
 		ExecutionID:   "exec-post-approve",
 		Status:        "completed",
-		ApprovalToken: "", // rotated to empty by rotateApprovalToken after approve
+		ApprovalToken: freshToken, // minted by mintRevocationToken after approve
 	}
-	err := validateRevokeToken(exec, "pre-rotate-token")
-	require.Error(t, err, "rotated (empty) stored token must be rejected")
+	// The OLD approval token (from the approve-request email) must be rejected
+	// because the stored token has been rotated to the fresh revocation token.
+	err := validateRevokeToken(exec, "old-approval-token")
+	require.Error(t, err, "old approval token must be rejected after token rotation")
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "expected a ClientError")
-	assert.Equal(t, 403, ce.code, "must return 403 for a rotated token")
+	assert.Equal(t, 403, ce.code, "must return 403 for the rotated-away old token")
+
+	// Confirm the fresh token IS accepted, proving the guard is hash-based
+	// (not a blanket rejection).
+	require.NoError(t, validateRevokeToken(exec, freshToken),
+		"fresh revocation token must be accepted for revoke")
 }
 
 // ---------------------------------------------------------------------------
