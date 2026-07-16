@@ -460,8 +460,8 @@ type RecommendationSummary struct {
 	AccountLabel   string
 	Count          int
 	MonthlySavings float64
-	Term        int
-	UpfrontCost float64
+	Term           int
+	UpfrontCost    float64
 }
 
 // RIExchangeNotificationData holds data for RI exchange email templates.
