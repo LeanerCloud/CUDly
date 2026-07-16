@@ -528,6 +528,10 @@ func TestPerAccountPerms_DashboardSummary_AggregatesAllowedSubsetOnly(t *testing
 	// Issue #956 regression: the all-accounts fast path must NOT be taken for a
 	// restricted session, or commitment KPIs would leak other accounts' data.
 	mockStore.AssertNotCalled(t, "GetAllPurchaseHistory", mock.Anything, mock.Anything)
+	// Positively assert the scoped read happened: without this the test could
+	// pass if commitment metrics were skipped entirely.
+	mockStore.AssertCalled(t, "GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"),
+		[]string{permsAccA}, map[string][]string(nil))
 }
 
 // TestPerAccountPerms_DashboardSummary_CommitmentMetricsExcludeOtherAccounts is
