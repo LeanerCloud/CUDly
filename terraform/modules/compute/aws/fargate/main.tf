@@ -313,9 +313,9 @@ resource "aws_iam_role_policy" "ri_exchange" {
           "elasticache:DescribeReservedCacheNodesOfferings",
           "elasticache:PurchaseReservedCacheNodesOffering",
           # OpenSearch reserved instances
-          "es:DescribeReservedElasticsearchInstances",
-          "es:DescribeReservedElasticsearchInstanceOfferings",
-          "es:PurchaseReservedElasticsearchInstanceOffering",
+          "es:DescribeReservedInstances",
+          "es:DescribeReservedInstanceOfferings",
+          "es:PurchaseReservedInstanceOffering",
           # Redshift reserved nodes
           "redshift:DescribeReservedNodes",
           "redshift:DescribeReservedNodeOfferings",
