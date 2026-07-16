@@ -36,4 +36,18 @@ github_repo = "LeanerCloud/CUDly"
 # Only exact-match pushes to this branch can obtain a GCP token.
 # PRs, tags, forks, and workflow_dispatch from other refs are blocked.
 #
+# DEFAULT: refs/heads/main
+# The default in variables.tf is refs/heads/main, which is correct for normal
+# operation. Override here ONLY when temporarily deploying from a feature branch.
+#
+# IMPORTANT: When the active deploy branch changes (e.g. a long-running feature
+# branch merges into main), update this value and re-apply the module. Forgetting
+# to flip back to refs/heads/main will lock out all future main-branch deploys
+# with: "The given credential is rejected by the attribute condition."
+#
+# To verify the currently-applied condition in GCP (read-only):
+#   gcloud iam workload-identity-pools providers describe github-actions \
+#     --workload-identity-pool=github-actions --location=global \
+#     --project=<PROJECT_ID> --format="value(attributeCondition)"
+#
 deploy_ref = "refs/heads/main"

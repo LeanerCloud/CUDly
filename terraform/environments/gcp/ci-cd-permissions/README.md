@@ -119,6 +119,33 @@ Workload Identity Federation endpoint for a short-lived SA access token, and set
 
 ### Attribute condition
 
-The WIF provider is configured with `attribute_condition = "assertion.repository == 'LeanerCloud/CUDly'"`.
-Only workflows from that exact repository can impersonate the service account. To change the allowed
-repo, update `github_repo` in `terraform.tfvars` and re-apply.
+The WIF provider enforces **two** conditions simultaneously:
+
+```text
+assertion.repository == '<github_repo>' && assertion.ref == '<deploy_ref>'
+```
+
+Only workflows running from the exact repository **and** the exact ref (branch) configured in
+`terraform.tfvars` can obtain a GCP token. Any other branch, PR, fork, tag, or
+`workflow_dispatch` from a different ref is rejected with:
+
+> `unauthorized_client: The given credential is rejected by the attribute condition.`
+
+**Keeping `deploy_ref` in sync with the active deploy branch is critical.** When the base
+deploy branch changes (e.g. a long-running feature branch is merged into `main`), the operator
+must update `deploy_ref` in `terraform.tfvars` and re-apply this module before the next deploy.
+
+The default value of `deploy_ref` is `refs/heads/main`. A plain `terraform apply` with no
+override in `terraform.tfvars` restores the correct condition for deploys from `main`.
+
+To verify the currently-applied condition without applying:
+
+```bash
+gcloud iam workload-identity-pools providers describe github-actions \
+  --workload-identity-pool=github-actions \
+  --location=global \
+  --project=<PROJECT_ID> \
+  --format="value(attributeCondition)"
+```
+
+To change the allowed repo, update `github_repo` in `terraform.tfvars` and re-apply.
