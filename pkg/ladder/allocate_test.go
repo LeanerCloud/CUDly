@@ -628,10 +628,30 @@ func TestAllocate_MaxActionsExceeded_Truncates(t *testing.T) {
 	}
 }
 
+// truncatedHoldLayers returns the set of layers named by max_actions_per_run
+// truncation holds in the result, so tests can assert exactly which actions
+// were dropped (not merely how many).
+func truncatedHoldLayers(holds []PlannedAction) map[LayerType]bool {
+	out := make(map[LayerType]bool, len(holds))
+	for _, h := range holds {
+		if strings.Contains(h.Rationale, "max_actions_per_run") {
+			out[h.Layer] = true
+		}
+	}
+	return out
+}
+
 // TestAllocate_MaxActions_ReshapeRetained verifies that when reshapes and
 // purchases together exceed MaxActionsPerRun, reshapes are preferred over
-// purchases: the reshape is kept, all purchase slots go to the largest-gap
-// allocations, and the smallest purchase is dropped with a hold.
+// purchases: the reshape is kept, the single remaining slot goes to the
+// largest-gap purchase, and every dropped purchase leaves a hold.
+//
+// Fixture: lowWater=10, stable=4, buffer_fraction=0.10, ConvertibleRI existing
+// $5/hr @ 50% util (-> reshape). gap = min(10-5, 10-5) = 5; coreGap = 4.5;
+// baseGap = min(4.5, stable 4) = 4.0 -> EC2InstanceSP; bufferGap = 0.5 ->
+// ConvertibleRI; flexGap = 0.5 -> ComputeSP. So the largest purchase is
+// EC2InstanceSP ($4/hr); ComputeSP and ConvertibleRI ($0.5/hr each) are dropped.
+// With cap=2 (1 reshape + 1 purchase), EC2InstanceSP survives.
 func TestAllocate_MaxActions_ReshapeRetained(t *testing.T) {
 	t.Parallel()
 	cfg := validConfigAWS()
@@ -653,25 +673,102 @@ func TestAllocate_MaxActions_ReshapeRetained(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Must not exceed MaxActionsPerRun.
+	// Exactly MaxActionsPerRun money actions: 1 reshape + 1 purchase.
 	total := len(result.Allocations) + len(result.Reshapes)
-	if total > cfg.MaxActionsPerRun {
-		t.Errorf("want <= %d money actions, got %d (allocs=%d reshapes=%d)",
+	if total != cfg.MaxActionsPerRun {
+		t.Errorf("want %d money actions, got %d (allocs=%d reshapes=%d)",
 			cfg.MaxActionsPerRun, total, len(result.Allocations), len(result.Reshapes))
 	}
-	// The reshape must be retained.
-	if len(result.Reshapes) == 0 {
-		t.Error("reshape must be retained when reshapes are preferred over purchases")
+	// Exactly one reshape, on the buffer layer (ConvertibleRI), retained.
+	if len(result.Reshapes) != 1 || result.Reshapes[0].Layer != LayerConvertibleRI {
+		t.Fatalf("want exactly one reshape on ConvertibleRI, got %+v", result.Reshapes)
 	}
-	// At least one hold for a dropped purchase must be present.
+	// Exactly one surviving purchase, on the largest-gap layer (EC2InstanceSP).
+	if len(result.Allocations) != 1 {
+		t.Fatalf("want exactly one surviving purchase, got %d", len(result.Allocations))
+	}
+	if result.Allocations[0].Layer != LayerEC2InstanceSP {
+		t.Errorf("surviving purchase must be the largest-gap layer EC2InstanceSP, got %s",
+			result.Allocations[0].Layer)
+	}
+	// Exactly the two smaller purchases were dropped with holds.
+	held := truncatedHoldLayers(result.Holds)
+	wantHeld := map[LayerType]bool{LayerComputeSP: true, LayerConvertibleRI: true}
+	if !maps.Equal(held, wantHeld) {
+		t.Errorf("dropped-purchase hold layers = %v, want %v", held, wantHeld)
+	}
+}
+
+// TestAllocate_MaxActions_ReshapesFillCap is the regression for the CRITICAL
+// Fable finding: when reshapes alone fill (>=) the cap, every dropped purchase
+// must still leave an audit Hold. Pre-fix, this branch discarded all
+// allocations with ZERO holds (holds=0); post-fix each dropped purchase names
+// its layer + amount in a max_actions_per_run hold.
+//
+// Fixture matches TestAllocate_MaxActions_ReshapeRetained but with cap=1: the
+// single reshape (ConvertibleRI) consumes the only slot, so all three purchases
+// (EC2InstanceSP $4/hr, ComputeSP $0.5/hr, ConvertibleRI $0.5/hr) are dropped.
+func TestAllocate_MaxActions_ReshapesFillCap(t *testing.T) {
+	t.Parallel()
+	cfg := validConfigAWS()
+	cfg.MaxActionsPerRun = 1 // one slot, taken by the reshape
+	layers := awsLayers()
+	states := zeroStates(layers)
+	states = withExisting(states, LayerConvertibleRI, 5.0)
+	states = withBufferUtilization(states, 50.0) // below 90% threshold -> reshape
+	in := &AllocationInput{
+		Config:      cfg,
+		Layers:      layers,
+		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates: states,
+		Now:         nowFixed(),
+		DataSources: []string{"cost-explorer"},
+	}
+	result, err := Allocate(in)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Exactly one money action, the retained reshape; no purchases survive.
+	total := len(result.Allocations) + len(result.Reshapes)
+	if total != cfg.MaxActionsPerRun {
+		t.Errorf("want %d money action, got %d (allocs=%d reshapes=%d)",
+			cfg.MaxActionsPerRun, total, len(result.Allocations), len(result.Reshapes))
+	}
+	if len(result.Allocations) != 0 {
+		t.Errorf("no purchase may survive when the reshape fills the cap, got %d", len(result.Allocations))
+	}
+	if len(result.Reshapes) != 1 || result.Reshapes[0].Layer != LayerConvertibleRI {
+		t.Fatalf("want the ConvertibleRI reshape retained, got %+v", result.Reshapes)
+	}
+	// CRITICAL: every dropped purchase must leave an audit hold (pre-fix: 0).
+	held := truncatedHoldLayers(result.Holds)
+	wantHeld := map[LayerType]bool{
+		LayerEC2InstanceSP: true,
+		LayerComputeSP:     true,
+		LayerConvertibleRI: true,
+	}
+	if !maps.Equal(held, wantHeld) {
+		t.Errorf("dropped-purchase hold layers = %v, want %v", held, wantHeld)
+	}
+	// Each truncation hold must name its layer and the dropped amount.
 	var truncHolds int
 	for _, h := range result.Holds {
-		if strings.Contains(h.Rationale, "max_actions_per_run") {
-			truncHolds++
+		if !strings.Contains(h.Rationale, "max_actions_per_run") {
+			continue
+		}
+		truncHolds++
+		if h.Action != ActionHold {
+			t.Errorf("truncation hold must be ActionHold, got %q", h.Action)
+		}
+		if !strings.Contains(h.Rationale, string(h.Layer)) {
+			t.Errorf("hold rationale must name its layer %s: %q", h.Layer, h.Rationale)
+		}
+		if !strings.Contains(h.Rationale, "/hr") {
+			t.Errorf("hold rationale must name the dropped amount: %q", h.Rationale)
 		}
 	}
-	if truncHolds == 0 {
-		t.Error("expected at least one truncation hold for a dropped purchase")
+	if truncHolds != 3 {
+		t.Errorf("want 3 truncation holds (one per dropped purchase), got %d", truncHolds)
 	}
 }
 

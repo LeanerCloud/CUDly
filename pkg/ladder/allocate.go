@@ -499,28 +499,38 @@ func dropSubMinimumAllocations(allocs []Allocation, dataSources []string) ([]All
 func truncateToMaxActions(
 	allocs []Allocation,
 	reshapes []PlannedAction,
-	max int,
+	maxActions int,
 	layerStates map[LayerType]LayerState,
 	dataSources []string,
 ) ([]Allocation, []PlannedAction, []PlannedAction) {
-	if len(allocs)+len(reshapes) <= max {
+	if len(allocs)+len(reshapes) <= maxActions {
 		return allocs, reshapes, nil
 	}
-	// Case: reshapes alone fill or exceed the cap.
-	if len(reshapes) >= max {
-		kept, holds := truncateReshapes(reshapes, max, layerStates, dataSources)
-		return nil, kept, holds
+	// Case: reshapes alone fill or exceed the cap. Every dropped purchase must
+	// still leave an audit Hold (Q-TRUNC), so ALL allocations are converted to
+	// holds here via purchaseCap 0; none is silently discarded.
+	//
+	// INVARIANT: this branch is currently unreachable in production.
+	// validateRoleCounts caps buffer layers at 1 (so at most one reshape) and
+	// MaxActionsPerRun is validated > 0, so len(reshapes) < maxActions always
+	// holds. truncateReshapes' utilization sort and layerUtilPctOrMax's
+	// nil->100 path are therefore defensive-only, kept for future multi-buffer
+	// topologies.
+	if len(reshapes) >= maxActions {
+		keptReshapes, reshapeHolds := truncateReshapes(reshapes, maxActions, layerStates, dataSources)
+		_, allocHolds := truncatePurchases(allocs, 0, maxActions, dataSources)
+		return nil, keptReshapes, append(allocHolds, reshapeHolds...)
 	}
 	// Normal case: reshapes fit; truncate the lowest-gap purchases.
-	purchaseCap := max - len(reshapes)
-	kept, holds := truncatePurchases(allocs, purchaseCap, max, dataSources)
+	purchaseCap := maxActions - len(reshapes)
+	kept, holds := truncatePurchases(allocs, purchaseCap, maxActions, dataSources)
 	return kept, reshapes, holds
 }
 
 // truncateReshapes keeps the most urgent (lowest utilization) reshapes up to
-// max, emitting an ActionHold for each dropped one. Split from
+// maxActions, emitting an ActionHold for each dropped one. Split from
 // truncateToMaxActions to keep cyclomatic complexity within the project limit.
-func truncateReshapes(reshapes []PlannedAction, max int, layerStates map[LayerType]LayerState, dataSources []string) ([]PlannedAction, []PlannedAction) {
+func truncateReshapes(reshapes []PlannedAction, maxActions int, layerStates map[LayerType]LayerState, dataSources []string) ([]PlannedAction, []PlannedAction) {
 	sorted := make([]PlannedAction, len(reshapes))
 	copy(sorted, reshapes)
 	slices.SortStableFunc(sorted, func(a, b PlannedAction) int {
@@ -541,15 +551,15 @@ func truncateReshapes(reshapes []PlannedAction, max int, layerStates map[LayerTy
 		return 0
 	})
 	var holds []PlannedAction
-	for _, r := range sorted[max:] {
+	for _, r := range sorted[maxActions:] {
 		holds = append(holds, PlannedAction{
 			Action:      ActionHold,
 			Layer:       r.Layer,
-			Rationale:   fmt.Sprintf("deferred to a later run: max_actions_per_run=%d reached (dropped reshape on %s)", max, r.Layer),
+			Rationale:   fmt.Sprintf("deferred to a later run: max_actions_per_run=%d reached (dropped reshape on %s)", maxActions, r.Layer),
 			DataSources: dataSources,
 		})
 	}
-	return sorted[:max], holds
+	return sorted[:maxActions], holds
 }
 
 // truncatePurchases keeps the largest-GapUSDPerHour allocations up to
