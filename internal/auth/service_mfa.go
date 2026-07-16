@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha1" // #nosec G505 -- TOTP (RFC 6238) mandates HMAC-SHA1; using SHA256 would break compatibility with standard authenticator apps
+	"crypto/sha1" // #nosec G505 -- SHA-1 retained for broad authenticator app compatibility and existing otpauth provisioning; RFC 6238 permits SHA-256/SHA-512 but most authenticator apps default to SHA-1
 	"crypto/subtle"
 	"encoding/base32"
 	"fmt"

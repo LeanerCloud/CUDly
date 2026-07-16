@@ -48,7 +48,7 @@ func (l *Logger) getLevel() Level {
 
 // setLevel stores the logger's level atomically.
 func (l *Logger) setLevel(level Level) {
-	l.level.Store(int32(level))
+	l.level.Store(int32(level)) // #nosec G115 -- Level is a bounded enum (LevelDebug=0..LevelError=3); int->int32 cannot overflow
 }
 
 // Config holds logger configuration

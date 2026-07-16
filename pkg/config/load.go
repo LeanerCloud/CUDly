@@ -30,7 +30,7 @@ func defaults() Config {
 		Server: ServerConfig{
 			Enabled:   false,
 			Listen:    ":8080",
-			APIKeyEnv: "CUDLY_API_KEY",
+			APIKeyEnv: "CUDLY_API_KEY", // #nosec G101 -- name of the env var to look up the API key, not a credential value
 		},
 		Azure: AzureConfig{Scope: "shared"},
 	}
@@ -90,7 +90,7 @@ func resolveFilePath(argPath string) (string, bool, error) {
 // applyYAML reads the YAML file at path and merges it into cfg.
 // If explicit is false and the file doesn't exist, it is silently ignored.
 func applyYAML(cfg *Config, path string, explicit bool) error {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- operator-supplied config file path; reading an arbitrary config file is by design
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) && !explicit {
 			return nil

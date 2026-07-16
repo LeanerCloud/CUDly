@@ -29,7 +29,7 @@ import (
 // GetCredentials. If the SDK ever renames them on upgrade,
 // TestGetCredentials_SourceMapping will flag the mismatch at test time.
 const (
-	awsSourceSharedConfigCredentials = "SharedConfigCredentials"
+	awsSourceSharedConfigCredentials = "SharedConfigCredentials" // #nosec G101 -- AWS SDK credential-source name string, not a credential value
 	awsSourceAssumeRoleProvider      = "AssumeRoleProvider"
 )
 
@@ -502,7 +502,9 @@ func (p *AWSProvider) GetRecommendationsClient(ctx context.Context) (provider.Re
 
 // Register the AWS provider with the global registry
 func init() {
-	provider.RegisterProvider("aws", func(config *provider.ProviderConfig) (provider.Provider, error) {
+	if err := provider.RegisterProvider("aws", func(config *provider.ProviderConfig) (provider.Provider, error) {
 		return NewAWSProvider(config)
-	})
+	}); err != nil {
+		panic("failed to register AWS provider: " + err.Error())
+	}
 }

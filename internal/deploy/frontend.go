@@ -82,47 +82,52 @@ func (s *FrontendService) uploadDirectory(ctx context.Context, distDir, bucketNa
 		if d.IsDir() {
 			return nil
 		}
-
-		// Get relative path
-		relPath, err := filepath.Rel(distDir, path)
-		if err != nil {
-			return err
+		// Reject symlinks: filepath.WalkDir does not traverse symlinks but
+		// os.ReadFile will dereference them. A symlinked file inside the build
+		// dir could point outside it, so we skip any symlink entry explicitly.
+		if d.Type()&fs.ModeSymlink != 0 {
+			log.Printf("deploy: skipping symlink %s", path)
+			return nil
 		}
-		// Convert to forward slashes for S3 keys
-		key := strings.ReplaceAll(relPath, string(filepath.Separator), "/")
-
-		// Read file
-		content, err := os.ReadFile(path) // #nosec G304,G122 -- path is from WalkDir callback, always a descendant of distDir (npm build output under operator control); TOCTOU risk not applicable in CI/CD deploy context
-		if err != nil {
-			return fmt.Errorf("failed to read %s: %w", path, err)
-		}
-
-		// Determine content type
-		contentType := mime.TypeByExtension(filepath.Ext(path))
-		if contentType == "" {
-			contentType = "application/octet-stream"
-		}
-
-		// Set cache control based on file type
-		cacheControl := "max-age=31536000" // 1 year for assets
-		if strings.HasSuffix(key, ".html") || strings.HasSuffix(key, ".json") || strings.HasSuffix(key, ".webmanifest") {
-			cacheControl = "no-cache, no-store, must-revalidate"
-		}
-
-		// Upload to S3
-		_, err = s.S3Client.PutObject(ctx, &s3.PutObjectInput{
-			Bucket:       aws.String(bucketName),
-			Key:          aws.String(key),
-			Body:         bytes.NewReader(content),
-			ContentType:  aws.String(contentType),
-			CacheControl: aws.String(cacheControl),
-		})
-		if err != nil {
-			return fmt.Errorf("failed to upload %s: %w", key, err)
-		}
-
-		return nil
+		return s.uploadFile(ctx, distDir, bucketName, path)
 	})
+}
+
+// uploadFile reads a single regular file and puts it in the S3 bucket.
+// path must be a non-symlink descendant of distDir (enforced by the caller).
+func (s *FrontendService) uploadFile(ctx context.Context, distDir, bucketName, path string) error {
+	relPath, err := filepath.Rel(distDir, path)
+	if err != nil {
+		return err
+	}
+	key := strings.ReplaceAll(relPath, string(filepath.Separator), "/")
+
+	content, err := os.ReadFile(path) // #nosec G304,G122 -- path is from WalkDir callback, symlinks rejected by caller; always a regular file descendant of distDir (npm build output under operator control)
+	if err != nil {
+		return fmt.Errorf("failed to read %s: %w", path, err)
+	}
+
+	contentType := mime.TypeByExtension(filepath.Ext(path))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	cacheControl := "max-age=31536000" // 1 year for assets
+	if strings.HasSuffix(key, ".html") || strings.HasSuffix(key, ".json") || strings.HasSuffix(key, ".webmanifest") {
+		cacheControl = "no-cache, no-store, must-revalidate"
+	}
+
+	_, err = s.S3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:       aws.String(bucketName),
+		Key:          aws.String(key),
+		Body:         bytes.NewReader(content),
+		ContentType:  aws.String(contentType),
+		CacheControl: aws.String(cacheControl),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to upload %s: %w", key, err)
+	}
+	return nil
 }
 
 // FindFrontendDir finds the frontend directory.

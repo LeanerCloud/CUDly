@@ -188,7 +188,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 
 	input := &redshift.PurchaseReservedNodeOfferingInput{
 		ReservedNodeOfferingId: aws.String(offeringID),
-		NodeCount:              aws.Int32(int32(rec.Count)),
+		NodeCount:              aws.Int32(int32(rec.Count)), // #nosec G115 -- Count from CE recommendation; AWS RI purchase limits keep this far below math.MaxInt32
 	}
 
 	response, err := c.client.PurchaseReservedNodeOffering(ctx, input)

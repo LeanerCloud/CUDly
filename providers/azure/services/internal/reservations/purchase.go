@@ -212,7 +212,7 @@ func doCalculatePrice(ctx context.Context, httpClient HTTPClient, calcURL string
 		return "", fmt.Errorf("calculatePrice HTTP call: %w", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	resp.Body.Close() // #nosec G104 -- body fully drained by io.ReadAll before Close; transport close error does not affect correctness
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("calculatePrice failed with status %d: %s", resp.StatusCode, string(body))
@@ -315,7 +315,7 @@ func fetchReservationOrdersPage(ctx context.Context, httpClient HTTPClient, page
 		return nil, fmt.Errorf("list reservation orders HTTP call: %w", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	resp.Body.Close() // #nosec G104 -- body fully drained by io.ReadAll before Close; transport close error does not affect correctness
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("list reservation orders failed with status %d: %s", resp.StatusCode, string(body))
@@ -400,7 +400,7 @@ func doPurchase(ctx context.Context, httpClient HTTPClient, purchaseURL string, 
 		return fmt.Errorf("failed to purchase reservation: %w", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	resp.Body.Close() // #nosec G104 -- body fully drained by io.ReadAll before Close; transport close error does not affect correctness
 
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusAccepted {
 		return nil
