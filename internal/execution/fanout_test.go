@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -105,7 +106,20 @@ func TestFanOut_ContextCancelled_BlockedSemaphore(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{}, 1)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	// canceledRecorded is closed by the fan-out launch loop the moment the
+	// queued "second" item is recorded as ctx.Canceled at the semaphore
+	// boundary (via the semBlockedHookKey hook). This gives a deterministic
+	// happens-before edge: the test only releases the blocker AFTER the
+	// cancellation has been recorded, so the freed semaphore slot can never
+	// race the launch loop into running "second". Without it, cancel() and the
+	// slot-release both make the loop's select ready, and Go's uniform-random
+	// pick would intermittently launch "second" (recording a nil error).
+	canceledRecorded := make(chan struct{})
+	ctx, cancel := context.WithCancel(
+		context.WithValue(context.Background(), semBlockedHookKey{}, func() {
+			close(canceledRecorded)
+		}),
+	)
 	defer cancel()
 
 	// Collect results in a separate goroutine so this test goroutine can
@@ -130,9 +144,26 @@ func TestFanOut_ContextCancelled_BlockedSemaphore(t *testing.T) {
 		done <- outcome{res}
 	}()
 
-	// Wait until the first goroutine holds the semaphore, then cancel.
+	// Wait until the first goroutine holds the semaphore, then cancel. Once
+	// canceledRecorded fires, the loop has committed "second" to the
+	// <-ctx.Done() branch, so releasing the blocker is now race-free.
 	<-started
 	cancel()
+	select {
+	case <-canceledRecorded:
+		// Correct behavior: the loop honored ctx cancellation at the
+		// semaphore boundary. Fires within microseconds, so the deadline
+		// below is never reached on a healthy tree (no flakiness).
+	case <-time.After(10 * time.Second):
+		// A regression to unconditional `sem <- struct{}{}` would block the
+		// launch loop on the second item forever (the blocker never releases
+		// because we never send release), so canceledRecorded never fires.
+		// Fail fast with a clear message instead of hanging for the whole
+		// go-test timeout.
+		t.Fatal("timed out waiting for the queued item to be recorded as " +
+			"canceled; FanOutWithConcurrency likely blocked on the semaphore " +
+			"instead of honoring ctx cancellation")
+	}
 	release <- struct{}{} // let the first goroutine finish so FanOut can return
 
 	o := <-done

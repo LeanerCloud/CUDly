@@ -54,6 +54,15 @@ func FanOut[T any](
 	return FanOutWithConcurrency(ctx, accountIDs, fn, DefaultMaxConcurrency)
 }
 
+// semBlockedHookKey is the context key for an optional test-only
+// synchronization hook. When a func() is stored under this key,
+// FanOutWithConcurrency invokes it each time an item is recorded as canceled at
+// the semaphore-acquire boundary (the <-ctx.Done() branch below). It exists
+// purely so tests can synchronize deterministically with that moment; no
+// production caller sets it, so the branch is inert (a single context lookup on
+// the already-canceled path) outside tests.
+type semBlockedHookKey struct{}
+
 // FanOutWithConcurrency is like FanOut but with an explicit concurrency limit.
 func FanOutWithConcurrency[T any](
 	ctx context.Context,
@@ -82,6 +91,13 @@ func FanOutWithConcurrency[T any](
 		case <-ctx.Done():
 			results[i] = Result[T]{AccountID: id, Err: ctx.Err()}
 			wg.Done()
+			// Optional test-only synchronization hook (unset in production):
+			// signals that a queued item was recorded as canceled at the
+			// semaphore boundary, letting tests order a subsequent unblock
+			// deterministically. See semBlockedHookKey.
+			if hook, ok := ctx.Value(semBlockedHookKey{}).(func()); ok {
+				hook()
+			}
 			continue
 		}
 		go func(idx int, accountID string) {
