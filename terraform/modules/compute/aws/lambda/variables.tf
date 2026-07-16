@@ -195,6 +195,30 @@ variable "analytics_collect_schedule" {
   default     = "rate(1 day)"
 }
 
+variable "enable_ladder_run_schedule" {
+  description = "Enable the scheduled commitment-ladder planning run. When true, EventBridge fires the ladder_run task daily. Default false until laddering is promoted to GA."
+  type        = bool
+  default     = false
+}
+
+variable "ladder_run_schedule" {
+  description = "EventBridge schedule for the commitment-ladder planning run. rate() starts from deployment time; use cron() for a fixed daily window (e.g. cron(0 2 * * ? *) for 02:00 UTC). Daily cadence balances coverage freshness with CE API cost."
+  type        = string
+  default     = "rate(1 day)"
+}
+
+variable "enable_fire_scheduled_purchases_schedule" {
+  description = "Enable the scheduled fire_scheduled_purchases sweep. When true, EventBridge periodically fires purchase_executions in status=scheduled whose scheduled_execution_at is past (auto-approve delayed-fire path). Default false until auto-approve (L9) is promoted to GA."
+  type        = bool
+  default     = false
+}
+
+variable "fire_scheduled_purchases_schedule" {
+  description = "EventBridge schedule for the fire_scheduled_purchases sweep. Frequent cadence (default rate(15 minutes)) ensures delayed purchases fire close to their scheduled time between daily ladder runs."
+  type        = string
+  default     = "rate(15 minutes)"
+}
+
 variable "purchase_approved_reap_after" {
   description = "Threshold age for the stuck-purchase reaper. Any execution sitting in approved/running longer than this gets flipped to failed on the next sweep. Parsed via Go time.ParseDuration (e.g. \"10m\", \"15m\", \"1h\"). Empty string falls back to the in-code default (10m)."
   type        = string
