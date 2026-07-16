@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/database"
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -2452,22 +2453,38 @@ func (s *PostgresStore) CancelAllPendingExchanges(ctx context.Context) (int64, e
 }
 
 // CancelPendingExchangesByOrigin cancels only pending records that match the
-// given origin scope (gap G10 / issue #1348):
-//   - ladderScoped=false (standalone): cancels WHERE ladder_run_id IS NULL
-//   - ladderScoped=true  (ladder):     cancels WHERE ladder_run_id IS NOT NULL
-func (s *PostgresStore) CancelPendingExchangesByOrigin(ctx context.Context, ladderScoped bool) (int64, error) {
+// given origin (gap G10 / issue #1348):
+//   - common.ExchangeOriginStandalone: cancels WHERE ladder_run_id IS NULL
+//   - common.ExchangeOriginLadder:     cancels WHERE ladder_run_id IS NOT NULL
+//
+// The origin is validated at this boundary; an unknown value fails loud rather
+// than silently cancelling the wrong partition on a money path.
+//
+// DELIBERATE COARSE PARTITION: the ExchangeOriginLadder branch cancels EVERY
+// ladder-linked pending record (ladder_run_id IS NOT NULL) across ALL ladder
+// runs and configs, not just the current run's. This is acceptable today
+// because the ladder never creates pending exchange records: buildRIExchangeConfig
+// forces Mode=auto, which completes or fails immediately without leaving a
+// pending row. Per-run / per-config scoping needs an additional selection key
+// (e.g. the specific ladder_run_id or config_id) and is tracked in TODO(#1367).
+func (s *PostgresStore) CancelPendingExchangesByOrigin(ctx context.Context, origin common.ExchangeOrigin) (int64, error) {
+	if err := origin.Validate(); err != nil {
+		return 0, fmt.Errorf("CancelPendingExchangesByOrigin: %w", err)
+	}
+
 	var query string
-	if ladderScoped {
+	switch origin {
+	case common.ExchangeOriginLadder:
 		query = `
 			UPDATE ri_exchange_history
-			SET status = 'cancelled'
+			SET status = 'cancelled', updated_at = NOW()
 			WHERE status = 'pending'
 			  AND ladder_run_id IS NOT NULL
 		`
-	} else {
+	default: // common.ExchangeOriginStandalone (validated non-unknown above)
 		query = `
 			UPDATE ri_exchange_history
-			SET status = 'cancelled'
+			SET status = 'cancelled', updated_at = NOW()
 			WHERE status = 'pending'
 			  AND ladder_run_id IS NULL
 		`
@@ -2475,7 +2492,7 @@ func (s *PostgresStore) CancelPendingExchangesByOrigin(ctx context.Context, ladd
 
 	result, err := s.db.Exec(ctx, query)
 	if err != nil {
-		return 0, fmt.Errorf("failed to cancel pending exchanges by origin (ladder_scoped=%v): %w", ladderScoped, err)
+		return 0, fmt.Errorf("failed to cancel pending exchanges by origin %q: %w", origin, err)
 	}
 
 	return result.RowsAffected(), nil

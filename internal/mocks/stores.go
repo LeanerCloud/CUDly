@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/ladder"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/mock"
@@ -526,8 +527,8 @@ func (m *MockConfigStore) CancelAllPendingExchanges(ctx context.Context) (int64,
 	return v, args.Error(1)
 }
 
-func (m *MockConfigStore) CancelPendingExchangesByOrigin(ctx context.Context, ladderScoped bool) (int64, error) {
-	args := m.Called(ctx, ladderScoped)
+func (m *MockConfigStore) CancelPendingExchangesByOrigin(ctx context.Context, origin common.ExchangeOrigin) (int64, error) {
+	args := m.Called(ctx, origin)
 	v, ok := args.Get(0).(int64)
 	if !ok {
 		panic(fmt.Sprintf("mock: expected int64, got %T", args.Get(0)))

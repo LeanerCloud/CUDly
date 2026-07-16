@@ -11,6 +11,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/email"
 	"github.com/LeanerCloud/CUDly/internal/testutil"
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/exchange"
 	"github.com/LeanerCloud/CUDly/providers/aws/recommendations"
 	ec2svc "github.com/LeanerCloud/CUDly/providers/aws/services/ec2"
@@ -795,7 +796,7 @@ type mockConfigStoreForExchange struct {
 	globalConfigErr           error
 	saveRIExchangeRecordFunc  func(ctx context.Context, record *config.RIExchangeRecord) error
 	cancelAllPendingFunc      func(ctx context.Context) (int64, error)
-	cancelPendingByOriginFunc func(ctx context.Context, ladderScoped bool) (int64, error)
+	cancelPendingByOriginFunc func(ctx context.Context, origin common.ExchangeOrigin) (int64, error)
 	getDailySpendFunc         func(ctx context.Context, date time.Time) (string, error)
 }
 
@@ -823,9 +824,9 @@ func (m *mockConfigStoreForExchange) CancelAllPendingExchanges(ctx context.Conte
 	return 0, nil
 }
 
-func (m *mockConfigStoreForExchange) CancelPendingExchangesByOrigin(ctx context.Context, ladderScoped bool) (int64, error) {
+func (m *mockConfigStoreForExchange) CancelPendingExchangesByOrigin(ctx context.Context, origin common.ExchangeOrigin) (int64, error) {
 	if m.cancelPendingByOriginFunc != nil {
-		return m.cancelPendingByOriginFunc(ctx, ladderScoped)
+		return m.cancelPendingByOriginFunc(ctx, origin)
 	}
 	return 0, nil
 }

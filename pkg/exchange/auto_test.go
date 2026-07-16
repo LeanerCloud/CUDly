@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+
+	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
 // mockExchangeStore implements RIExchangeStore for testing.
@@ -18,9 +20,9 @@ type mockExchangeStore struct {
 	staleRecords   []ExchangeRecord
 	dailySpend     string
 	dailySpendErr  error
-	// cancelByOriginLastScoped captures the ladderScoped argument of the last
+	// cancelByOriginLast captures the origin argument of the last
 	// CancelPendingExchangesByOrigin call for assertion in scoping tests.
-	cancelByOriginLastScoped *bool
+	cancelByOriginLast *common.ExchangeOrigin
 }
 
 func (m *mockExchangeStore) SaveRIExchangeRecord(_ context.Context, record *ExchangeRecord) error {
@@ -35,8 +37,8 @@ func (m *mockExchangeStore) CancelAllPendingExchanges(_ context.Context) (int64,
 	return m.cancelledCount, nil
 }
 
-func (m *mockExchangeStore) CancelPendingExchangesByOrigin(_ context.Context, ladderScoped bool) (int64, error) {
-	m.cancelByOriginLastScoped = &ladderScoped
+func (m *mockExchangeStore) CancelPendingExchangesByOrigin(_ context.Context, origin common.ExchangeOrigin) (int64, error) {
+	m.cancelByOriginLast = &origin
 	return m.cancelledCount, nil
 }
 
@@ -76,8 +78,8 @@ func (m *testifyExchangeStore) CancelAllPendingExchanges(ctx context.Context) (i
 	return args.Get(0).(int64), args.Error(1)
 }
 
-func (m *testifyExchangeStore) CancelPendingExchangesByOrigin(ctx context.Context, ladderScoped bool) (int64, error) {
-	args := m.Called(ctx, ladderScoped)
+func (m *testifyExchangeStore) CancelPendingExchangesByOrigin(ctx context.Context, origin common.ExchangeOrigin) (int64, error) {
+	args := m.Called(ctx, origin)
 	return args.Get(0).(int64), args.Error(1)
 }
 
@@ -371,12 +373,9 @@ func TestRunAutoExchange_IdleRI_Skipped(t *testing.T) {
 // test for gap G10: before this fix, RunAutoExchange called
 // CancelAllPendingExchanges (store-wide), so the standalone ri_exchange_reshape
 // task would silently wipe out ladder-linked pending reshapes. After the fix,
-// the standalone run calls CancelPendingExchangesByOrigin(ctx, false) which
-// only cancels records where ladder_run_id IS NULL.
-//
-// Regression: pre-fix code routes through CancelAllPendingExchanges and would
-// cancel with ladderScoped=nil (method absent). Post-fix: CancelPendingExchangesByOrigin
-// is called with ladderScoped=false.
+// the standalone run calls CancelPendingExchangesByOrigin with
+// common.ExchangeOriginStandalone, which only cancels records where
+// ladder_run_id IS NULL.
 func TestRunAutoExchange_StandaloneDoesNotCancelLadderPendings(t *testing.T) {
 	t.Parallel()
 	store := &mockExchangeStore{dailySpend: "0"}
@@ -388,19 +387,19 @@ func TestRunAutoExchange_StandaloneDoesNotCancelLadderPendings(t *testing.T) {
 	_, err := RunAutoExchange(context.Background(), params)
 	require.NoError(t, err)
 
-	// Must have called the scoped cancel with ladderScoped=false, NOT the
-	// store-wide CancelAllPendingExchanges. cancelByOriginLastScoped tracks the
+	// Must have called the scoped cancel with the standalone origin, NOT the
+	// store-wide CancelAllPendingExchanges. cancelByOriginLast tracks the
 	// argument passed to CancelPendingExchangesByOrigin.
-	require.NotNil(t, store.cancelByOriginLastScoped,
+	require.NotNil(t, store.cancelByOriginLast,
 		"CancelPendingExchangesByOrigin must have been called (not the store-wide variant)")
-	assert.False(t, *store.cancelByOriginLastScoped,
-		"standalone run must cancel only non-ladder pendings (ladderScoped=false)")
+	assert.Equal(t, common.ExchangeOriginStandalone, *store.cancelByOriginLast,
+		"standalone run must cancel only non-ladder pendings (origin=standalone)")
 }
 
 // TestRunAutoExchange_LadderDoesNotCancelStandalonePendings verifies that a
-// ladder-originated run calls CancelPendingExchangesByOrigin(ctx, true), which
-// only cancels records where ladder_run_id IS NOT NULL, leaving standalone
-// pending records intact.
+// ladder-originated run calls CancelPendingExchangesByOrigin with
+// common.ExchangeOriginLadder, which only cancels records where ladder_run_id
+// IS NOT NULL, leaving standalone pending records intact.
 func TestRunAutoExchange_LadderDoesNotCancelStandalonePendings(t *testing.T) {
 	t.Parallel()
 	store := &mockExchangeStore{dailySpend: "0"}
@@ -412,10 +411,10 @@ func TestRunAutoExchange_LadderDoesNotCancelStandalonePendings(t *testing.T) {
 	_, err := RunAutoExchange(context.Background(), params)
 	require.NoError(t, err)
 
-	require.NotNil(t, store.cancelByOriginLastScoped,
+	require.NotNil(t, store.cancelByOriginLast,
 		"CancelPendingExchangesByOrigin must have been called")
-	assert.True(t, *store.cancelByOriginLastScoped,
-		"ladder run must cancel only ladder-linked pendings (ladderScoped=true)")
+	assert.Equal(t, common.ExchangeOriginLadder, *store.cancelByOriginLast,
+		"ladder run must cancel only ladder-linked pendings (origin=ladder)")
 }
 
 // ─── Dry-run tests ────────────────────────────────────────────────────────────

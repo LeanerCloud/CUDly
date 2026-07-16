@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/database"
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/ladder"
 	"github.com/jackc/pgx/v5"
 )
@@ -171,7 +172,7 @@ func (m *mockConfigStoreForHealth) CancelAllPendingExchanges(ctx context.Context
 	return 0, nil
 }
 
-func (m *mockConfigStoreForHealth) CancelPendingExchangesByOrigin(_ context.Context, _ bool) (int64, error) {
+func (m *mockConfigStoreForHealth) CancelPendingExchangesByOrigin(_ context.Context, _ common.ExchangeOrigin) (int64, error) {
 	return 0, nil
 }
 func (m *mockConfigStoreForHealth) GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]config.RIExchangeRecord, error) {

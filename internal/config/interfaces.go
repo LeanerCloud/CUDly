@@ -6,6 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/ladder"
 )
 
@@ -209,13 +210,14 @@ type StoreInterface interface {
 	FailRIExchange(ctx context.Context, id string, errorMsg string) error
 	GetRIExchangeDailySpend(ctx context.Context, date time.Time) (string, error)
 	CancelAllPendingExchanges(ctx context.Context) (int64, error)
-	// CancelPendingExchangesByOrigin cancels only pending records that match the
-	// given origin scope:
-	//   - ladderScoped=false (standalone): cancels WHERE ladder_run_id IS NULL
-	//   - ladderScoped=true  (ladder):     cancels WHERE ladder_run_id IS NOT NULL
+	// CancelPendingExchangesByOrigin cancels only pending records whose origin
+	// matches:
+	//   - common.ExchangeOriginStandalone: cancels WHERE ladder_run_id IS NULL
+	//   - common.ExchangeOriginLadder:     cancels WHERE ladder_run_id IS NOT NULL
+	// The origin is validated at the boundary and an unknown value fails loud.
 	// This prevents the standalone ri_exchange_reshape task from wiping out
 	// ladder-linked pending reshapes and vice versa (gap G10 / issue #1348).
-	CancelPendingExchangesByOrigin(ctx context.Context, ladderScoped bool) (int64, error)
+	CancelPendingExchangesByOrigin(ctx context.Context, origin common.ExchangeOrigin) (int64, error)
 	GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]RIExchangeRecord, error)
 
 	// Cloud accounts

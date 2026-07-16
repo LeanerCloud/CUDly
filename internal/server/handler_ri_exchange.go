@@ -12,6 +12,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/email"
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/exchange"
 	awsprovider "github.com/LeanerCloud/CUDly/providers/aws"
 	"github.com/LeanerCloud/CUDly/providers/aws/recommendations"
@@ -294,8 +295,8 @@ func (a *configExchangeStoreAdapter) CancelAllPendingExchanges(ctx context.Conte
 	return a.store.CancelAllPendingExchanges(ctx)
 }
 
-func (a *configExchangeStoreAdapter) CancelPendingExchangesByOrigin(ctx context.Context, ladderScoped bool) (int64, error) {
-	return a.store.CancelPendingExchangesByOrigin(ctx, ladderScoped)
+func (a *configExchangeStoreAdapter) CancelPendingExchangesByOrigin(ctx context.Context, origin common.ExchangeOrigin) (int64, error) {
+	return a.store.CancelPendingExchangesByOrigin(ctx, origin)
 }
 
 func (a *configExchangeStoreAdapter) GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]exchange.ExchangeRecord, error) {

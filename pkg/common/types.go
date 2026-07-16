@@ -26,6 +26,40 @@ const (
 	ProviderGCP   ProviderType = "gcp"
 )
 
+// ExchangeOrigin identifies the task that created an RI exchange record so that
+// pending-cancellation can be scoped by origin (standalone vs ladder) through a
+// typed value rather than a bare bool. It lives in pkg/common because both
+// pkg/exchange (the caller) and internal/config (the store implementation) need
+// it, and pkg/common carries no heavy provider-SDK dependencies.
+type ExchangeOrigin string
+
+const (
+	// ExchangeOriginStandalone is the standalone ri_exchange_reshape scheduled
+	// task. Its pending records have ladder_run_id IS NULL in the database.
+	ExchangeOriginStandalone ExchangeOrigin = "standalone-ri-exchange"
+	// ExchangeOriginLadder is the cudly-ladder engine (ladder run reshape
+	// phase). Its pending records have ladder_run_id IS NOT NULL.
+	ExchangeOriginLadder ExchangeOrigin = "cudly-ladder"
+)
+
+// Validate returns an error when the origin is not a known value. Callers on
+// the money path (pending cancellation) must fail loud on an unexpected origin
+// rather than silently defaulting to the wrong partition.
+func (o ExchangeOrigin) Validate() error {
+	switch o {
+	case ExchangeOriginStandalone, ExchangeOriginLadder:
+		return nil
+	default:
+		return fmt.Errorf("unknown exchange origin %q (allowed: %s, %s)",
+			o, ExchangeOriginStandalone, ExchangeOriginLadder)
+	}
+}
+
+// String returns the string representation of the exchange origin.
+func (o ExchangeOrigin) String() string {
+	return string(o)
+}
+
 // String returns the string representation of the provider type
 func (p ProviderType) String() string {
 	return string(p)

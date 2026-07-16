@@ -810,6 +810,13 @@ type RIExchangeRecord struct {
 	// The database column ri_exchange_history.ladder_run_id was added in migration
 	// 000080 and is the authoritative source for origin scoping in
 	// CancelPendingExchangesByOrigin.
+	//
+	// KNOWN/ACCEPTABLE: the FK is ON DELETE SET NULL (migration 000080), so
+	// deleting a ladder_runs row nulls this column and reclassifies the record
+	// as standalone. A still-pending reshape then becomes standalone-cancellable
+	// (the standalone-origin sweep would cancel it). This is acceptable: a
+	// deleted run has no owner to approve its pendings, so cancelling them on the
+	// next standalone sweep is the safe outcome, not a leak.
 	LadderRunID    *string    `json:"ladder_run_id,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`

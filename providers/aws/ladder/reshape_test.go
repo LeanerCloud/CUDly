@@ -15,17 +15,22 @@ import (
 )
 
 // fakeExchangeRunner is a hermetic exchangeRunner double that records the
-// config it received. Field order minimizes GC pointer-scan range.
+// config and scoping arguments it received. Field order minimizes GC
+// pointer-scan range.
 type fakeExchangeRunner struct {
-	err    error
-	result *exchange.AutoExchangeResult
-	gotCfg exchange.RIExchangeConfig
-	calls  int
+	err            error
+	result         *exchange.AutoExchangeResult
+	gotLadderRunID *string
+	gotCfg         exchange.RIExchangeConfig
+	calls          int
+	gotDryRun      bool
 }
 
-func (f *fakeExchangeRunner) RunAutoExchange(_ context.Context, cfg exchange.RIExchangeConfig) (*exchange.AutoExchangeResult, error) {
+func (f *fakeExchangeRunner) RunAutoExchange(_ context.Context, cfg exchange.RIExchangeConfig, ladderRunID *string, dryRun bool) (*exchange.AutoExchangeResult, error) {
 	f.calls++
 	f.gotCfg = cfg
+	f.gotLadderRunID = ladderRunID
+	f.gotDryRun = dryRun
 	if f.result == nil && f.err == nil {
 		return &exchange.AutoExchangeResult{Mode: cfg.Mode}, nil
 	}
@@ -137,20 +142,20 @@ func TestReshapeBuffer_ThresholdAndLookbackValidation(t *testing.T) {
 	}
 }
 
-func TestReshapeBuffer_DryRun_NotSupported_FailsLoudWithoutCallingRunner(t *testing.T) {
-	// DryRun must NOT be mapped onto the exchange flow's manual mode: manual
-	// mode persists pending ExchangeRecords with live approval tokens and
-	// RunAutoExchange unconditionally cancels ALL pending records store-wide
-	// first — neither is a simulation. The decided behavior is a loud error.
+func TestReshapeBuffer_DryRun_ForwardedThroughSeam(t *testing.T) {
+	// pkg/exchange now supports a true dry-run (DryRun=true skips every mutation
+	// and returns Simulated outcomes), so ReshapeBuffer forwards cfg.DryRun
+	// through the seam instead of failing loud. The concrete runner (L16) honors
+	// it; here the fake asserts the flag reached the seam.
 	ex := &fakeExchangeRunner{}
 	a := newWiredLadder(t, &fakePurchaser{}, &fakePurchaser{}, ex)
 
 	cfg := validReshapeCfg()
 	cfg.DryRun = true
 	_, err := a.ReshapeBuffer(context.Background(), testScope(), cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not supported")
-	assert.Equal(t, 0, ex.calls, "a dry run must never reach the runner (it would cancel unrelated pending exchanges)")
+	require.NoError(t, err)
+	require.Equal(t, 1, ex.calls, "the runner must be reached so it can simulate")
+	assert.True(t, ex.gotDryRun, "cfg.DryRun must be forwarded to the runner's dryRun argument")
 }
 
 func TestReshapeBuffer_LiveRun_AlwaysAutoMode(t *testing.T) {
@@ -163,6 +168,40 @@ func TestReshapeBuffer_LiveRun_AlwaysAutoMode(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, ex.calls)
 	assert.Equal(t, string(exchange.ExchangeModeAuto), ex.gotCfg.Mode)
+	assert.False(t, ex.gotDryRun, "a live run must forward dryRun=false")
+}
+
+// TestReshapeBuffer_LadderRunID_ForwardedThroughSeam is the correct-by-construction
+// regression for gap G10: a ladder-originated reshape MUST forward its
+// LadderRunID through the exchangeRunner seam so exchange.RunAutoExchange scopes
+// cancellation to the ladder origin. Before the seam carried LadderRunID, a
+// future concrete runner would default it to nil (standalone scoping) and cancel
+// the standalone task's pendings.
+func TestReshapeBuffer_LadderRunID_ForwardedThroughSeam(t *testing.T) {
+	ex := &fakeExchangeRunner{}
+	a := newWiredLadder(t, &fakePurchaser{}, &fakePurchaser{}, ex)
+
+	runID := "ladder-run-xyz"
+	cfg := validReshapeCfg()
+	cfg.LadderRunID = &runID
+	_, err := a.ReshapeBuffer(context.Background(), testScope(), cfg)
+	require.NoError(t, err)
+	require.Equal(t, 1, ex.calls)
+	require.NotNil(t, ex.gotLadderRunID, "LadderRunID must be forwarded, not dropped to nil")
+	assert.Equal(t, runID, *ex.gotLadderRunID, "the exact run ID must reach the runner for ladder-origin scoping")
+}
+
+// TestReshapeBuffer_NilLadderRunID_ForwardedAsNil verifies a non-ladder caller
+// forwards nil (standalone origin) rather than a fabricated value.
+func TestReshapeBuffer_NilLadderRunID_ForwardedAsNil(t *testing.T) {
+	ex := &fakeExchangeRunner{}
+	a := newWiredLadder(t, &fakePurchaser{}, &fakePurchaser{}, ex)
+
+	cfg := validReshapeCfg() // LadderRunID left nil
+	_, err := a.ReshapeBuffer(context.Background(), testScope(), cfg)
+	require.NoError(t, err)
+	require.Equal(t, 1, ex.calls)
+	assert.Nil(t, ex.gotLadderRunID, "a non-ladder reshape must forward nil (standalone origin)")
 }
 
 // ---------------------------------------------------------------------------
@@ -257,7 +296,7 @@ func TestReshapeBuffer_NilResultWithoutError_IsContractViolation(t *testing.T) {
 // nilResultRunner deliberately violates the runner contract for the guard test.
 type nilResultRunner struct{}
 
-func (n *nilResultRunner) RunAutoExchange(_ context.Context, _ exchange.RIExchangeConfig) (*exchange.AutoExchangeResult, error) {
+func (n *nilResultRunner) RunAutoExchange(_ context.Context, _ exchange.RIExchangeConfig, _ *string, _ bool) (*exchange.AutoExchangeResult, error) {
 	return nil, nil
 }
 

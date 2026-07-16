@@ -10,20 +10,6 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
 
-// ExchangeOrigin identifies the originating task that created an exchange record,
-// enabling scoped cancellation so standalone and ladder-originated pending
-// exchanges do not contaminate each other.
-type ExchangeOrigin string
-
-const (
-	// ExchangeOriginStandalone is the standalone ri_exchange_reshape scheduled task.
-	// Its pending records have ladder_run_id IS NULL in the database.
-	ExchangeOriginStandalone ExchangeOrigin = "standalone-ri-exchange"
-	// ExchangeOriginLadder is the cudly-ladder engine (ladder run reshape phase).
-	// Its pending records have ladder_run_id IS NOT NULL in the database.
-	ExchangeOriginLadder ExchangeOrigin = "cudly-ladder"
-)
-
 // ExchangeRecord is a lightweight record type for the auto exchange logic.
 // It mirrors config.RIExchangeRecord but lives in pkg/exchange to avoid
 // cross-module imports (pkg/ is a separate Go module from internal/).
@@ -61,13 +47,14 @@ type RIExchangeStore interface {
 	// Kept for interface compatibility; RunAutoExchange now calls
 	// CancelPendingExchangesByOrigin instead to avoid cross-origin contamination.
 	CancelAllPendingExchanges(ctx context.Context) (int64, error)
-	// CancelPendingExchangesByOrigin cancels only pending records that match the
-	// given origin scope:
-	//   - ladderScoped=false (standalone): cancels WHERE ladder_run_id IS NULL
-	//   - ladderScoped=true  (ladder):     cancels WHERE ladder_run_id IS NOT NULL
+	// CancelPendingExchangesByOrigin cancels only pending records whose origin
+	// matches:
+	//   - common.ExchangeOriginStandalone: cancels WHERE ladder_run_id IS NULL
+	//   - common.ExchangeOriginLadder:     cancels WHERE ladder_run_id IS NOT NULL
 	// This prevents the standalone task from wiping out ladder-linked pending
-	// reshapes and vice versa.
-	CancelPendingExchangesByOrigin(ctx context.Context, ladderScoped bool) (int64, error)
+	// reshapes and vice versa. Implementations must validate the origin and
+	// fail loud on an unknown value (money path).
+	CancelPendingExchangesByOrigin(ctx context.Context, origin common.ExchangeOrigin) (int64, error)
 	GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]ExchangeRecord, error)
 	GetRIExchangeDailySpend(ctx context.Context, date time.Time) (string, error)
 	CompleteRIExchange(ctx context.Context, id string, exchangeID string) error
@@ -178,12 +165,15 @@ func RunAutoExchange(ctx context.Context, params RunAutoExchangeParams) (*AutoEx
 	// WHERE clause prevents the exchange from executing (record already cancelled
 	// → returns nil → handler returns 409).
 	if !params.DryRun {
-		ladderScoped := params.LadderRunID != nil
-		cancelled, err := params.Store.CancelPendingExchangesByOrigin(ctx, ladderScoped)
+		origin := common.ExchangeOriginStandalone
+		if params.LadderRunID != nil {
+			origin = common.ExchangeOriginLadder
+		}
+		cancelled, err := params.Store.CancelPendingExchangesByOrigin(ctx, origin)
 		if err != nil {
 			logging.Warnf("failed to cancel pending exchanges: %v", err)
 		} else if cancelled > 0 {
-			logging.Infof("cancelled %d stale pending exchange records (ladder_scoped=%v)", cancelled, ladderScoped)
+			logging.Infof("cancelled %d stale pending exchange records (origin=%s)", cancelled, origin)
 		}
 	}
 
