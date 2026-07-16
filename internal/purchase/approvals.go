@@ -2,12 +2,14 @@ package purchase
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/jackc/pgx/v5"
 )
@@ -34,19 +36,9 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 		return fmt.Errorf("failed to get execution: %w", err)
 	}
 
-	// Validate token using constant-time comparison to prevent timing attacks.
-	if execution.ApprovalToken == "" || token == "" {
-		return fmt.Errorf("invalid approval token")
-	}
-	if subtle.ConstantTimeCompare([]byte(execution.ApprovalToken), []byte(token)) != 1 {
-		return fmt.Errorf("invalid approval token")
-	}
-
-	// Enforce token TTL (issue #397). Legacy rows that pre-date migration
-	// 000051 have ApprovalTokenExpiresAt == nil and are passed through
-	// for backward compatibility; all new rows carry a non-nil deadline.
-	if execution.ApprovalTokenExpiresAt != nil && time.Now().After(*execution.ApprovalTokenExpiresAt) {
-		return fmt.Errorf("approval token has expired")
+	// Validate token and TTL (Finding #4 + issue #397).
+	if tokErr := validateApprovalToken(execution, token); tokErr != nil {
+		return tokErr
 	}
 
 	// Preflight guard (issue #609): reject non-AWS orphan executions before
@@ -66,6 +58,27 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 	} else {
 		logging.Infof("purchase[%s]: ApproveExecution (token path) completed in %s",
 			executionID, time.Since(t0))
+		// Token rotation (best-effort): mint a fresh revocation token after a
+		// successful approve. The old approval token must not double as a
+		// revocation token: (a) it was consumed to authorize this approve action
+		// and (b) clearing it (old behavior) caused the post-execution email to
+		// embed an already-invalidated token, making every "Revoke" click return
+		// 403 (issue #291 wave-2 adversarial review finding).
+		//
+		// mintRevocationToken fetches the freshly-finalized row (so we don't
+		// stomp completed_at or other fields), generates a new random token with
+		// a 24-hour expiry matching the revocation window, and persists it.
+		// The handler re-fetches the execution after this call to obtain the
+		// fresh token for the email.
+		//
+		// Security: re-approval with the old token is still blocked by the status
+		// check in TransitionExecutionStatus (the row is now "completed", not
+		// "pending"/"notified"), so token rotation is NOT required to prevent
+		// approve-replay. The new token is scoped to revoke-only via the status
+		// check in checkRevokableStatus ("completed" required).
+		if rotateErr := m.mintRevocationToken(ctx, executionID); rotateErr != nil {
+			logging.Warnf("purchase[%s]: ApproveExecution: revocation token mint failed (best-effort): %v", executionID, rotateErr)
+		}
 	}
 	return err
 }
@@ -90,6 +103,27 @@ func maskActor(actor string) string {
 		return "..." + actor[len(actor)-4:]
 	}
 	return "****"
+}
+
+// validateApprovalToken checks that the execution carries a non-empty token,
+// that the supplied token matches the stored one using constant-time comparison
+// (Finding #4 -- prevents timing attacks), and that the token has not expired
+// (issue #397). Legacy rows with a nil ApprovalTokenExpiresAt pass the TTL
+// check for backward compatibility. Extracted from ApproveExecution to keep
+// that function under the gocyclo threshold.
+func validateApprovalToken(execution *config.PurchaseExecution, token string) error {
+	if execution.ApprovalToken == "" || token == "" {
+		return fmt.Errorf("invalid approval token")
+	}
+	storedHash := sha256.Sum256([]byte(execution.ApprovalToken))
+	userHash := sha256.Sum256([]byte(token))
+	if subtle.ConstantTimeCompare(storedHash[:], userHash[:]) != 1 {
+		return fmt.Errorf("invalid approval token")
+	}
+	if execution.ApprovalTokenExpiresAt != nil && time.Now().After(*execution.ApprovalTokenExpiresAt) {
+		return fmt.Errorf("approval token has expired")
+	}
+	return nil
 }
 
 // OrphanExecutionError returns a descriptive error when the execution has no
@@ -235,7 +269,71 @@ func (m *Manager) CancelExecution(ctx context.Context, executionID, token, actor
 	}
 
 	logging.Infof("Execution %s canceled", executionID)
+	// Token clear (best-effort): a canceled execution has no valid follow-up
+	// action, so the approval token is cleared to prevent replay. Unlike the
+	// approve path (which mints a fresh revocation token), cancel produces no
+	// usable successor action, so an empty token is correct here.
+	if rotateErr := m.clearApprovalToken(ctx, executionID); rotateErr != nil {
+		logging.Warnf("purchase[%s]: CancelExecution: token clear failed (best-effort): %v", executionID, rotateErr)
+	}
 	return nil
+}
+
+// mintRevocationToken generates a fresh cryptographically-secure revocation
+// token, stamps it onto the execution with a revocationTokenWindow expiry,
+// and persists the update. Called after a successful token-authed approve so
+// the post-execution email carries a valid revoke-capable token rather than
+// the now-consumed approval token.
+//
+// The handler re-fetches the execution after ApproveExecution returns to
+// pick up the fresh token for embedding in the email.
+//
+// Best-effort: if the write fails the approve has already landed and this
+// returns an error the caller only logs. The stored token is then unchanged
+// (still the consumed approval token), so the handler's re-fetch surfaces that
+// token and the email carries it -- it still validates for revoke because it
+// was never rotated (degraded to the old reuse-the-approval-token behavior on
+// this rare path, but functional and safe). The distinct failure mode where the
+// handler's re-fetch itself errors is handled in approveViaToken by blanking
+// ApprovalToken so the Revoke panel is suppressed rather than emailing a token
+// whose validity is unknown.
+func (m *Manager) mintRevocationToken(ctx context.Context, executionID string) error {
+	exec, err := m.config.GetExecutionByID(ctx, executionID)
+	if err != nil {
+		return fmt.Errorf("mintRevocationToken: failed to fetch execution: %w", err)
+	}
+	if exec == nil {
+		return fmt.Errorf("mintRevocationToken: execution not found: %s", executionID)
+	}
+	tok, err := common.GenerateApprovalToken()
+	if err != nil {
+		return fmt.Errorf("mintRevocationToken: failed to generate token: %w", err)
+	}
+	expiry := time.Now().Add(config.RevocationWindow)
+	exec.ApprovalToken = tok
+	exec.ApprovalTokenExpiresAt = &expiry
+	return m.config.SavePurchaseExecution(ctx, exec)
+}
+
+// clearApprovalToken clears the ApprovalToken on the execution after a
+// successful cancel. A canceled execution has no valid follow-up action, so
+// clearing the token prevents replay for any purpose. Unlike the approve path
+// (which mints a fresh revocation token for the revoke-window email link),
+// cancel produces no usable successor action.
+//
+// Best-effort: if the follow-up save fails the cancel has already landed, so
+// we only warn rather than surfacing an error to the caller.
+func (m *Manager) clearApprovalToken(ctx context.Context, executionID string) error {
+	exec, err := m.config.GetExecutionByID(ctx, executionID)
+	if err != nil {
+		return fmt.Errorf("clearApprovalToken: failed to fetch execution: %w", err)
+	}
+	if exec == nil {
+		return fmt.Errorf("clearApprovalToken: execution not found: %s", executionID)
+	}
+	exec.ApprovalToken = ""
+	exec.ApprovalTokenExpiresAt = nil
+	return m.config.SavePurchaseExecution(ctx, exec)
 }
 
 // loadCancelableExecution fetches an execution, validates the approval
@@ -252,7 +350,9 @@ func (m *Manager) loadCancelableExecution(ctx context.Context, executionID, toke
 	if execution.ApprovalToken == "" || token == "" {
 		return nil, fmt.Errorf("invalid approval token")
 	}
-	if subtle.ConstantTimeCompare([]byte(execution.ApprovalToken), []byte(token)) != 1 {
+	storedHash := sha256.Sum256([]byte(execution.ApprovalToken))
+	userHash := sha256.Sum256([]byte(token))
+	if subtle.ConstantTimeCompare(storedHash[:], userHash[:]) != 1 {
 		return nil, fmt.Errorf("invalid approval token")
 	}
 

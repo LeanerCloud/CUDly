@@ -25,6 +25,12 @@ func TestHandler_isPublicEndpoint(t *testing.T) {
 		{"/api/recommendations", false},
 		{"/api/plans", false},
 		{"/api/history", false},
+		// /version is a public endpoint but must be exact-matched only.
+		{"/version", true},
+		{"/version-evil", false},      // prefix overlap must not bypass auth
+		{"/versionXYZ", false},        // prefix overlap must not bypass auth
+		{"/api/register", true},       // POST /api/register (exact)
+		{"/api/registrations", false}, // must not match via prefix
 	}
 
 	for _, tt := range tests {
@@ -239,6 +245,49 @@ func TestHandler_authenticate_BearerTokenWithAPIKey(t *testing.T) {
 	}
 	// Should be false because API key is configured and bearer token is invalid
 	assert.False(t, handler.authenticate(ctx, req))
+}
+
+// TestHandler_requiresCSRFValidation_ExactMatch asserts that paths sharing a
+// prefix with a CSRF-exempt route are NOT themselves exempt. The fix uses
+// exact-match (switch) instead of strings.HasPrefix so that a path like
+// /api/register-malicious is not silently exempted because it starts with
+// /api/register.
+func TestHandler_requiresCSRFValidation_ExactMatch(t *testing.T) {
+	handler := &Handler{}
+
+	tests := []struct {
+		method       string
+		path         string
+		requiresCSRF bool
+	}{
+		// Exempt routes must still pass (exact-match still covers them).
+		{"POST", "/api/auth/login", false},
+		{"POST", "/api/auth/setup-admin", false},
+		{"POST", "/api/auth/forgot-password", false},
+		{"POST", "/api/auth/reset-password", false},
+		{"POST", "/api/register", false},
+		// Paths sharing only a PREFIX with an exempt route must require CSRF.
+		{"POST", "/api/register-malicious", true},
+		{"POST", "/api/register-anything", true},
+		{"POST", "/api/auth/login-evil", true},
+		{"POST", "/api/auth/forgot-password-extra", true},
+		// Non-exempt POST paths
+		{"POST", "/api/config", true},
+		{"POST", "/api/recommendations", true},
+		// GET never requires CSRF regardless of path
+		{"GET", "/api/register", false},
+		{"GET", "/api/config", false},
+		// DELETE on a protected endpoint requires CSRF
+		{"DELETE", "/api/plans", true},
+	}
+
+	for _, tt := range tests {
+		name := tt.method + " " + tt.path
+		t.Run(name, func(t *testing.T) {
+			result := handler.requiresCSRFValidation(tt.method, tt.path, nil)
+			assert.Equal(t, tt.requiresCSRF, result)
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------

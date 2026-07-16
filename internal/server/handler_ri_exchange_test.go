@@ -892,6 +892,10 @@ func (m *mockEmailSender) SendRIExchangeCompleted(ctx context.Context, data emai
 	return nil
 }
 
+func (m *mockEmailSender) SendPurchaseExecutedNotification(_ context.Context, _ email.NotificationData) error {
+	return nil
+}
+
 func (m *mockEmailSender) SendRegistrationReceivedNotification(_ context.Context, _ email.RegistrationNotificationData) error {
 	return nil
 }
