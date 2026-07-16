@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"time"
 
 	"github.com/LeanerCloud/CUDly/pkg/ladder"
 )
@@ -14,6 +15,24 @@ import (
 // low-water-mark; GetUsageBaseline returns an error when the series is shorter.
 // The caller (engine) should configure LookbackDays >= minBaselineSeriesDays.
 const minBaselineSeriesDays = 7
+
+// maxMissingDays is the maximum number of calendar days that may be absent
+// from the series within the configured lookback window and still yield a
+// trustworthy baseline. CE data typically lags 24-48 hours, so a 30-day
+// window may return 28-29 points; one extra day of tolerance is provided.
+// A series with more than maxMissingDays absent days returns a coverage error.
+// Distinct from minBaselineSeriesDays: this is a window-relative completeness
+// check, not an absolute floor.
+const maxMissingDays = 3
+
+// maxSeriesAgeDays is the maximum age in calendar days of the most-recent data
+// point in the on-demand series before the series is considered stale.
+// CE cost data lags 24-48 hours, so yesterday's data (1 day old) is normal;
+// a point older than maxSeriesAgeDays indicates the CE feed has stalled, the
+// date-range parameter is wrong, or CE has temporarily stopped ingesting data
+// for the account. GetUsageBaseline fails loud rather than computing a baseline
+// from stale data that the utilization clamp would then trust.
+const maxSeriesAgeDays = 3
 
 // GetUsageBaseline computes a statistical low-water-mark from a daily
 // on-demand-equivalent USD/hour series returned by the injected onDemandSeriesSource.
@@ -44,6 +63,10 @@ const minBaselineSeriesDays = 7
 //   - Series empty: hard error (no data from the coverage source).
 //   - Series shorter than minBaselineSeriesDays: hard error (insufficient
 //     history for a reliable percentile estimate).
+//   - Series with too few points for the lookback window (more than
+//     maxMissingDays gaps): hard error (coverage check).
+//   - Most-recent point older than maxSeriesAgeDays days: hard error (stale
+//     series; GetUsageBaseline fails loud rather than trusting stale data).
 //   - Series containing a non-finite (NaN/Inf) or negative element: hard error
 //     naming the offending index (a cost series must be finite and >= 0).
 //   - percentile not in (0, 100]: hard error (out-of-range).
@@ -55,19 +78,36 @@ func (a *AWSLadder) GetUsageBaseline(ctx context.Context, scope ladder.Scope, lo
 		return ladder.UsageBaseline{}, err
 	}
 
-	series, err := a.onDemand.GetOnDemandSeries(ctx, a.cfg.Region, lookbackDays)
+	points, err := a.onDemand.GetOnDemandSeries(ctx, a.cfg.Region, lookbackDays)
 	if err != nil {
 		return ladder.UsageBaseline{}, fmt.Errorf("GetUsageBaseline: on-demand series fetch failed: %w", err)
 	}
-	if len(series) == 0 {
+	if len(points) == 0 {
 		return ladder.UsageBaseline{}, fmt.Errorf("GetUsageBaseline: on-demand series is empty for region %s (series source returned no data)", a.cfg.Region)
 	}
-	if len(series) < minBaselineSeriesDays {
+	if len(points) < minBaselineSeriesDays {
 		return ladder.UsageBaseline{}, fmt.Errorf(
 			"GetUsageBaseline: series length %d is below minimum %d days; extend the lookback window or check the on-demand series source",
-			len(series), minBaselineSeriesDays,
+			len(points), minBaselineSeriesDays,
 		)
 	}
+	// Coverage check: the series must span most of the requested lookback
+	// window. CE typically lags 24-48h, so up to maxMissingDays absent days
+	// is acceptable; more indicates truncated date ranges or feed gaps.
+	if minRequired := lookbackDays - maxMissingDays; len(points) < minRequired {
+		return ladder.UsageBaseline{}, fmt.Errorf(
+			"GetUsageBaseline: series has %d points for a %d-day lookback window (minimum %d = %d - maxMissingDays %d); the on-demand series source may have gaps or a truncated date range",
+			len(points), lookbackDays, minRequired, lookbackDays, maxMissingDays,
+		)
+	}
+	// Freshness check: the most-recent point must be within maxSeriesAgeDays.
+	// A stale tail means the CE feed has stopped or the date range is wrong;
+	// computing a baseline from stale data would yield a confidently wrong clamp.
+	if fErr := validateSeriesFreshness(points); fErr != nil {
+		return ladder.UsageBaseline{}, fmt.Errorf("GetUsageBaseline: %w", fErr)
+	}
+
+	series := extractValues(points)
 	if vErr := validateSeries(series); vErr != nil {
 		return ladder.UsageBaseline{}, fmt.Errorf("GetUsageBaseline: %w", vErr)
 	}
@@ -89,6 +129,38 @@ func (a *AWSLadder) GetUsageBaseline(ctx context.Context, scope ladder.Scope, lo
 		LookbackDays:       lookbackDays,
 		Percentile:         percentile,
 	}, nil
+}
+
+// validateSeriesFreshness returns an error when the most-recent DailyPoint is
+// older than maxSeriesAgeDays calendar days. It is called after the series has
+// been confirmed non-empty and above minBaselineSeriesDays by GetUsageBaseline,
+// so len(points) > 0 is guaranteed.
+//
+// Age is computed as integer days (floor of elapsed hours / 24), which is
+// precise enough for a 3-day threshold and avoids DST and leap-second edge
+// cases that a Date difference would introduce.
+func validateSeriesFreshness(points []DailyPoint) error {
+	latestDate := points[len(points)-1].Date
+	ageDays := int(time.Since(latestDate).Hours() / 24)
+	if ageDays > maxSeriesAgeDays {
+		return fmt.Errorf(
+			"on-demand series is stale: most recent data point is %s (%d days old, maximum %d); check that the CE data feed is active or that the lookback date range ends near today",
+			latestDate.Format("2006-01-02"), ageDays, maxSeriesAgeDays,
+		)
+	}
+	return nil
+}
+
+// extractValues returns the USDPerHour field of each DailyPoint as a plain
+// []float64, ordered oldest-to-newest, for use by validateSeries and
+// nearestRankPercentile. The Date fields are consumed by validateSeriesFreshness
+// and not needed downstream.
+func extractValues(points []DailyPoint) []float64 {
+	out := make([]float64, len(points))
+	for i, p := range points {
+		out[i] = p.USDPerHour
+	}
+	return out
 }
 
 // validateSeries rejects series containing non-finite (NaN/Inf) or negative

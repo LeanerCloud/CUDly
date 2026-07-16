@@ -3,6 +3,7 @@ package ladder
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -48,15 +49,15 @@ type fakeCoverageSource struct {
 	coverageErr    error
 	onDemandErr    error
 	coverageMap    recommendations.PoolCoverageMap
-	onDemandSeries []float64
+	onDemandPoints []DailyPoint
 }
 
 func (f *fakeCoverageSource) GetRICoverageMap(_ context.Context, _ int, _ []string) (recommendations.PoolCoverageMap, error) {
 	return f.coverageMap, f.coverageErr
 }
 
-func (f *fakeCoverageSource) GetOnDemandSeries(_ context.Context, _ string, _ int) ([]float64, error) {
-	return f.onDemandSeries, f.onDemandErr
+func (f *fakeCoverageSource) GetOnDemandSeries(_ context.Context, _ string, _ int) ([]DailyPoint, error) {
+	return f.onDemandPoints, f.onDemandErr
 }
 
 // fakeUtilizationSource: err field before utils for fieldalignment.
@@ -703,8 +704,7 @@ func TestNearestRankPercentile(t *testing.T) {
 
 func TestGetUsageBaseline_SingleDaySeries_ReturnsThatValue(t *testing.T) {
 	// A 7-day series with all same value; p5 should return 3.0.
-	series := []float64{3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0}
-	cov := &fakeCoverageSource{onDemandSeries: series}
+	cov := &fakeCoverageSource{onDemandPoints: makeConstantPoints(7, 3.0)}
 	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, cov, &fakeUtilizationSource{})
 
 	bl, err := a.GetUsageBaseline(context.Background(), testScope(), 7, 5.0)
@@ -722,7 +722,7 @@ func TestGetUsageBaseline_SingleDaySeries_ReturnsThatValue(t *testing.T) {
 
 func TestGetUsageBaseline_P5OfVariedSeries(t *testing.T) {
 	// 20-element series [1..20]; p5 nearest-rank: ceil(5/100*20)=ceil(1)=1 -> sorted[0]=1.
-	cov := &fakeCoverageSource{onDemandSeries: makeRange(20)}
+	cov := &fakeCoverageSource{onDemandPoints: makeRecentPoints(20)}
 	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, cov, &fakeUtilizationSource{})
 
 	bl, err := a.GetUsageBaseline(context.Background(), testScope(), 20, 5.0)
@@ -732,7 +732,7 @@ func TestGetUsageBaseline_P5OfVariedSeries(t *testing.T) {
 }
 
 func TestGetUsageBaseline_EmptySeries_ReturnsError(t *testing.T) {
-	cov := &fakeCoverageSource{onDemandSeries: []float64{}}
+	cov := &fakeCoverageSource{onDemandPoints: []DailyPoint{}}
 	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, cov, &fakeUtilizationSource{})
 	_, err := a.GetUsageBaseline(context.Background(), testScope(), 7, 5.0)
 	require.Error(t, err)
@@ -740,7 +740,8 @@ func TestGetUsageBaseline_EmptySeries_ReturnsError(t *testing.T) {
 }
 
 func TestGetUsageBaseline_SeriesTooShort_ReturnsError(t *testing.T) {
-	cov := &fakeCoverageSource{onDemandSeries: []float64{1.0, 2.0, 3.0}} // < 7 days
+	// 3 points with recent dates: fires minBaselineSeriesDays=7 check (3 < 7).
+	cov := &fakeCoverageSource{onDemandPoints: makeRecentPoints(3)}
 	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, cov, &fakeUtilizationSource{})
 	_, err := a.GetUsageBaseline(context.Background(), testScope(), 7, 5.0)
 	require.Error(t, err)
@@ -748,9 +749,9 @@ func TestGetUsageBaseline_SeriesTooShort_ReturnsError(t *testing.T) {
 }
 
 func TestGetUsageBaseline_NaNElement_ReturnsErrorNamingIndex(t *testing.T) {
-	series := makeRange(10)
-	series[4] = math.NaN()
-	cov := &fakeCoverageSource{onDemandSeries: series}
+	points := makeRecentPoints(10)
+	points[4].USDPerHour = math.NaN()
+	cov := &fakeCoverageSource{onDemandPoints: points}
 	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, cov, &fakeUtilizationSource{})
 	_, err := a.GetUsageBaseline(context.Background(), testScope(), 10, 5.0)
 	require.Error(t, err, "a NaN element must be rejected at the boundary")
@@ -759,9 +760,9 @@ func TestGetUsageBaseline_NaNElement_ReturnsErrorNamingIndex(t *testing.T) {
 }
 
 func TestGetUsageBaseline_InfElement_ReturnsErrorNamingIndex(t *testing.T) {
-	series := makeRange(10)
-	series[7] = math.Inf(1)
-	cov := &fakeCoverageSource{onDemandSeries: series}
+	points := makeRecentPoints(10)
+	points[7].USDPerHour = math.Inf(1)
+	cov := &fakeCoverageSource{onDemandPoints: points}
 	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, cov, &fakeUtilizationSource{})
 	_, err := a.GetUsageBaseline(context.Background(), testScope(), 10, 5.0)
 	require.Error(t, err, "an Inf element must be rejected at the boundary")
@@ -770,9 +771,9 @@ func TestGetUsageBaseline_InfElement_ReturnsErrorNamingIndex(t *testing.T) {
 }
 
 func TestGetUsageBaseline_NegativeElement_ReturnsErrorNamingIndex(t *testing.T) {
-	series := makeRange(10)
-	series[2] = -0.5
-	cov := &fakeCoverageSource{onDemandSeries: series}
+	points := makeRecentPoints(10)
+	points[2].USDPerHour = -0.5
+	cov := &fakeCoverageSource{onDemandPoints: points}
 	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, cov, &fakeUtilizationSource{})
 	_, err := a.GetUsageBaseline(context.Background(), testScope(), 10, 5.0)
 	require.Error(t, err, "a negative cost element must be rejected at the boundary")
@@ -789,8 +790,7 @@ func TestGetUsageBaseline_OnDemandSourceError_Propagates(t *testing.T) {
 }
 
 func TestGetUsageBaseline_InvalidPercentile_ReturnsError(t *testing.T) {
-	series := makeRange(30)
-	cov := &fakeCoverageSource{onDemandSeries: series}
+	cov := &fakeCoverageSource{onDemandPoints: makeRecentPoints(30)}
 	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, cov, &fakeUtilizationSource{})
 
 	for _, p := range []float64{0.0, -1.0, 101.0} {
@@ -801,11 +801,70 @@ func TestGetUsageBaseline_InvalidPercentile_ReturnsError(t *testing.T) {
 }
 
 func TestGetUsageBaseline_WrongScope_ReturnsError(t *testing.T) {
-	cov := &fakeCoverageSource{onDemandSeries: makeRange(30)}
+	cov := &fakeCoverageSource{onDemandPoints: makeRecentPoints(30)}
 	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, cov, &fakeUtilizationSource{})
 	badScope := ladder.Scope{Provider: common.ProviderAWS, AccountID: "wrong"}
 	_, err := a.GetUsageBaseline(context.Background(), badScope, 30, 5.0)
 	require.Error(t, err)
+}
+
+// TestGetUsageBaseline_StaleSeries_ReturnsError is a regression test for gap G6a:
+// before stale-series detection was added, a CE feed that stopped days ago would
+// yield a low-water baseline with no error, and the utilization clamp would trust
+// it as though it were current. Now GetUsageBaseline must return an explicit error
+// naming the last date when the most-recent point is older than maxSeriesAgeDays.
+func TestGetUsageBaseline_StaleSeries_ReturnsError(t *testing.T) {
+	// Build a 30-point series whose most-recent point is maxSeriesAgeDays+1 days
+	// in the past, simulating a CE feed that stopped (or a wrong date range).
+	staleEnd := time.Now().AddDate(0, 0, -(maxSeriesAgeDays + 1)).UTC().Truncate(24 * time.Hour)
+	points := make([]DailyPoint, 30)
+	for i := range points {
+		points[i] = DailyPoint{
+			Date:       staleEnd.AddDate(0, 0, -(29 - i)),
+			USDPerHour: float64(i + 1),
+		}
+	}
+	cov := &fakeCoverageSource{onDemandPoints: points}
+	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, cov, &fakeUtilizationSource{})
+
+	_, err := a.GetUsageBaseline(context.Background(), testScope(), 30, 5.0)
+	require.Error(t, err, "a series whose tail is older than maxSeriesAgeDays must be rejected")
+	assert.Contains(t, err.Error(), "stale", "error must say 'stale'")
+	assert.Contains(t, err.Error(), staleEnd.Format("2006-01-02"), "error must name the most-recent date so callers can diagnose the CE feed gap")
+}
+
+// TestGetUsageBaseline_SparseSeries_ReturnsError is a regression test for gap G6a:
+// before coverage detection was added, a series with too many missing days for the
+// requested lookback window would silently yield a percentile over incomplete data.
+// Now GetUsageBaseline must return an error when the series has fewer than
+// lookbackDays - maxMissingDays points.
+func TestGetUsageBaseline_SparseSeries_ReturnsError(t *testing.T) {
+	const lookbackDays = 30
+	// n is one point below the minimum: lookbackDays - maxMissingDays - 1.
+	// At n=26 (>= minBaselineSeriesDays=7) the coverage check fires, not the
+	// absolute-minimum check.
+	n := lookbackDays - maxMissingDays - 1
+	cov := &fakeCoverageSource{onDemandPoints: makeRecentPoints(n)}
+	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, cov, &fakeUtilizationSource{})
+
+	_, err := a.GetUsageBaseline(context.Background(), testScope(), lookbackDays, 5.0)
+	require.Error(t, err, "a series with too many gaps for the lookback window must be rejected")
+	assert.Contains(t, err.Error(), fmt.Sprintf("%d points", n), "error must report the actual point count")
+	assert.Contains(t, err.Error(), fmt.Sprintf("%d-day lookback", lookbackDays), "error must report the requested lookback")
+}
+
+// TestGetUsageBaseline_FreshAndCompleteSeries_NoError is a regression test
+// confirming that the stale-series guard does not break the happy path:
+// a fresh, sufficiently complete series must still yield a valid baseline.
+func TestGetUsageBaseline_FreshAndCompleteSeries_NoError(t *testing.T) {
+	// 30 points ending yesterday, which is well within maxSeriesAgeDays=3 and
+	// covers the 30-day lookback window with only one day of natural lag.
+	cov := &fakeCoverageSource{onDemandPoints: makeRecentPoints(30)}
+	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, cov, &fakeUtilizationSource{})
+
+	bl, err := a.GetUsageBaseline(context.Background(), testScope(), 30, 5.0)
+	require.NoError(t, err, "a fresh, complete series must pass all stale-series checks")
+	require.NotNil(t, bl.LowWaterUSDPerHour, "LowWaterUSDPerHour must be set on a valid baseline")
 }
 
 // ---------------------------------------------------------------------------
@@ -817,6 +876,37 @@ func makeRange(n int) []float64 {
 	out := make([]float64, n)
 	for i := range out {
 		out[i] = float64(i + 1)
+	}
+	return out
+}
+
+// makeRecentPoints returns n DailyPoints whose USDPerHour values match
+// makeRange(n) (values 1.0...float64(n)), with dates ending yesterday.
+// Yesterday is used because CE data typically lags ~24 h; ending at yesterday
+// keeps the series well within the maxSeriesAgeDays freshness window while
+// being realistic for a real CE feed. Ordered oldest-to-newest.
+func makeRecentPoints(n int) []DailyPoint {
+	yesterday := time.Now().AddDate(0, 0, -1).UTC().Truncate(24 * time.Hour)
+	out := make([]DailyPoint, n)
+	for i := range out {
+		out[i] = DailyPoint{
+			Date:       yesterday.AddDate(0, 0, -(n - 1 - i)),
+			USDPerHour: float64(i + 1),
+		}
+	}
+	return out
+}
+
+// makeConstantPoints returns n DailyPoints all with the given USDPerHour value,
+// ending yesterday. Ordered oldest-to-newest.
+func makeConstantPoints(n int, value float64) []DailyPoint {
+	yesterday := time.Now().AddDate(0, 0, -1).UTC().Truncate(24 * time.Hour)
+	out := make([]DailyPoint, n)
+	for i := range out {
+		out[i] = DailyPoint{
+			Date:       yesterday.AddDate(0, 0, -(n - 1 - i)),
+			USDPerHour: value,
+		}
 	}
 	return out
 }
