@@ -51,7 +51,7 @@ func (m *mockOnDemandCE) GetCostAndUsage(
 }
 
 // dailyResult builds one ResultByTime entry for testing.
-// dateStr must be in "2006-01-02" format; totalUSD is the day's UNBLENDED_COST.
+// dateStr must be in "2006-01-02" format; totalUSD is the day's UnblendedCost.
 func dailyResult(dateStr string, totalUSD float64) types.ResultByTime {
 	return types.ResultByTime{
 		TimePeriod: &types.DateInterval{

@@ -133,12 +133,20 @@ func appendRegionScopedSPs(sps []ActiveSP, page []sptypes.SavingsPlan, region st
 // Fails loud on a missing SavingsPlanId (would make the entry
 // un-identifiable), on a non-numeric Commitment string (money path: cannot
 // represent an absent number as 0, per feedback_nullable_not_zero and
-// feedback_strict_int_parse), and on missing or unparseable Start/End dates
+// feedback_strict_int_parse), on missing or unparseable Start/End dates
 // (a silently zero EndDate would drop the SP from sumExpiringSPHourlyCost
-// and understate expiring commitment).
+// and understate expiring commitment), and on an EC2Instance-plan SP with
+// an empty Region (AWS always populates Region for region-bound plans, so
+// an empty one means corrupted data; letting it fall through to the
+// region-scope filter would silently exclude it, understating existing
+// commitment and over-purchasing).
 func mapActiveSP(sp sptypes.SavingsPlan) (ActiveSP, error) {
 	if sp.SavingsPlanId == nil {
 		return ActiveSP{}, fmt.Errorf("ListActiveSPs: DescribeSavingsPlans returned entry with nil SavingsPlanId")
+	}
+	if string(sp.SavingsPlanType) == spPlanTypeEC2Instance && aws.ToString(sp.Region) == "" {
+		return ActiveSP{}, fmt.Errorf("ListActiveSPs: EC2Instance SP %s has an empty Region; AWS always populates Region for region-bound plans, so this indicates corrupted data (silently excluding it would understate existing commitment)",
+			*sp.SavingsPlanId)
 	}
 	commitment := aws.ToString(sp.Commitment)
 	hourly, err := strconv.ParseFloat(commitment, 64)

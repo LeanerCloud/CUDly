@@ -256,6 +256,25 @@ func TestSPLister_BadDatesFail(t *testing.T) {
 	}
 }
 
+// TestSPLister_EmptyRegionEC2InstanceFails verifies fail-loud on an
+// EC2Instance-plan SP with an empty Region: AWS always populates Region for
+// region-bound plans, so an empty one means corrupted data. Letting it fall
+// through to the region-scope filter would silently exclude it ("" != region),
+// understating existing commitment and over-purchasing.
+func TestSPLister_EmptyRegionEC2InstanceFails(t *testing.T) {
+	sp := makeSPEntry("sp-noregion", string(sptypes.SavingsPlanTypeEc2Instance), "1.00", "", sptypes.SavingsPlanStateActive)
+	mock := &mockDescribeSP{
+		pages: []*sdksp.DescribeSavingsPlansOutput{{SavingsPlans: []sptypes.SavingsPlan{sp}}},
+	}
+	lister := newSPLister(mock)
+
+	_, err := lister.ListActiveSPs(context.Background())
+
+	require.Error(t, err, "empty Region on an EC2Instance SP must fail loud, not be silently excluded")
+	assert.Contains(t, err.Error(), "empty Region")
+	assert.Contains(t, err.Error(), "sp-noregion", "error must name the offending SP")
+}
+
 // TestSPLister_APIErrorPropagated verifies that a DescribeSavingsPlans error
 // is propagated to the caller (no silent swallowing).
 func TestSPLister_APIErrorPropagated(t *testing.T) {
