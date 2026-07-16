@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -61,15 +62,17 @@ type Config struct {
 
 // Validator authenticates inbound requests against the configured mode.
 type Validator struct {
-	verifier  *oidc.IDTokenVerifier
-	keySet    *oidc.RemoteKeySet
+	mode      Mode
+	verifier  *oidc.IDTokenVerifier // nil unless mode == ModeOIDC
+	keySet    *oidc.RemoteKeySet    // nil unless mode == ModeOIDC; powered by go-oidc's single-flight cache
+	verMu     sync.RWMutex          // guards verifier and keySet during rotation-recovery rebuilds
+	jwksURL   string                // remembered for Warmup and rotation rebuild; empty unless mode == ModeOIDC
+	issuer    string                // OIDC issuer URL; empty unless mode == ModeOIDC; needed to rebuild verifier
 	audiences map[string]struct{}
 	subjects  map[string]struct{}
-	now       func() time.Time
-	mode      Mode
-	jwksURL   string
-	bearer    []byte
 	skew      time.Duration
+	bearer    []byte
+	now       func() time.Time // pluggable for tests
 }
 
 // claims captures the timestamp claims we need beyond what go-oidc's
@@ -163,6 +166,7 @@ func configureOIDC(v *Validator, cfg Config) (*Validator, error) {
 	v.audiences = auds
 	v.subjects = subs
 	v.jwksURL = cfg.JWKSURL
+	v.issuer = cfg.Issuer
 	v.keySet = oidc.NewRemoteKeySet(context.Background(), cfg.JWKSURL)
 	v.verifier = oidc.NewVerifier(cfg.Issuer, v.keySet, &oidc.Config{
 		// Pin to RS256. Google's tokens are RS256; rejecting anything
@@ -337,7 +341,14 @@ func (v *Validator) validateOIDC(ctx context.Context, authz string) error {
 	// Verify signature, issuer, and algorithm via go-oidc. SkipClientIDCheck
 	// and SkipExpiryCheck are enabled because we apply our own multi-aud
 	// and skew-tolerant expiry checks below.
-	idToken, err := v.verifier.Verify(ctx, rawToken)
+	//
+	// verifyWithRotationRetry handles the go-oidc stale-inflight race: during
+	// key rotation, go-oidc's RemoteKeySet may cache a completed but
+	// not-yet-cleaned-up inflight request. A second goroutine joining that
+	// inflight receives pre-rotation keys, causing a spurious signature
+	// failure. The retry detects this class of error and rebuilds the
+	// RemoteKeySet from scratch (no stale inflight), then retries once.
+	idToken, err := v.verifyWithRotationRetry(ctx, rawToken)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrUnauthorized, err)
 	}
@@ -370,6 +381,62 @@ func (v *Validator) validateOIDC(ctx context.Context, authz string) error {
 
 	log.Printf("scheduledauth: oidc token accepted (sub=%q, aud=%q)", idToken.Subject, idToken.Audience) // #nosec G706 -- both sub and aud are quoted (%q) to prevent log injection; sub is additionally validated against the allowlist
 	return nil
+}
+
+// verifyWithRotationRetry calls Verify on the current verifier. If the call
+// fails with a signature error (unknown kid after key rotation, or stale
+// inflight keyset) it rebuilds the RemoteKeySet and IDTokenVerifier from
+// scratch to bypass go-oidc's cached inflight, then retries exactly once.
+//
+// Fail-closed constraints:
+//   - Retry only on signature errors (error contains "failed to verify signature").
+//     aud/iss/exp/nbf/sub failures are returned immediately without retry.
+//   - At most one rebuild per rotation event: if another goroutine has already
+//     rebuilt the verifier (pointer changed under the write lock), we skip the
+//     rebuild and retry with the new verifier directly.
+//   - No sleep; the retry itself re-fetching fresh keys is the synchronization.
+//   - Rebuild is logged once per rotation (not per failing request).
+func (v *Validator) verifyWithRotationRetry(ctx context.Context, rawToken string) (*oidc.IDToken, error) {
+	v.verMu.RLock()
+	ver := v.verifier
+	v.verMu.RUnlock()
+
+	idToken, err := ver.Verify(ctx, rawToken)
+	if err == nil || !isSignatureError(err) {
+		return idToken, err
+	}
+
+	// Signature failure - possibly a stale inflight keyset from go-oidc's
+	// single-flight cache. Rebuild the RemoteKeySet (starts empty, no cached
+	// inflight) so the retry always performs a fresh JWKS fetch. The check
+	// v.verifier == ver prevents duplicate rebuilds when multiple goroutines
+	// hit the same rotation at once: only the first write-lock holder rebuilds;
+	// the rest find the pointer already updated and reuse the new verifier.
+	v.verMu.Lock()
+	if v.verifier == ver {
+		log.Printf("scheduledauth: oidc signature verification failed; rebuilding key set for rotation retry")
+		newKS := oidc.NewRemoteKeySet(context.Background(), v.jwksURL)
+		v.keySet = newKS
+		v.verifier = oidc.NewVerifier(v.issuer, newKS, &oidc.Config{
+			SupportedSigningAlgs: []string{string(oidc.RS256)},
+			SkipClientIDCheck:    true,
+			SkipExpiryCheck:      true,
+		})
+	}
+	newVer := v.verifier
+	v.verMu.Unlock()
+
+	return newVer.Verify(ctx, rawToken)
+}
+
+// isSignatureError reports whether err is a go-oidc signature verification
+// failure (unknown kid, key mismatch, or stale inflight result). It does NOT
+// match aud/iss/exp/nbf/sub claim failures, which must never trigger a retry.
+// The sentinel string "failed to verify signature" is the exact prefix emitted
+// by (*oidc.IDTokenVerifier).Verify when (*RemoteKeySet).VerifySignature
+// returns an error (see go-oidc/v3 verify.go).
+func isSignatureError(err error) bool {
+	return strings.Contains(err.Error(), "failed to verify signature")
 }
 
 // extractBearerToken pulls the JWT out of an `Authorization: Bearer <jwt>`

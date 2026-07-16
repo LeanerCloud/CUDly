@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -399,10 +400,17 @@ func TestValidate_OIDC_AudienceListClaim(t *testing.T) {
 }
 
 func TestValidate_OIDC_KeyRotation_RefreshOnUnknownKid(t *testing.T) {
-	// 1. Server starts with key A. Token signed by A → validates.
+	// 1. Server starts with key A. Token signed by A validates.
 	// 2. Provider rotates: server now publishes key B. Token signed by B
 	//    arrives with a previously-unseen kid. The validator MUST refresh
 	//    the JWKS and accept the new token.
+	//
+	// The verifyWithRotationRetry path in validateOIDC makes this
+	// deterministic: when the cached (or in-flight) JWKS lacks kid-B, the
+	// first Verify returns a signature error, the verifier is rebuilt with a
+	// fresh RemoteKeySet, and the retry fetches the rotated JWKS. No goroutine
+	// timing is relied upon - see also TestValidate_OIDC_KeyRotation_StaleInflight
+	// for a direct exercise of the stale-inflight path.
 	keyA := newTestKey(t, "kid-A")
 	keyB := newTestKey(t, "kid-B")
 	srv := newJWKSServer(t, jwks(keyA))
@@ -416,27 +424,14 @@ func TestValidate_OIDC_KeyRotation_RefreshOnUnknownKid(t *testing.T) {
 		t.Fatalf("kid A: %v", err)
 	}
 
-	// Sign tokB before issuing the swap so that the RSA operation
-	// (CPU-bound, ~1 ms) gives the go-oidc cleanup goroutine time to
-	// set inflight=nil under the mutex. Without this, fast loopback
-	// HTTP on Linux CI completes the swap POST without a goroutine
-	// switch, leaving the stale inflight visible to the next Validate
-	// call and causing it to reuse the pre-rotation key set.
-	tokB := signToken(t, keyB, baseClaims(time.Now(),
-		testSchedulerSubject,
-		"https://api.example.com",
-		"https://accounts.example.com"))
-
 	// Swap the JWKS to publish kid B.
 	//
 	// Both the request build and the response status are checked: if the
-	// /swap handler 5xx's (or -- more subtly -- returns a non-200 because
-	// the body short-read), the JWKS would silently NOT update. The test
-	// would then fail later at "unknown kid" instead of pointing at the
-	// real cause. Surfacing the swap failure here keeps the diagnostic
-	// chain short.
+	// /swap handler 5xx's (or returns non-200 due to a body short-read),
+	// the JWKS would silently NOT update and the test would fail later at
+	// "unknown kid" instead of pointing at the real cause.
 	jwksB := jwks(keyB)
-	swap, err := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/swap", strings.NewReader(string(jwksB)))
+	swap, err := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/swap", bytes.NewReader(jwksB))
 	if err != nil {
 		t.Fatalf("build swap request: %v", err)
 	}
@@ -452,8 +447,102 @@ func TestValidate_OIDC_KeyRotation_RefreshOnUnknownKid(t *testing.T) {
 	}
 	resp.Body.Close()
 
+	tokB := signToken(t, keyB, baseClaims(time.Now(),
+		testSchedulerSubject,
+		"https://api.example.com",
+		"https://accounts.example.com"))
 	if err := v.Validate(context.Background(), "Bearer "+tokB); err != nil {
 		t.Fatalf("kid B (post-rotation): %v", err)
+	}
+}
+
+func TestValidate_OIDC_KeyRotation_StaleInflight(t *testing.T) {
+	// Directly exercise the stale-inflight race diagnosed in issue #1381.
+	//
+	// go-oidc's RemoteKeySet uses a single goroutine ("inflight") to fetch
+	// JWKS. The goroutine calls inflight.done(keys) to unblock callers, then
+	// must re-acquire the mutex to set inflight=nil. In the window between
+	// done() and inflight=nil, a new caller joins the same inflight and
+	// receives the pre-rotation keys, causing a spurious signature failure.
+	//
+	// Setup: a JWKS server that holds its first response (simulating the
+	// inflight window). While the first fetch is blocked, the JWKS rotates
+	// to key B. A second validation (tokB, signed with key B) joins the
+	// blocked inflight and will receive stale key-A keys.
+	//
+	// Pre-fix behavior: tokB fails with "failed to verify id token signature".
+	// Post-fix behavior: the retry rebuilds the RemoteKeySet (fresh, no stale
+	// inflight), fetches the rotated JWKS, and verifies tokB successfully.
+	keyA := newTestKey(t, "kid-A")
+	keyB := newTestKey(t, "kid-B")
+
+	var (
+		fetchCount   atomic.Int64
+		firstArrived = make(chan struct{})
+		release      = make(chan struct{})
+		jwksA        = jwks(keyA)
+		jwksB        = jwks(keyB)
+	)
+
+	// The JWKS server is deterministic by request number:
+	//   request 1: serves keyA JWKS (held until release) - simulates the
+	//              inflight completing with pre-rotation keys
+	//   request 2+: serves keyB JWKS - the post-rotation state that the
+	//               retry must pick up
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		n := fetchCount.Add(1)
+		var body []byte
+		if n == 1 {
+			close(firstArrived) // signal: first JWKS request is in progress
+			<-release           // hold until the test releases (stale-inflight window)
+			body = jwksA
+		} else {
+			body = jwksB
+		}
+		w.Header().Set("Content-Type", "application/jwk-set+json")
+		_, _ = w.Write(body)
+	})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	v := newOIDCValidator(t, ts.URL)
+
+	tokA := signToken(t, keyA, baseClaims(time.Now(),
+		testSchedulerSubject, "https://api.example.com", "https://accounts.example.com"))
+	tokB := signToken(t, keyB, baseClaims(time.Now(),
+		testSchedulerSubject, "https://api.example.com", "https://accounts.example.com"))
+
+	// Start tokA validation in background; it triggers the first (held) JWKS fetch.
+	errA := make(chan error, 1)
+	go func() { errA <- v.Validate(context.Background(), "Bearer "+tokA) }()
+
+	// Wait for the first JWKS fetch to start (inflight#1 is now active).
+	<-firstArrived
+
+	// Start tokB validation while inflight#1 is blocked. go-oidc deduplicates
+	// concurrent fetches via single-flight, so tokB joins the same inflight
+	// and will receive key-A keys when the inflight is released.
+	errB := make(chan error, 1)
+	go func() { errB <- v.Validate(context.Background(), "Bearer "+tokB) }()
+
+	// Yield the scheduler a few times to let the tokB goroutine progress
+	// into keysFromRemote and join the active inflight before we release it.
+	for i := 0; i < 20; i++ {
+		runtime.Gosched()
+	}
+
+	// Release the first fetch. The inflight returns key-A keys.
+	// tokA verifies (kid-A present). tokB fails (kid-B absent in key-A set)
+	// and the validator's retry rebuilds the RemoteKeySet, fetches the
+	// rotated JWKS (request 2, returns key-B), and accepts tokB.
+	close(release)
+
+	if err := <-errA; err != nil {
+		t.Errorf("tokA: expected success, got %v", err)
+	}
+	if err := <-errB; err != nil {
+		t.Errorf("tokB (stale-inflight retry): expected success, got %v", err)
 	}
 }
 
