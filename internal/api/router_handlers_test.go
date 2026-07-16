@@ -784,18 +784,18 @@ func TestHandler_rejectRIExchange_ValidTokenAndRecord(t *testing.T) {
 			ApprovalToken: "tok",
 			Status:        "pending",
 		}, nil)
-	// rejectRIExchange transitions to "canceled", not "rejected"
-	mockStore.On("TransitionRIExchangeStatus", ctx, "11111111-1111-1111-1111-111111111111", "pending", "canceled", mock.Anything).
+	// rejectRIExchange transitions to "cancelled" (UK spelling, matches DB canonical)
+	mockStore.On("TransitionRIExchangeStatus", ctx, "11111111-1111-1111-1111-111111111111", "pending", "cancelled", mock.Anything).
 		Return(&config.RIExchangeRecord{
 			ID:     "11111111-1111-1111-1111-111111111111",
-			Status: "canceled",
+			Status: "cancelled",
 		}, nil)
 
 	h := &Handler{config: mockStore}
 	result, err := h.rejectRIExchange(ctx, "11111111-1111-1111-1111-111111111111", "tok")
 	require.NoError(t, err)
 	m := result.(map[string]string)
-	assert.Equal(t, "canceled", m["status"])
+	assert.Equal(t, "cancelled", m["status"])
 }
 
 // ---------------------------------------------------------------------------
