@@ -1024,6 +1024,34 @@ describe('Plans Module', () => {
       // getPlan must NOT be called when planId is empty.
       expect(api.getPlan).not.toHaveBeenCalled();
     });
+
+    test('edit action reconciles the list when the plan is gone (#1403)', async () => {
+      // Regression for #1403: a scheduled-purchase row can outlive its plan
+      // (deleted, or the caller's account scope changed). Clicking Edit passes
+      // the correct plan_id (the #773/#780 fix is intact), but GET /plans/{id}
+      // now returns 404. The UI must surface an actionable message AND refresh
+      // the planned-purchases list so the orphaned row is dropped, instead of
+      // dead-ending on the generic "Failed to load plan details" toast.
+      const notFound = Object.assign(new Error('HTTP 404'), { status: 404 });
+      (api.getPlan as jest.Mock).mockRejectedValue(notFound);
+      // Clear the getPlannedPurchases call made during beforeEach's loadPlans
+      // so the assertion below counts only the reconcile triggered by the edit.
+      (api.getPlannedPurchases as jest.Mock).mockClear();
+
+      const editBtn = document.querySelector('[data-action="edit"]') as HTMLButtonElement;
+      editBtn?.click();
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // The right plan FK was used (guards against a #773-class regression).
+      expect(api.getPlan).toHaveBeenCalledWith('plan-1');
+      // Actionable, plan-gone message — NOT the generic dead-end.
+      expect(mockShowToast).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'This plan is no longer available. It may have been deleted.', kind: 'error' }),
+      );
+      // The stale row is reconciled by refetching the planned purchases.
+      expect(api.getPlannedPurchases).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('resume action for paused purchase', () => {

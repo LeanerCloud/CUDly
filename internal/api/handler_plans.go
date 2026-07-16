@@ -171,9 +171,20 @@ func (h *Handler) getPlan(ctx context.Context, req *events.LambdaFunctionURLRequ
 		return nil, err
 	}
 
+	// Map a missing plan to 404 (mirrors updatePlan / patchPlan /
+	// getPlanForPurchaseCreation). GetPurchasePlan wraps config.ErrNotFound,
+	// which the router's IsNotFoundError check does NOT recognize (it matches
+	// only the api-package sentinel), so a raw return here surfaced a deleted
+	// plan as a 500. A scheduled-purchase row can outlive its plan (issue
+	// #1403: ON DELETE SET NULL detaches the execution, or the user's account
+	// scope changes), and the Edit button then loads GET /plans/{id}; the
+	// frontend needs a 404 to distinguish "plan is gone" from a server error
+	// and reconcile the stale row instead of dead-ending on a generic message.
 	plan, err := h.config.GetPurchasePlan(ctx, planID)
 	if err != nil {
-		return nil, err
+		return nil, mapCreatePlanStorageError(err,
+			"plan not found", "failed to load plan",
+			"getPlan: GetPurchasePlan failed")
 	}
 
 	// Ensure plan has NextExecutionDate calculated

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -308,6 +309,41 @@ func TestHandler_getPlan(t *testing.T) {
 
 	resultPlan := result.(*config.PurchasePlan)
 	assert.Equal(t, "12345678-1234-1234-1234-123456789abc", resultPlan.ID)
+}
+
+// TestHandler_getPlan_NotFound_MapsTo404 is the backend half of the #1403 fix.
+// A scheduled-purchase row can outlive its plan (ON DELETE SET NULL detaches
+// the execution, or the caller's account scope changes), and the Edit button
+// then loads GET /plans/{id}. GetPurchasePlan wraps config.ErrNotFound, which
+// the router's IsNotFoundError sentinel does NOT match, so the pre-fix getPlan
+// returned the raw error and the router mapped it to 500. It must be a 404
+// (like updatePlan / patchPlan / getPlanForPurchaseCreation) so the frontend
+// can tell "plan is gone" from a server error and reconcile the stale row.
+func TestHandler_getPlan_NotFound_MapsTo404(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+
+	planID := "12345678-1234-1234-1234-123456789abc"
+	// GetPurchasePlan wraps config.ErrNotFound exactly as the Postgres store does.
+	mockStore.On("GetPurchasePlan", ctx, planID).
+		Return(nil, fmt.Errorf("%w: purchase plan %s", config.ErrNotFound, planID))
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+	}
+	_, err := handler.getPlan(ctx, req, planID)
+
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "a missing plan must map to a ClientError, not propagate raw (500)")
+	assert.Equal(t, 404, ce.code, "a missing plan must be 404, not 500")
+	mockStore.AssertExpectations(t)
 }
 
 func TestHandler_updatePlan(t *testing.T) {
