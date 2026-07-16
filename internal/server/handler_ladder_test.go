@@ -249,11 +249,16 @@ func validTestCloudAccount(externalID string) *config.CloudAccount {
 // nonZeroFloat64 is a helper to create a *float64 from a literal.
 func nonZeroFloat64(f float64) *float64 { return &f }
 
+// testBaselineLowWaterUSDHr is the LowWaterUSDPerHour every testBaseline
+// fixture uses; all callers share the same value so the helper takes no
+// parameter (unparam).
+const testBaselineLowWaterUSDHr = 10.0
+
 // testBaseline returns a UsageBaseline with a non-nil LowWaterUSDPerHour.
-func testBaseline(lowWater float64) pkgladder.UsageBaseline {
+func testBaseline() pkgladder.UsageBaseline {
 	return pkgladder.UsageBaseline{
-		LowWaterUSDPerHour: nonZeroFloat64(lowWater),
-		StableUSDPerHour:   nonZeroFloat64(lowWater * 0.9),
+		LowWaterUSDPerHour: nonZeroFloat64(testBaselineLowWaterUSDHr),
+		StableUSDPerHour:   nonZeroFloat64(testBaselineLowWaterUSDHr * 0.9),
 		LookbackDays:       30,
 		Percentile:         5.0,
 	}
@@ -456,7 +461,7 @@ func TestHandleLadderRun_MultiAccountSkip_CountedAndIsolated(t *testing.T) {
 	app := &Application{
 		Config: store,
 		LadderCapabilityFactory: func(_ context.Context, _, _ string) (pkgladder.LadderCapability, error) {
-			return &fakeLadderCapability{t: t, baseline: testBaseline(10.0)}, nil
+			return &fakeLadderCapability{t: t, baseline: testBaseline()}, nil
 		},
 	}
 
@@ -502,7 +507,7 @@ func TestExecuteLadderRun_HealthyRun(t *testing.T) {
 
 	cap := &fakeLadderCapability{
 		t:        t,
-		baseline: testBaseline(10.0),
+		baseline: testBaseline(),
 	}
 
 	err := app.executeLadderRun(ctx, &dbCfg, cap, "123456789012", pkgladder.Term1Year, pkgladder.PaymentNoUpfront, now)
@@ -651,7 +656,7 @@ func TestExecuteLadderRun_ZeroGap_HoldPlan(t *testing.T) {
 	zero := 0.0
 	cap := &fakeLadderCapability{
 		t:        t,
-		baseline: testBaseline(10.0),
+		baseline: testBaseline(),
 		layerStates: map[pkgladder.LayerType]pkgladder.LayerState{
 			pkgladder.LayerConvertibleRI: {
 				Layer:              pkgladder.LayerConvertibleRI,
@@ -981,7 +986,7 @@ func TestHandleLadderRun_MultiConfigIsolation(t *testing.T) {
 	app := &Application{
 		Config: store,
 		LadderCapabilityFactory: func(_ context.Context, _, _ string) (pkgladder.LadderCapability, error) {
-			return &fakeLadderCapability{t: t, baseline: testBaseline(10.0)}, nil
+			return &fakeLadderCapability{t: t, baseline: testBaseline()}, nil
 		},
 	}
 

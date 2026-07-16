@@ -1016,7 +1016,7 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 }
 
 // CancelExecutionAtomic atomically transitions an execution from
-// pending or notified to cancelled, setting cancelled_by to the supplied
+// pending or notified to 'cancelled', setting cancelled_by to the supplied
 // actor (NULL when actor is nil). The UPDATE is conditional on
 // status IN ('pending','notified') so a concurrent approve that has
 // already transitioned the row to 'approved' causes zero rows to be
@@ -1745,7 +1745,7 @@ func (s *PostgresStore) GetActivePurchaseHistory(ctx context.Context, asOf time.
 // number, unknown provider) matches account_id with no provider gate. Providers
 // are sorted for deterministic SQL. The OR is wrapped in parentheses so it
 // composes with the surrounding AND chain.
-func appendAccountPredicate(conds []string, args []any, accountIDs []string, externalIDsByProvider map[string][]string) ([]string, []any) {
+func appendAccountPredicate(conds []string, args []any, accountIDs []string, externalIDsByProvider map[string][]string) ([]string, []any) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	if len(accountIDs) == 0 && len(externalIDsByProvider) == 0 {
 		return conds, args
 	}
@@ -2031,7 +2031,7 @@ func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purc
 // the purchase_history row identified by purchaseID. The UPDATE is a no-op
 // when revoked_at is already non-null (idempotency guard). Returns a not-found
 // error when zero rows are affected and revoked_at was previously NULL.
-func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error {
+func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error {
 	var supportCaseIDPtr *string
 	if supportCaseID != "" {
 		supportCaseIDPtr = &supportCaseID
@@ -2325,7 +2325,7 @@ func (s *PostgresStore) GetRIExchangeHistory(ctx context.Context, since time.Tim
 // Uses a single UPDATE...WHERE...RETURNING for atomicity, then diagnoses failure
 // only if zero rows are returned.
 // actor is the UUID of the user performing the transition (nil for system-initiated paths).
-func (s *PostgresStore) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*RIExchangeRecord, error) {
+func (s *PostgresStore) TransitionRIExchangeStatus(ctx context.Context, id, fromStatus, toStatus string, actor *string) (*RIExchangeRecord, error) {
 	query := `
 		UPDATE ri_exchange_history
 		SET status = $3, updated_at = NOW(),
@@ -2372,7 +2372,7 @@ func (s *PostgresStore) diagnoseTransitionFailure(ctx context.Context, id, fromS
 }
 
 // CompleteRIExchange marks an RI exchange as completed.
-func (s *PostgresStore) CompleteRIExchange(ctx context.Context, id string, exchangeID string) error {
+func (s *PostgresStore) CompleteRIExchange(ctx context.Context, id, exchangeID string) error {
 	query := `
 		UPDATE ri_exchange_history
 		SET status = 'completed', exchange_id = $2, completed_at = NOW()
@@ -2395,7 +2395,7 @@ func (s *PostgresStore) CompleteRIExchange(ctx context.Context, id string, excha
 // (issue #300). Called after CompleteRIExchange when approval came from a
 // session-authed user. The stamping is best-effort (log + continue on failure
 // so the exchange itself isn't rolled back just because the audit stamp failed).
-func (s *PostgresStore) StampRIExchangeApprovedBy(ctx context.Context, id string, approverEmail string) error {
+func (s *PostgresStore) StampRIExchangeApprovedBy(ctx context.Context, id, approverEmail string) error {
 	query := `
 		UPDATE ri_exchange_history
 		SET approved_by = $2
@@ -2413,7 +2413,7 @@ func (s *PostgresStore) StampRIExchangeApprovedBy(ctx context.Context, id string
 }
 
 // FailRIExchange marks an RI exchange as failed.
-func (s *PostgresStore) FailRIExchange(ctx context.Context, id string, errorMsg string) error {
+func (s *PostgresStore) FailRIExchange(ctx context.Context, id, errorMsg string) error {
 	query := `
 		UPDATE ri_exchange_history
 		SET status = 'failed', error = $2
@@ -2475,7 +2475,7 @@ func (s *PostgresStore) CancelAllPendingExchanges(ctx context.Context) (int64, e
 //   - common.ExchangeOriginLadder:     cancels WHERE ladder_run_id IS NOT NULL
 //
 // The origin is validated at this boundary; an unknown value fails loud rather
-// than silently cancelling the wrong partition on a money path.
+// than silently canceling the wrong partition on a money path.
 //
 // DELIBERATE COARSE PARTITION: the ExchangeOriginLadder branch cancels EVERY
 // ladder-linked pending record (ladder_run_id IS NOT NULL) across ALL ladder
@@ -3129,7 +3129,8 @@ func (s *PostgresStore) SetPlanAccounts(ctx context.Context, planID string, acco
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	if err = s.validatePlanAccountProvidersTx(ctx, tx, planID, accountIDs); err != nil {
+	err = s.validatePlanAccountProvidersTx(ctx, tx, planID, accountIDs)
+	if err != nil {
 		return err
 	}
 
@@ -3207,7 +3208,7 @@ type planAccountProviderMismatch struct {
 	Provider string
 }
 
-func (s *PostgresStore) findPlanAccountProviderMismatchesTx(ctx context.Context, tx pgx.Tx, accountIDs []string, expected []string) ([]planAccountProviderMismatch, error) {
+func (s *PostgresStore) findPlanAccountProviderMismatchesTx(ctx context.Context, tx pgx.Tx, accountIDs, expected []string) ([]planAccountProviderMismatch, error) {
 	expectedSet := make(map[string]struct{}, len(expected))
 	for _, provider := range expected {
 		expectedSet[provider] = struct{}{}

@@ -16,7 +16,7 @@ type Resolver interface {
 	GetSecretJSON(ctx context.Context, secretID string) (map[string]any, error)
 
 	// PutSecret creates or updates a secret value by ID/ARN/name
-	PutSecret(ctx context.Context, secretID string, value string) error
+	PutSecret(ctx context.Context, secretID, value string) error
 
 	// ListSecrets lists available secrets.
 	// Filter behavior varies by provider:

@@ -27,41 +27,38 @@ import (
 
 // CloudAccountRequest is the request body for create/update account endpoints.
 type CloudAccountRequest struct {
-	Name         string `json:"name"`
-	Description  string `json:"description"`
-	ContactEmail string `json:"contact_email"`
-	Provider     string `json:"provider"`
-	ExternalID   string `json:"external_id"`
-	Enabled      *bool  `json:"enabled"`
-	// AWS
+	Enabled                 *bool  `json:"enabled"`
+	AWSWebIdentityTokenFile string `json:"aws_web_identity_token_file"`
+	AzureClientID           string `json:"azure_client_id"`
+	Provider                string `json:"provider"`
+	Name                    string `json:"name"`
+	Description             string `json:"description"`
 	AWSAuthMode             string `json:"aws_auth_mode"`
 	AWSRoleARN              string `json:"aws_role_arn"`
 	AWSExternalID           string `json:"aws_external_id"`
+	ContactEmail            string `json:"contact_email"`
+	GCPWIFAudience          string `json:"gcp_wif_audience"`
+	ExternalID              string `json:"external_id"`
+	AzureSubscriptionID     string `json:"azure_subscription_id"`
+	AzureTenantID           string `json:"azure_tenant_id"`
 	AWSBastionID            string `json:"aws_bastion_id"`
-	AWSWebIdentityTokenFile string `json:"aws_web_identity_token_file"`
+	AzureAuthMode           string `json:"azure_auth_mode"`
+	GCPProjectID            string `json:"gcp_project_id"`
+	GCPClientEmail          string `json:"gcp_client_email"`
+	GCPAuthMode             string `json:"gcp_auth_mode"`
 	AWSIsOrgRoot            bool   `json:"aws_is_org_root"`
-	// Azure
-	AzureSubscriptionID string `json:"azure_subscription_id"`
-	AzureTenantID       string `json:"azure_tenant_id"`
-	AzureClientID       string `json:"azure_client_id"`
-	AzureAuthMode       string `json:"azure_auth_mode"`
-	// GCP
-	GCPProjectID   string `json:"gcp_project_id"`
-	GCPClientEmail string `json:"gcp_client_email"`
-	GCPAuthMode    string `json:"gcp_auth_mode"`
-	GCPWIFAudience string `json:"gcp_wif_audience"` // Full WIF provider resource, secret-free path only.
 }
 
 // CredentialsRequest is the request body for the save-credentials endpoint.
 type CredentialsRequest struct {
-	CredentialType string                 `json:"credential_type"`
 	Payload        map[string]interface{} `json:"payload"`
+	CredentialType string                 `json:"credential_type"`
 }
 
 // AccountTestResult is the response for the test-credentials endpoint.
 type AccountTestResult struct {
-	OK      bool   `json:"ok"`
 	Message string `json:"message"`
+	OK      bool   `json:"ok"`
 }
 
 // AccountServiceOverrideRequest is the request body for service override endpoints.
@@ -96,16 +93,16 @@ func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionUR
 
 	filter := buildAccountFilter(req.QueryStringParameters)
 
-	accounts, err := h.config.ListCloudAccounts(ctx, filter)
+	accts, err := h.config.ListCloudAccounts(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
 
-	if accounts == nil {
-		accounts = []config.CloudAccount{}
+	if accts == nil {
+		accts = []config.CloudAccount{}
 	}
 
-	// Filter by allowed accounts if the user has restricted access.
+	// Filter by allowed accts if the user has restricted access.
 	// An empty list or one containing "*" grants unrestricted access.
 	// Otherwise each entry is matched against the account's ID or Name.
 	allowedAccounts, err := h.getAllowedAccounts(ctx, session)
@@ -113,19 +110,20 @@ func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionUR
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
 	if !auth.IsUnrestrictedAccess(allowedAccounts) {
-		filtered := accounts[:0]
-		for _, acct := range accounts {
+		filtered := accts[:0]
+		for _rvc := range accts {
+			acct := accts[_rvc]
 			if auth.MatchesAccount(allowedAccounts, acct.ID, acct.Name) {
 				filtered = append(filtered, acct)
 			}
 		}
-		accounts = filtered
+		accts = filtered
 	}
 
 	// Mark the self-account (the account matching CUDly's own host identity)
-	h.markSelfAccount(ctx, accounts)
+	h.markSelfAccount(ctx, accts)
 
-	return accounts, nil
+	return accts, nil
 }
 
 // AccountSummary is the minimal-disclosure projection of a cloud account used
@@ -159,7 +157,7 @@ func (h *Handler) listAccountsMinimal(ctx context.Context, req *events.LambdaFun
 
 	filter := buildAccountFilter(req.QueryStringParameters)
 
-	accounts, err := h.config.ListCloudAccounts(ctx, filter)
+	accts, err := h.config.ListCloudAccounts(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
@@ -172,9 +170,9 @@ func (h *Handler) listAccountsMinimal(ctx context.Context, req *events.LambdaFun
 
 	// Build the minimal projection in place, applying allowed_accounts scoping
 	// during the copy so a restricted user only ever sees their entitled rows.
-	summaries := make([]AccountSummary, 0, len(accounts))
-	for i := range accounts {
-		acct := &accounts[i]
+	summaries := make([]AccountSummary, 0, len(accts))
+	for i := range accts {
+		acct := &accts[i]
 		if !unrestricted && !auth.MatchesAccount(allowedAccounts, acct.ID, acct.Name) {
 			continue
 		}
@@ -190,14 +188,14 @@ func (h *Handler) listAccountsMinimal(ctx context.Context, req *events.LambdaFun
 }
 
 // markSelfAccount sets IsSelf=true on the account matching the source identity.
-func (h *Handler) markSelfAccount(ctx context.Context, accounts []config.CloudAccount) {
+func (h *Handler) markSelfAccount(ctx context.Context, accts []config.CloudAccount) {
 	si := h.resolveSourceIdentity(ctx)
 	if si == nil || si.ExternalID() == "" {
 		return
 	}
-	for i := range accounts {
-		if accounts[i].Provider == si.Provider && accounts[i].ExternalID == si.ExternalID() {
-			accounts[i].IsSelf = true
+	for i := range accts {
+		if accts[i].Provider == si.Provider && accts[i].ExternalID == si.ExternalID() {
+			accts[i].IsSelf = true
 		}
 	}
 }
@@ -553,11 +551,13 @@ func (h *Handler) updateAccount(ctx context.Context, httpReq *events.LambdaFunct
 	}
 
 	var req CloudAccountRequest
-	if err := json.Unmarshal([]byte(httpReq.Body), &req); err != nil {
+	err = json.Unmarshal([]byte(httpReq.Body), &req)
+	if err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	if err := validateCloudAccountRequest(req); err != nil {
+	err = validateCloudAccountRequest(req)
+	if err != nil {
 		return nil, err
 	}
 
@@ -599,7 +599,8 @@ func (h *Handler) deleteAccount(ctx context.Context, req *events.LambdaFunctionU
 
 	// Verify the user can access this account AND that it exists. Returns 404
 	// for both "doesn't exist" and "out of scope" to avoid existence leakage.
-	if _, err := h.requireAccountAccess(ctx, session, id); err != nil {
+	_, err = h.requireAccountAccess(ctx, session, id)
+	if err != nil {
 		return nil, err
 	}
 
@@ -693,7 +694,8 @@ func (h *Handler) saveAccountCredentials(ctx context.Context, httpReq *events.La
 	// Must precede the credStore-nil check so missing/out-of-scope accounts
 	// return 404 rather than a 500 about credential store configuration.
 	// Returns errNotFound for both cases to avoid existence disclosure.
-	if _, err := h.requireAccountAccess(ctx, session, id); err != nil {
+	_, err = h.requireAccountAccess(ctx, session, id)
+	if err != nil {
 		return nil, err
 	}
 
@@ -874,7 +876,7 @@ func runGCPFederatedTokenExchange(ctx context.Context, ts oauth2.TokenSource) Ac
 // gcpTokenExchangeAttempt runs one Token() call with a 15s deadline.
 // Returns (result, nil, _) on success, (_, err, true) on a retriable
 // IAM propagation error, (_, err, false) on any other failure.
-func gcpTokenExchangeAttempt(ctx context.Context, ts oauth2.TokenSource) (AccountTestResult, error, bool) {
+func gcpTokenExchangeAttempt(ctx context.Context, ts oauth2.TokenSource) (AccountTestResult, error, bool) { //nolint:revive // error-return: error position is part of established calling convention
 	tokCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	tokenChan := make(chan tokenResult, 1)
@@ -1028,7 +1030,8 @@ func (h *Handler) listAccountServiceOverrides(ctx context.Context, req *events.L
 		return nil, err
 	}
 
-	if _, err := h.requireAccountAccess(ctx, session, id); err != nil {
+	_, err = h.requireAccountAccess(ctx, session, id)
+	if err != nil {
 		return nil, err
 	}
 
@@ -1057,12 +1060,14 @@ func (h *Handler) saveAccountServiceOverride(ctx context.Context, httpReq *event
 		return nil, err
 	}
 
-	if _, err := h.requireAccountAccess(ctx, session, accountID); err != nil {
+	_, err = h.requireAccountAccess(ctx, session, accountID)
+	if err != nil {
 		return nil, err
 	}
 
 	var req AccountServiceOverrideRequest
-	if err := json.Unmarshal([]byte(httpReq.Body), &req); err != nil {
+	err = json.Unmarshal([]byte(httpReq.Body), &req)
+	if err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
@@ -1346,16 +1351,16 @@ func (h *Handler) listPlanAccounts(ctx context.Context, req *events.LambdaFuncti
 		return nil, err
 	}
 
-	accounts, err := h.config.GetPlanAccounts(ctx, id)
+	accts, err := h.config.GetPlanAccounts(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
 
-	if accounts == nil {
-		accounts = []config.CloudAccount{}
+	if accts == nil {
+		accts = []config.CloudAccount{}
 	}
 
-	return accounts, nil
+	return accts, nil
 }
 
 // DiscoverOrgRequest is the request body for POST /api/accounts/discover-org.

@@ -325,10 +325,10 @@ func TestConfigDSN(t *testing.T) {
 
 func TestConfigValidate(t *testing.T) {
 	tests := []struct {
-		name        string
 		config      Config
-		expectError bool
+		name        string
 		errorMsg    string
+		expectError bool
 	}{
 		{
 			name: "valid config with password",
@@ -677,10 +677,10 @@ func TestConfigStruct(t *testing.T) {
 
 func TestValidateRequiredFields(t *testing.T) {
 	tests := []struct {
-		name        string
 		config      Config
-		expectError bool
+		name        string
 		errorMsg    string
+		expectError bool
 	}{
 		{
 			name: "all required fields present",
@@ -752,10 +752,10 @@ func TestValidateRequiredFields(t *testing.T) {
 
 func TestValidatePoolSettings(t *testing.T) {
 	tests := []struct {
-		name        string
 		config      Config
-		expectError bool
+		name        string
 		errorMsg    string
+		expectError bool
 	}{
 		{
 			name: "valid pool settings",

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -13,26 +14,16 @@ import (
 )
 
 type Output struct {
-	Mode       string `json:"mode"` // dry-run | execute
-	Region     string `json:"region"`
-	AccountChk string `json:"expected_account,omitempty"`
-
-	ReservedIDs      []string `json:"reserved_instance_ids"`
+	Quote            any      `json:"quote"`
+	Mode             string   `json:"mode"`
+	Region           string   `json:"region"`
+	AccountChk       string   `json:"expected_account,omitempty"`
 	TargetOfferingID string   `json:"target_offering_id"`
-	TargetCount      int32    `json:"target_count"`
 	MaxPaymentDueUSD string   `json:"max_payment_due_usd,omitempty"`
 	ExchangeID       string   `json:"exchange_id,omitempty"`
-	Quote            any      `json:"quote"`
 	Error            string   `json:"error,omitempty"`
-}
-
-// validateTargetCount exits with an error message when n is outside the int32
-// range. Extracted to keep main's cyclomatic complexity within the project limit.
-func validateTargetCount(n int) {
-	if n < 1 || n > (1<<31-1) {
-		fmt.Fprintln(os.Stderr, "ERROR: --target-count must be between 1 and math.MaxInt32")
-		os.Exit(2)
-	}
+	ReservedIDs      []string `json:"reserved_instance_ids"`
+	TargetCount      int32    `json:"target_count"`
 }
 
 func parseIDs(s string) []string {
@@ -44,6 +35,25 @@ func parseIDs(s string) []string {
 		}
 	}
 	return out
+}
+
+// validateRequiredFlags checks that the required CLI flags are present and
+// that --target-count can safely be narrowed to int32. It exits on the first
+// failure so callers do not need to handle the error return.
+func validateRequiredFlags(riIDsCSV, targetOffering string, ids []string, targetCount int) {
+	if len(ids) == 0 {
+		fmt.Fprintln(os.Stderr, "ERROR: --ri-ids is required (comma-separated)")
+		os.Exit(2)
+	}
+	if strings.TrimSpace(targetOffering) == "" {
+		fmt.Fprintln(os.Stderr, "ERROR: --target-offering-id is required")
+		os.Exit(2)
+	}
+	if targetCount < 1 || targetCount > math.MaxInt32 {
+		fmt.Fprintf(os.Stderr, "ERROR: --target-count must be between 1 and %d, got %d\n", math.MaxInt32, targetCount)
+		os.Exit(2)
+	}
+	_ = riIDsCSV // used indirectly via ids
 }
 
 func main() {
@@ -65,20 +75,10 @@ func main() {
 	)
 	flag.Parse()
 
-	validateTargetCount(*targetCount)
+	ids := parseIDs(*riIDsCSV)
+	validateRequiredFlags(*riIDsCSV, *targetOffering, ids, *targetCount)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*timeoutSec)*time.Second)
-	defer cancel()
-
-	ids := parseIDs(*riIDsCSV)
-	if len(ids) == 0 {
-		fmt.Fprintln(os.Stderr, "ERROR: --ri-ids is required (comma-separated)")
-		os.Exit(2)
-	}
-	if strings.TrimSpace(*targetOffering) == "" {
-		fmt.Fprintln(os.Stderr, "ERROR: --target-offering-id is required")
-		os.Exit(2)
-	}
 
 	o := Output{
 		Region:           *region,
@@ -102,6 +102,7 @@ func main() {
 			o.Error = err.Error()
 			o.Quote = q
 			writeOrExit(o, *outPath)
+			cancel()
 			fmt.Fprintf(os.Stderr, "quote: FAIL (see %s)\n", *outPath)
 			os.Exit(1)
 		}
@@ -109,9 +110,11 @@ func main() {
 		writeOrExit(o, *outPath)
 
 		if !q.IsValidExchange {
+			cancel()
 			fmt.Fprintf(os.Stderr, "quote: INVALID (%s) (see %s)\n", q.ValidationFailureReason, *outPath)
 			os.Exit(1)
 		}
+		cancel()
 		fmt.Printf("quote: OK (valid=%v, paymentDue=%s %s) (see %s)\n", q.IsValidExchange, q.PaymentDueRaw, q.CurrencyCode, *outPath)
 		os.Exit(0)
 	}
@@ -121,12 +124,14 @@ func main() {
 	if strings.TrimSpace(*ack) != "YES" {
 		o.Error = "refusing to execute: pass --ack YES"
 		writeOrExit(o, *outPath)
+		cancel()
 		fmt.Fprintf(os.Stderr, "execute: REFUSED (see %s)\n", *outPath)
 		os.Exit(2)
 	}
 	if strings.TrimSpace(*maxPaymentDue) == "" {
 		o.Error = "refusing to execute: --max-payment-due-usd is required as a safety cap"
 		writeOrExit(o, *outPath)
+		cancel()
 		fmt.Fprintf(os.Stderr, "execute: REFUSED (see %s)\n", *outPath)
 		os.Exit(2)
 	}
@@ -134,6 +139,7 @@ func main() {
 	if err != nil {
 		o.Error = err.Error()
 		writeOrExit(o, *outPath)
+		cancel()
 		fmt.Fprintf(os.Stderr, "execute: BAD INPUT (see %s)\n", *outPath)
 		os.Exit(2)
 	}
@@ -151,12 +157,14 @@ func main() {
 	if err != nil {
 		o.Error = err.Error()
 		writeOrExit(o, *outPath)
+		cancel()
 		fmt.Fprintf(os.Stderr, "execute: FAIL (see %s)\n", *outPath)
 		os.Exit(1)
 	}
 
 	o.ExchangeID = exID
 	writeOrExit(o, *outPath)
+	cancel()
 	fmt.Printf("execute: OK exchangeId=%s (see %s)\n", exID, *outPath)
 }
 

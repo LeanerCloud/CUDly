@@ -47,17 +47,18 @@ func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 	// surface is lower than the unauthenticated credential endpoints. Emit a
 	// high-severity alert so the fail-open window is observable (02-M1).
 	if h.rateLimiter != nil {
-		allowed, err := h.rateLimiter.AllowWithUser(ctx, session.UserID, "admin")
-		if err != nil {
+		allowed, rateLimitErr := h.rateLimiter.AllowWithUser(ctx, session.UserID, "admin")
+		if rateLimitErr != nil {
 			logging.Errorf("ALERT: rate limiter error on admin operation for user %s; proceeding fail-open (02-M1): %v",
-				session.UserID, err)
+				session.UserID, rateLimitErr)
 		} else if !allowed {
 			return nil, NewClientError(429, "too many requests, please slow down")
 		}
 	}
 
 	var createReq CreateAPIKeyRequest
-	if err := json.Unmarshal([]byte(req.Body), &createReq); err != nil {
+	err = json.Unmarshal([]byte(req.Body), &createReq)
+	if err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 

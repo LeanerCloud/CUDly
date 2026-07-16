@@ -113,7 +113,7 @@ func (m *MockCommandRunner) Run(name string, args ...string) error {
 	return nil
 }
 
-func (m *MockCommandRunner) RunWithStdin(name string, stdin string, args ...string) error {
+func (m *MockCommandRunner) RunWithStdin(name, stdin string, args ...string) error {
 	cmd := append([]string{name}, args...)
 	m.Commands = append(m.Commands, cmd)
 	if m.RunWithStdinFunc != nil {

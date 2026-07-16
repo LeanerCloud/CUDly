@@ -179,17 +179,17 @@ func (s *PostgresAnalyticsStore) BulkInsertSnapshots(ctx context.Context, snapsh
 
 			// Validate commitment_type against the table CHECK before COPY so a
 			// single bad value doesn't abort the entire batch server-side (L4).
-			if err := validateCommitmentType(snapshot.CommitmentType); err != nil {
-				return nil, fmt.Errorf("snapshot %d: %w", i, err)
+			if commitmentErr := validateCommitmentType(snapshot.CommitmentType); commitmentErr != nil {
+				return nil, fmt.Errorf("snapshot %d: %w", i, commitmentErr)
 			}
 
 			// Marshal metadata as []byte so pgx transmits it as a JSON value for
 			// the jsonb column rather than as a bytea literal.
 			var metadataJSON []byte
 			if snapshot.Metadata != nil {
-				data, err := json.Marshal(snapshot.Metadata)
-				if err != nil {
-					return nil, fmt.Errorf("failed to marshal metadata for snapshot %d: %w", i, err)
+				data, marshalErr := json.Marshal(snapshot.Metadata)
+				if marshalErr != nil {
+					return nil, fmt.Errorf("failed to marshal metadata for snapshot %d: %w", i, marshalErr)
 				}
 				metadataJSON = data
 			}

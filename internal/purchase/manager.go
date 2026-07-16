@@ -24,28 +24,21 @@ type STSClient interface {
 
 // ManagerConfig holds configuration for the purchase manager.
 type ManagerConfig struct {
-	ConfigStore            config.StoreInterface
+	AmbientAWSCreds        aws.CredentialsProvider
 	EmailSender            email.SenderInterface
 	STSClient              STSClient
-	AssumeRoleSTS          credentials.STSClient // used for cross-account role assumption
+	AssumeRoleSTS          credentials.STSClient
 	CredentialStore        credentials.CredentialStore
 	ProviderFactory        provider.FactoryInterface
-	NotificationDaysBefore int
-	DefaultTerm            int
+	ConfigStore            config.StoreInterface
+	OIDCSigner             oidc.Signer
+	OIDCIssuerURL          string
 	DefaultPaymentOption   string
-	DefaultCoverage        float64
 	DefaultRampSchedule    string
 	DashboardURL           string
-	// AmbientAWSCreds is the host Lambda / EC2 instance credentials provider,
-	// used when resolving a Self account (auth_mode=role_arn with empty role ARN).
-	AmbientAWSCreds aws.CredentialsProvider
-	// OIDCSigner and OIDCIssuerURL enable the secret-free Azure
-	// federated credential path. When both are set, Azure accounts in
-	// workload_identity_federation mode with no stored PEM are routed
-	// through BuildAzureFederatedCredential. Optional — when unset,
-	// the legacy cert-based path is used for backward compatibility.
-	OIDCSigner    oidc.Signer
-	OIDCIssuerURL string
+	NotificationDaysBefore int
+	DefaultCoverage        float64
+	DefaultTerm            int
 }
 
 // Manager handles purchase workflow.
@@ -57,31 +50,28 @@ type Manager struct {
 	ambientAWSCreds aws.CredentialsProvider
 	credStore       credentials.CredentialStore
 	providerFactory provider.FactoryInterface
-	notifyDays      int
+	oidcSigner      oidc.Signer
 	defaults        PurchaseDefaults
 	dashboardURL    string
-	oidcSigner      oidc.Signer
 	oidcIssuerURL   string
+	notifyDays      int
 }
 
 // PurchaseDefaults holds default purchase settings.
-type PurchaseDefaults struct {
-	Term         int
+type PurchaseDefaults struct { //nolint:revive // exported: doc comment style intentional
 	Payment      string
-	Coverage     float64
 	RampSchedule string
+	Term         int
+	Coverage     float64
 }
 
 // ProcessResult holds the result of processing scheduled purchases.
 type ProcessResult struct {
-	Processed int `json:"processed"`
-	Executed  int `json:"executed"`
-	Failed    int `json:"failed"`
-	// Recovered counts executions that were stuck in "approved" and were
-	// re-driven into a terminal "failed" state by the recovery sweep
-	// (issue #632).
-	Recovered int      `json:"recovered,omitempty"`
 	Errors    []string `json:"errors,omitempty"`
+	Processed int      `json:"processed"`
+	Executed  int      `json:"executed"`
+	Failed    int      `json:"failed"`
+	Recovered int      `json:"recovered,omitempty"`
 }
 
 // staleApprovedThreshold is how long an execution may sit in the "approved"
@@ -284,7 +274,8 @@ func allRecsSafeToRedrive(exec *config.PurchaseExecution) bool {
 	if len(exec.Recommendations) == 0 {
 		return false
 	}
-	for _, rec := range exec.Recommendations {
+	for _rvc := range exec.Recommendations {
+		rec := exec.Recommendations[_rvc]
 		if !recIsSafeToRedrive(rec) {
 			return false
 		}

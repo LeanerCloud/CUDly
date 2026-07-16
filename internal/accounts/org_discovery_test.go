@@ -14,8 +14,8 @@ import (
 
 // mockOrgsClient implements orgListAccountsClient for testing.
 type mockOrgsClient struct {
-	pages [][]orgtypes.Account
 	err   error
+	pages [][]orgtypes.Account
 	call  int
 }
 

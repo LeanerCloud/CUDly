@@ -100,7 +100,7 @@ func reshapeRequest() *events.LambdaFunctionURLRequest {
 // recommendations directly into the store so the reshape lookup has
 // something to read. Bypasses the scheduler so the test only exercises
 // the read-side mapping logic.
-func seedRecsForRegion(ctx context.Context, t *testing.T, store *config.PostgresStore, region string, recs []config.RecommendationRecord) {
+func seedRecsForRegion(ctx context.Context, t *testing.T, store *config.PostgresStore, recs []config.RecommendationRecord) {
 	t.Helper()
 	require.NoError(t, store.ReplaceRecommendations(ctx, time.Now(), recs),
 		"seeding recommendations into the test container failed")
@@ -124,7 +124,7 @@ func TestReshapeRecommendations_Integration_EndToEnd(t *testing.T) {
 	// cross-family alternatives ordered by EffectiveMonthlyCost;
 	// m5.2xlarge must NOT appear despite being a different size —
 	// same-family RIs aren't valid Convertible exchange targets.
-	seedRecsForRegion(ctx, t, store, "us-east-1", []config.RecommendationRecord{
+	seedRecsForRegion(ctx, t, store, []config.RecommendationRecord{
 		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.2xlarge", Term: 1, MonthlyCost: aws.Float64(40)},
 		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "c5.large", Term: 1, MonthlyCost: aws.Float64(50)},
 		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "r5.large", Term: 1, MonthlyCost: aws.Float64(60)},
@@ -188,7 +188,7 @@ func TestReshapeRecommendations_Integration_SecondCallHitsCache(t *testing.T) {
 	store, cleanup := setupReshapeHandlerIntegration(ctx, t)
 	defer cleanup()
 
-	seedRecsForRegion(ctx, t, store, "us-east-1", []config.RecommendationRecord{
+	seedRecsForRegion(ctx, t, store, []config.RecommendationRecord{
 		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "c5.large", Term: 1, MonthlyCost: aws.Float64(40)},
 	})
 

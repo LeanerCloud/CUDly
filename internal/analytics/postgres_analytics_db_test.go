@@ -26,15 +26,9 @@ import (
 func skipIfNoDocker(t *testing.T) {
 	t.Helper()
 
-	// Skip if explicitly requested
+	// Skip if SKIP_DB_TESTS is set (CI without a live DB, or local opt-out).
 	if os.Getenv("SKIP_DB_TESTS") != "" {
 		t.Skip("Skipping database tests (SKIP_DB_TESTS is set)")
-	}
-
-	// Skip if running in CI without Docker
-	if os.Getenv("CI") != "" && os.Getenv("DOCKER_HOST") == "" {
-		// Try to check if Docker is available
-		// If not, we'll catch the error when setting up the container
 	}
 }
 
@@ -558,7 +552,7 @@ func TestPostgresAnalyticsStore_QueryMonthlyTotals_DB(t *testing.T) {
 	}
 
 	for _, snapshot := range testSnapshots {
-		err := store.SaveSnapshot(ctx, snapshot)
+		err = store.SaveSnapshot(ctx, snapshot)
 		require.NoError(t, err)
 	}
 

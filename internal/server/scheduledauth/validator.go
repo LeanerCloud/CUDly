@@ -51,25 +51,25 @@ const GoogleJWKSURL = "https://www.googleapis.com/oauth2/v3/certs"
 // applies defaults and rejects invalid combinations.
 type Config struct {
 	Mode      Mode
-	Issuer    string   // OIDC issuer; defaults to GoogleIssuer in oidc mode
-	JWKSURL   string   // OIDC JWKS endpoint; defaults to GoogleJWKSURL in oidc mode
-	Audiences []string // accepted aud claims (must be non-empty in oidc mode)
-	Subjects  []string // accepted sub claims (REQUIRED non-empty in oidc mode — defense in depth)
+	Issuer    string
+	JWKSURL   string
+	Bearer    string
+	Audiences []string
+	Subjects  []string
 	Skew      time.Duration
-	Bearer    string // shared secret for bearer mode (must be non-empty)
 }
 
 // Validator authenticates inbound requests against the configured mode.
 type Validator struct {
-	mode      Mode
-	verifier  *oidc.IDTokenVerifier // nil unless mode == ModeOIDC
-	keySet    *oidc.RemoteKeySet    // nil unless mode == ModeOIDC; powered by go-oidc's single-flight cache
-	jwksURL   string                // remembered for Warmup; empty unless mode == ModeOIDC
+	verifier  *oidc.IDTokenVerifier
+	keySet    *oidc.RemoteKeySet
 	audiences map[string]struct{}
 	subjects  map[string]struct{}
-	skew      time.Duration
+	now       func() time.Time
+	mode      Mode
+	jwksURL   string
 	bearer    []byte
-	now       func() time.Time // pluggable for tests
+	skew      time.Duration
 }
 
 // claims captures the timestamp claims we need beyond what go-oidc's
@@ -250,7 +250,7 @@ func (v *Validator) Warmup(ctx context.Context) {
 		log.Printf("scheduledauth: WARN — JWKS warmup request build failed: %v", err)
 		return
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // G704: unsafe operation intentional
 	if err != nil {
 		log.Printf("scheduledauth: WARN — JWKS warmup fetch failed for %s: %v "+
 			"(validator will retry on first request)", v.jwksURL, err)
@@ -294,7 +294,7 @@ func (v *Validator) Middleware(next http.Handler) http.Handler {
 
 		authz := r.Header.Get("Authorization")
 		if err := v.Validate(r.Context(), authz); err != nil {
-			log.Printf("scheduledauth: rejected %s %s: %v", r.Method, r.URL.Path, err) // #nosec G706 -- HTTP method and path logged for auth audit; Go net/http normalizes paths before handler dispatch
+			log.Printf("scheduledauth: rejected %s %s: %q", r.Method, r.URL.Path, err.Error()) // #nosec G706 -- HTTP method and path logged for auth audit; Go net/http normalizes paths before handler dispatch; %q quotes the error string to prevent log injection from any token-derived values
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -358,7 +358,7 @@ func (v *Validator) validateOIDC(ctx context.Context, authz string) error {
 	// allow-list. The token typically has exactly one audience but the
 	// spec permits multiple.
 	if !audienceMatches(idToken.Audience, v.audiences) {
-		return fmt.Errorf("%w: audience %v not in allowlist", ErrUnauthorized, idToken.Audience)
+		return fmt.Errorf("%w: audience %q not in allowlist", ErrUnauthorized, idToken.Audience)
 	}
 
 	// Subject pinning: required defense-in-depth — any GCP SA in the
@@ -368,7 +368,7 @@ func (v *Validator) validateOIDC(ctx context.Context, authz string) error {
 		return fmt.Errorf("%w: subject %q not in allowlist", ErrUnauthorized, idToken.Subject)
 	}
 
-	log.Printf("scheduledauth: oidc token accepted (sub=%s, aud=%v)", idToken.Subject, idToken.Audience) // #nosec G706 -- subject is validated against a pre-configured allowlist before this log; informational audit entry
+	log.Printf("scheduledauth: oidc token accepted (sub=%q, aud=%q)", idToken.Subject, idToken.Audience) // #nosec G706 -- both sub and aud are quoted (%q) to prevent log injection; sub is additionally validated against the allowlist
 	return nil
 }
 

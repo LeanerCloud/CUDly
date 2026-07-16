@@ -780,9 +780,9 @@ func TestCalculateNextExecutionDate(t *testing.T) {
 	now := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	tests := []struct {
-		name     string
-		plan     *config.PurchasePlan
 		expected time.Time
+		plan     *config.PurchasePlan
+		name     string
 	}{
 		{
 			name: "immediate type",

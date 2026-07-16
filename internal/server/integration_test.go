@@ -57,7 +57,7 @@ func TestHealthCheckIntegration(t *testing.T) {
 	}
 
 	// Create HTTP test server
-	req := httptest.NewRequest("GET", "/health", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/health", nil)
 	w := httptest.NewRecorder()
 
 	// Call health check handler

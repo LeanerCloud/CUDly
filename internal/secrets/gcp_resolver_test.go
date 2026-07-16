@@ -17,9 +17,9 @@ import (
 
 // MockSecretIterator implements the iterator interface for testing.
 type MockSecretIterator struct {
+	err     error
 	secrets []*secretmanagerpb.Secret
 	index   int
-	err     error
 }
 
 func (m *MockSecretIterator) Next() (*secretmanagerpb.Secret, error) {

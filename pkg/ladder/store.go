@@ -17,7 +17,7 @@ const (
 	RunStatusExecuting        RunStatus = "executing"
 	RunStatusCompleted        RunStatus = "completed"
 	RunStatusFailed           RunStatus = "failed"
-	RunStatusCancelled        RunStatus = "cancelled" //nolint:misspell // matches existing DB status spelling ("cancelled")
+	RunStatusCancelled        RunStatus = "cancelled"
 	RunStatusExpired          RunStatus = "expired"
 )
 
@@ -61,7 +61,7 @@ const (
 	TrancheStatusScheduled TrancheStatus = "scheduled"
 	TrancheStatusFired     TrancheStatus = "fired"
 	TrancheStatusCompleted TrancheStatus = "completed"
-	TrancheStatusCancelled TrancheStatus = "cancelled" //nolint:misspell // matches existing DB status spelling ("cancelled")
+	TrancheStatusCancelled TrancheStatus = "cancelled"
 	TrancheStatusFailed    TrancheStatus = "failed"
 )
 

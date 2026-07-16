@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"time"
 
@@ -11,9 +12,9 @@ import (
 )
 
 // requireInt32Range exits with an error when n is outside [1, math.MaxInt32].
-func requireInt32Range(flag string, n int) {
+func requireInt32Range(flagName string, n int) {
 	if n < 1 || n > (1<<31-1) {
-		fmt.Fprintf(os.Stderr, "ERROR: %s must be between 1 and math.MaxInt32\n", flag)
+		fmt.Fprintf(os.Stderr, "ERROR: %s must be between 1 and math.MaxInt32\n", flagName)
 		os.Exit(2)
 	}
 }
@@ -28,8 +29,12 @@ func main() {
 	flag.Parse()
 	requireInt32Range("--max-list", *maxList)
 
+	if *maxList < 1 || *maxList > math.MaxInt32 {
+		fmt.Fprintf(os.Stderr, "ERROR: --max-list must be between 1 and %d, got %d\n", math.MaxInt32, *maxList)
+		os.Exit(2)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
 
 	rep, err := aws.Run(ctx, aws.Options{
 		Region:          *region,
@@ -37,19 +42,23 @@ func main() {
 		MaxList:         int32(*maxList), // #nosec G115 -- range-validated above (1 <= maxList <= math.MaxInt32); int->int32 cannot overflow
 	})
 	if err != nil {
+		cancel()
 		fmt.Fprintf(os.Stderr, "sanity run failed: %v\n", err)
 		os.Exit(2)
 	}
 
 	if err := rep.WriteJSON(*outPath); err != nil {
+		cancel()
 		fmt.Fprintf(os.Stderr, "write report failed: %v\n", err)
 		os.Exit(2)
 	}
 
 	if rep.HasFailures() {
+		cancel()
 		fmt.Fprintf(os.Stderr, "sanity checks: FAIL (see %s)\n", *outPath)
 		os.Exit(1)
 	}
 
+	cancel()
 	fmt.Printf("sanity checks: PASS (see %s)\n", *outPath)
 }

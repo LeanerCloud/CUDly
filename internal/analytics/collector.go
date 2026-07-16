@@ -134,7 +134,8 @@ func (c *Collector) Collect(ctx context.Context) error {
 func aggregatePurchases(ctx context.Context, purchases []config.PurchaseHistoryRecord, now time.Time) (serviceMap map[string]*aggregateData, activePurchases, skippedBadTerm int, err error) {
 	serviceMap = make(map[string]*aggregateData)
 
-	for _, p := range purchases {
+	for _rvc := range purchases {
+		p := purchases[_rvc]
 		if err := ctx.Err(); err != nil {
 			return nil, 0, 0, fmt.Errorf("collection canceled after %d rows: %w", activePurchases, err)
 		}

@@ -74,12 +74,17 @@ type Application struct {
 	staticDir string
 
 	// Lazy initialization fields for PostgreSQL (Lambda ENI readiness)
-	dbConfig       *database.Config
-	secretResolver secrets.Resolver
-	dbMu           sync.Mutex
-	dbConnected    bool
-	dbErr          error
-	appConfig      ApplicationConfig
+	dbConfig          *database.Config
+	secretResolver    secrets.Resolver
+	dbMu              sync.Mutex
+	dbConnected       bool
+	dbErr             error
+	appConfig         ApplicationConfig
+	signer            oidc.Signer
+	scheduledAuth     *scheduledauth.Validator
+	runMigrationsFunc func(ctx context.Context, pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string) error
+	migrationsTimeout time.Duration
+	migrationMu       sync.Mutex
 
 	// encKeySource is the env var name that resolved the credential encryption
 	// key (e.g. "CREDENTIAL_ENCRYPTION_KEY_SECRET_NAME"). Set during
@@ -87,71 +92,32 @@ type Application struct {
 	encKeySource string
 
 	// State from the most recent migration attempt. Surfaced by /health so
-	// ops can see failures. Protected by its OWN dedicated mutex — NOT
+	// ops can see failures. Protected by its OWN dedicated mutex -- NOT
 	// dbMu, because ensureDB holds dbMu for its full duration. If /health
 	// reached into dbMu it would block behind a long-running ensureDB,
 	// which defeats the point of non-fatal migrations.
 	migrationErr        error
 	migrationFinishedAt time.Time
-	migrationMu         sync.Mutex
-
-	// OIDC signer (optional, backs /.well-known/* and the Azure
-	// federated credential path). Nil when the deployment has not
-	// opted into the federated flow.
-	signer oidc.Signer
-
-	// scheduledAuth authenticates inbound /api/scheduled/* requests.
-	// Non-nil after NewApplicationFromDeps — disabled mode allows
-	// everything through with a loud WARN log; oidc mode (GCP)
-	// validates the Cloud Scheduler-signed ID token; bearer mode
-	// (Azure) constant-time-compares the shared secret resolved at
-	// startup from Key Vault. May be nil in tests that build
-	// Application directly without the constructor; the
-	// scheduledAuthMiddleware helper passes through unmodified in
-	// that case so handler-only tests stay focused.
-	scheduledAuth *scheduledauth.Validator
-
-	// migrationsTimeout and runMigrationsFunc are per-instance instead of
-	// package-level variables so that tests can set them on a specific
-	// Application instance without serializing parallel tests (04-M3).
-	// NewApplicationFromDeps sets them to the package defaults.
-	migrationsTimeout time.Duration
-	runMigrationsFunc func(ctx context.Context, pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string) error
 }
 
 // ApplicationConfig holds all env-based configuration for the application.
 type ApplicationConfig struct {
-	Version                string
-	NotificationDaysBefore int
-	DefaultTerm            int
-	DefaultPaymentOption   string
-	DefaultCoverage        float64
-	DefaultRampSchedule    string
-	APIKeySecretARN        string
-	EnableDashboard        bool
-	DashboardBucket        string
-	DashboardURL           string
-	// IssuerURL is the canonical OIDC issuer URL published under
-	// /.well-known/* and used as the iss claim in JWTs minted by the
-	// KMS-backed signer. Falls back to DashboardURL. Set via the
-	// CUDLY_ISSUER_URL env var; in the AWS Lambda deploy the Terraform
-	// module wires this to the Function URL so the deployment is
-	// self-contained without needing a frontend domain.
-	IssuerURL         string
-	CORSAllowedOrigin string
-	// ScheduledTaskSecret is the shared secret checked on the /scheduled
-	// endpoint. In production (Azure Container Apps, Lambda-with-KV) it is
-	// resolved lazily from SCHEDULED_TASK_SECRET_NAME via the SecretResolver
-	// in NewApplicationFromDeps, so the value never lives in a container
-	// env var. In dev the plaintext SCHEDULED_TASK_SECRET env var is still
-	// accepted as a fallback.
 	ScheduledTaskSecret     string
+	IssuerURL               string
 	ScheduledTaskSecretName string
+	DefaultPaymentOption    string
+	Version                 string
+	DefaultRampSchedule     string
+	CORSAllowedOrigin       string
+	DashboardURL            string
+	DashboardBucket         string
+	APIKeySecretARN         string
+	Analytics               AnalyticsConfig
+	NotificationDaysBefore  int
+	DefaultCoverage         float64
+	DefaultTerm             int
+	EnableDashboard         bool
 	IsLambda                bool
-
-	// Analytics snapshot collector knobs. See analytics_collect.go for
-	// defaults and boundary validation (LoadAnalyticsConfig).
-	Analytics AnalyticsConfig
 }
 
 // ExternalDeps holds pre-built external dependencies that require infrastructure.
@@ -204,7 +170,7 @@ func (app *Application) recordMigrationResult(err error) {
 
 // snapshotMigrationState returns a point-in-time copy of the migration
 // state suitable for /health rendering.
-func (app *Application) snapshotMigrationState() (err error, finishedAt time.Time) {
+func (app *Application) snapshotMigrationState() (err error, finishedAt time.Time) { //nolint:revive,staticcheck // error-return/ST1008: named return order matches struct field order for clarity
 	app.migrationMu.Lock()
 	defer app.migrationMu.Unlock()
 	return app.migrationErr, app.migrationFinishedAt
@@ -1058,8 +1024,8 @@ func (a *authServiceAdapter) CheckAdminExists(ctx context.Context) (bool, error)
 	return a.service.CheckAdminExists(ctx)
 }
 
-func (a *authServiceAdapter) RequestPasswordReset(ctx context.Context, email string) error {
-	return a.service.RequestPasswordReset(ctx, email)
+func (a *authServiceAdapter) RequestPasswordReset(ctx context.Context, emailAddr string) error {
+	return a.service.RequestPasswordReset(ctx, emailAddr)
 }
 
 func (a *authServiceAdapter) ConfirmPasswordReset(ctx context.Context, req api.PasswordResetConfirm) error {
@@ -1070,7 +1036,7 @@ func (a *authServiceAdapter) ConfirmPasswordReset(ctx context.Context, req api.P
 	return a.service.ConfirmPasswordReset(ctx, authReq)
 }
 
-func (a *authServiceAdapter) ResetTokenStatus(ctx context.Context, token string) (string, string, error) {
+func (a *authServiceAdapter) ResetTokenStatus(ctx context.Context, token string) (string, string, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	state, flow, err := a.service.ResetTokenStatus(ctx, token)
 	return string(state), string(flow), err
 }
@@ -1091,8 +1057,8 @@ func (a *authServiceAdapter) GetUser(ctx context.Context, userID string) (*api.U
 	}, nil
 }
 
-func (a *authServiceAdapter) UpdateUserProfile(ctx context.Context, userID string, email string, currentPassword string, newPassword string) error {
-	return a.service.UpdateUserProfile(ctx, userID, email, currentPassword, newPassword)
+func (a *authServiceAdapter) UpdateUserProfile(ctx context.Context, userID, emailAddr, currentPassword, newPassword string) error {
+	return a.service.UpdateUserProfile(ctx, userID, emailAddr, currentPassword, newPassword)
 }
 
 // User management methods - delegate to auth service API methods.
@@ -1117,7 +1083,7 @@ func (a *authServiceAdapter) ChangePasswordAPI(ctx context.Context, userID, curr
 }
 
 // MFA lifecycle (issue #497).
-func (a *authServiceAdapter) MFASetupAPI(ctx context.Context, userID, password string) (string, string, error) {
+func (a *authServiceAdapter) MFASetupAPI(ctx context.Context, userID, password string) (string, string, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	return a.service.MFASetupAPI(ctx, userID, password)
 }
 
@@ -1198,6 +1164,6 @@ func (a *authServiceAdapter) RevokeAPIKeyAPI(ctx context.Context, userID, keyID 
 	return a.service.RevokeAPIKeyAPI(ctx, userID, keyID)
 }
 
-func (a *authServiceAdapter) ValidateUserAPIKeyAPI(ctx context.Context, apiKey string) (any, any, error) {
+func (a *authServiceAdapter) ValidateUserAPIKeyAPI(ctx context.Context, apiKey string) (any, any, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	return a.service.ValidateUserAPIKeyAPI(ctx, apiKey)
 }

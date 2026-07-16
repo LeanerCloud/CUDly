@@ -264,15 +264,15 @@ func (m *MockAuthService) GetUserPermissionsAPI(ctx context.Context, userID stri
 
 // allowConstraintChecks stubs the SEC-01 execution-time permission
 // constraint check (HasPermissionForConstraintsAPI) to succeed for any
-// request, modelling a granting permission with no Constraints configured.
-// Tests that target constraint behaviour register an explicit expectation
+// request, modeling a granting permission with no Constraints configured.
+// Tests that target constraint behavior register an explicit expectation
 // instead.
 func (m *MockAuthService) allowConstraintChecks() {
 	m.On("HasPermissionForConstraintsAPI", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(true, nil).Maybe()
 }
 
-// grantAdmin makes every HasPermissionAPI check succeed, modelling an
+// grantAdmin makes every HasPermissionAPI check succeed, modeling an
 // Administrators-group member. Authorization is group-membership-only after
 // issue #907, so admin-gated handlers resolve "is admin" / specific permissions
 // through HasPermissionAPI rather than a Session.Role short-circuit; tests that

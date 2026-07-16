@@ -218,7 +218,7 @@ func TestManager_ApproveExecution_TransitionFails(t *testing.T) {
 	}
 	store.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
 	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "approved", (*string)(nil)).
-		Return(nil, errors.New(`execution exec-123 cannot transition from "cancelled" to "approved"`))
+		Return(nil, errors.New(`execution exec-123 cannot transition from "canceled" to "approved"`))
 
 	err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "")
 	assert.Error(t, err)
@@ -316,7 +316,7 @@ func TestManager_CancelExecution(t *testing.T) {
 	mockStore.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
 	// WithTx passes nil as the tx sentinel in tests; empty actor -> nil cancelledBy.
 	mockStore.On("CancelExecutionAtomic", ctx, mock.Anything, "exec-123", (*string)(nil)).
-		Return(true, "cancelled", nil)
+		Return(true, "canceled", nil)
 	mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, "exec-123").
 		Return(nil)
 
@@ -381,20 +381,21 @@ func TestManager_CancelExecution_AlreadyCompleted(t *testing.T) {
 
 	err := manager.CancelExecution(ctx, "exec-123", "valid-token", "")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "execution cannot be cancelled")
+	assert.Contains(t, err.Error(), "execution cannot be canceled")
 
 	mockStore.AssertExpectations(t)
 }
 
 // TestManager_CancelExecution_RejectsNonCancelableStatus is the regression
 // guard for issue #645: the token/email cancel path previously rejected only
-// completed/cancelled, so an email-link holder could cancel an
+// completed/canceled, so an email-link holder could cancel an
 // approved/running/paused/failed/expired execution that the dashboard
-// (session) path refuses. Each non-pending/notified status must now be
-// rejected with no write to the store — approved/running rows in particular
-// are mid-execution and cancelling them would desync the DB from the cloud.
+// (session) path refuses. Each non-cancelable status must now be rejected with
+// no write to the store — approved/running rows in particular are mid-execution
+// and canceling them would desync the DB from the cloud. Pending, notified, and
+// scheduled are cancelable; all other states are not.
 func TestManager_CancelExecution_RejectsNonCancelableStatus(t *testing.T) {
-	rejected := []string{"approved", "running", "paused", "failed", "expired", "completed", "cancelled"}
+	rejected := []string{"approved", "running", "paused", "failed", "expired", "completed", "canceled"}
 	for _, status := range rejected {
 		t.Run(status, func(t *testing.T) {
 			ctx := context.Background()
@@ -417,7 +418,7 @@ func TestManager_CancelExecution_RejectsNonCancelableStatus(t *testing.T) {
 
 			err := manager.CancelExecution(ctx, "exec-123", "valid-token", status)
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "execution cannot be cancelled")
+			assert.Contains(t, err.Error(), "execution cannot be canceled")
 			assert.Contains(t, err.Error(), status)
 			// Status guard fires before the atomic UPDATE — a rejected
 			// cancel must never reach CancelExecutionAtomic.
@@ -428,12 +429,14 @@ func TestManager_CancelExecution_RejectsNonCancelableStatus(t *testing.T) {
 }
 
 // TestManager_CancelExecution_AllowsCancelableStatus confirms the inverse of
-// the #645 guard: genuinely-pending and notified rows are still cancelable on
+// the #645 guard: pending, notified, and scheduled rows are all cancelable on
 // the token path, and the cancel commits (status flip + suppression cleanup)
 // in a single tx. Without this the alignment fix could silently over-restrict
 // and break the legitimate email-link cancel of a row awaiting approval.
+// "scheduled" is included because the cloud SDK has not been called yet (issue
+// #291 wave-2) and IsCancelable already permits it.
 func TestManager_CancelExecution_AllowsCancelableStatus(t *testing.T) {
-	allowed := []string{"pending", "notified"}
+	allowed := []string{"pending", "notified", "scheduled"}
 	for _, status := range allowed {
 		t.Run(status, func(t *testing.T) {
 			ctx := context.Background()
@@ -449,7 +452,7 @@ func TestManager_CancelExecution_AllowsCancelableStatus(t *testing.T) {
 			mockStore.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
 			// CancelExecutionAtomic is called inside WithTx (nil tx sentinel in tests).
 			mockStore.On("CancelExecutionAtomic", ctx, mock.Anything, "exec-123", (*string)(nil)).
-				Return(true, "cancelled", nil)
+				Return(true, "canceled", nil)
 			// Suppression cleanup must follow a successful atomic cancel.
 			mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, "exec-123").
 				Return(nil)
@@ -514,7 +517,7 @@ func TestManager_CancelExecution_GetError(t *testing.T) {
 // TestManager_ApproveExecution_ExpiredToken is the regression guard for
 // issue #397: an approval token whose ApprovalTokenExpiresAt deadline has
 // passed must be rejected with "expired", not silently accepted. This
-// prevents a phished or log-leaked token from authorising a purchase weeks
+// prevents a phished or log-leaked token from authorizing a purchase weeks
 // after the approval window closed.
 func TestManager_ApproveExecution_ExpiredToken(t *testing.T) {
 	ctx := context.Background()

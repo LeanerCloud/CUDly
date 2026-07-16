@@ -77,7 +77,7 @@ func TestHttpToLambdaRequest(t *testing.T) {
 				bodyReader = bytes.NewReader([]byte{})
 			}
 
-			req := httptest.NewRequest(tt.method, tt.path, bodyReader)
+			req := httptest.NewRequestWithContext(context.Background(), tt.method, tt.path, bodyReader)
 
 			// Add headers
 			for key, value := range tt.headers {
@@ -107,11 +107,11 @@ func TestHttpToLambdaRequest(t *testing.T) {
 
 func TestLambdaResponseToHTTP(t *testing.T) {
 	tests := []struct {
-		name            string
 		lambdaResp      *events.LambdaFunctionURLResponse
-		expectedStatus  int
-		expectedBody    string
 		expectedHeaders map[string]string
+		name            string
+		expectedBody    string
+		expectedStatus  int
 		expectedCookies int
 	}{
 		{
@@ -231,11 +231,11 @@ func TestHandleScheduledHTTP(t *testing.T) {
 	}
 
 	tests := []struct {
+		setupApp       func(*testing.T, *Application)
 		name           string
 		method         string
 		path           string
 		authHeader     string
-		setupApp       func(*testing.T, *Application)
 		expectedStatus int
 		expectError    bool
 	}{
@@ -305,7 +305,7 @@ func TestHandleScheduledHTTP(t *testing.T) {
 				tt.setupApp(t, app)
 			}
 
-			req := httptest.NewRequest(tt.method, tt.path, nil)
+			req := httptest.NewRequestWithContext(context.Background(), tt.method, tt.path, nil)
 			if tt.authHeader != "" {
 				req.Header.Set("Authorization", tt.authHeader)
 			}
@@ -429,7 +429,7 @@ func TestHandleOIDCHTTP(t *testing.T) {
 		API: api.NewHandler(api.HandlerConfig{}),
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/oidc/.well-known/openid-configuration", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/oidc/.well-known/openid-configuration", nil)
 	w := httptest.NewRecorder()
 
 	app.handleOIDCHTTP(w, req)

@@ -39,35 +39,18 @@ type STSClient interface {
 }
 
 // SchedulerConfig holds configuration for the scheduler.
-type SchedulerConfig struct {
+type SchedulerConfig struct { //nolint:revive // exported: doc comment style intentional
 	ConfigStore     config.StoreInterface
 	PurchaseManager ManagerInterface
 	EmailSender     email.SenderInterface
-	DashboardURL    string
-	// Provider factory for creating cloud providers (allows injection for testing)
 	ProviderFactory provider.FactoryInterface
-	// Per-account credential resolution (mirrors purchase manager)
 	CredentialStore credentials.CredentialStore
 	OIDCSigner      oidc.Signer
-	OIDCIssuerURL   string
 	AssumeRoleSTS   credentials.STSClient
-
-	// STSClient is the runtime AWS STS client used to discover the
-	// Lambda's own AWS account ID on the ambient collection path. When
-	// the discovered ID matches a registered cloud_accounts row (by
-	// external_id), the ambient path stamps that account's UUID onto
-	// every rec it returns so the approve modal shows the registered
-	// name instead of `(ambient)`. Optional — when nil, the ambient
-	// path keeps its pre-fix behavior (CloudAccountID = nil), which
-	// preserves the truly-orphan case.
-	STSClient STSClient
-
-	// IsLambda gates the stale-while-revalidate background goroutine.
-	// On Lambda, goroutines freeze between invocations — firing one from
-	// a request handler would corrupt state — so we fall back to the
-	// scheduled cron + manual refresh. Cloud Run / Container Apps run
-	// long-lived processes where the goroutine is safe.
-	IsLambda bool
+	STSClient       STSClient
+	DashboardURL    string
+	OIDCIssuerURL   string
+	IsLambda        bool
 }
 
 // CollectResult holds the result of collecting recommendations.
@@ -77,10 +60,10 @@ type SchedulerConfig struct {
 // clause to providers that actually ran, and the frontend banner can
 // surface the specific failures.
 type CollectResult struct {
+	FailedProviders     map[string]string `json:"failed_providers,omitempty"`
+	SuccessfulProviders []string          `json:"successful_providers,omitempty"`
 	Recommendations     int               `json:"recommendations"`
 	TotalSavings        float64           `json:"total_savings"`
-	SuccessfulProviders []string          `json:"successful_providers,omitempty"`
-	FailedProviders     map[string]string `json:"failed_providers,omitempty"`
 }
 
 // ManagerInterface defines the purchase manager methods used by scheduler.
@@ -95,29 +78,19 @@ type ManagerInterface interface {
 
 // Scheduler handles scheduled tasks.
 type Scheduler struct {
-	config          config.StoreInterface
+	stsClient       STSClient
 	purchase        ManagerInterface
 	email           email.SenderInterface
-	dashboardURL    string
 	providerFactory provider.FactoryInterface
 	credStore       credentials.CredentialStore
 	oidcSigner      oidc.Signer
-	oidcIssuerURL   string
 	assumeRoleSTS   credentials.STSClient
-	stsClient       STSClient
-
-	// isLambda gates the stale-while-revalidate background goroutine. See
-	// SchedulerConfig.IsLambda for the rationale.
-	isLambda bool
-
-	// cacheTTL is the age past which opportunistic background refresh kicks
-	// in on non-Lambda runtimes. Parsed from CUDLY_RECOMMENDATION_CACHE_TTL
-	// at NewScheduler time; defaults to 6h.
-	cacheTTL time.Duration
-
-	// collecting is a single-flight guard so N concurrent stale reads only
-	// trigger ONE background refresh.
-	collecting atomic.Bool
+	config          config.StoreInterface
+	dashboardURL    string
+	oidcIssuerURL   string
+	cacheTTL        time.Duration
+	collecting      atomic.Bool
+	isLambda        bool
 }
 
 // defaultCacheTTL is the fallback when CUDLY_RECOMMENDATION_CACHE_TTL is
@@ -247,7 +220,8 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 			DashboardURL: s.dashboardURL,
 			TotalSavings: totalSavings,
 		}
-		for _, rec := range allRecommendations {
+		for _rvc := range allRecommendations {
+			rec := allRecommendations[_rvc]
 			if len(data.Recommendations) >= 10 { // Limit to top 10 in email
 				break
 			}
@@ -295,9 +269,9 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 // succeeded (possibly partially — partial-account-failure semantics live in
 // fanOutPerAccount, not here).
 type providerOutcome struct {
+	err                 error
 	recs                []config.RecommendationRecord
 	succeededAccountIDs []string
-	err                 error
 }
 
 // collectAllProviders fans out provider collection (AWS / Azure / GCP) under
@@ -312,7 +286,7 @@ type providerOutcome struct {
 // Extracted from CollectRecommendations to keep that function under the
 // project's gocyclo gate (.golangci.yml min-complexity: 15) after the
 // errgroup + post-Wait ctx.Err() block was added.
-func (s *Scheduler) collectAllProviders(ctx context.Context, globalCfg *config.GlobalConfig) (
+func (s *Scheduler) collectAllProviders(ctx context.Context, globalCfg *config.GlobalConfig) ( //nolint:gocritic // tooManyResultsChecker: multiple returns intentional
 	allRecommendations []config.RecommendationRecord,
 	totalSavings float64,
 	successfulProviders []string,
@@ -372,7 +346,8 @@ func (s *Scheduler) collectAllProviders(ctx context.Context, globalCfg *config.G
 		}
 		successfulProviders = append(successfulProviders, providerName)
 		successfulCollects = append(successfulCollects, expandSuccessfulCollects(providerName, out.succeededAccountIDs)...)
-		for _, rec := range out.recs {
+		for _rvc := range out.recs {
+			rec := out.recs[_rvc]
 			totalSavings += rec.Savings
 		}
 		allRecommendations = append(allRecommendations, out.recs...)
@@ -509,10 +484,10 @@ func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *co
 // account-scoped eviction. Order is not preserved — the eviction
 // query treats it as a set.
 type accountOutcome struct {
+	LastErr             string
+	SucceededAccountIDs []string
 	SucceededCount      int
 	FailedCount         int
-	LastErr             string   // most-recent per-account error message, for surfacing in the banner
-	SucceededAccountIDs []string // IDs of accounts that succeeded this run
 }
 
 // fanOutPerAccount runs fn concurrently across accounts, bounded by the
@@ -540,8 +515,8 @@ func fanOutPerAccount(
 	var all []config.RecommendationRecord
 	var outcome accountOutcome
 
-	for _, acct := range accounts {
-		acct := acct // capture
+	for _rvc := range accounts {
+		acct := accounts[_rvc]
 		g.Go(func() error {
 			recs, err := fn(gctx, acct)
 			if err != nil {
@@ -662,13 +637,13 @@ func (s *Scheduler) resolveAmbientHostAccountID(ctx context.Context) string {
 // truly-orphan deployments are unaffected. All errors are intentionally swallowed
 // (logged at warn) — this is a best-effort UX improvement on the ambient path
 // and must not break the collection.
-func (s *Scheduler) resolveAmbientAccountID(ctx context.Context, provider, externalID string) string {
+func (s *Scheduler) resolveAmbientAccountID(ctx context.Context, providerName, externalID string) string {
 	if externalID == "" {
 		return ""
 	}
-	acct, err := s.config.GetCloudAccountByExternalID(ctx, provider, externalID)
+	acct, err := s.config.GetCloudAccountByExternalID(ctx, providerName, externalID)
 	if err != nil {
-		logging.Warnf("ambient host-account lookup: GetCloudAccountByExternalID(%s,%s) failed: %v", provider, externalID, err)
+		logging.Warnf("ambient host-account lookup: GetCloudAccountByExternalID(%s,%s) failed: %v", providerName, externalID, err)
 		return ""
 	}
 	if acct == nil {
@@ -852,9 +827,9 @@ func (s *Scheduler) collectGCPForAccount(ctx context.Context, acct config.CloudA
 		prov = gcpprovider.NewProviderWithCredentials(ctx, acct.GCPProjectID, gcpTS)
 	} else {
 		// ADC mode (application_default): use ambient credentials
-		created, err := s.providerFactory.CreateAndValidateProvider(ctx, "gcp", nil)
-		if err != nil {
-			return nil, fmt.Errorf("create ambient GCP provider: %w", err)
+		created, createErr := s.providerFactory.CreateAndValidateProvider(ctx, "gcp", nil)
+		if createErr != nil {
+			return nil, fmt.Errorf("create ambient GCP provider: %w", createErr)
 		}
 		prov = created
 	}
@@ -950,8 +925,9 @@ func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.Recom
 
 	if freshness.LastCollectedAt == nil {
 		logging.Info("Recommendations cache is empty; performing synchronous cold-start collect")
-		if _, err := s.CollectRecommendations(ctx); err != nil {
-			return nil, fmt.Errorf("cold-start collect failed: %w", err)
+		_, collectErr := s.CollectRecommendations(ctx)
+		if collectErr != nil {
+			return nil, fmt.Errorf("cold-start collect failed: %w", collectErr)
 		}
 	}
 
@@ -1095,10 +1071,10 @@ type suppressionKey struct {
 // "Xd remaining"), and the execution whose suppression contributed
 // the most (drives the badge deep-link).
 type suppressionAgg struct {
-	suppressedCount         int
 	earliestExpiresAt       time.Time
-	primaryExecutionID      string
 	primaryExecutionCreated time.Time
+	primaryExecutionID      string
+	suppressedCount         int
 	primaryExecutionContrib int
 }
 
@@ -1158,7 +1134,8 @@ func applySuppressionIndex(recs []config.RecommendationRecord, index map[suppres
 	// Allocate a fresh backing array so callers that hold a reference to
 	// the original recs slice do not see mutations (05-M1).
 	out := make([]config.RecommendationRecord, 0, len(recs))
-	for _, rec := range recs {
+	for _rvc := range recs {
+		rec := recs[_rvc]
 		accountID := ""
 		if rec.CloudAccountID != nil {
 			accountID = *rec.CloudAccountID
@@ -1293,7 +1270,8 @@ func marshalRecDetails(rec common.Recommendation, providerName string) []byte {
 func (s *Scheduler) convertRecommendations(recs []common.Recommendation, providerName string) []config.RecommendationRecord {
 	records := make([]config.RecommendationRecord, 0, len(recs))
 
-	for _, rec := range recs {
+	for _rvc := range recs {
+		rec := recs[_rvc]
 		engine := extractEngine(rec.Details)
 		detailsBlob := marshalRecDetails(rec, providerName)
 

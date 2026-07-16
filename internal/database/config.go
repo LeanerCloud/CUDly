@@ -9,33 +9,22 @@ import (
 
 // Config holds database configuration.
 type Config struct {
-	// Connection details
-	Host     string
-	Port     int
-	Database string
-	User     string
-
-	// Password can be direct value or secret reference
-	Password       string // Direct password (local dev only)
-	PasswordSecret string // Secret ARN/ID/name for cloud secret managers
-
-	// SSL configuration
-	SSLMode string // disable, require, verify-ca, verify-full
-
-	// Connection pool settings
-	MaxConnections    int
+	Host              string
+	LogLevel          string
+	Database          string
+	User              string
+	Password          string //nolint:gosec // G101: field holds a user-supplied runtime password, not a hardcoded credential
+	PasswordSecret    string
+	SSLMode           string
+	MigrationsPath    string
 	MinConnections    int
 	MaxConnLifetime   time.Duration
 	MaxConnIdleTime   time.Duration
 	HealthCheckPeriod time.Duration
 	ConnectTimeout    time.Duration
-
-	// Migration settings
-	AutoMigrate    bool
-	MigrationsPath string
-
-	// Logging
-	LogLevel string // error, warn, info, debug
+	MaxConnections    int
+	Port              int
+	AutoMigrate       bool
 }
 
 // LoadFromEnv loads database configuration from environment variables.

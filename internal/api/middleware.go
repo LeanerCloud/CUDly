@@ -100,20 +100,20 @@ func (h *Handler) checkBearerToken(ctx context.Context, req *events.LambdaFuncti
 // with SigV4, which overwrites the standard Authorization header.
 func (h *Handler) extractBearerToken(req *events.LambdaFunctionURLRequest) string {
 	// First check X-Authorization (used by frontend with CloudFront OAC)
-	auth := req.Headers["x-authorization"]
-	if auth == "" {
-		auth = req.Headers["X-Authorization"]
+	authHdr := req.Headers["x-authorization"]
+	if authHdr == "" {
+		authHdr = req.Headers["X-Authorization"]
 	}
 	// Fall back to standard Authorization header (for direct API access)
-	if auth == "" {
-		auth = req.Headers["authorization"]
+	if authHdr == "" {
+		authHdr = req.Headers["authorization"]
 	}
-	if auth == "" {
-		auth = req.Headers["Authorization"]
+	if authHdr == "" {
+		authHdr = req.Headers["Authorization"]
 	}
 
-	if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
-		return auth[len("bearer "):]
+	if strings.HasPrefix(strings.ToLower(authHdr), "bearer ") {
+		return authHdr[len("bearer "):]
 	}
 
 	return ""

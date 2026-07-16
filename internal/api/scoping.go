@@ -66,7 +66,8 @@ func (h *Handler) requirePlanAccess(ctx context.Context, session *Session, planI
 	if err != nil {
 		return fmt.Errorf("failed to get plan accounts: %w", err)
 	}
-	for _, acct := range accounts {
+	for _rvc := range accounts {
+		acct := accounts[_rvc]
 		if auth.MatchesAccount(allowed, acct.ID, acct.Name) {
 			return nil
 		}
@@ -88,7 +89,8 @@ func (h *Handler) validatePurchaseRecommendationScope(ctx context.Context, sessi
 		return nil
 	}
 	nameByID := h.resolveAccountNamesByID(ctx)
-	for i, rec := range recs {
+	for i := range recs {
+		rec := recs[i]
 		if rec.CloudAccountID == nil {
 			return NewClientError(400, fmt.Sprintf("recommendation %d has no cloud_account_id; scoped users cannot execute unattributed recommendations", i))
 		}
@@ -162,7 +164,8 @@ func (h *Handler) resolveAccountFilterIDs(ctx context.Context, uuids []string) (
 	}
 	type provExt struct{ provider, externalID string }
 	byUUID := make(map[string]provExt, len(accounts))
-	for _, a := range accounts {
+	for _rvc := range accounts {
+		a := accounts[_rvc]
 		if a.ExternalID != "" {
 			byUUID[a.ID] = provExt{provider: a.Provider, externalID: a.ExternalID}
 		}
@@ -219,7 +222,8 @@ func (h *Handler) resolveSingleAccountFilterIDs(ctx context.Context, accountID s
 	if err != nil {
 		return nil, map[string][]string{"": {accountID}}
 	}
-	for _, a := range accounts {
+	for _rvc := range accounts {
+		a := accounts[_rvc]
 		if a.ID == accountID {
 			// Known UUID: match cloud_account_id by UUID and, when present,
 			// account_id by the resolved external number scoped to its provider.
@@ -251,7 +255,8 @@ func (h *Handler) resolveAccountNamesByID(ctx context.Context) map[string]string
 	}
 	// Allocate 2x capacity since each account contributes up to two keys.
 	nameByID := make(map[string]string, len(accounts)*2)
-	for _, a := range accounts {
+	for _rvc := range accounts {
+		a := accounts[_rvc]
 		nameByID[a.ID] = a.Name
 		if a.ExternalID != "" {
 			nameByID[a.ExternalID] = a.Name

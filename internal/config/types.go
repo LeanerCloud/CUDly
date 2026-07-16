@@ -256,7 +256,7 @@ func (r *RampSchedule) IsComplete() bool {
 type PurchaseExecution struct {
 	PlanID           string                 `json:"plan_id" dynamodbav:"plan_id"`
 	ExecutionID      string                 `json:"execution_id" dynamodbav:"execution_id"`
-	Status           string                 `json:"status" dynamodbav:"status"` // pending, notified, approved, cancelled, completed, failed
+	Status           string                 `json:"status" dynamodbav:"status"` // pending, notified, approved, canceled, completed, failed
 	StepNumber       int                    `json:"step_number" dynamodbav:"step_number"`
 	ScheduledDate    time.Time              `json:"scheduled_date" dynamodbav:"scheduled_date"`
 	NotificationSent *time.Time             `json:"notification_sent,omitempty" dynamodbav:"notification_sent,omitempty"`
@@ -355,11 +355,11 @@ type PurchaseExecution struct {
 	ScheduledExecutionAt *time.Time `json:"scheduled_execution_at,omitempty" dynamodbav:"scheduled_execution_at,omitempty"`
 }
 
-// IsCancelable reports whether an execution may still be cancelled. Only the
+// IsCancelable reports whether an execution may still be canceled. Only the
 // pre-purchase states ("pending"/"notified"/"scheduled") qualify: once a row
 // reaches "approved" or "running" the AWS commitment is being or has been
-// created, so cancelling would leave the DB and the cloud out of sync;
-// "cancelled", "completed", "failed", "expired", and "paused" are likewise
+// created, so canceling would leave the DB and the cloud out of sync;
+// "canceled", "completed", "failed", "expired", and "paused" are likewise
 // non-cancelable. The "scheduled" state is cancellable because the cloud SDK
 // has not been called yet (issue #291 wave-2).
 // Both cancel paths (purchase.Manager.CancelExecution on the email-token flow
@@ -735,7 +735,7 @@ type PurchaseHistoryRecord struct {
 	// CreatedByUserEmail is the email address of the user who created the
 	// underlying execution, resolved from CreatedByUserID via the auth
 	// service. Populated only on synthesized execution rows (pending,
-	// notified, failed, expired, cancelled) when a valid user ID is
+	// notified, failed, expired, canceled) when a valid user ID is
 	// present; empty for scheduler-driven executions, legacy NULL-creator
 	// rows, and completed purchase_history rows. Excluded from DB
 	// persistence (resolved at read time). The UI renders this in the
@@ -815,7 +815,7 @@ type RIExchangeRecord struct {
 	// deleting a ladder_runs row nulls this column and reclassifies the record
 	// as standalone. A still-pending reshape then becomes standalone-cancellable
 	// (the standalone-origin sweep would cancel it). This is acceptable: a
-	// deleted run has no owner to approve its pendings, so cancelling them on the
+	// deleted run has no owner to approve its pendings, so canceling them on the
 	// next standalone sweep is the safe outcome, not a leak.
 	LadderRunID    *string    `json:"ladder_run_id,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
@@ -826,7 +826,7 @@ type RIExchangeRecord struct {
 }
 
 // ConfigSetting represents a configuration setting for the defaults system.
-type ConfigSetting struct {
+type ConfigSetting struct { //nolint:revive // exported: doc comment style intentional
 	Key         string    `json:"key"`
 	Value       any       `json:"value"`
 	Type        string    `json:"type"` // int, float, bool, string, json

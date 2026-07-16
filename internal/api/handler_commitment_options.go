@@ -15,16 +15,16 @@ import (
 // omitted — those commitment rules stay hardcoded in the frontend because
 // their APIs don't expose a comparable probe.
 type commitmentOptionsResponse struct {
-	Status string                             `json:"status"`
 	AWS    map[string][]commitmentOptionCombo `json:"aws,omitempty"`
+	Status string                             `json:"status"`
 }
 
 // commitmentOptionCombo is one (term, payment) tuple as the frontend
 // consumes it. Dropping Provider/Service from the persisted Combo shape
 // keeps the wire payload compact.
 type commitmentOptionCombo struct {
-	Term    int    `json:"term"`
 	Payment string `json:"payment"`
+	Term    int    `json:"term"`
 }
 
 // getCommitmentOptions returns the dynamically-probed AWS commitment
@@ -32,7 +32,7 @@ type commitmentOptionCombo struct {
 // {"status":"unavailable"} (200, not a 5xx) so the frontend can fall
 // back to its hardcoded defaults without tripping the generic
 // error-toast path.
-func (h *Handler) getCommitmentOptions(ctx context.Context) (*commitmentOptionsResponse, error) {
+func (h *Handler) getCommitmentOptions(ctx context.Context) (*commitmentOptionsResponse, error) { //nolint:unparam // error return is part of router handler interface; always nil when returning unavailable status
 	if h.commitmentOpts == nil {
 		return &commitmentOptionsResponse{Status: "unavailable"}, nil
 	}

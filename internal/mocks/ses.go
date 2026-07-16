@@ -9,7 +9,7 @@ import (
 )
 
 // MockSESClient is a mock implementation of SES client.
-type MockSESClient struct {
+type MockSESClient struct { //nolint:revive // exported: doc comment style intentional
 	mock.Mock
 }
 

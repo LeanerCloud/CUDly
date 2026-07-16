@@ -14,28 +14,19 @@ import (
 // carry only one of them populated (CloudAccountID is NULL on the AWS ambient-
 // credentials path and on legacy rows), so both are written when available.
 type SavingsSnapshot struct {
-	ID        string `json:"id"`
-	AccountID string `json:"account_id"`
-	// CloudAccountID is the cloud_accounts UUID FK and the tenant key. Nil when
-	// the source row had no cloud_account_id (AWS ambient creds / legacy rows).
-	CloudAccountID  *string   `json:"cloud_account_id,omitempty"`
-	Timestamp       time.Time `json:"timestamp"`
-	Provider        string    `json:"provider"`
-	Service         string    `json:"service"`
-	Region          string    `json:"region"`
-	CommitmentType  string    `json:"commitment_type"` // "RI" or "SavingsPlan"
-	TotalCommitment float64   `json:"total_commitment"`
-	// TotalUsage is the on-demand-equivalent recurring spend the commitments in
-	// this bucket cover. Nil when the source data carried no recurring/monthly
-	// cost (e.g. AWS all-upfront), so AVG/SUM skip it instead of being dragged
-	// toward zero (project rule feedback_nullable_not_zero).
-	TotalUsage   *float64 `json:"total_usage,omitempty"`
-	TotalSavings float64  `json:"total_savings"`
-	// CoveragePercentage is committed spend / total eligible (on-demand) spend.
-	// Nil when no on-demand baseline was available to compute it; never a
-	// placeholder 0 (feedback_nullable_not_zero).
+	Timestamp          time.Time      `json:"timestamp"`
+	TotalUsage         *float64       `json:"total_usage,omitempty"`
+	CloudAccountID     *string        `json:"cloud_account_id,omitempty"`
 	CoveragePercentage *float64       `json:"coverage_percentage,omitempty"`
 	Metadata           map[string]any `json:"metadata,omitempty"`
+	AccountID          string         `json:"account_id"`
+	Provider           string         `json:"provider"`
+	Service            string         `json:"service"`
+	Region             string         `json:"region"`
+	CommitmentType     string         `json:"commitment_type"`
+	ID                 string         `json:"id"`
+	TotalCommitment    float64        `json:"total_commitment"`
+	TotalSavings       float64        `json:"total_savings"`
 }
 
 // QueryRequest defines parameters for querying savings data.
@@ -46,46 +37,48 @@ type SavingsSnapshot struct {
 // "all accounts accessible to the caller" — the caller MUST enforce scoping
 // upstream before passing empty filters.
 type QueryRequest struct {
-	AccountUUIDs                 []string
-	AccountExternalIDsByProvider map[string][]string
-	Provider                     string // optional filter
-	Service                      string // optional filter
 	StartDate                    time.Time
 	EndDate                      time.Time
+	AccountExternalIDsByProvider map[string][]string
+	Provider                     string
+	Service                      string
+	AccountUUIDs                 []string
 	Limit                        int
 }
 
 // MonthlySummary represents aggregated monthly savings.
 type MonthlySummary struct {
 	Month          time.Time `json:"month"`
-	AccountID      string    `json:"account_id"`
 	CloudAccountID *string   `json:"cloud_account_id,omitempty"`
-	Provider       string    `json:"provider"`
-	Service        string    `json:"service"`
-	TotalSavings   float64   `json:"total_savings"`
-	// AvgCoverage is nil when every snapshot in the bucket had NULL coverage.
+	// AvgCoverage is the average reservation coverage for the month.
+	// A nil value means coverage data is absent for this period and must
+	// not be treated as zero coverage by consumers.
 	AvgCoverage   *float64 `json:"avg_coverage,omitempty"`
+	AccountID     string   `json:"account_id"`
+	Provider      string   `json:"provider"`
+	Service       string   `json:"service"`
+	TotalSavings  float64  `json:"total_savings"`
 	SnapshotCount int      `json:"snapshot_count"`
 }
 
 // ProviderBreakdown represents savings breakdown by provider.
 type ProviderBreakdown struct {
+	AvgCoverage  *float64 `json:"avg_coverage,omitempty"`
 	Provider     string   `json:"provider"`
 	Service      string   `json:"service"`
 	TotalSavings float64  `json:"total_savings"`
-	AvgCoverage  *float64 `json:"avg_coverage,omitempty"`
 }
 
 // ServiceBreakdown represents savings breakdown by service.
 type ServiceBreakdown struct {
+	AvgCoverage  *float64 `json:"avg_coverage,omitempty"`
 	Service      string   `json:"service"`
 	Region       string   `json:"region"`
 	TotalSavings float64  `json:"total_savings"`
-	AvgCoverage  *float64 `json:"avg_coverage,omitempty"`
 }
 
 // AnalyticsStore defines the interface for analytics storage.
-type AnalyticsStore interface {
+type AnalyticsStore interface { //nolint:revive // exported: doc comment style intentional
 	// SaveSnapshot stores a single savings snapshot.
 	SaveSnapshot(ctx context.Context, snapshot *SavingsSnapshot) error
 

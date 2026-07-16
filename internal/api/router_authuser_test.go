@@ -1,4 +1,4 @@
-package api
+package api //nolint:revive // var-naming: package name "api" is intentional for handler package
 
 import (
 	"context"

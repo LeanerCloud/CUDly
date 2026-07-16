@@ -52,7 +52,8 @@ func (h *Handler) listActiveCommitments(ctx context.Context, req *events.LambdaF
 	nameByID := h.resolveAccountNamesByID(ctx)
 
 	commitments := make([]InventoryCommitment, 0, len(purchases))
-	for _, p := range purchases {
+	for _rvc := range purchases {
+		p := purchases[_rvc]
 		if !isActiveCommitment(p, now) {
 			continue
 		}
@@ -71,7 +72,7 @@ func (h *Handler) listActiveCommitments(ctx context.Context, req *events.LambdaF
 }
 
 // fetchCommitmentRecords reads the active purchase_history rows from the
-// store, honouring optional `account_id` and `provider` query params the same
+// store, honoring optional `account_id` and `provider` query params the same
 // way fetchPurchaseHistory does for /api/history. The read goes through
 // GetActivePurchaseHistory so the active filter runs in SQL with no row cap:
 // a newest-first LIMIT page dropped exactly the oldest still-active 1y/3y
@@ -97,7 +98,7 @@ func (h *Handler) listActiveCommitments(ctx context.Context, req *events.LambdaF
 // admin sessions resolve to a nil scope and keep the all-accounts read. The
 // in-memory filterPurchaseHistoryByAllowedAccounts in the callers still runs
 // afterwards; it is what trims an explicit account_id outside the session's
-// scope and serves as defence in depth for the no-param path.
+// scope and serves as defense in depth for the no-param path.
 //
 // `provider` filtering is applied in-memory after the store read so the
 // record set is small enough that a post-read filter has negligible cost.
@@ -128,7 +129,8 @@ func (h *Handler) fetchCommitmentRecords(ctx context.Context, asOf time.Time, se
 	// lowercase in the store (aws, azure, gcp).
 	if provider := params["provider"]; provider != "" {
 		filtered := rows[:0]
-		for _, r := range rows {
+		for _rvc := range rows {
+			r := rows[_rvc]
 			if r.Provider == provider {
 				filtered = append(filtered, r)
 			}
@@ -204,7 +206,8 @@ func (h *Handler) getCoverageBreakdown(ctx context.Context, req *events.LambdaFu
 	// registers as covered instead of being silently dropped (issue: Azure
 	// showed $0 coverage while the dashboard reported active commitments).
 	coveredByKey := make(map[string]float64)
-	for _, p := range purchases {
+	for _rvc := range purchases {
+		p := purchases[_rvc]
 		if !isActiveCommitment(p, now) {
 			continue
 		}
@@ -261,7 +264,8 @@ func buildCoverageRecFilter(params map[string]string) config.RecommendationFilte
 // cyclomatic limit.
 func aggregateOnDemandByKey(recs []config.RecommendationRecord, providerFilter string) map[string]float64 {
 	out := make(map[string]float64)
-	for _, rec := range recs {
+	for _rvc := range recs {
+		rec := recs[_rvc]
 		if providerFilter != "" && rec.Provider != providerFilter {
 			continue
 		}

@@ -11,28 +11,28 @@ import (
 
 // APICreateAPIKeyRequest represents the API request to create an API key.
 type APICreateAPIKeyRequest struct {
+	ExpiresAt   *time.Time   `json:"expires_at,omitempty"`
 	Name        string       `json:"name"`
 	Permissions []Permission `json:"permissions,omitempty"`
-	ExpiresAt   *time.Time   `json:"expires_at,omitempty"`
 }
 
 // APIKeyInfo represents public API key information (without sensitive data).
 type APIKeyInfo struct {
+	CreatedAt   time.Time    `json:"created_at"`
+	ExpiresAt   *time.Time   `json:"expires_at,omitempty"`
+	LastUsedAt  *time.Time   `json:"last_used_at,omitempty"`
 	ID          string       `json:"id"`
 	Name        string       `json:"name"`
 	KeyPrefix   string       `json:"key_prefix"`
 	Permissions []Permission `json:"permissions,omitempty"`
-	ExpiresAt   *time.Time   `json:"expires_at,omitempty"`
-	CreatedAt   time.Time    `json:"created_at"`
-	LastUsedAt  *time.Time   `json:"last_used_at,omitempty"`
 	IsActive    bool         `json:"is_active"`
 }
 
 // APICreateAPIKeyResponse represents the API response for creating an API key.
 type APICreateAPIKeyResponse struct {
-	APIKey string      `json:"api_key"` // Full key - only returned once
-	KeyID  string      `json:"key_id"`
 	Info   *APIKeyInfo `json:"info"`
+	APIKey string      `json:"api_key"` //nolint:gosec // G117: intentional one-time raw API-key response -- the key is returned to its owner exactly once on creation and is never re-stored or re-serialized
+	KeyID  string      `json:"key_id"`
 }
 
 // APIListAPIKeysResponse represents the API response for listing API keys.

@@ -138,16 +138,16 @@ func (h *Handler) getFederationIaC(ctx context.Context, req *events.LambdaFuncti
 	// Reject impossible target/source combinations early — before bundle
 	// construction — so the caller gets a clear 400 instead of a downloadable
 	// bundle that fails at terraform apply with a cryptic IAM error. See #42.
-	if err = validateFederationTargetSource(target, source); err != nil {
+	if err := validateFederationTargetSource(target, source); err != nil {
 		return nil, err
 	}
 
 	apiURL := deriveFederationAPIURL(h.dashboardURL, req.RequestContext.DomainName)
 	data := buildGenericIaCData(target, source, apiURL)
-	if err = h.populateSourceAccountID(ctx, source, &data); err != nil {
+	if err := h.populateSourceAccountID(ctx, source, &data); err != nil {
 		return nil, err
 	}
-	if err = h.validateSourceIdentity(ctx); err != nil {
+	if err := h.validateSourceIdentity(ctx); err != nil {
 		return nil, err
 	}
 	// ContactEmail is always the email of the authenticated user who requested
@@ -431,7 +431,7 @@ func cliScriptSpec(target, source, slug string) (tmplPath, filename, contentType
 //
 // Returns the raw zip bytes and output filename. base64 wrapping happens in
 // buildZipResponse.
-func buildFederationBundle(data federationIaCData, target, source, slug string) ([]byte, string, error) {
+func buildFederationBundle(data federationIaCData, target, source, slug string) (zipData []byte, outputName string, err error) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 
@@ -455,7 +455,7 @@ func buildFederationBundle(data federationIaCData, target, source, slug string) 
 
 // buildCFNZip creates a self-contained CloudFormation zip with template.yaml,
 // the parameters JSON, and deploy-cfn.sh. Returns raw zip bytes + filename.
-func buildCFNZip(data federationIaCData, target, source, slug string) ([]byte, string, error) {
+func buildCFNZip(data federationIaCData, target, source, slug string) (zipData []byte, outputName string, err error) {
 	if target != "aws" {
 		return nil, "", NewClientError(400, "format=cfn requires target=aws")
 	}
@@ -492,7 +492,7 @@ func azureTemplateName(format string) string {
 // identity, then deploy this template to assign the Reservation Purchaser role).
 //
 // format must be "bicep" or "arm". target must be "azure".
-func buildAzureTemplateZip(format string, data federationIaCData, target, slug string) ([]byte, string, error) {
+func buildAzureTemplateZip(format string, data federationIaCData, target, slug string) (zipData []byte, outputName string, err error) {
 	if target != "azure" {
 		return nil, "", NewClientError(400, "format="+format+" requires target=azure")
 	}

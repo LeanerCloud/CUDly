@@ -154,7 +154,7 @@ func (s *FrontendService) FindFrontendDir() (string, error) {
 		execDir := filepath.Dir(execPath)
 		paths = append(paths,
 			filepath.Join(execDir, "frontend"),
-			filepath.Join(execDir, "../frontend"),
+			filepath.Join(execDir, "..", "frontend"),
 		)
 	}
 
@@ -195,7 +195,8 @@ func (s *FrontendService) findDistributionForBucket(ctx context.Context, bucketN
 			continue
 		}
 
-		for _, dist := range result.DistributionList.Items {
+		for _rvc := range result.DistributionList.Items {
+			dist := result.DistributionList.Items[_rvc]
 			if distID := s.checkDistributionOrigins(dist, bucketName); distID != "" {
 				return distID, nil
 			}

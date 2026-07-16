@@ -49,8 +49,8 @@ func SetupPostgresContainer(ctx context.Context, t *testing.T) (*PostgresContain
 
 	// Clean up container when test ends
 	t.Cleanup(func() {
-		if err := container.Terminate(ctx); err != nil {
-			t.Errorf("failed to terminate container: %v", err)
+		if termErr := container.Terminate(ctx); termErr != nil {
+			t.Errorf("failed to terminate container: %v", termErr)
 		}
 	})
 

@@ -62,15 +62,15 @@ func checkInstances(ctx context.Context, cfg aws.Config, maxList int32) (map[str
 }
 
 func checkRDS(ctx context.Context, cfg aws.Config, maxList int32) (map[string]string, error) {
-	max := maxList
-	if max < 20 {
-		max = 20
+	limit := maxList
+	if limit < 20 {
+		limit = 20
 	}
-	if max > 100 {
-		max = 100
+	if limit > 100 {
+		limit = 100
 	}
 	out, err := rds.NewFromConfig(cfg).DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{
-		MaxRecords: aws.Int32(max),
+		MaxRecords: aws.Int32(limit),
 	})
 	if err != nil {
 		return nil, err

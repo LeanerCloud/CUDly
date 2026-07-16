@@ -18,41 +18,28 @@ import (
 // Most methods dispatch through m.Called only when an expectation has been
 // registered via .On(). Methods that pre-existing tests call implicitly
 // (without expectations) default to sensible zero-values so those tests
-// keep working without changes. The "default or dispatch" behaviour is
+// keep working without changes. The "default or dispatch" behavior is
 // controlled by the isExpected helper at the bottom of this file.
 //
-// Fn-override fields allow tests to inject behaviour without registering
+// Fn-override fields allow tests to inject behavior without registering
 // testify expectations. The precedence order for every overridable method is:
 //  1. FnField (non-nil closure wins first)
 //  2. Registered .On() expectation (dispatches through m.Called)
 //  3. Hardcoded default (zero-value / sensible stub)
 type MockConfigStore struct {
-	mock.Mock
-
-	// GetCloudAccountFn overrides GetCloudAccount when non-nil.
-	GetCloudAccountFn func(ctx context.Context, id string) (*config.CloudAccount, error)
-	// GetCloudAccountByExternalIDFn overrides GetCloudAccountByExternalID when non-nil.
-	GetCloudAccountByExternalIDFn func(ctx context.Context, provider, externalID string) (*config.CloudAccount, error)
-	// DeleteCloudAccountFn overrides DeleteCloudAccount when non-nil.
-	DeleteCloudAccountFn func(ctx context.Context, id string) error
-	// ListCloudAccountsFn overrides ListCloudAccounts when non-nil.
-	ListCloudAccountsFn func(ctx context.Context, filter config.CloudAccountFilter) ([]config.CloudAccount, error)
-	// CreateCloudAccountFn overrides CreateCloudAccount when non-nil.
-	CreateCloudAccountFn func(ctx context.Context, account *config.CloudAccount) error
-	// GetPurchasePlanFn overrides GetPurchasePlan when non-nil.
-	GetPurchasePlanFn func(ctx context.Context, planID string) (*config.PurchasePlan, error)
-	// SetPlanAccountsFn overrides SetPlanAccounts when non-nil.
-	SetPlanAccountsFn func(ctx context.Context, planID string, accountIDs []string) error
-	// GetPlanAccountsFn overrides GetPlanAccounts when non-nil.
-	GetPlanAccountsFn func(ctx context.Context, planID string) ([]config.CloudAccount, error)
-	// SaveAccountServiceOverrideFn overrides SaveAccountServiceOverride when non-nil.
-	SaveAccountServiceOverrideFn func(ctx context.Context, override *config.AccountServiceOverride) error
-	// CountPendingExecutionsForAccountFn overrides CountPendingExecutionsForAccount when non-nil.
-	CountPendingExecutionsForAccountFn func(ctx context.Context, accountID string) (int, error)
-	// ListPendingExecutionIDsForAccountFn overrides ListPendingExecutionIDsForAccount when non-nil.
+	GetPurchasePlanFn                   func(ctx context.Context, planID string) (*config.PurchasePlan, error)
+	GetCloudAccountFn                   func(ctx context.Context, id string) (*config.CloudAccount, error)
+	GetCloudAccountByExternalIDFn       func(ctx context.Context, provider, externalID string) (*config.CloudAccount, error)
+	DeleteCloudAccountFn                func(ctx context.Context, id string) error
+	ListCloudAccountsFn                 func(ctx context.Context, filter config.CloudAccountFilter) ([]config.CloudAccount, error)
+	CreateCloudAccountFn                func(ctx context.Context, account *config.CloudAccount) error
+	SetPlanAccountsFn                   func(ctx context.Context, planID string, accountIDs []string) error
+	GetPlanAccountsFn                   func(ctx context.Context, planID string) ([]config.CloudAccount, error)
+	SaveAccountServiceOverrideFn        func(ctx context.Context, override *config.AccountServiceOverride) error
+	CountPendingExecutionsForAccountFn  func(ctx context.Context, accountID string) (int, error)
 	ListPendingExecutionIDsForAccountFn func(ctx context.Context, accountID string) ([]string, error)
-	// SavePurchaseExecutionFn overrides SavePurchaseExecution when non-nil.
-	SavePurchaseExecutionFn func(ctx context.Context, exec *config.PurchaseExecution) error
+	SavePurchaseExecutionFn             func(ctx context.Context, exec *config.PurchaseExecution) error
+	mock.Mock
 }
 
 // GetGlobalConfig mocks the GetGlobalConfig operation. Returns an empty
@@ -73,7 +60,7 @@ func (m *MockConfigStore) GetGlobalConfig(ctx context.Context) (*config.GlobalCo
 	return v, args.Error(1)
 }
 
-// SaveGlobalConfig mocks the SaveGlobalConfig operation
+// SaveGlobalConfig mocks the SaveGlobalConfig operation.
 func (m *MockConfigStore) SaveGlobalConfig(ctx context.Context, cfg *config.GlobalConfig) error {
 	args := m.Called(ctx, cfg)
 	return args.Error(0)
@@ -112,7 +99,7 @@ func (m *MockConfigStore) UpdateGlobalConfigAtomic(ctx context.Context, apply fu
 	return existing, nil
 }
 
-// GetServiceConfig mocks the GetServiceConfig operation
+// GetServiceConfig mocks the GetServiceConfig operation.
 func (m *MockConfigStore) GetServiceConfig(ctx context.Context, provider, service string) (*config.ServiceConfig, error) {
 	args := m.Called(ctx, provider, service)
 	if args.Get(0) == nil {
@@ -125,13 +112,13 @@ func (m *MockConfigStore) GetServiceConfig(ctx context.Context, provider, servic
 	return v, args.Error(1)
 }
 
-// SaveServiceConfig mocks the SaveServiceConfig operation
+// SaveServiceConfig mocks the SaveServiceConfig operation.
 func (m *MockConfigStore) SaveServiceConfig(ctx context.Context, cfg *config.ServiceConfig) error {
 	args := m.Called(ctx, cfg)
 	return args.Error(0)
 }
 
-// ListServiceConfigs mocks the ListServiceConfigs operation
+// ListServiceConfigs mocks the ListServiceConfigs operation.
 func (m *MockConfigStore) ListServiceConfigs(ctx context.Context) ([]config.ServiceConfig, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
@@ -144,7 +131,7 @@ func (m *MockConfigStore) ListServiceConfigs(ctx context.Context) ([]config.Serv
 	return v, args.Error(1)
 }
 
-// CreatePurchasePlan mocks the CreatePurchasePlan operation
+// CreatePurchasePlan mocks the CreatePurchasePlan operation.
 func (m *MockConfigStore) CreatePurchasePlan(ctx context.Context, plan *config.PurchasePlan) error {
 	args := m.Called(ctx, plan)
 	return args.Error(0)
@@ -172,7 +159,7 @@ func (m *MockConfigStore) GetPurchasePlan(ctx context.Context, planID string) (*
 	return v, args.Error(1)
 }
 
-// UpdatePurchasePlan mocks the UpdatePurchasePlan operation
+// UpdatePurchasePlan mocks the UpdatePurchasePlan operation.
 func (m *MockConfigStore) UpdatePurchasePlan(ctx context.Context, plan *config.PurchasePlan) error {
 	args := m.Called(ctx, plan)
 	return args.Error(0)
@@ -196,13 +183,13 @@ func (m *MockConfigStore) UpdatePurchasePlanTx(ctx context.Context, tx pgx.Tx, p
 	return args.Error(0)
 }
 
-// DeletePurchasePlan mocks the DeletePurchasePlan operation
+// DeletePurchasePlan mocks the DeletePurchasePlan operation.
 func (m *MockConfigStore) DeletePurchasePlan(ctx context.Context, planID string) error {
 	args := m.Called(ctx, planID)
 	return args.Error(0)
 }
 
-// ListPurchasePlans mocks the ListPurchasePlans operation
+// ListPurchasePlans mocks the ListPurchasePlans operation.
 func (m *MockConfigStore) ListPurchasePlans(ctx context.Context, filter config.PurchasePlanFilter) ([]config.PurchasePlan, error) {
 	args := m.Called(ctx, filter)
 	if args.Get(0) == nil {
@@ -225,7 +212,7 @@ func (m *MockConfigStore) SavePurchaseExecution(ctx context.Context, exec *confi
 	return args.Error(0)
 }
 
-// TransitionExecutionStatus mocks the TransitionExecutionStatus operation
+// TransitionExecutionStatus mocks the TransitionExecutionStatus operation.
 func (m *MockConfigStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string) (*config.PurchaseExecution, error) {
 	args := m.Called(ctx, executionID, fromStatuses, toStatus, actor)
 	if args.Get(0) == nil {
@@ -243,7 +230,7 @@ func (m *MockConfigStore) TransitionExecutionStatus(ctx context.Context, executi
 // so tests that only need the happy path don't require explicit mock setup.
 // Tests exercising the CAS-race path (zero rows affected) register an
 // expectation that returns (false, <racing_status>, nil).
-func (m *MockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
+func (m *MockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	if !isExpected(&m.Mock, "CancelExecutionAtomic") {
 		return true, "cancelled", nil
 	}
@@ -258,7 +245,7 @@ func (m *MockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, 
 // Tests exercising the CAS-race path (scheduler tick already fired) register
 // an expectation that returns (false, <racing_status>, nil), typically
 // (false, "approved", nil) to simulate the scheduler winning the race.
-func (m *MockConfigStore) CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
+func (m *MockConfigStore) CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	if !isExpected(&m.Mock, "CancelScheduledExecutionAtomic") {
 		return true, "cancelled", nil
 	}
@@ -266,7 +253,7 @@ func (m *MockConfigStore) CancelScheduledExecutionAtomic(ctx context.Context, tx
 	return args.Bool(0), args.String(1), args.Error(2)
 }
 
-// GetPendingExecutions mocks the GetPendingExecutions operation
+// GetPendingExecutions mocks the GetPendingExecutions operation.
 func (m *MockConfigStore) GetPendingExecutions(ctx context.Context) ([]config.PurchaseExecution, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
@@ -279,7 +266,7 @@ func (m *MockConfigStore) GetPendingExecutions(ctx context.Context) ([]config.Pu
 	return v, args.Error(1)
 }
 
-// GetExecutionByID mocks the GetExecutionByID operation
+// GetExecutionByID mocks the GetExecutionByID operation.
 func (m *MockConfigStore) GetExecutionByID(ctx context.Context, executionID string) (*config.PurchaseExecution, error) {
 	args := m.Called(ctx, executionID)
 	if args.Get(0) == nil {
@@ -292,7 +279,7 @@ func (m *MockConfigStore) GetExecutionByID(ctx context.Context, executionID stri
 	return v, args.Error(1)
 }
 
-// GetExecutionByPlanAndDate mocks the GetExecutionByPlanAndDate operation
+// GetExecutionByPlanAndDate mocks the GetExecutionByPlanAndDate operation.
 func (m *MockConfigStore) GetExecutionByPlanAndDate(ctx context.Context, planID string, scheduledDate time.Time) (*config.PurchaseExecution, error) {
 	args := m.Called(ctx, planID, scheduledDate)
 	if args.Get(0) == nil {
@@ -338,13 +325,13 @@ func (m *MockConfigStore) ListPendingExecutionIDsForAccount(ctx context.Context,
 	return v, args.Error(1)
 }
 
-// SavePurchaseHistory mocks the SavePurchaseHistory operation
+// SavePurchaseHistory mocks the SavePurchaseHistory operation.
 func (m *MockConfigStore) SavePurchaseHistory(ctx context.Context, record *config.PurchaseHistoryRecord) error {
 	args := m.Called(ctx, record)
 	return args.Error(0)
 }
 
-// GetPurchaseHistory mocks the GetPurchaseHistory operation
+// GetPurchaseHistory mocks the GetPurchaseHistory operation.
 func (m *MockConfigStore) GetPurchaseHistory(ctx context.Context, accountID string, limit int) ([]config.PurchaseHistoryRecord, error) {
 	args := m.Called(ctx, accountID, limit)
 	if args.Get(0) == nil {
@@ -357,7 +344,7 @@ func (m *MockConfigStore) GetPurchaseHistory(ctx context.Context, accountID stri
 	return v, args.Error(1)
 }
 
-// GetAllPurchaseHistory mocks the GetAllPurchaseHistory operation
+// GetAllPurchaseHistory mocks the GetAllPurchaseHistory operation.
 func (m *MockConfigStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([]config.PurchaseHistoryRecord, error) {
 	args := m.Called(ctx, limit)
 	if args.Get(0) == nil {
@@ -370,7 +357,7 @@ func (m *MockConfigStore) GetAllPurchaseHistory(ctx context.Context, limit int) 
 	return v, args.Error(1)
 }
 
-// GetActivePurchaseHistory mocks the GetActivePurchaseHistory operation
+// GetActivePurchaseHistory mocks the GetActivePurchaseHistory operation.
 func (m *MockConfigStore) GetActivePurchaseHistory(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, error) {
 	args := m.Called(ctx, asOf, accountIDs, externalIDsByProvider)
 	if args.Get(0) == nil {
@@ -410,7 +397,7 @@ func (m *MockConfigStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, pu
 }
 
 // MarkPurchaseRevoked mocks the MarkPurchaseRevoked operation (issue #290).
-func (m *MockConfigStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error {
+func (m *MockConfigStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error {
 	args := m.Called(ctx, purchaseID, revokedAt, revokedVia, supportCaseID, calcRefundAmount, calcRefundCurrency)
 	return args.Error(0)
 }
@@ -491,7 +478,7 @@ func (m *MockConfigStore) GetRIExchangeHistory(ctx context.Context, since time.T
 	return v, args.Error(1)
 }
 
-func (m *MockConfigStore) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*config.RIExchangeRecord, error) {
+func (m *MockConfigStore) TransitionRIExchangeStatus(ctx context.Context, id, fromStatus, toStatus string, actor *string) (*config.RIExchangeRecord, error) {
 	args := m.Called(ctx, id, fromStatus, toStatus, actor)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -503,12 +490,12 @@ func (m *MockConfigStore) TransitionRIExchangeStatus(ctx context.Context, id str
 	return v, args.Error(1)
 }
 
-func (m *MockConfigStore) CompleteRIExchange(ctx context.Context, id string, exchangeID string) error {
+func (m *MockConfigStore) CompleteRIExchange(ctx context.Context, id, exchangeID string) error {
 	args := m.Called(ctx, id, exchangeID)
 	return args.Error(0)
 }
 
-func (m *MockConfigStore) FailRIExchange(ctx context.Context, id string, errorMsg string) error {
+func (m *MockConfigStore) FailRIExchange(ctx context.Context, id, errorMsg string) error {
 	args := m.Called(ctx, id, errorMsg)
 	return args.Error(0)
 }
@@ -548,12 +535,12 @@ func (m *MockConfigStore) GetStaleProcessingExchanges(ctx context.Context, older
 	return v, args.Error(1)
 }
 
-// MockAuthStore is a mock implementation of auth.Store
+// MockAuthStore is a mock implementation of auth.Store.
 type MockAuthStore struct {
 	mock.Mock
 }
 
-// GetUserByID mocks the GetUserByID operation
+// GetUserByID mocks the GetUserByID operation.
 func (m *MockAuthStore) GetUserByID(ctx context.Context, userID string) (*auth.User, error) {
 	args := m.Called(ctx, userID)
 	if args.Get(0) == nil {
@@ -566,7 +553,7 @@ func (m *MockAuthStore) GetUserByID(ctx context.Context, userID string) (*auth.U
 	return v, args.Error(1)
 }
 
-// GetUserByEmail mocks the GetUserByEmail operation
+// GetUserByEmail mocks the GetUserByEmail operation.
 func (m *MockAuthStore) GetUserByEmail(ctx context.Context, email string) (*auth.User, error) {
 	args := m.Called(ctx, email)
 	if args.Get(0) == nil {
@@ -579,25 +566,25 @@ func (m *MockAuthStore) GetUserByEmail(ctx context.Context, email string) (*auth
 	return v, args.Error(1)
 }
 
-// CreateUser mocks the CreateUser operation
+// CreateUser mocks the CreateUser operation.
 func (m *MockAuthStore) CreateUser(ctx context.Context, user *auth.User) error {
 	args := m.Called(ctx, user)
 	return args.Error(0)
 }
 
-// UpdateUser mocks the UpdateUser operation
+// UpdateUser mocks the UpdateUser operation.
 func (m *MockAuthStore) UpdateUser(ctx context.Context, user *auth.User) error {
 	args := m.Called(ctx, user)
 	return args.Error(0)
 }
 
-// DeleteUser mocks the DeleteUser operation
+// DeleteUser mocks the DeleteUser operation.
 func (m *MockAuthStore) DeleteUser(ctx context.Context, userID string) error {
 	args := m.Called(ctx, userID)
 	return args.Error(0)
 }
 
-// ListUsers mocks the ListUsers operation
+// ListUsers mocks the ListUsers operation.
 func (m *MockAuthStore) ListUsers(ctx context.Context) ([]auth.User, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
@@ -610,7 +597,7 @@ func (m *MockAuthStore) ListUsers(ctx context.Context) ([]auth.User, error) {
 	return v, args.Error(1)
 }
 
-// GetUserByResetToken mocks the GetUserByResetToken operation
+// GetUserByResetToken mocks the GetUserByResetToken operation.
 func (m *MockAuthStore) GetUserByResetToken(ctx context.Context, token string) (*auth.User, error) {
 	args := m.Called(ctx, token)
 	if args.Get(0) == nil {
@@ -623,19 +610,19 @@ func (m *MockAuthStore) GetUserByResetToken(ctx context.Context, token string) (
 	return v, args.Error(1)
 }
 
-// AdminExists mocks the AdminExists operation
+// AdminExists mocks the AdminExists operation.
 func (m *MockAuthStore) AdminExists(ctx context.Context) (bool, error) {
 	args := m.Called(ctx)
 	return args.Bool(0), args.Error(1)
 }
 
-// CreateAdminIfNone mocks the CreateAdminIfNone operation
+// CreateAdminIfNone mocks the CreateAdminIfNone operation.
 func (m *MockAuthStore) CreateAdminIfNone(ctx context.Context, user *auth.User) (bool, error) {
 	args := m.Called(ctx, user)
 	return args.Bool(0), args.Error(1)
 }
 
-// GetGroup mocks the GetGroup operation
+// GetGroup mocks the GetGroup operation.
 func (m *MockAuthStore) GetGroup(ctx context.Context, groupID string) (*auth.Group, error) {
 	args := m.Called(ctx, groupID)
 	if args.Get(0) == nil {
@@ -648,25 +635,25 @@ func (m *MockAuthStore) GetGroup(ctx context.Context, groupID string) (*auth.Gro
 	return v, args.Error(1)
 }
 
-// CreateGroup mocks the CreateGroup operation
+// CreateGroup mocks the CreateGroup operation.
 func (m *MockAuthStore) CreateGroup(ctx context.Context, group *auth.Group) error {
 	args := m.Called(ctx, group)
 	return args.Error(0)
 }
 
-// UpdateGroup mocks the UpdateGroup operation
+// UpdateGroup mocks the UpdateGroup operation.
 func (m *MockAuthStore) UpdateGroup(ctx context.Context, group *auth.Group) error {
 	args := m.Called(ctx, group)
 	return args.Error(0)
 }
 
-// DeleteGroup mocks the DeleteGroup operation
+// DeleteGroup mocks the DeleteGroup operation.
 func (m *MockAuthStore) DeleteGroup(ctx context.Context, groupID string) error {
 	args := m.Called(ctx, groupID)
 	return args.Error(0)
 }
 
-// ListGroups mocks the ListGroups operation
+// ListGroups mocks the ListGroups operation.
 func (m *MockAuthStore) ListGroups(ctx context.Context) ([]auth.Group, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
@@ -679,19 +666,19 @@ func (m *MockAuthStore) ListGroups(ctx context.Context) ([]auth.Group, error) {
 	return v, args.Error(1)
 }
 
-// CountGroupMembers mocks the CountGroupMembers operation
+// CountGroupMembers mocks the CountGroupMembers operation.
 func (m *MockAuthStore) CountGroupMembers(ctx context.Context, groupID string) (int, error) {
 	args := m.Called(ctx, groupID)
 	return args.Int(0), args.Error(1)
 }
 
-// CreateSession mocks the CreateSession operation
+// CreateSession mocks the CreateSession operation.
 func (m *MockAuthStore) CreateSession(ctx context.Context, session *auth.Session) error {
 	args := m.Called(ctx, session)
 	return args.Error(0)
 }
 
-// GetSession mocks the GetSession operation
+// GetSession mocks the GetSession operation.
 func (m *MockAuthStore) GetSession(ctx context.Context, token string) (*auth.Session, error) {
 	args := m.Called(ctx, token)
 	if args.Get(0) == nil {
@@ -704,19 +691,19 @@ func (m *MockAuthStore) GetSession(ctx context.Context, token string) (*auth.Ses
 	return v, args.Error(1)
 }
 
-// DeleteSession mocks the DeleteSession operation
+// DeleteSession mocks the DeleteSession operation.
 func (m *MockAuthStore) DeleteSession(ctx context.Context, token string) error {
 	args := m.Called(ctx, token)
 	return args.Error(0)
 }
 
-// DeleteUserSessions mocks the DeleteUserSessions operation
+// DeleteUserSessions mocks the DeleteUserSessions operation.
 func (m *MockAuthStore) DeleteUserSessions(ctx context.Context, userID string) error {
 	args := m.Called(ctx, userID)
 	return args.Error(0)
 }
 
-// CleanupExpiredSessions mocks the CleanupExpiredSessions operation
+// CleanupExpiredSessions mocks the CleanupExpiredSessions operation.
 func (m *MockAuthStore) CleanupExpiredSessions(ctx context.Context) error {
 	args := m.Called(ctx)
 	return args.Error(0)
@@ -724,13 +711,13 @@ func (m *MockAuthStore) CleanupExpiredSessions(ctx context.Context) error {
 
 // API Key operations
 
-// CreateAPIKey mocks the CreateAPIKey operation
+// CreateAPIKey mocks the CreateAPIKey operation.
 func (m *MockAuthStore) CreateAPIKey(ctx context.Context, key *auth.UserAPIKey) error {
 	args := m.Called(ctx, key)
 	return args.Error(0)
 }
 
-// GetAPIKeyByID mocks the GetAPIKeyByID operation
+// GetAPIKeyByID mocks the GetAPIKeyByID operation.
 func (m *MockAuthStore) GetAPIKeyByID(ctx context.Context, keyID string) (*auth.UserAPIKey, error) {
 	args := m.Called(ctx, keyID)
 	if args.Get(0) == nil {
@@ -743,7 +730,7 @@ func (m *MockAuthStore) GetAPIKeyByID(ctx context.Context, keyID string) (*auth.
 	return v, args.Error(1)
 }
 
-// GetAPIKeyByHash mocks the GetAPIKeyByHash operation
+// GetAPIKeyByHash mocks the GetAPIKeyByHash operation.
 func (m *MockAuthStore) GetAPIKeyByHash(ctx context.Context, keyHash string) (*auth.UserAPIKey, error) {
 	args := m.Called(ctx, keyHash)
 	if args.Get(0) == nil {
@@ -756,7 +743,7 @@ func (m *MockAuthStore) GetAPIKeyByHash(ctx context.Context, keyHash string) (*a
 	return v, args.Error(1)
 }
 
-// ListAPIKeysByUser mocks the ListAPIKeysByUser operation
+// ListAPIKeysByUser mocks the ListAPIKeysByUser operation.
 func (m *MockAuthStore) ListAPIKeysByUser(ctx context.Context, userID string) ([]*auth.UserAPIKey, error) {
 	args := m.Called(ctx, userID)
 	if args.Get(0) == nil {
@@ -769,25 +756,25 @@ func (m *MockAuthStore) ListAPIKeysByUser(ctx context.Context, userID string) ([
 	return v, args.Error(1)
 }
 
-// UpdateAPIKey mocks the UpdateAPIKey operation
+// UpdateAPIKey mocks the UpdateAPIKey operation.
 func (m *MockAuthStore) UpdateAPIKey(ctx context.Context, key *auth.UserAPIKey) error {
 	args := m.Called(ctx, key)
 	return args.Error(0)
 }
 
-// UpdateAPIKeyLastUsed mocks the UpdateAPIKeyLastUsed operation
+// UpdateAPIKeyLastUsed mocks the UpdateAPIKeyLastUsed operation.
 func (m *MockAuthStore) UpdateAPIKeyLastUsed(ctx context.Context, keyID string) error {
 	args := m.Called(ctx, keyID)
 	return args.Error(0)
 }
 
-// DeleteAPIKey mocks the DeleteAPIKey operation
+// DeleteAPIKey mocks the DeleteAPIKey operation.
 func (m *MockAuthStore) DeleteAPIKey(ctx context.Context, keyID string) error {
 	args := m.Called(ctx, keyID)
 	return args.Error(0)
 }
 
-// Ping mocks the Ping operation
+// Ping mocks the Ping operation.
 func (m *MockAuthStore) Ping(ctx context.Context) error {
 	args := m.Called(ctx)
 	return args.Error(0)
@@ -998,7 +985,7 @@ func (m *MockConfigStore) GetPlanAccounts(ctx context.Context, planID string) ([
 	return v, args.Error(1)
 }
 
-// CleanupOldExecutions mocks the CleanupOldExecutions operation
+// CleanupOldExecutions mocks the CleanupOldExecutions operation.
 func (m *MockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error) {
 	args := m.Called(ctx, retentionDays)
 	v, ok := args.Get(0).(int64)
@@ -1326,7 +1313,7 @@ func (m *MockConfigStore) ClearCollectionStarted(ctx context.Context) error {
 }
 
 // StampRIExchangeApprovedBy mocks the StampRIExchangeApprovedBy operation.
-func (m *MockConfigStore) StampRIExchangeApprovedBy(ctx context.Context, id string, approverEmail string) error {
+func (m *MockConfigStore) StampRIExchangeApprovedBy(ctx context.Context, id, approverEmail string) error {
 	args := m.Called(ctx, id, approverEmail)
 	return args.Error(0)
 }
@@ -1475,8 +1462,8 @@ func (m *MockConfigStore) TransitionLadderRunStatus(ctx context.Context, id stri
 }
 
 // isExpected reports whether mock has any .On() expectation for method.
-func isExpected(mock *mock.Mock, method string) bool {
-	for _, call := range mock.ExpectedCalls {
+func isExpected(m *mock.Mock, method string) bool {
+	for _, call := range m.ExpectedCalls {
 		if call.Method == method {
 			return true
 		}
@@ -1484,6 +1471,6 @@ func isExpected(mock *mock.Mock, method string) bool {
 	return false
 }
 
-// Compile-time interface compliance checks
+// Compile-time interface compliance checks.
 var _ config.StoreInterface = (*MockConfigStore)(nil)
 var _ auth.StoreInterface = (*MockAuthStore)(nil)

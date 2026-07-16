@@ -45,33 +45,22 @@ const (
 type Service struct {
 	store              StoreInterface
 	emailSender        EmailSenderInterface
-	sessionDuration    time.Duration
-	dashboardURL       string
-	bcryptCostOverride int // if > 0, overrides bcryptCost const (used by tests for speed)
+	lastUsedSFG        singleflight.Group
 	onPasswordChange   func(ctx context.Context, userID, newPassword string)
-	// csrfKey is the server-side key used to derive CSRF tokens as
-	// HMAC-SHA256(csrfKey, rawSessionToken). Tokens are never stored
-	// in cleartext; validation recomputes the HMAC and compares.
-	// A random key is generated at NewService time when not supplied.
-	csrfKey []byte
-	// lastUsedSFG deduplicates concurrent UpdateLastUsed calls for the
-	// same API key so a burst of authenticated requests does not spawn
-	// an unbounded number of goroutines.
-	lastUsedSFG singleflight.Group
+	dashboardURL       string
+	csrfKey            []byte
+	sessionDuration    time.Duration
+	bcryptCostOverride int
 }
 
 // ServiceConfig holds configuration for the auth service.
 type ServiceConfig struct {
 	Store            StoreInterface
 	EmailSender      EmailSenderInterface
-	SessionDuration  time.Duration
-	DashboardURL     string
 	OnPasswordChange func(ctx context.Context, userID, newPassword string)
-	// CSRFKey is the server-side secret used to derive CSRF tokens as
-	// HMAC-SHA256(CSRFKey, rawSessionToken). Must be 32 bytes for
-	// 256-bit security. When empty, NewService generates a random key and
-	// logs a warning; all existing sessions will require re-login on restart.
-	CSRFKey []byte
+	DashboardURL     string
+	CSRFKey          []byte
+	SessionDuration  time.Duration
 }
 
 // NewService creates a new auth service.
@@ -182,18 +171,18 @@ func (s *Service) getUserAndValidateStatus(ctx context.Context, email string) (*
 		// errors so callers cannot distinguish a missing account from a DB
 		// failure (issue #416). The caller (Login) runs a dummy bcrypt compare
 		// after this to equalize response time with the wrong-password path.
-		return nil, errors.New(genericLoginError)
+		return nil, errors.New(genericLoginError) //nolint:staticcheck // ST1005: user-facing message; capitalization intentional and asserted by tests
 	}
 
 	if !user.Active {
-		return nil, errors.New(genericLoginError)
+		return nil, errors.New(genericLoginError) //nolint:staticcheck // ST1005: user-facing message; capitalization intentional and asserted by tests
 	}
 
 	if user.LockedUntil != nil && time.Now().Before(*user.LockedUntil) {
 		remainingTime := time.Until(*user.LockedUntil).Round(time.Minute)
 		// Omit user.ID from log to avoid leaking internal identifiers to log
 		logging.Warnf("Login attempt for locked account (locked for %v more)", remainingTime)
-		return nil, errors.New(genericLoginError)
+		return nil, errors.New(genericLoginError) //nolint:staticcheck // ST1005: user-facing message; capitalization intentional and asserted by tests
 	}
 	// NOTE: when LockedUntil is set but the window has already expired, the user falls
 	// through here with FailedLoginAttempts and LockedUntil still set in memory.
@@ -226,12 +215,12 @@ func (s *Service) verifyPasswordAndMFA(ctx context.Context, user *User, req Logi
 	// Both branches return the same message as the "user not found" path so the
 	// full login failure surface is uniform (issue #416).
 	if user.PasswordHash == "" {
-		return errors.New(genericLoginError)
+		return errors.New(genericLoginError) //nolint:staticcheck // ST1005: user-facing message; capitalization intentional and asserted by tests
 	}
 
 	if !s.verifyPassword(req.Password, user.PasswordHash) {
 		s.recordFailedLogin(ctx, user)
-		return errors.New(genericLoginError)
+		return errors.New(genericLoginError) //nolint:staticcheck // ST1005: user-facing message; capitalization intentional and asserted by tests
 	}
 
 	if user.MFAEnabled {
@@ -243,7 +232,7 @@ func (s *Service) verifyPasswordAndMFA(ctx context.Context, user *User, req Logi
 			// Log internally for operator visibility without leaking internal state
 			// to the caller -- a distinct message would confirm the password was correct.
 			logging.Errorf("MFA enabled but secret missing for user %s -- possible data integrity issue", user.ID)
-			return errors.New(genericLoginError)
+			return errors.New(genericLoginError) //nolint:staticcheck // ST1005: user-facing message; capitalization intentional and asserted by tests
 		}
 		// verifyTOTP fails closed on empty or malformed inputs: empty code, empty
 		// secret, and base32-decode errors all return false rather than a match.

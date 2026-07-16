@@ -120,14 +120,14 @@ func standardUserSession() *Session {
 // setupStandardUserAuth stubs ValidateSession + a single HasPermissionAPI verb
 // for the Standard user. It deliberately does NOT grant view:accounts so a test
 // can assert the full listAccounts handler 403s while the minimal one succeeds.
-func setupStandardUserAuth(ctx context.Context, mockAuth *MockAuthService, verb, resource string, allow bool, allowed []string) {
+func setupStandardUserAuth(ctx context.Context, mockAuth *MockAuthService, verb, resource string, allow bool, allowed []string) { //nolint:unparam // param intentional for interface consistency/future use
 	session := standardUserSession()
 	mockAuth.On("ValidateSession", ctx, "standard-token").Return(session, nil)
 	mockAuth.On("HasPermissionAPI", ctx, session.UserID, verb, resource).Return(allow, nil)
 	mockAuth.On("GetAllowedAccountsAPI", ctx, session.UserID).Return(allowed, nil).Maybe()
 }
 
-func standardRequest(body string) *events.LambdaFunctionURLRequest {
+func standardRequest(body string) *events.LambdaFunctionURLRequest { //nolint:unparam // param intentional for interface consistency/future use
 	return &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"Authorization": "Bearer standard-token"},
 		Body:    body,
@@ -1705,7 +1705,7 @@ func scopedUserSession() *Session {
 	}
 }
 
-func setupScopedAuth(ctx context.Context, mockAuth *MockAuthService, userID, verb, resource string, allowed []string) {
+func setupScopedAuth(ctx context.Context, mockAuth *MockAuthService, userID, verb, resource string, allowed []string) { //nolint:unparam // param intentional for interface consistency/future use
 	session := scopedUserSession()
 	session.UserID = userID
 	mockAuth.On("ValidateSession", ctx, "scoped-token").Return(session, nil)
@@ -1809,13 +1809,13 @@ func TestSaveAccountCredentials_OutOfScope_Returns404(t *testing.T) {
 
 // mockConfigStoreAccounts embeds MockConfigStore and allows overriding specific account methods.
 type mockConfigStoreAccounts struct {
+	createErr error
+	updateErr error
 	*MockConfigStore
 	getResult           *config.CloudAccount
 	listResult          []config.CloudAccount
 	planAccountsResult  []config.CloudAccount
 	listOverridesResult []config.AccountServiceOverride
-	createErr           error // optional override: return this err from CreateCloudAccount
-	updateErr           error // optional override: return this err from UpdateCloudAccount
 }
 
 func (m *mockConfigStoreAccounts) GetCloudAccount(ctx context.Context, id string) (*config.CloudAccount, error) {

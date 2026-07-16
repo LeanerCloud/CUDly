@@ -18,11 +18,11 @@ import (
 // mockSMTPServer is a simple mock SMTP server for testing.
 type mockSMTPServer struct {
 	listener    net.Listener
-	port        int
-	authFail    bool
-	wg          sync.WaitGroup
 	receivedMsg string
+	wg          sync.WaitGroup
+	port        int
 	mu          sync.Mutex
+	authFail    bool
 	inData      bool
 }
 

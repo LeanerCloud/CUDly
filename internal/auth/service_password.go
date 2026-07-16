@@ -26,8 +26,8 @@ const bcryptCost = 12
 //
 // Generated once at compile time with cost bcryptCost (12).
 //
-//nolint:gosec // this is a public sentinel hash, not a credential
-var dummyPasswordHash = "$2a$12$iAMeexq41AwZ2Dj9oAvGfeVHQxK5ffLPPTNxwPB8bsf7olA730dxO" // #nosec G101 -- public sentinel hash for constant-time compare on missing accounts; not a real credential //nolint:gosec
+//nolint:gosec // G101: this is a public sentinel hash for constant-time compare, not a real credential
+const dummyPasswordHash = "$2a$12$iAMeexq41AwZ2Dj9oAvGfeVHQxK5ffLPPTNxwPB8bsf7olA730dxO" // #nosec G101 -- public sentinel hash for constant-time compare; not a real credential
 
 // Password validation constants following NIST guidelines.
 const (
@@ -107,7 +107,7 @@ func containsRepeatedChars(password string, n int) bool {
 // Checks the current password hash and the prior-password history separately so
 // the caller can render a more useful message for the dominant case (user
 // re-typing their existing password on the reset form): see issue #459.
-func (s *Service) checkPasswordHistory(newPassword string, currentHash string, passwordHistory []string) error {
+func (s *Service) checkPasswordHistory(newPassword, currentHash string, passwordHistory []string) error {
 	// Check against current password first; distinct message so the user
 	// can tell "I typed my current one" from "this matches an old one".
 	if currentHash != "" && s.verifyPassword(newPassword, currentHash) {
@@ -226,12 +226,14 @@ func (s *Service) ChangePassword(ctx context.Context, userID string, req ChangeP
 	}
 
 	// Validate new password against requirements
-	if err := s.validatePassword(req.NewPassword); err != nil {
+	err = s.validatePassword(req.NewPassword)
+	if err != nil {
 		return err
 	}
 
 	// Check password history to prevent reuse (includes current password)
-	if err := s.checkPasswordHistory(req.NewPassword, user.PasswordHash, user.PasswordHistory); err != nil {
+	err = s.checkPasswordHistory(req.NewPassword, user.PasswordHash, user.PasswordHistory)
+	if err != nil {
 		return err
 	}
 

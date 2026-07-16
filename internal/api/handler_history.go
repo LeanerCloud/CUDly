@@ -114,7 +114,10 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 // wave-2) appear in the History view with a Revoke button before the cloud SDK
 // call fires. Without this entry the row is invisible to the History UI, making
 // the Revoke button unreachable (issue #290, second-wave CR Finding E).
-var historyExecutionStatuses = []string{"pending", "notified", "scheduled", "approved", "running", "paused", "completed", "partially_completed", "failed", "expired", "cancelled"}
+// historyExecutionStatuses includes both "canceled" (new canonical spelling) and
+// "cancelled" (DB-stored value written by CancelExecutionAtomic until migration
+// #1277 renames the column). Both spellings must be accepted until that migration lands.
+var historyExecutionStatuses = []string{"pending", "notified", "scheduled", "approved", "running", "paused", "completed", "partially_completed", "failed", "expired", "canceled", "cancelled"}
 
 // approvalExpiryWindow is how long a pending approval stays actionable
 // before the History view flips it to "expired". Aligns with the
@@ -151,7 +154,8 @@ func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyF
 	userEmailCache := h.resolveUserEmails(ctx, executions)
 	out := make([]config.PurchaseHistoryRecord, 0, len(executions))
 	var staleExecs []config.PurchaseExecution
-	for _, exec := range executions {
+	for _rvc := range executions {
+		exec := executions[_rvc]
 		// Dedup: a normal completed execution is already represented by its
 		// purchase_history rows. Skip it here so it shows exactly once. Only
 		// completed executions carrying an audit-gap Error (history write
@@ -209,7 +213,8 @@ func (h *Handler) expireStaleExecutionsAsync(staleExecs []config.PurchaseExecuti
 	}
 	go func() {
 		ctx := context.Background()
-		for _, exec := range staleExecs {
+		for _rvc := range staleExecs {
+			exec := staleExecs[_rvc]
 			_, err := h.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"pending", "notified"}, "expired", nil)
 			if err != nil {
 				logging.Warnf("history: async expire of execution %s failed: %v", exec.ExecutionID, err)
@@ -226,7 +231,8 @@ func (h *Handler) expireStaleExecutionsAsync(staleExecs []config.PurchaseExecuti
 // creators, not the number of execution rows.
 func (h *Handler) resolveUserEmails(ctx context.Context, executions []config.PurchaseExecution) map[string]string {
 	seen := make(map[string]struct{})
-	for _, exec := range executions {
+	for _rvc := range executions {
+		exec := executions[_rvc]
 		if exec.CreatedByUserID != nil && *exec.CreatedByUserID != "" {
 			seen[*exec.CreatedByUserID] = struct{}{}
 		}
@@ -326,7 +332,7 @@ func annotateHistoryRowByStatus(row *config.PurchaseHistoryRecord, exec config.P
 		row.StatusDescription = exec.Error
 	case "expired":
 		row.StatusDescription = "approval link expired (not approved within 7 days)"
-	case "cancelled":
+	case "canceled", "cancelled": // both spellings until migration #1277 renames the DB column
 		annotateCancelled(row, exec, approver)
 	default:
 		// In-flight (approved/running/scheduled/paused) and audit-gap
@@ -400,15 +406,15 @@ func annotateInFlightOrAuditGapRow(row *config.PurchaseHistoryRecord, exec confi
 func annotateCancelled(row *config.PurchaseHistoryRecord, exec config.PurchaseExecution, approver string) {
 	if exec.CancelledBy != nil && *exec.CancelledBy != "" {
 		row.Approver = *exec.CancelledBy
-		row.StatusDescription = "cancelled by " + *exec.CancelledBy
+		row.StatusDescription = "canceled by " + *exec.CancelledBy
 		return
 	}
 	if approver != "" {
 		row.Approver = approver
-		row.StatusDescription = "cancelled by " + approver + " (via approval link)"
+		row.StatusDescription = "canceled by " + approver + " (via approval link)"
 		return
 	}
-	row.StatusDescription = "cancelled via approval link"
+	row.StatusDescription = "canceled via approval link"
 }
 
 // annotateApproved resolves who approved the execution using the same
@@ -474,7 +480,8 @@ func collapseRecommendationService(recs []config.RecommendationRecord) string {
 		return "multiple"
 	}
 	s := recs[0].Service
-	for _, r := range recs[1:] {
+	for _rvc := range recs[1:] {
+		r := recs[1:][_rvc]
 		if r.Service != s {
 			return "multiple"
 		}
@@ -491,7 +498,8 @@ func collapseRecommendationTerm(recs []config.RecommendationRecord) int {
 		return 0
 	}
 	t := recs[0].Term
-	for _, r := range recs[1:] {
+	for _rvc := range recs[1:] {
+		r := recs[1:][_rvc]
 		if r.Term != t {
 			return 0
 		}
@@ -507,7 +515,8 @@ func collapseRecommendationProvider(recs []config.RecommendationRecord) string {
 		return "multiple"
 	}
 	p := recs[0].Provider
-	for _, r := range recs[1:] {
+	for _rvc := range recs[1:] {
+		r := recs[1:][_rvc]
 		if r.Provider != p {
 			return "multiple"
 		}
@@ -524,7 +533,8 @@ func collapseRecommendationPayment(recs []config.RecommendationRecord) string {
 		return ""
 	}
 	p := recs[0].Payment
-	for _, r := range recs[1:] {
+	for _rvc := range recs[1:] {
+		r := recs[1:][_rvc]
 		if r.Payment != p {
 			return ""
 		}
@@ -545,7 +555,8 @@ func collapseRecommendationAccount(recs []config.RecommendationRecord) string {
 	if recs[0].CloudAccountID != nil {
 		first = *recs[0].CloudAccountID
 	}
-	for _, r := range recs[1:] {
+	for _rvc := range recs[1:] {
+		r := recs[1:][_rvc]
 		var cur string
 		if r.CloudAccountID != nil {
 			cur = *r.CloudAccountID
@@ -565,7 +576,8 @@ func collapseRecommendationAccount(recs []config.RecommendationRecord) string {
 func sumRecommendationMonthlyCostPtr(recs []config.RecommendationRecord) *float64 {
 	var total float64
 	anyNonNil := false
-	for _, r := range recs {
+	for _rvc := range recs {
+		r := recs[_rvc]
 		if r.MonthlyCost != nil {
 			total += *r.MonthlyCost
 			anyNonNil = true
@@ -606,24 +618,14 @@ const MaxHistoryDateRangeDays = 366
 // times are zero-valued and the SQL/in-memory date predicates are skipped
 // entirely (so legacy clients that don't send dates keep working).
 type historyFilters struct {
-	Provider        string
-	LegacyAccountID string
-	AccountIDs      []string
-	// ExternalIDsByProvider are the cloud-provider external account numbers
-	// resolved from AccountIDs (the UUIDs) via Handler.resolveAccountFilterIDs,
-	// grouped by provider so the external-id match stays provider-scoped (a
-	// reused external number across providers cannot leak rows). Populated by
-	// the handler AFTER parse (the resolution needs a DB read), not by
-	// parseHistoryFilters. Both the SQL path (provider = $p AND account_id =
-	// ANY) and the in-memory matchesExecution use them so a row/execution that
-	// carries only the external id (cloud_account_id NULL) is still matched
-	// (issue #701/#498). The "" provider key means "provider unknown" and
-	// matches the external id regardless of provider (legacy behavior).
-	ExternalIDsByProvider map[string][]string
-	HasDate               bool
 	Start                 time.Time
 	End                   time.Time
+	ExternalIDsByProvider map[string][]string
+	Provider              string
+	LegacyAccountID       string
+	AccountIDs            []string
 	Limit                 int
+	HasDate               bool
 }
 
 // parseHistoryFilters validates and normalises the /api/history query string.
@@ -687,7 +689,7 @@ func parseHistoryFilters(params map[string]string) (historyFilters, error) {
 // fields emit exactly that format, so accepting RFC 3339 here would be a
 // surface area not exercised in production and a divergence from the
 // analytics handler's broader format set.
-func parseHistoryDateRange(startStr, endStr string) (time.Time, time.Time, bool, error) {
+func parseHistoryDateRange(startStr, endStr string) (time.Time, time.Time, bool, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	if startStr == "" && endStr == "" {
 		return time.Time{}, time.Time{}, false, nil
 	}
@@ -720,7 +722,7 @@ func parseHistoryDateRange(startStr, endStr string) (time.Time, time.Time, bool,
 // string returns the zero value for that side; the caller is responsible for
 // substituting a sensible default. The end side is rolled forward to end-of-
 // day so a date input is inclusive of the chosen day.
-func parseHistoryDateBounds(startStr, endStr string) (time.Time, time.Time, error) {
+func parseHistoryDateBounds(startStr, endStr string) (time.Time, time.Time, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	const layout = "2006-01-02"
 	var start, end time.Time
 	if startStr != "" {
@@ -831,7 +833,8 @@ func accountMatchesFilters(exec config.PurchaseExecution, accountIDs []string, e
 // recommendation (all recs in an execution share a provider in practice).
 // Returns "" when no recommendation carries one.
 func executionProvider(exec config.PurchaseExecution) string {
-	for _, r := range exec.Recommendations {
+	for _rvc := range exec.Recommendations {
+		r := exec.Recommendations[_rvc]
 		if r.Provider != "" {
 			return r.Provider
 		}
@@ -842,7 +845,8 @@ func executionProvider(exec config.PurchaseExecution) string {
 // executionHasProvider reports whether any of the execution's
 // recommendations carries the given provider value.
 func executionHasProvider(exec config.PurchaseExecution, provider string) bool {
-	for _, r := range exec.Recommendations {
+	for _rvc := range exec.Recommendations {
+		r := exec.Recommendations[_rvc]
 		if r.Provider == provider {
 			return true
 		}
@@ -964,7 +968,8 @@ func (h *Handler) filterPurchaseHistoryByAllowedAccounts(ctx context.Context, se
 	}
 	nameByID := h.resolveAccountNamesByID(ctx)
 	filtered := make([]config.PurchaseHistoryRecord, 0, len(purchases))
-	for _, p := range purchases {
+	for _rvc := range purchases {
+		p := purchases[_rvc]
 		// Empty AccountID: unattributed ambient/multi-account synthesized row.
 		// Pass through so scoped users see in-flight financial actions that
 		// cannot be pinned to a single account (issue #1032 / #621 regression).
@@ -981,9 +986,10 @@ func (h *Handler) filterPurchaseHistoryByAllowedAccounts(ctx context.Context, se
 
 func summarizePurchaseHistory(purchases []config.PurchaseHistoryRecord) HistorySummary {
 	summary := HistorySummary{TotalPurchases: len(purchases)}
-	for _, p := range purchases {
+	for _rvc := range purchases {
+		p := purchases[_rvc]
 		// Non-completed rows count toward TotalPurchases and their specific
-		// bucket (pending / in-progress / failed / expired / cancelled) but
+		// bucket (pending / in-progress / failed / expired / canceled) but
 		// are excluded from the dollar totals — the money hasn't been committed
 		// for any of those states. "completed" and unset (legacy DB rows that
 		// pre-date the status field) both count as completed.
@@ -1003,8 +1009,8 @@ func summarizePurchaseHistory(purchases []config.PurchaseHistoryRecord) HistoryS
 		case "expired":
 			summary.TotalExpired++
 			continue
-		case "cancelled":
-			// A cancelled purchase represents zero committed spend and zero
+		case "canceled", "cancelled": // both spellings until migration #1277 renames the DB column
+			// A canceled purchase represents zero committed spend and zero
 			// realized savings (issue #736). Exclude from all dollar KPIs and
 			// from TotalCompleted — the money was never committed.
 			continue

@@ -16,31 +16,26 @@ import (
 
 // SMTPConfig holds configuration for SMTP email sender.
 type SMTPConfig struct {
-	Host        string // SMTP server host (e.g., "smtp.sendgrid.net" or "smtp.azurecomm.net")
-	Port        int    // SMTP server port (usually 587 for TLS, 465 for SSL)
-	Username    string // SMTP username (SendGrid API key or Azure connection username)
-	Password    string // SMTP password
-	FromEmail   string
-	FromName    string
-	NotifyEmail string // Notification recipient email (defaults to FromEmail if empty)
-	UseTLS      bool   // Use STARTTLS (default true)
-	// AllowInsecure, when true, permits sending with credentials over a
-	// non-TLS connection. This must never be set in production; it exists
-	// only for integration tests against a local plaintext SMTP stub.
-	// When false (the default), dispatchSMTP returns an error if auth is
-	// configured but UseTLS is false (07-H2).
+	Host          string
+	Username      string
+	Password      string //nolint:gosec // G101: field holds a user-supplied runtime password, not a hardcoded credential
+	FromEmail     string
+	FromName      string
+	NotifyEmail   string
+	Port          int
+	UseTLS        bool
 	AllowInsecure bool
 }
 
 // SMTPSender handles sending email via SMTP (works for SendGrid, Azure ACS, and others).
 type SMTPSender struct {
 	host          string
-	port          int
 	username      string
 	password      string
 	fromEmail     string
 	fromName      string
 	notifyEmail   string
+	port          int
 	useTLS        bool
 	allowInsecure bool
 }
@@ -208,7 +203,7 @@ func (s *SMTPSender) buildSMTPMessageMultipart(toEmail string, cc []string, subj
 	if len(cc) > 0 {
 		headers += fmt.Sprintf("Cc: %s\r\n", strings.Join(cc, ", "))
 	}
-	headers += fmt.Sprintf("Subject: %s\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=\"%s\"\r\n\r\n", subject, boundary)
+	headers += fmt.Sprintf("Subject: %s\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=%q\r\n\r\n", subject, boundary)
 
 	var body strings.Builder
 	body.WriteString("--")
@@ -322,15 +317,15 @@ func (s *SMTPSender) sendMailTLS(addr string, auth smtp.Auth, from string, to []
 	}
 
 	// MinVersion guards against TLS 1.0/1.1 negotiation (issue #410).
-	if err = c.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
+	if err := c.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
 		return err
 	}
 
-	if err = smtpAuthenticate(c, auth); err != nil {
+	if err := smtpAuthenticate(c, auth); err != nil {
 		return err
 	}
 
-	if err = smtpSendBody(c, from, to, msg); err != nil {
+	if err := smtpSendBody(c, from, to, msg); err != nil {
 		return err
 	}
 

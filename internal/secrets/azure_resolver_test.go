@@ -32,9 +32,9 @@ func (m MockSecretID) Version() string {
 
 // MockAzureSecretsPager simulates the Azure secrets pager.
 type MockAzureSecretsPager struct {
+	err         error
 	pages       [][]*azsecrets.SecretProperties
 	currentPage int
-	err         error
 }
 
 func (m *MockAzureSecretsPager) More() bool {

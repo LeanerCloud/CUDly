@@ -56,7 +56,7 @@ func (r *AWSResolver) GetSecret(ctx context.Context, secretID string) (string, e
 }
 
 // PutSecret creates or updates a secret value in AWS Secrets Manager.
-func (r *AWSResolver) PutSecret(ctx context.Context, secretID string, value string) error {
+func (r *AWSResolver) PutSecret(ctx context.Context, secretID, value string) error {
 	input := &secretsmanager.PutSecretValueInput{
 		SecretId:     aws.String(secretID),
 		SecretString: aws.String(value),
@@ -108,7 +108,8 @@ func (r *AWSResolver) ListSecrets(ctx context.Context, filter string) ([]string,
 			return nil, fmt.Errorf("failed to list secrets: %w", err)
 		}
 
-		for _, secret := range result.SecretList {
+		for _rvc := range result.SecretList {
+			secret := result.SecretList[_rvc]
 			if secret.Name != nil {
 				secrets = append(secrets, *secret.Name)
 			}

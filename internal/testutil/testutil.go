@@ -15,18 +15,22 @@ func TestContext(t *testing.T) context.Context {
 	return ctx
 }
 
-// SetEnv sets an environment variable for the duration of the test.
+// SetEnv sets an environment variable for the duration of the test and
+// restores the exact prior state (including the distinction between an
+// unset variable and a variable set to "") on cleanup.
 func SetEnv(t *testing.T, key, value string) {
-	old := os.Getenv(key)
+	old, wasSet := os.LookupEnv(key)
 	if err := os.Setenv(key, value); err != nil {
 		t.Fatalf("SetEnv: os.Setenv(%q): %v", key, err)
 	}
 	t.Cleanup(func() {
-		if old == "" {
-			os.Unsetenv(key)
+		if !wasSet {
+			if err := os.Unsetenv(key); err != nil {
+				t.Errorf("SetEnv cleanup: os.Unsetenv(%q): %v", key, err)
+			}
 		} else {
 			if err := os.Setenv(key, old); err != nil {
-				t.Logf("SetEnv cleanup: os.Setenv(%q): %v", key, err)
+				t.Errorf("SetEnv cleanup: os.Setenv(%q): %v", key, err)
 			}
 		}
 	})
@@ -120,7 +124,7 @@ func AssertNotContains(t *testing.T, str, substr string) {
 }
 
 func contains(str, substr string) bool {
-	return len(str) >= len(substr) && (str == substr || len(substr) == 0 || indexSubstring(str, substr) >= 0)
+	return len(str) >= len(substr) && (str == substr || substr == "" || indexSubstring(str, substr) >= 0)
 }
 
 func indexSubstring(str, substr string) int {

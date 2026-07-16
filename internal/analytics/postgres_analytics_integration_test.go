@@ -256,7 +256,7 @@ func TestPostgresAnalyticsStore_QueryMonthlyTotals(t *testing.T) {
 	}
 
 	for _, snapshot := range testSnapshots {
-		err := store.SaveSnapshot(ctx, snapshot)
+		err = store.SaveSnapshot(ctx, snapshot)
 		require.NoError(t, err)
 	}
 

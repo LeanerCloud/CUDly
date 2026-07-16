@@ -9,15 +9,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestNewResolver_AllProviders tests the NewResolver factory for all provider types
+// TestNewResolver_AllProviders tests the NewResolver factory for all provider types.
 func TestNewResolver_AllProviders(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
-		name          string
 		config        *Config
-		expectError   bool
+		name          string
 		errorContains string
+		expectError   bool
 	}{
 		{
 			name:        "env provider creates EnvResolver",
@@ -67,7 +67,7 @@ func TestNewResolver_AllProviders(t *testing.T) {
 	}
 }
 
-// TestLoadConfigFromEnv_EdgeCases tests edge cases in config loading
+// TestLoadConfigFromEnv_EdgeCases tests edge cases in config loading.
 func TestLoadConfigFromEnv_EdgeCases(t *testing.T) {
 	// Save and clear all relevant env vars
 	envVars := []string{"SECRET_PROVIDER", "AWS_REGION", "GCP_PROJECT_ID", "AZURE_KEY_VAULT_URL"}
@@ -87,9 +87,9 @@ func TestLoadConfigFromEnv_EdgeCases(t *testing.T) {
 	}()
 
 	tests := []struct {
-		name     string
 		envVars  map[string]string
 		expected *Config
+		name     string
 	}{
 		{
 			name:    "all empty returns defaults",
@@ -179,15 +179,15 @@ func TestLoadConfigFromEnv_EdgeCases(t *testing.T) {
 	}
 }
 
-// TestGetEnv_EdgeCases tests the getEnv helper function
+// TestGetEnv_EdgeCases tests the getEnv helper function.
 func TestGetEnv_EdgeCases(t *testing.T) {
 	tests := []struct {
 		name         string
 		key          string
 		defaultValue string
 		envValue     string
-		setEnv       bool
 		expected     string
+		setEnv       bool
 	}{
 		{
 			name:         "returns env value when set with spaces",
@@ -252,7 +252,7 @@ func TestGetEnv_EdgeCases(t *testing.T) {
 	}
 }
 
-// TestConfig_ZeroValue tests Config with zero values
+// TestConfig_ZeroValue tests Config with zero values.
 func TestConfig_ZeroValue(t *testing.T) {
 	config := Config{}
 
@@ -262,7 +262,7 @@ func TestConfig_ZeroValue(t *testing.T) {
 	assert.Empty(t, config.AzureVaultURL)
 }
 
-// TestNewResolver_MultipleEnvResolvers tests creating multiple env resolvers
+// TestNewResolver_MultipleEnvResolvers tests creating multiple env resolvers.
 func TestNewResolver_MultipleEnvResolvers(t *testing.T) {
 	ctx := context.Background()
 	config := &Config{Provider: "env"}
@@ -293,7 +293,7 @@ func TestNewResolver_MultipleEnvResolvers(t *testing.T) {
 	assert.Equal(t, "value", val2)
 }
 
-// TestNewResolver_ContextCancellation tests behavior with canceled context
+// TestNewResolver_ContextCancellation tests behavior with canceled context.
 func TestNewResolver_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately

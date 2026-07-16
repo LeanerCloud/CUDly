@@ -148,8 +148,8 @@ func anyRecPurchased(recs []config.RecommendationRecord) bool {
 // the accounts that already succeeded (which #1012's stable key would otherwise
 // dedupe, but the contract should not depend on that second line of defense).
 type multiAccountPartialError struct {
-	committed int
 	errors    []string
+	committed int
 }
 
 func (e *multiAccountPartialError) Error() string {
@@ -485,12 +485,12 @@ func getMaxAccountParallelism() int {
 // savePurchaseHistory from a single goroutine (no concurrent map / slice
 // mutation). The index field is the position in exec.Recommendations.
 type recPurchaseOutcome struct {
-	index    int
 	purchase common.PurchaseResult
 	err      error
+	index    int
 }
 
-func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, provCfg *provider.ProviderConfig) (float64, float64, []string) {
+func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, provCfg *provider.ProviderConfig) (float64, float64, []string) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	// ExecutionID is carried into PurchaseOptions so executeSinglePurchase
 	// can tag every per-rec log line with the owning exec UUID. Without
 	// this, CloudWatch filtering by exec ID returns zero hits and a stuck
@@ -567,7 +567,7 @@ func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *conf
 // so the aggregation logic is single-threaded — no concurrent writes to
 // totals, purchaseErrors, or exec.Recommendations[i] regardless of how
 // many recs ran in parallel.
-func (m *Manager) aggregatePurchaseOutcomes(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, results []execution.Result[recPurchaseOutcome]) (float64, float64, []string) {
+func (m *Manager) aggregatePurchaseOutcomes(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, results []execution.Result[recPurchaseOutcome]) (float64, float64, []string) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	var totalSavings, totalUpfront float64
 	var purchaseErrors []string
 	for _, r := range results {
@@ -704,7 +704,8 @@ func (m *Manager) normalizePurchaseSource(exec *config.PurchaseExecution) string
 // results writes back to exec.Recommendations deterministically.
 func selectedIndices(recs []config.RecommendationRecord) []int {
 	out := make([]int, 0, len(recs))
-	for i, rec := range recs {
+	for i := range recs {
+		rec := recs[i]
 		if rec.Selected {
 			out = append(out, i)
 		}
@@ -797,7 +798,8 @@ func (m *Manager) buildPurchaseConfirmationData(exec *config.PurchaseExecution, 
 		data.ArcheraEducationURL = dashboardBase + "/archera-insurance"
 	}
 
-	for _, rec := range exec.Recommendations {
+	for _rvc := range exec.Recommendations {
+		rec := exec.Recommendations[_rvc]
 		if rec.Purchased {
 			data.Recommendations = append(data.Recommendations, email.RecommendationSummary{
 				Service:        rec.Service,

@@ -104,8 +104,8 @@ func walkPaginated(
 // service (2 terms × 3 payments).
 func collect(service string, raw []rawOffer) []Combo {
 	type key struct {
-		term    int
 		payment string
+		term    int
 	}
 	seen := make(map[key]struct{}, len(raw))
 	out := make([]Combo, 0, len(raw))
@@ -137,8 +137,8 @@ func collect(service string, raw []rawOffer) []Combo {
 // into collect(). Keeping the shape uniform means normalization lives in
 // exactly one place.
 type rawOffer struct {
-	durationSeconds int64
 	payment         string
+	durationSeconds int64
 }
 
 // ---------------------------------------------------------------------------
@@ -443,7 +443,8 @@ func (p *EC2Prober) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) 
 			return nil, nil, err
 		}
 		offers := make([]rawOffer, 0, len(out.ReservedInstancesOfferings))
-		for _, o := range out.ReservedInstancesOfferings {
+		for _rvc := range out.ReservedInstancesOfferings {
+			o := out.ReservedInstancesOfferings[_rvc]
 			offers = append(offers, rawOffer{
 				durationSeconds: aws.ToInt64(o.Duration),
 				payment:         string(o.OfferingType),
@@ -544,7 +545,8 @@ func (p *SavingsPlansProber) probeOnePlanType(
 			return nil, nil, err
 		}
 		offers := make([]rawOffer, 0, len(out.SearchResults))
-		for _, o := range out.SearchResults {
+		for _rvc := range out.SearchResults {
+			o := out.SearchResults[_rvc]
 			offers = append(offers, rawOffer{
 				durationSeconds: o.DurationSeconds,
 				payment:         string(o.PaymentOption),

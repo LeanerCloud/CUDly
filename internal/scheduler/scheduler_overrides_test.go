@@ -17,11 +17,11 @@ import (
 // in scheduler_suppressions_test.go to keep tests self-contained.
 type mockOverrideStore struct {
 	MockConfigStore
-	recs           []config.RecommendationRecord
-	globals        map[string]*config.ServiceConfig          // key: provider|service
-	overrides      map[string]*config.AccountServiceOverride // key: account|provider|service
 	getGlobalErr   error
 	getOverrideErr error
+	globals        map[string]*config.ServiceConfig
+	overrides      map[string]*config.AccountServiceOverride
+	recs           []config.RecommendationRecord
 }
 
 func (m *mockOverrideStore) ListStoredRecommendations(_ context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {

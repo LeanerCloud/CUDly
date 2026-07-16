@@ -169,8 +169,8 @@ func TestBuildPoolConfig(t *testing.T) {
 
 // MockSecretResolver implements SecretResolver for testing.
 type MockSecretResolver struct {
-	SecretValue string
 	SecretError error
+	SecretValue string
 	GetCalls    int
 	CloseCalls  int
 }

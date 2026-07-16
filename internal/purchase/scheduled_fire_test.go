@@ -168,11 +168,13 @@ func TestFireScheduledDelayedPurchases_EndToEnd(t *testing.T) {
 }
 
 // TestFireScheduledDelayedPurchases_DelayPathNotSilentNoOp is a compile-time
-// guard: if FireScheduledDelayedPurchases is removed from Manager (e.g. the
-// function signature drifts), this test fails to build and catches the
+// guard: if FireScheduledDelayedPurchases is removed from Manager or its
+// signature drifts, the typed assertion below fails to build and catches the
 // regression before the test suite runs.
 func TestFireScheduledDelayedPurchases_DelayPathNotSilentNoOp(t *testing.T) {
-	// Verify the method exists and is callable on a zero-value Manager
-	// (no-op call with a nil config store; we only care about compilation).
-	var _ func(context.Context) (*FireResult, error) = (&Manager{}).FireScheduledDelayedPurchases
+	// Typed assertion ensures both method existence and signature are locked.
+	// The explicit type is intentional: QF1011 notwithstanding, omitting it
+	// would revert to the weaker method-existence-only guard that this
+	// assertion replaced.
+	var _ func(context.Context) (*FireResult, error) = (&Manager{}).FireScheduledDelayedPurchases //nolint:staticcheck // QF1011: explicit type is intentional to catch signature drift
 }

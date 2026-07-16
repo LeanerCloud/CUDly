@@ -93,13 +93,16 @@ type StoreInterface interface {
 	// When non-nil the actor is stamped onto transitioned_by + transitioned_at; when nil,
 	// transitioned_by is set to NULL and transitioned_at is still set to NOW() for ordering.
 	TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string) (*PurchaseExecution, error)
-	// CancelExecutionAtomic atomically flips status from pending / notified /
-	// scheduled to cancelled, setting cancelled_by. The 'scheduled' status
-	// supports the Gmail-style pre-fire delay revoke path (issue #290).
-	// Returns (true, "cancelled", nil) on success and (false, currentStatus,
-	// nil) when zero rows were affected (the execution had already been
-	// approved or otherwise transitioned). Must be called inside a WithTx
-	// block so the suppression cleanup and the status flip commit atomically.
+	// CancelExecutionAtomic atomically flips status from pending / notified
+	// to 'cancelled', setting cancelled_by. The 'scheduled' status is NOT
+	// accepted here; scheduled rows are revoked via
+	// CancelScheduledExecutionAtomic (Gmail-style pre-fire delay revoke
+	// path, issue #291 wave-2) so the two flows surface distinct CAS race
+	// outcomes. Returns (true, "cancelled", nil) on success and (false,
+	// currentStatus, nil) when zero rows were affected (the execution had
+	// already been approved or otherwise transitioned). Must be called
+	// inside a WithTx block so the suppression cleanup and the status flip
+	// commit atomically.
 	CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (canceled bool, currentStatus string, err error)
 	// CancelScheduledExecutionAtomic atomically flips status from 'scheduled' to
 	// 'cancelled', setting cancelled_by. Used by the Gmail-style pre-fire delay

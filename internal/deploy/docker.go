@@ -105,7 +105,7 @@ func (r *DefaultCommandRunner) Run(name string, args ...string) error {
 }
 
 // RunWithStdin runs a command with stdin input and streams output to stdout/stderr.
-func (r *DefaultCommandRunner) RunWithStdin(name string, stdin string, args ...string) error {
+func (r *DefaultCommandRunner) RunWithStdin(name, stdin string, args ...string) error {
 	cmd := exec.Command(name, args...) // #nosec G204 -- deploy tooling: callers hardcode binary names (npm, docker, aws); no user input reaches this function
 	cmd.Stdin = strings.NewReader(stdin)
 	cmd.Stdout = os.Stdout

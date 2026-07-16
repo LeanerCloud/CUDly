@@ -19,14 +19,14 @@ const inMemoryRateLimitMaxEntries = 500
 // InMemoryRateLimiter provides in-memory rate limiting for single-instance deployments (Fargate, ECS)
 // This implementation should NOT be used for Lambda (multi-instance) - use DBRateLimiter instead.
 type InMemoryRateLimiter struct {
-	mu       sync.Mutex
 	attempts map[string]*inMemoryRateLimitEntry
-	limits   map[string]RateLimitConfig // endpoint -> config
+	limits   map[string]RateLimitConfig
+	mu       sync.Mutex
 }
 
 type inMemoryRateLimitEntry struct {
-	count     int
 	resetTime time.Time
+	count     int
 }
 
 // Verify that InMemoryRateLimiter implements RateLimiterInterface.
@@ -102,7 +102,7 @@ func (rl *InMemoryRateLimiter) evictOldest() {
 // Allow checks if a request should be allowed based on rate limits.
 // The key should be formatted as "IP#{ip}" or "EMAIL#{email}".
 // The endpoint identifies which rate limit configuration to use.
-func (rl *InMemoryRateLimiter) Allow(ctx context.Context, key string, endpoint string) (bool, error) {
+func (rl *InMemoryRateLimiter) Allow(ctx context.Context, key, endpoint string) (bool, error) {
 	if rl == nil {
 		return true, nil
 	}
@@ -134,19 +134,19 @@ func (rl *InMemoryRateLimiter) Allow(ctx context.Context, key string, endpoint s
 }
 
 // AllowWithIP is a convenience method that formats the key as an IP-based key.
-func (rl *InMemoryRateLimiter) AllowWithIP(ctx context.Context, ip string, endpoint string) (bool, error) {
+func (rl *InMemoryRateLimiter) AllowWithIP(ctx context.Context, ip, endpoint string) (bool, error) {
 	key := fmt.Sprintf("IP#%s", ip)
 	return rl.Allow(ctx, key, endpoint)
 }
 
 // AllowWithEmail is a convenience method that formats the key as an email-based key.
-func (rl *InMemoryRateLimiter) AllowWithEmail(ctx context.Context, email string, endpoint string) (bool, error) {
+func (rl *InMemoryRateLimiter) AllowWithEmail(ctx context.Context, email, endpoint string) (bool, error) {
 	key := fmt.Sprintf("EMAIL#%s", email)
 	return rl.Allow(ctx, key, endpoint)
 }
 
 // AllowWithUser is a convenience method that formats the key as a user-based key.
-func (rl *InMemoryRateLimiter) AllowWithUser(ctx context.Context, userID string, endpoint string) (bool, error) {
+func (rl *InMemoryRateLimiter) AllowWithUser(ctx context.Context, userID, endpoint string) (bool, error) {
 	key := fmt.Sprintf("USER#%s", userID)
 	return rl.Allow(ctx, key, endpoint)
 }

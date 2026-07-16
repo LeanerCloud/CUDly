@@ -12,25 +12,25 @@ import (
 
 // Config holds configuration for the deployment.
 type Config struct {
-	StackName         string
+	Architecture      string
 	Email             string
-	Term              int
+	AdminEmail        string
 	PaymentOption     string
-	Coverage          float64
+	StackName         string
 	RampSchedule      string
-	NotifyDays        int
-	EnableDashboard   bool
+	CORSAllowedOrigin string
+	ImageTag          string
 	DashboardDomain   string
 	HostedZoneID      string
-	Architecture      string
+	Coverage          float64
 	MemorySize        int
+	NotifyDays        int
+	Term              int
 	SkipBuild         bool
 	SkipPush          bool
 	SkipFrontend      bool
 	SkipAdmin         bool
-	ImageTag          string
-	CORSAllowedOrigin string
-	AdminEmail        string
+	EnableDashboard   bool
 }
 
 // ECRClient interface for ECR operations.

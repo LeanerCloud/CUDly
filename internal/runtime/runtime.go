@@ -1,7 +1,7 @@
 // Package runtime holds small helpers that inspect the process's
 // runtime environment. Kept deliberately minimal — this is a shared
 // surface, not a grab-bag for utility code.
-package runtime
+package runtime //nolint:revive // var-naming: package name "runtime" is intentional; provides process-env helpers distinct from stdlib runtime
 
 import "os"
 

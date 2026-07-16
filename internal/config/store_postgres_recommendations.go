@@ -175,7 +175,8 @@ func insertRecommendationsBatch(ctx context.Context, tx pgx.Tx, collectedAt time
 	args := make([]any, 0, len(recs)*colsPerRow)
 	placeholders := make([]string, 0, len(recs))
 
-	for i, rec := range recs {
+	for i := range recs {
+		rec := recs[i]
 		payload, err := json.Marshal(rec)
 		if err != nil {
 			return fmt.Errorf("failed to marshal recommendation %d: %w", i, err)
@@ -231,7 +232,7 @@ func insertRecommendationsBatch(ctx context.Context, tx pgx.Tx, collectedAt time
 // for ListStoredRecommendations. Extracted to keep the caller below the
 // gocyclo threshold; also makes the SQL builder testable in isolation if
 // needed.
-func buildRecommendationFilter(filter RecommendationFilter) (string, []any) {
+func buildRecommendationFilter(filter RecommendationFilter) (whereClause string, queryArgs []any) {
 	var conds []string
 	var args []any
 	add := func(cond string, val any) {

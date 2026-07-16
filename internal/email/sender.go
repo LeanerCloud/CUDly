@@ -73,10 +73,7 @@ func isValidFromEmail(addr string) bool {
 		return false
 	}
 	domain := addr[at+1:]
-	if !strings.Contains(domain, ".") {
-		return false
-	}
-	return true
+	return strings.Contains(domain, ".")
 }
 
 // NewSenderWithContext creates a new email sender with the provided context.
@@ -416,74 +413,26 @@ func dedupeCCAgainstTo(to string, cc []string) []string {
 
 // NotificationData holds data for rendering email templates.
 type NotificationData struct {
-	DashboardURL  string
-	ApprovalToken string
-	ExecutionID   string
-	// PlanID is the parent purchase plan's UUID. Used by the Pause Plan
-	// deeplink in scheduledPurchaseTemplate to route the user to the
-	// Plans tab with the matching plan highlighted. The plan UUID is
-	// non-sensitive (the user already needs an authenticated session
-	// cookie to act on the plan), so embedding it in the URL is safe.
-	PlanID            string
-	TotalSavings      float64
-	TotalUpfrontCost  float64
-	Recommendations   []RecommendationSummary
-	PurchaseDate      string
-	DaysUntilPurchase int
-	PlanName          string
-	// RecipientEmail addresses the individual recipient for flows that target
-	// a specific user (e.g. purchase approval). Leave empty for broadcast
-	// flows that go to preconfigured subscribers via SNS. Purchase approvals
-	// MUST set this — silently broadcasting an approval link to every
-	// subscriber of an SNS alerts topic would leak the approval token.
-	RecipientEmail string
-	// CCEmails carries additional recipients (e.g. the global notification
-	// email) for flows where more than one inbox needs visibility into the
-	// action but only one party is authorized to approve. Empty for single-
-	// recipient flows. Purchase approvals use this to keep the global
-	// notification email informed while directing the approver role at the
-	// account's contact email.
-	CCEmails []string
-	// AuthorizedApprovers carries the email(s) of the parties who are
-	// allowed to click the approve/cancel links. The template prints these
-	// verbatim in the message body so recipients on CC know the action
-	// isn't theirs to take. When empty the template omits the authorisation
-	// block (legacy broadcast behavior).
-	AuthorizedApprovers []string
-	// RequestedByName is the human-readable display name (or email-local) of
-	// the user who submitted the purchase. Rendered in the approval-email
-	// summary block so approvers see who originated the request without
-	// having to cross-reference the dashboard. Empty falls back to
-	// RequestedByEmail.
-	RequestedByName string
-	// RequestedByEmail is the requester's email address. Used as a fallback
-	// for RequestedByName and as a context line in the approval-email
-	// summary. Empty omits the requested-by block entirely.
-	RequestedByEmail string
-	// RequestedAt is the ISO-8601 / RFC3339 timestamp the purchase request
-	// was submitted at. Empty omits the timestamp from the summary.
-	RequestedAt string
-	// CancellationWindowNote is the short text (e.g. "limited time after
-	// approval — see AWS Account & Billing → Refund") rendered below the
-	// approve/cancel buttons. Empty falls back to a generic note. Per-rec
-	// AWS cancellation windows differ; the call site is responsible for
-	// composing the right wording for the rec set.
-	CancellationWindowNote string
-	// ArcheraEducationURL is the full URL to the "What is Archera Insurance?"
-	// page in the CUDly dashboard (DashboardURL + "/archera-insurance").
-	// When non-empty the templates append a short Archera Insurance mention
-	// with the 7-day enrollment window. Empty silently omits the block so
-	// existing callers that haven't been updated yet are unaffected.
-	ArcheraEducationURL string
-	// RevocationWindowClosesAt is the human-readable UTC timestamp when the
-	// Gmail-style pre-fire revocation window closes (issue #291 wave-2). Used
-	// by SendPurchaseScheduledNotification to tell the user until when they
-	// can revoke at zero cost. Empty means "not applicable" (immediate execute).
+	RequestedAt              string
+	RequestedByName          string
+	ExecutionID              string
+	PlanID                   string
+	RevokeURL                string
 	RevocationWindowClosesAt string
-	// RevokeURL is the deep-link URL to revoke the scheduled purchase from the
-	// dashboard (issue #291 wave-2). Embedded in the scheduled-notification
-	// email so the user can revoke with one click.
-	RevokeURL string
+	ArcheraEducationURL      string
+	PurchaseDate             string
+	PlanName                 string
+	ApprovalToken            string
+	CancellationWindowNote   string
+	DashboardURL             string
+	RecipientEmail           string
+	RequestedByEmail         string
+	CCEmails                 []string
+	AuthorizedApprovers      []string
+	Recommendations          []RecommendationSummary
+	DaysUntilPurchase        int
+	TotalUpfrontCost         float64
+	TotalSavings             float64
 }
 
 // RecommendationSummary is a simplified recommendation for email display.
@@ -492,20 +441,12 @@ type RecommendationSummary struct {
 	ResourceType   string
 	Engine         string
 	Region         string
+	Payment        string
+	AccountLabel   string
 	Count          int
 	MonthlySavings float64
-	// Term in years (1 or 3 for AWS RIs/SPs). Zero falls back to
-	// the prior shape (template hides the field).
-	Term int
-	// Payment is the payment-option string (all-upfront / partial-upfront
-	// / no-upfront / monthly). Empty falls back to the prior shape.
-	Payment string
-	// UpfrontCost is the per-rec upfront in dollars. Zero is rendered as
-	// "$0" so a no-upfront payment option visibly shows that fact.
-	UpfrontCost float64
-	// AccountLabel is a friendly per-rec account identifier (e.g.
-	// "AWS 540659244915 (acme-prod)"). Empty omits the line.
-	AccountLabel string
+	Term           int
+	UpfrontCost    float64
 }
 
 // RIExchangeNotificationData holds data for RI exchange email templates.
@@ -533,11 +474,11 @@ type RIExchangeItem struct {
 	SourceRIID         string
 	SourceInstanceType string
 	TargetInstanceType string
-	TargetCount        int
 	PaymentDue         string
 	ExchangeID         string
-	UtilizationPct     float64
 	Error              string
+	TargetCount        int
+	UtilizationPct     float64
 }
 
 // SkippedExchange represents an exchange that was skipped.

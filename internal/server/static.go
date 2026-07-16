@@ -59,6 +59,26 @@ func isPathContainedIn(absFile, absDir string) bool {
 		strings.HasPrefix(absFile, absDir+string(os.PathSeparator))
 }
 
+// symlinkSafeContainedIn returns false when absFile is lexically outside absDir,
+// or when the file exists and its symlink-resolved real path is outside the
+// symlink-resolved real dir. Returns true when the file does not exist yet
+// (SPA fallback: os.Stat below handles the missing-file case).
+func symlinkSafeContainedIn(absDir, absFile string) bool {
+	if !isPathContainedIn(absFile, absDir) {
+		return false
+	}
+	realDir, err := filepath.EvalSymlinks(absDir)
+	if err != nil {
+		return false
+	}
+	if realFile, symlinkErr := filepath.EvalSymlinks(absFile); symlinkErr == nil {
+		return isPathContainedIn(realFile, realDir)
+	}
+	// EvalSymlinks returned an error (file does not exist yet); allow, the
+	// caller's os.Stat will surface the missing-file state.
+	return true
+}
+
 // resolveStaticFilePath validates the URL path against directory traversal and
 // resolves the actual file path. Falls back to index.html for extensionless
 // paths (SPA routing). Returns the file path, the clean path used for content
@@ -79,11 +99,11 @@ func resolveStaticFilePath(dir, urlPath string) (filePath, cleanPath string, ok 
 	if err != nil {
 		return "", "", false
 	}
-	if !isPathContainedIn(absFile, absDir) {
+	if !symlinkSafeContainedIn(absDir, absFile) {
 		return "", "", false
 	}
 
-	info, err := os.Stat(filePath)
+	info, err := os.Stat(filePath) //nolint:gosec // G703: error from Close handled in defer
 	if err != nil || info.IsDir() {
 		if path.Ext(cleanPath) != "" {
 			return "", "", false
@@ -91,7 +111,7 @@ func resolveStaticFilePath(dir, urlPath string) (filePath, cleanPath string, ok 
 		// SPA fallback
 		filePath = filepath.Join(dir, "index.html")
 		cleanPath = "/index.html"
-		if _, err := os.Stat(filePath); err != nil {
+		if _, err := os.Stat(filePath); err != nil { //nolint:gosec // G703: error from Close handled in defer
 			return "", "", false
 		}
 	}
@@ -114,7 +134,7 @@ func cacheControlForExt(ext string) string {
 
 // serveStaticForLambda checks if the request path matches a static file in dir.
 // Returns the file content, content type, cache header, and whether a file was found.
-func serveStaticForLambda(dir, urlPath string) (content []byte, contentType string, cacheControl string, found bool) {
+func serveStaticForLambda(dir, urlPath string) (content []byte, contentType, cacheControl string, found bool) {
 	filePath, cleanPath, ok := resolveStaticFilePath(dir, urlPath)
 	if !ok {
 		return nil, "", "", false

@@ -162,7 +162,7 @@ func resolveAzureSMTPCredentials(ctx context.Context) (username, password string
 	usernameSecret := os.Getenv("AZURE_SMTP_USERNAME_SECRET")
 	passwordSecret := os.Getenv("AZURE_SMTP_PASSWORD_SECRET")
 	if usernameSecret == "" || passwordSecret == "" {
-		return "", "", fmt.Errorf("Azure SMTP credentials required: set AZURE_SMTP_USERNAME/AZURE_SMTP_PASSWORD or AZURE_SMTP_USERNAME_SECRET/AZURE_SMTP_PASSWORD_SECRET")
+		return "", "", fmt.Errorf("Azure SMTP credentials required: set AZURE_SMTP_USERNAME/AZURE_SMTP_PASSWORD or AZURE_SMTP_USERNAME_SECRET/AZURE_SMTP_PASSWORD_SECRET") //nolint:staticcheck // ST1005: user-facing message; capitalization intentional and asserted by tests
 	}
 
 	resolver, err := secrets.NewResolver(ctx, secrets.LoadConfigFromEnv())

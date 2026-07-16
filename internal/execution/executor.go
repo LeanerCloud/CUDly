@@ -20,7 +20,8 @@ func RunForAccounts[T any](
 ) []Result[T] {
 	ids := make([]string, len(accounts))
 	byID := make(map[string]config.CloudAccount, len(accounts))
-	for i, a := range accounts {
+	for i := range accounts {
+		a := accounts[i]
 		ids[i] = a.ID
 		byID[a.ID] = a
 	}
@@ -39,7 +40,8 @@ func RunForAccountsWithConcurrency[T any](
 ) []Result[T] {
 	ids := make([]string, len(accounts))
 	byID := make(map[string]config.CloudAccount, len(accounts))
-	for i, a := range accounts {
+	for i := range accounts {
+		a := accounts[i]
 		ids[i] = a.ID
 		byID[a.ID] = a
 	}

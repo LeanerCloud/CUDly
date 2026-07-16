@@ -106,7 +106,6 @@ func (s *PostgresStore) ListAccountRegistrations(ctx context.Context, filter Acc
 			idx, idx, idx,
 		))
 		args = append(args, "%"+escaped+"%")
-		idx++
 	}
 
 	query := `SELECT ` + registrationColumns() + ` FROM account_registrations`

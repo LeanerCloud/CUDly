@@ -307,7 +307,7 @@ func TestSendRegistrationReceivedNotification_SubjectHeaderInjection(t *testing.
 	data := RegistrationNotificationData{
 		AccountName:    injectedName,
 		Provider:       injectedProvider,
-		RecipientEmail: "", // will fall back to notifyEmail
+		RecipientEmail: "",
 	}
 
 	s := &SMTPSender{

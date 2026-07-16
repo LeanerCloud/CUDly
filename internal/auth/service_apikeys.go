@@ -265,7 +265,8 @@ func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserA
 		return nil, nil, fmt.Errorf("invalid API key")
 	}
 
-	if err := validateAPIKeyStatus(key); err != nil {
+	err = validateAPIKeyStatus(key)
+	if err != nil {
 		return nil, nil, err
 	}
 
