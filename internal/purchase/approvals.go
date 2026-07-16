@@ -14,14 +14,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// revocationTokenWindow is the TTL stamped onto the fresh revocation token
-// minted after a token-authed approve. It matches the 24-hour AWS RI/SP
-// support-case window advertised in the post-execution email and enforced
-// in validateRevokeToken (handler_purchases.go). Keeping the two values
-// in sync is essential: a token that expires before the window closes would
-// silently block a valid revoke attempt.
-const revocationTokenWindow = 24 * time.Hour
-
 // ApproveExecution is the token-authenticated approve entry point used by
 // the legacy email-link flow and the SQS approve worker. After validating
 // the approval token it hands off to ApproveAndExecute, which performs the
@@ -296,9 +288,15 @@ func (m *Manager) CancelExecution(ctx context.Context, executionID, token, actor
 // The handler re-fetches the execution after ApproveExecution returns to
 // pick up the fresh token for embedding in the email.
 //
-// Best-effort: if the write fails the approve has already landed and the
-// handler will fall back to sending the email with an empty RevocationToken
-// (no revoke button), which is degraded but safe.
+// Best-effort: if the write fails the approve has already landed and this
+// returns an error the caller only logs. The stored token is then unchanged
+// (still the consumed approval token), so the handler's re-fetch surfaces that
+// token and the email carries it -- it still validates for revoke because it
+// was never rotated (degraded to the old reuse-the-approval-token behavior on
+// this rare path, but functional and safe). The distinct failure mode where the
+// handler's re-fetch itself errors is handled in approveViaToken by blanking
+// ApprovalToken so the Revoke panel is suppressed rather than emailing a token
+// whose validity is unknown.
 func (m *Manager) mintRevocationToken(ctx context.Context, executionID string) error {
 	exec, err := m.config.GetExecutionByID(ctx, executionID)
 	if err != nil {
@@ -311,7 +309,7 @@ func (m *Manager) mintRevocationToken(ctx context.Context, executionID string) e
 	if err != nil {
 		return fmt.Errorf("mintRevocationToken: failed to generate token: %w", err)
 	}
-	expiry := time.Now().Add(revocationTokenWindow)
+	expiry := time.Now().Add(config.RevocationWindow)
 	exec.ApprovalToken = tok
 	exec.ApprovalTokenExpiresAt = &expiry
 	return m.config.SavePurchaseExecution(ctx, exec)

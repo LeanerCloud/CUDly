@@ -104,3 +104,12 @@ const (
 // 6-hour TTL; purchase approvals are higher-stakes so a longer window is
 // appropriate but must still be bounded.
 const ApprovalTokenTTL = 7 * 24 * time.Hour
+
+// RevocationWindow is the time window after a purchase completes during which
+// the buyer may request revocation (issue #291). 24 hours matches the AWS RI/SP
+// support-case window advertised in the post-execution email. It is the single
+// source of truth for both the fresh revocation token's expiry (minted in
+// purchase.mintRevocationToken) and the enforcement check in api.validateRevokeToken:
+// the two MUST stay equal or a token could expire before the window closes and
+// silently block a valid revoke.
+const RevocationWindow = 24 * time.Hour

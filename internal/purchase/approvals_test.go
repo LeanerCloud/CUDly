@@ -748,9 +748,10 @@ func TestManager_CancelExecution_ExpiredToken(t *testing.T) {
 // Finding #1: Token rotation on approve/cancel
 // ---------------------------------------------------------------------------
 
-// TestApproveExecution_RotatesApprovalToken verifies that after a successful
-// approve the ApprovalToken is cleared to prevent the same token from being
-// used to trigger a revoke (or any other action) later.
+// TestApproveExecution_MintsRevocationToken verifies that after a successful
+// approve a FRESH revocation token is minted (not cleared), so the consumed
+// approval token can no longer trigger a revoke while the executed-notification
+// email carries a valid revoke-capable token.
 func TestApproveExecution_MintsRevocationToken(t *testing.T) {
 	ctx := context.Background()
 	manager, store, sender := newApproveManager(t)

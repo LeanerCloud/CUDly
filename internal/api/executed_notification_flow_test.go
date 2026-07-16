@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -132,6 +133,69 @@ func TestExecutedNotification_TokenApprovePath(t *testing.T) {
 	// scenario: recipient clicks "Revoke" in the email -> token validates -> 200.
 	require.NoError(t, validateRevokeToken(freshExec, freshToken),
 		"the token embedded in the email must pass validateRevokeToken on the post-approve execution")
+
+	mockPurchase.AssertExpectations(t)
+	mockConfig.AssertExpectations(t)
+}
+
+// TestExecutedNotification_TokenApprovePath_RefetchFailureSuppressesPanel is the
+// regression test for the degraded-path nit: when the post-approve re-fetch
+// fails, approveViaToken must NOT email the stale pre-approve execution struct
+// (which still carries the OLD approval token that mintRevocationToken has
+// already replaced in the DB -- that token would 403 on every Revoke click,
+// resurrecting the original defect). Instead the email must carry an EMPTY
+// RevocationToken so the email template's {{if .RevocationToken}} suppresses the
+// Revoke panel entirely (no broken button).
+func TestExecutedNotification_TokenApprovePath_RefetchFailureSuppressesPanel(t *testing.T) {
+	ctx := context.Background()
+	execID := "12345678-1234-1234-1234-123456789abc"
+	contact := "contact@example.com"
+
+	mockConfig := new(MockConfigStore)
+	exec := approvalTestExec(execID, contact, mockConfig)
+
+	// First call: loadApproveExecution fetches the pending execution.
+	// Second call: approveViaToken re-fetches after ApproveExecution returns,
+	// but this time the store errors -- the fresh token cannot be obtained.
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil).Once()
+	mockConfig.On("GetExecutionByID", ctx, execID).
+		Return(nil, errors.New("transient store failure")).Once()
+	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		NotificationEmail: &contact,
+	}, nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: contact}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "", "approve-any", "purchases").Return(false, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", ctx, "", "approve-own", "purchases").Return(false, nil).Maybe()
+
+	mockPurchase := new(MockPurchaseManager)
+	mockPurchase.On("ApproveExecution", ctx, execID, "valid-token", contact).Return(nil)
+
+	notifier := &recordingExecutedNotifier{}
+	handler := &Handler{
+		purchase:      mockPurchase,
+		config:        mockConfig,
+		auth:          mockAuth,
+		emailNotifier: notifier,
+	}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	result, err := handler.approvePurchase(ctx, req, execID, "valid-token")
+	require.NoError(t, err, "approve must still succeed even when the email re-fetch fails")
+	assert.Equal(t, "completed", result.(map[string]string)["status"])
+
+	// The notification still fires (best-effort), but with an EMPTY revocation
+	// token so the Revoke panel is suppressed rather than showing a broken button.
+	require.Equal(t, 1, notifier.calls, "notification must still fire on the degraded path")
+	assert.Empty(t, notifier.captured.RevocationToken,
+		"re-fetch failure must blank the revocation token (suppress panel), never email the stale token")
+
+	// The stale pre-approve struct must be untouched: blanking happens on a COPY.
+	assert.Equal(t, "valid-token", exec.ApprovalToken,
+		"the fallback must blank a COPY, not mutate the caller's execution struct")
 
 	mockPurchase.AssertExpectations(t)
 	mockConfig.AssertExpectations(t)

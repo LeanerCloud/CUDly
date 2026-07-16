@@ -528,11 +528,19 @@ func (h *Handler) approveViaToken(ctx context.Context, req *events.LambdaFunctio
 	// stored token, which mintRevocationToken has already replaced).
 	emailExec, fetchErr := h.config.GetExecutionByID(ctx, execution.ExecutionID)
 	if fetchErr != nil || emailExec == nil {
-		// Best-effort fallback: send without a valid revoke token rather than
-		// blocking the response. The purchase is complete regardless.
-		logging.Warnf("approveViaToken[%s]: re-fetch for email failed (%v); sending without valid revocation token",
+		// Best-effort fallback: the re-fetch failed, so we cannot obtain the
+		// fresh revocation token minted inside ApproveExecution. The stale
+		// pre-approve struct still carries the OLD approval token, which
+		// mintRevocationToken has already replaced in the DB -- emailing it
+		// would embed an invalid token and every Revoke click would 403.
+		// Instead, send a COPY with ApprovalToken blanked so the email
+		// template's {{if .RevocationToken}} suppresses the Revoke panel
+		// entirely (no broken button). The purchase is complete regardless.
+		logging.Warnf("approveViaToken[%s]: re-fetch for email failed (%v); suppressing Revoke panel (no valid token available)",
 			execution.ExecutionID, fetchErr)
-		emailExec = execution
+		emailCopy := *execution
+		emailCopy.ApprovalToken = ""
+		emailExec = &emailCopy
 	}
 	// Best-effort post-execution notification email (issue #291). Mirrors
 	// the session-authed path; errors are logged inside sendPurchaseExecutedEmail
@@ -1175,15 +1183,9 @@ func checkRevokableStatus(execution *config.PurchaseExecution) error {
 	}
 }
 
-// revocationWindowDuration is the time window after a purchase completes
-// during which the buyer may request revocation. 24 hours matches the AWS
-// RI/SP support-case window and is advertised in the post-execution email.
-// Adjust this constant to change the window without touching call sites.
-const revocationWindowDuration = 24 * time.Hour
-
 // validateRevokeToken checks that the execution carries a non-empty
 // ApprovalToken, that the token has not expired, that the revocation window
-// has not closed (revocationWindowDuration after CompletedAt), and that the
+// has not closed (config.RevocationWindow after CompletedAt), and that the
 // token matches using constant-time comparison. Pre-migration rows without an
 // ApprovalTokenExpiresAt pass the expiry check (legacy backward compat).
 // Extracted from revokeViaEmailToken to keep that function under the cyclomatic limit.
@@ -1224,7 +1226,7 @@ func checkRevocationWindow(execution *config.PurchaseExecution) error {
 		// Legacy row: no timestamp to anchor the window; allow the revoke.
 		return nil
 	}
-	windowCloses := ref.Add(revocationWindowDuration)
+	windowCloses := ref.Add(config.RevocationWindow)
 	if time.Now().After(windowCloses) {
 		return NewClientError(403, fmt.Sprintf(
 			"revocation window has closed (window closed at %s)", windowCloses.UTC().Format(time.RFC3339)))
@@ -1246,7 +1248,7 @@ func revocationWindowClosesAt(execution *config.PurchaseExecution) string {
 	if ref == nil {
 		return ""
 	}
-	return ref.Add(revocationWindowDuration).UTC().Format("2006-01-02 15:04 UTC")
+	return ref.Add(config.RevocationWindow).UTC().Format("2006-01-02 15:04 UTC")
 }
 
 // revokeViaSession performs the post-execution revocation action by recording
