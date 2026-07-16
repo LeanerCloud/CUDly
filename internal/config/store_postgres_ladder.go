@@ -361,6 +361,34 @@ func (s *PostgresStore) SaveLadderRunWithTranches(ctx context.Context, run *Ladd
 	return &result, nil
 }
 
+// GetInFlightLadderCommitUSDHr returns the total hourly USD commitment already
+// in flight for the given config: the SUM of amount_usd_hr for ladder_tranches
+// rows where config_id=$1 and status = 'scheduled'.
+//
+// SCHEDULED ONLY: fired/completed tranches are executed purchases already
+// counted in the engine's ExistingUSDPerHour (the provider adapters fold
+// payment-pending and active commitments into E). Summing them here as well
+// would double-subtract them from the gap and cause under-purchasing. Only
+// not-yet-fired (scheduled) tranches are genuinely "in flight" and absent
+// from E, so they alone must be netted out of the gap.
+//
+// Returns a non-nil *float64 (zero when no scheduled tranches exist); never
+// returns nil without a non-nil error, so callers can pass it directly to
+// AllocationInput.InFlightUSDPerHour without an extra nil-guard.
+func (s *PostgresStore) GetInFlightLadderCommitUSDHr(ctx context.Context, configID string) (*float64, error) {
+	var total float64
+	err := s.db.QueryRow(ctx, `
+		SELECT COALESCE(SUM(amount_usd_hr), 0)
+		FROM ladder_tranches
+		WHERE config_id = $1
+		  AND status = $2
+	`, configID, string(ladder.TrancheStatusScheduled)).Scan(&total)
+	if err != nil {
+		return nil, fmt.Errorf("GetInFlightLadderCommitUSDHr config_id=%s: %w", configID, err)
+	}
+	return &total, nil
+}
+
 // LatestLadderRunStartedAt returns the maximum started_at for the given
 // config_id, or nil when no run has been recorded yet. Drives the per-cadence
 // self-gate in handleLadderRun (Q6).
