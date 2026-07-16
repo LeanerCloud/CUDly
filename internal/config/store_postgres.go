@@ -1079,7 +1079,7 @@ func (s *PostgresStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, ex
 // 'scheduled' to 'cancelled', setting cancelled_by to the supplied actor
 // (NULL when actor is nil). Used by the Gmail-style pre-fire delay revoke
 // path (issue #290 / #291 wave-2): an approved-but-not-yet-fired execution
-// can be revoked at $0 by flipping it to canceled before the scheduler
+// can be revoked at $0 by flipping it to cancelled before the scheduler
 // fires the cloud SDK call.
 //
 // The 'scheduled' status is the only accepted source. A concurrent

@@ -68,7 +68,7 @@ func TestFireScheduledDelayedPurchases_ListErrorSurfaces(t *testing.T) {
 func TestFireScheduledDelayedPurchases_CASLostToRevokeClassifiedAsRaceLost(t *testing.T) {
 	// The critical safety property of the Gmail-style pre-fire delay: if the
 	// user clicks Revoke between the sweep's SELECT and its scheduled->approved
-	// CAS, the row is flipped to "canceled" first and the CAS is rejected with
+	// CAS, the row is flipped to "cancelled" first and the CAS is rejected with
 	// ErrExecutionNotInExpectedStatus. That MUST be classified as RaceLost (a
 	// normal, expected outcome), NOT Errored — and the row must NOT fire the
 	// SDK call. A regression here would either double-charge the user (fire a
@@ -81,7 +81,7 @@ func TestFireScheduledDelayedPurchases_CASLostToRevokeClassifiedAsRaceLost(t *te
 		Return([]config.PurchaseExecution{row}, nil)
 	store.On("TransitionExecutionStatus", ctx, "exec-revoked", []string{"scheduled"}, "approved", (*string)(nil)).
 		Return(nil, fmt.Errorf("%w: execution exec-revoked cannot transition from %q to %q",
-			config.ErrExecutionNotInExpectedStatus, "canceled", "approved"))
+			config.ErrExecutionNotInExpectedStatus, "cancelled", "approved"))
 
 	mgr := newFireManager(store)
 	result, err := mgr.FireScheduledDelayedPurchases(ctx)
