@@ -147,7 +147,7 @@ func (app *Application) resolveLadderAccount(ctx context.Context) (accountID, re
 // account cannot be determined. The ladder path uses the account ID to SCOPE
 // which configs run, so a fabricated/"unknown" value is unsafe: it would skip
 // every config as multi-account and report a false success.
-func defaultLadderAccountResolver(ctx context.Context) (string, string, error) {
+func defaultLadderAccountResolver(ctx context.Context) (accountID, region string, err error) {
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
 		return "", "", fmt.Errorf("load AWS config: %w", err)
@@ -165,7 +165,7 @@ func defaultLadderAccountResolver(ctx context.Context) (string, string, error) {
 // no-op that still returns success. Failing loud here aborts handleLadderRun
 // before any config is processed (same silent-degradation class as the missing
 // STS account ID below).
-func resolveLadderIdentity(ctx context.Context, awsCfg aws.Config) (string, string, error) {
+func resolveLadderIdentity(ctx context.Context, awsCfg aws.Config) (accountID, region string, err error) {
 	if awsCfg.Region == "" {
 		return "", "", fmt.Errorf("AWS region is empty; set AWS_REGION / AWS_DEFAULT_REGION or a region in the shared config")
 	}
@@ -183,7 +183,7 @@ func resolveLadderIdentity(ctx context.Context, awsCfg aws.Config) (string, stri
 // runLadderConfigs processes every ladder_config entry, isolating each one:
 // an error on one config increments the Errored counter and continues to the
 // next, so a single broken config never aborts the whole run. Extracted from
-// handleLadderRun so the multi-config isolation behaviour is unit-testable
+// handleLadderRun so the multi-config isolation behavior is unit-testable
 // without the AWS SDK account-resolution path in handleLadderRun.
 func (app *Application) runLadderConfigs(
 	ctx context.Context,
@@ -275,7 +275,7 @@ func (app *Application) processOneLadderConfig(
 func (app *Application) executeLadderRun(
 	ctx context.Context,
 	dbCfg *config.LadderConfigDB,
-	cap pkgladder.LadderCapability,
+	capability pkgladder.LadderCapability,
 	accountID string,
 	term pkgladder.Term,
 	paymentOpt pkgladder.PaymentOption,
@@ -290,17 +290,17 @@ func (app *Application) executeLadderRun(
 
 	// Collect read-side data. All three calls are independent; errors are
 	// fail-loud (not silently defaulted to empty).
-	baseline, err := cap.GetUsageBaseline(ctx, scope, engineCfg.LookbackDays, engineCfg.BaselinePercentile)
+	baseline, err := capability.GetUsageBaseline(ctx, scope, engineCfg.LookbackDays, engineCfg.BaselinePercentile)
 	if err != nil {
 		return fmt.Errorf("GetUsageBaseline: %w", err)
 	}
 
-	layerStates, err := cap.GetLayerStates(ctx, scope)
+	layerStates, err := capability.GetLayerStates(ctx, scope)
 	if err != nil {
 		return fmt.Errorf("GetLayerStates: %w", err)
 	}
 
-	supportedLayers := cap.SupportedLayers()
+	supportedLayers := capability.SupportedLayers()
 
 	// Run Allocate.
 	allocResult, err := pkgladder.Allocate(&pkgladder.AllocationInput{
@@ -312,7 +312,7 @@ func (app *Application) executeLadderRun(
 		DataSources: []string{dataSourceAWSCostExplorer},
 	})
 	if err != nil {
-		return fmt.Errorf("Allocate: %w", err)
+		return fmt.Errorf("allocate: %w", err)
 	}
 
 	// Run BuildTranches to produce the ramp schedule.
@@ -415,7 +415,7 @@ func (app *Application) persistLadderRun(
 // if we cannot determine whether a recent run exists, proceeding risks a
 // duplicate money action, so the caller counts the config Errored rather than
 // running it.
-func ladderWithinCadenceWindow(ctx context.Context, store config.StoreInterface, dbCfg *config.LadderConfigDB, now time.Time) (bool, string, error) {
+func ladderWithinCadenceWindow(ctx context.Context, store config.StoreInterface, dbCfg *config.LadderConfigDB, now time.Time) (within bool, reason string, err error) {
 	latest, err := store.LatestLadderRunStartedAt(ctx, dbCfg.ID)
 	if err != nil {
 		return false, "", fmt.Errorf("LatestLadderRunStartedAt: %w", err)
@@ -503,7 +503,7 @@ func assembleLadderPlan(
 	term pkgladder.Term,
 	paymentOpt pkgladder.PaymentOption,
 ) *pkgladder.LadderPlan {
-	var actions []pkgladder.PlannedAction
+	actions := make([]pkgladder.PlannedAction, 0, len(allocResult.Allocations)+len(allocResult.Reshapes)+len(allocResult.Holds))
 	// Purchase allocations come first so approval-email ordering is stable.
 	for _, alloc := range allocResult.Allocations {
 		actions = append(actions, pkgladder.PlannedAction{
@@ -607,7 +607,8 @@ func allocTotalHourlyCommit(allocs []pkgladder.Allocation) float64 {
 // nothing partial is written.
 func buildTrancheDBRows(tranches []pkgladder.Tranche, runID string, configID *string) ([]config.LadderTrancheDB, error) {
 	rows := make([]config.LadderTrancheDB, 0, len(tranches))
-	for _, tr := range tranches {
+	for i := range tranches {
+		tr := &tranches[i] // use pointer to avoid copying 152-byte Tranche struct per iteration
 		// AmountUSDHr: parse the RatString back to float64. A missing or
 		// malformed RatString means BuildTranches produced a broken tranche;
 		// that should never happen after Validate() passes, so surface it as
