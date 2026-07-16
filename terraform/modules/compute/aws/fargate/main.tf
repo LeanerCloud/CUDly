@@ -975,3 +975,201 @@ resource "aws_iam_role_policy" "eventbridge_ri_exchange" {
     ]
   })
 }
+
+# ==============================================
+# Scheduled Commitment-Ladder Planning Run
+# ==============================================
+
+resource "aws_cloudwatch_event_rule" "ladder_run" {
+  count = var.enable_ladder_run_schedule ? 1 : 0
+
+  name                = "${local.name_prefix}-ladder-run"
+  description         = "Trigger commitment-ladder planning run (ladder_run task)"
+  schedule_expression = var.ladder_run_schedule
+
+  tags = local.common_tags
+}
+
+resource "aws_cloudwatch_event_target" "ladder_run" {
+  count = var.enable_ladder_run_schedule ? 1 : 0
+
+  rule      = aws_cloudwatch_event_rule.ladder_run[0].name
+  target_id = "ecs-task"
+  arn       = aws_ecs_cluster.main.arn
+  role_arn  = aws_iam_role.eventbridge_ladder_run[0].arn
+
+  ecs_target {
+    task_count          = 1
+    task_definition_arn = aws_ecs_task_definition.main.arn
+    launch_type         = "FARGATE"
+    platform_version    = "LATEST"
+
+    network_configuration {
+      subnets          = var.private_subnet_ids
+      security_groups  = [aws_security_group.ecs_tasks.id]
+      assign_public_ip = false
+    }
+  }
+
+  retry_policy {
+    maximum_retry_attempts       = 0
+    maximum_event_age_in_seconds = 3600
+  }
+
+  input = jsonencode({
+    containerOverrides = [{
+      name    = "app"
+      command = ["./cudly", "--task", "ladder_run"]
+    }]
+  })
+}
+
+resource "aws_iam_role" "eventbridge_ladder_run" {
+  count = var.enable_ladder_run_schedule ? 1 : 0
+
+  name = "${local.name_prefix}-eb-ladder-run"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "events.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy" "eventbridge_ladder_run" {
+  count = var.enable_ladder_run_schedule ? 1 : 0
+
+  name = "ecs-run-task"
+  role = aws_iam_role.eventbridge_ladder_run[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ecs:RunTask"
+        ]
+        Resource = aws_ecs_task_definition.main.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "iam:PassRole"
+        ]
+        Resource = [
+          aws_iam_role.task_execution.arn,
+          aws_iam_role.task.arn
+        ]
+      }
+    ]
+  })
+}
+
+# ==============================================
+# Scheduled Fire-Scheduled-Purchases Sweep
+# ==============================================
+
+resource "aws_cloudwatch_event_rule" "fire_scheduled_purchases" {
+  count = var.enable_fire_scheduled_purchases_schedule ? 1 : 0
+
+  name                = "${local.name_prefix}-fire-scheduled-purchases"
+  description         = "Trigger fire_scheduled_purchases sweep (auto-approve delayed execution)"
+  schedule_expression = var.fire_scheduled_purchases_schedule
+
+  tags = local.common_tags
+}
+
+resource "aws_cloudwatch_event_target" "fire_scheduled_purchases" {
+  count = var.enable_fire_scheduled_purchases_schedule ? 1 : 0
+
+  rule      = aws_cloudwatch_event_rule.fire_scheduled_purchases[0].name
+  target_id = "ecs-task"
+  arn       = aws_ecs_cluster.main.arn
+  role_arn  = aws_iam_role.eventbridge_fire_scheduled_purchases[0].arn
+
+  ecs_target {
+    task_count          = 1
+    task_definition_arn = aws_ecs_task_definition.main.arn
+    launch_type         = "FARGATE"
+    platform_version    = "LATEST"
+
+    network_configuration {
+      subnets          = var.private_subnet_ids
+      security_groups  = [aws_security_group.ecs_tasks.id]
+      assign_public_ip = false
+    }
+  }
+
+  retry_policy {
+    maximum_retry_attempts       = 0
+    maximum_event_age_in_seconds = 3600
+  }
+
+  input = jsonencode({
+    containerOverrides = [{
+      name    = "app"
+      command = ["./cudly", "--task", "fire_scheduled_purchases"]
+    }]
+  })
+}
+
+resource "aws_iam_role" "eventbridge_fire_scheduled_purchases" {
+  count = var.enable_fire_scheduled_purchases_schedule ? 1 : 0
+
+  name = "${local.name_prefix}-eb-fire-sched-purchases"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "events.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy" "eventbridge_fire_scheduled_purchases" {
+  count = var.enable_fire_scheduled_purchases_schedule ? 1 : 0
+
+  name = "ecs-run-task"
+  role = aws_iam_role.eventbridge_fire_scheduled_purchases[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ecs:RunTask"
+        ]
+        Resource = aws_ecs_task_definition.main.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "iam:PassRole"
+        ]
+        Resource = [
+          aws_iam_role.task_execution.arn,
+          aws_iam_role.task.arn
+        ]
+      }
+    ]
+  })
+}

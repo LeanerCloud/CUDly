@@ -190,6 +190,30 @@ variable "ri_exchange_schedule" {
   default     = "rate(6 hours)"
 }
 
+variable "enable_ladder_run_schedule" {
+  description = "Enable the scheduled commitment-ladder planning run. Default false until laddering is promoted to GA."
+  type        = bool
+  default     = false
+}
+
+variable "ladder_run_schedule" {
+  description = "EventBridge schedule for the commitment-ladder planning run (e.g. rate(1 day) or cron(0 2 * * ? *) for 02:00 UTC)."
+  type        = string
+  default     = "rate(1 day)"
+}
+
+variable "enable_fire_scheduled_purchases_schedule" {
+  description = "Enable the scheduled fire_scheduled_purchases sweep. Default false until auto-approve (L9) is promoted to GA."
+  type        = bool
+  default     = false
+}
+
+variable "fire_scheduled_purchases_schedule" {
+  description = "EventBridge schedule for the fire_scheduled_purchases sweep (default rate(15 minutes))."
+  type        = string
+  default     = "rate(15 minutes)"
+}
+
 variable "task_timeout" {
   description = "Timeout in seconds for one-off scheduled tasks"
   type        = number

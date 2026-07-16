@@ -77,6 +77,12 @@ module "compute_lambda" {
   enable_ri_exchange_schedule = var.enable_ri_exchange_schedule
   ri_exchange_schedule        = var.ri_exchange_schedule
 
+  # Commitment-ladder scheduling (default-off until GA)
+  enable_ladder_run_schedule               = var.enable_ladder_run_schedule
+  ladder_run_schedule                      = var.ladder_run_schedule
+  enable_fire_scheduled_purchases_schedule = var.enable_fire_scheduled_purchases_schedule
+  fire_scheduled_purchases_schedule        = var.fire_scheduled_purchases_schedule
+
   # Additional environment variables
   additional_env_vars = merge(
     {
@@ -186,6 +192,12 @@ module "compute_fargate" {
   # RI exchange automation
   enable_ri_exchange_schedule = var.enable_ri_exchange_schedule
   ri_exchange_schedule        = var.ri_exchange_schedule
+
+  # Commitment-ladder scheduling (default-off until GA)
+  enable_ladder_run_schedule               = var.enable_ladder_run_schedule
+  ladder_run_schedule                      = var.ladder_run_schedule
+  enable_fire_scheduled_purchases_schedule = var.enable_fire_scheduled_purchases_schedule
+  fire_scheduled_purchases_schedule        = var.fire_scheduled_purchases_schedule
 
   # ECS Exec for debugging
   enable_execute_command = var.fargate_enable_execute_command

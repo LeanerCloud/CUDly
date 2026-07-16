@@ -641,3 +641,90 @@ resource "aws_lambda_permission" "eventbridge_analytics_collect" {
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.analytics_collect[0].arn
 }
+
+# ==============================================
+# EventBridge Rule for Commitment-Ladder Planning Run
+# ==============================================
+#
+# Daily tick that invokes the ladder_run scheduled task: reads the
+# configured target coverage, computes the gap, and plans the next
+# batch of SP/RI purchases (and reshapes once L16 lands). The
+# handler is advisory-lock guarded, so overlapping invocations are
+# safe. Default-off until laddering is promoted to GA; enable via
+# var.enable_ladder_run_schedule.
+
+resource "aws_cloudwatch_event_rule" "ladder_run" {
+  count = var.enable_ladder_run_schedule ? 1 : 0
+
+  name                = "${var.stack_name}-ladder-run"
+  description         = "Trigger commitment-ladder planning run (ladder_run task)"
+  schedule_expression = var.ladder_run_schedule
+
+  tags = var.tags
+}
+
+resource "aws_cloudwatch_event_target" "ladder_run" {
+  count = var.enable_ladder_run_schedule ? 1 : 0
+
+  rule      = aws_cloudwatch_event_rule.ladder_run[0].name
+  target_id = "lambda"
+  arn       = aws_lambda_function.main.arn
+
+  input = jsonencode({
+    action = "ladder_run"
+  })
+}
+
+resource "aws_lambda_permission" "eventbridge_ladder_run" {
+  count = var.enable_ladder_run_schedule ? 1 : 0
+
+  statement_id  = "AllowExecutionFromEventBridgeLadderRun"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.main.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.ladder_run[0].arn
+}
+
+# ==============================================
+# EventBridge Rule for Scheduled-Purchase Fire Sweep
+# ==============================================
+#
+# Frequent tick that invokes the fire_scheduled_purchases task:
+# scans purchase_executions in status=scheduled whose
+# scheduled_execution_at is in the past and fires each one. This
+# sweep is the runtime mechanism that makes auto-approve delayed
+# purchases actually execute; without it, scheduled tranches would
+# never fire between daily ladder runs. Default-off until the
+# auto-approve feature (L9) is promoted to GA.
+
+resource "aws_cloudwatch_event_rule" "fire_scheduled_purchases" {
+  count = var.enable_fire_scheduled_purchases_schedule ? 1 : 0
+
+  name                = "${var.stack_name}-fire-scheduled-purchases"
+  description         = "Trigger fire_scheduled_purchases sweep (auto-approve delayed execution)"
+  schedule_expression = var.fire_scheduled_purchases_schedule
+
+  tags = var.tags
+}
+
+resource "aws_cloudwatch_event_target" "fire_scheduled_purchases" {
+  count = var.enable_fire_scheduled_purchases_schedule ? 1 : 0
+
+  rule      = aws_cloudwatch_event_rule.fire_scheduled_purchases[0].name
+  target_id = "lambda"
+  arn       = aws_lambda_function.main.arn
+
+  input = jsonencode({
+    action = "fire_scheduled_purchases"
+  })
+}
+
+resource "aws_lambda_permission" "eventbridge_fire_scheduled_purchases" {
+  count = var.enable_fire_scheduled_purchases_schedule ? 1 : 0
+
+  statement_id  = "AllowExecutionFromEventBridgeFireScheduledPurchases"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.main.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.fire_scheduled_purchases[0].arn
+}
