@@ -137,7 +137,7 @@ Review failed purchases:
 This is an automated message from CUDly.
 `
 
-const passwordResetTemplate = "" + // #nosec G101 -- email template; "password" in body text is email copy, not a hardcoded credential
+const passwordResetTemplate = "" +
 	`CUDly - Password Reset Request
 ==============================
 
@@ -161,7 +161,7 @@ This is an automated message from CUDly.
 // Modeled on purchaseApprovalRequestHTMLTemplate (line 367) — inline styles
 // because most email clients (Outlook, mobile Gmail) ignore class-based CSS.
 // Issue #355.
-const passwordResetHTMLTemplate = "" + // #nosec G101 -- HTML email template; "password" in body text is email copy, not a hardcoded credential
+const passwordResetHTMLTemplate = "" +
 	`<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>CUDly - Password Reset Request</title></head>
 <body style="margin:0;padding:0;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;color:#1a202c;">

@@ -102,7 +102,7 @@ func (s *FrontendService) uploadFile(ctx context.Context, distDir, bucketName, p
 	}
 	key := strings.ReplaceAll(relPath, string(filepath.Separator), "/")
 
-	content, err := os.ReadFile(path) // #nosec G304,G122 -- path is from WalkDir callback, symlinks rejected by caller; always a regular file descendant of distDir (npm build output under operator control)
+	content, err := os.ReadFile(path) // #nosec G304 -- path is from WalkDir callback, symlinks rejected by caller; always a regular file descendant of distDir (npm build output under operator control)
 	if err != nil {
 		return fmt.Errorf("failed to read %s: %w", path, err)
 	}
