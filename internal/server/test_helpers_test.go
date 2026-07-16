@@ -374,3 +374,7 @@ func (m *mockConfigStoreForHealth) UpdatePurchaseHistoryListing(_ context.Contex
 func (m *mockConfigStoreForHealth) ClaimMarketplaceListingSlot(_ context.Context, _ string) (bool, error) {
 	return true, nil
 }
+
+func (m *mockConfigStoreForHealth) StampOfferingClass(_ context.Context, _, _ string) error {
+	return nil
+}

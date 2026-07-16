@@ -25,8 +25,9 @@ const validMarketplacePurchaseID = "11111111-1111-1111-1111-111111111111"
 // Each field, when set, overrides the corresponding method's behavior and
 // records the last request so tests can assert on what was sent to AWS.
 type stubMarketplaceEC2 struct {
-	createFn func(ctx context.Context, req ec2svc.MarketplaceListingRequest) (ec2svc.MarketplaceListingResult, error)
-	cancelFn func(ctx context.Context, listingID string) (ec2svc.MarketplaceListingResult, error)
+	createFn     func(ctx context.Context, req ec2svc.MarketplaceListingRequest) (ec2svc.MarketplaceListingResult, error)
+	cancelFn     func(ctx context.Context, listingID string) (ec2svc.MarketplaceListingResult, error)
+	fetchClassFn func(ctx context.Context, reservedInstancesID string) (string, error)
 
 	lastCreateReq   ec2svc.MarketplaceListingRequest
 	createCallCount int
@@ -54,6 +55,14 @@ func (s *stubMarketplaceEC2) CancelMarketplaceListing(ctx context.Context, listi
 		return s.cancelFn(ctx, listingID)
 	}
 	return ec2svc.MarketplaceListingResult{ListingID: listingID, State: config.ListingStateCancelled}, nil
+}
+
+func (s *stubMarketplaceEC2) FetchOfferingClass(ctx context.Context, reservedInstancesID string) (string, error) {
+	if s.fetchClassFn != nil {
+		return s.fetchClassFn(ctx, reservedInstancesID)
+	}
+	// Default: return "standard" so tests that set offering_class="" still proceed.
+	return "standard", nil
 }
 
 // marketplaceTestAPIError is an smithy.APIError with a controllable fault so
@@ -448,5 +457,105 @@ func TestMarketplaceList_ClaimErrorMapsToInternal(t *testing.T) {
 	assert.Contains(t, err.Error(), "reserve marketplace listing slot")
 	// A failed claim must not fall through to AWS.
 	assert.Equal(t, 0, ec2.createCallCount)
+	cfgStore.AssertExpectations(t)
+}
+
+// --- Regression tests for the three blocking defects fixed in this PR ---
+
+// TestResolveMarketplacePriceSchedule_ZeroPriceRejected verifies Defect 3:
+// Price=0 must be rejected with a 400 so a user cannot list an RI for free.
+// This is the fail-before/pass-after regression test (the old code accepted
+// Price >= 0, so Price=0 was accepted; the fix requires Price > 0).
+func TestResolveMarketplacePriceSchedule_ZeroPriceRejected(t *testing.T) {
+	_, err := resolveMarketplacePriceSchedule([]MarketplacePriceTier{
+		{TermMonths: 6, Price: 0},
+	}, 6, 12, 1200, 0)
+	require.Error(t, err, "Price=0 must be rejected")
+	assert.Contains(t, err.Error(), "positive")
+}
+
+// TestResolveMarketplacePriceSchedule_BelowFloorRejected verifies Defect 3:
+// A schedule whose total value is below awsMarketplaceMinPriceFloorFraction of
+// the residual must be rejected. The fixture has residual=$1200 (upfront $1200,
+// no monthly, remaining=12 of 12 months) so the floor at 5% is $60; a price of
+// $0.01/month for 12 months totals $0.12 and must be rejected.
+func TestResolveMarketplacePriceSchedule_BelowFloorRejected(t *testing.T) {
+	_, err := resolveMarketplacePriceSchedule([]MarketplacePriceTier{
+		{TermMonths: 12, Price: 0.01},
+	}, 12, 12, 1200, 0)
+	require.Error(t, err, "sub-floor schedule must be rejected")
+	assert.Contains(t, err.Error(), "floor")
+	assert.Contains(t, err.Error(), "residual")
+}
+
+// TestMarketplaceList_EmptyOfferingClassFetchedStandard verifies Defect 2:
+// When purchase_history.offering_class is empty (pre-migration rows and
+// externally-created RIs), the handler fetches the class from AWS, persists
+// it, and proceeds when AWS reports "standard". This is the sell path becoming
+// reachable for externally-created Standard RIs.
+func TestMarketplaceList_EmptyOfferingClassFetchedStandard(t *testing.T) {
+	cfgStore := &MockConfigStore{}
+	authSvc := &MockAuthService{}
+	adminSession(authSvc)
+
+	// Row has no offering_class (simulates pre-migration or externally-created RI).
+	row := standardRow()
+	row.OfferingClass = ""
+	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).
+		Return(row, nil)
+	// The handler must stamp the fetched class back to the DB.
+	cfgStore.On("StampOfferingClass", mock.Anything, validMarketplacePurchaseID, "standard").
+		Return(nil)
+	cfgStore.On("ClaimMarketplaceListingSlot", mock.Anything, validMarketplacePurchaseID).
+		Return(true, nil)
+	cfgStore.On("UpdatePurchaseHistoryListing", mock.Anything, validMarketplacePurchaseID, "ril-default", config.ListingStateActive).
+		Return(nil)
+
+	// AWS reports this RI is "standard".
+	ec2 := &stubMarketplaceEC2{
+		fetchClassFn: func(_ context.Context, id string) (string, error) {
+			assert.Equal(t, validMarketplacePurchaseID, id)
+			return "standard", nil
+		},
+	}
+	h := newMarketplaceHandler(cfgStore, authSvc, ec2)
+	resp, err := h.marketplaceList(context.Background(), marketplaceReq(), validMarketplacePurchaseID)
+
+	require.NoError(t, err, "standard RI with empty offering_class must be listable after lazy-populate")
+	typed, ok := resp.(*MarketplaceListResponse)
+	require.True(t, ok)
+	assert.Equal(t, "ril-default", typed.ListingID)
+	cfgStore.AssertExpectations(t)
+}
+
+// TestMarketplaceList_EmptyOfferingClassFetchedConvertible verifies Defect 2
+// guard: when AWS reports the RI is "convertible", the handler must reject
+// with 400 even if offering_class was empty in the DB (not silently proceed).
+func TestMarketplaceList_EmptyOfferingClassFetchedConvertible(t *testing.T) {
+	cfgStore := &MockConfigStore{}
+	authSvc := &MockAuthService{}
+	adminSession(authSvc)
+
+	row := standardRow()
+	row.OfferingClass = ""
+	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).
+		Return(row, nil)
+	// The handler stamps the fetched class back even when it is convertible.
+	cfgStore.On("StampOfferingClass", mock.Anything, validMarketplacePurchaseID, "convertible").
+		Return(nil)
+
+	ec2 := &stubMarketplaceEC2{
+		fetchClassFn: func(_ context.Context, _ string) (string, error) {
+			return "convertible", nil
+		},
+	}
+	h := newMarketplaceHandler(cfgStore, authSvc, ec2)
+	_, err := h.marketplaceList(context.Background(), marketplaceReq(), validMarketplacePurchaseID)
+
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, err.Error(), "Standard")
 	cfgStore.AssertExpectations(t)
 }

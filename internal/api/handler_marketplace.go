@@ -38,6 +38,11 @@ type marketplaceEC2Client interface {
 	CreateMarketplaceListing(ctx context.Context, req ec2svc.MarketplaceListingRequest) (ec2svc.MarketplaceListingResult, error)
 	DescribeMarketplaceListing(ctx context.Context, listingID string) (ec2svc.MarketplaceListingResult, error)
 	CancelMarketplaceListing(ctx context.Context, listingID string) (ec2svc.MarketplaceListingResult, error)
+	// FetchOfferingClass calls AWS DescribeReservedInstances to determine
+	// whether a given Reserved Instance is 'standard' or 'convertible'. Used
+	// when the purchase_history row has no offering_class stored (pre-migration
+	// 000084 rows and externally-created Standard RIs).
+	FetchOfferingClass(ctx context.Context, reservedInstancesID string) (string, error)
 }
 
 // buildMarketplaceEC2Client honors the injected factory for tests, falling
@@ -100,8 +105,10 @@ func (h *Handler) validateMarketplaceListRequest(ctx context.Context, req *event
 		return nil, body, NewClientError(404, "purchase not found")
 	}
 
-	// Only Standard RIs can be listed on the Marketplace.
-	if !strings.EqualFold(row.OfferingClass, "standard") {
+	// Reject explicitly non-standard classes before the RBAC call (fast path).
+	// Empty offering_class is allowed here: the listing handler populates it
+	// lazily from AWS before performing the definitive check.
+	if isKnownNonStandardOfferingClass(row.OfferingClass) {
 		return nil, body, NewClientError(400, "only Standard Reserved Instances can be listed on the AWS Marketplace; this purchase has offering_class="+row.OfferingClass)
 	}
 
@@ -157,6 +164,23 @@ func (h *Handler) marketplaceList(ctx context.Context, req *events.LambdaFunctio
 	}
 
 	ec2Client := h.buildMarketplaceEC2Client(cfg)
+
+	// Populate offering_class from AWS when the DB row has none. This covers
+	// two cases: (1) pre-migration 000084 rows purchased by CUDly before this
+	// column existed, and (2) externally-created Standard RIs whose
+	// offering_class was never stamped. After population the value is persisted
+	// so subsequent requests do not require an extra AWS API call.
+	offeringClass := row.OfferingClass
+	if offeringClass == "" {
+		offeringClass, err = h.populateOfferingClass(ctx, purchaseID, ec2Client)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// Definitive offering_class gate: only Standard RIs can be listed.
+	if !strings.EqualFold(offeringClass, "standard") {
+		return nil, NewClientError(400, "only Standard Reserved Instances can be listed on the AWS Marketplace; this purchase has offering_class="+offeringClass)
+	}
 
 	awsSchedule := make([]ec2svc.MarketplacePriceTier, 0, len(schedule))
 	for _, t := range schedule {
@@ -242,6 +266,25 @@ func (h *Handler) reserveAndCreateListing(ctx context.Context, purchaseID string
 	}
 
 	return result, nil
+}
+
+// populateOfferingClass calls AWS DescribeReservedInstances to determine the
+// offering class for an RI whose purchase_history row lacks one, then persists
+// the result so subsequent requests are served from the DB. Returns the class
+// string on success; returns an error if AWS reports no such RI.
+//
+// The DB stamp is best-effort: a write failure is logged but does not block the
+// listing request because the in-memory class value is authoritative for this
+// request.
+func (h *Handler) populateOfferingClass(ctx context.Context, purchaseID string, ec2Client marketplaceEC2Client) (string, error) {
+	class, err := ec2Client.FetchOfferingClass(ctx, purchaseID)
+	if err != nil {
+		return "", fmt.Errorf("offering_class not set and could not fetch from AWS: %w", err)
+	}
+	if stampErr := h.config.StampOfferingClass(ctx, purchaseID, class); stampErr != nil {
+		logging.Errorf("marketplace: failed to persist offering_class %q for purchase %s: %v", class, purchaseID, stampErr)
+	}
+	return class, nil
 }
 
 // releaseMarketplaceClaim restores a purchase_history row's listing fields to
@@ -419,6 +462,16 @@ const awsMarketplaceNetFactor = 1 - awsMarketplaceFeePercent/100.0
 // seller's remaining cost basis. Applied before AWS deducts its fee.
 const awsMarketplaceBuyerDiscountFactor = 0.95
 
+// awsMarketplaceMinPriceFloorFraction is the minimum ratio of prorated
+// residual value that a caller-supplied price schedule must total across its
+// tiers. At 5%, a schedule totalling less than 1/20 of what the default
+// schedule would offer is rejected with a 400 so a user cannot accidentally
+// (or maliciously) list an RI at $0 or a nominal amount. The default schedule
+// uses awsMarketplaceBuyerDiscountFactor (95%) of residual; this floor is
+// intentionally far below that to give sellers flexibility while preventing
+// zero-price listings.
+const awsMarketplaceMinPriceFloorFraction = 0.05
+
 // awsMarketplaceClientFaultCodes is the set of AWS error codes that represent
 // client-side faults for Marketplace listing operations. These map to 4xx
 // responses so the caller receives an actionable message. Server-side AWS
@@ -462,15 +515,55 @@ func mapAWSMarketplaceError(opMsg string, err error) error {
 // term field, which would overprice older RIs).
 // originalTerm is the full contract term in months, used to prorate the
 // upfront cost to its remaining value.
+// isKnownNonStandardOfferingClass reports true when offering_class is
+// explicitly set to a non-standard value (e.g. "convertible"). An empty string
+// returns false because the class is not yet known and will be resolved lazily.
+func isKnownNonStandardOfferingClass(class string) bool {
+	return class != "" && !strings.EqualFold(class, "standard")
+}
+
+// checkSuppliedScheduleFloor returns a non-nil error when the total value of
+// a caller-supplied price schedule falls below awsMarketplaceMinPriceFloorFraction
+// of the computed residual value. Extracted from resolveMarketplacePriceSchedule
+// to keep that function within the gocyclo budget. The check is skipped when
+// residual is zero (fully-elapsed term or $0 RI) to avoid spurious rejections.
+func checkSuppliedScheduleFloor(tiers []MarketplacePriceTier, remainingMonths, originalTerm int, upfrontCost, monthlyCost float64) error {
+	if remainingMonths <= 0 {
+		return nil
+	}
+	upfrontRemaining := 0.0
+	if originalTerm > 0 {
+		upfrontRemaining = upfrontCost * (float64(remainingMonths) / float64(originalTerm))
+	}
+	residual := upfrontRemaining + monthlyCost*float64(remainingMonths)
+	if residual <= 0 {
+		return nil
+	}
+	floor := residual * awsMarketplaceMinPriceFloorFraction
+	var total float64
+	for _, t := range tiers {
+		total += t.Price * float64(t.TermMonths)
+	}
+	if total < floor {
+		return fmt.Errorf(
+			"total listing price (%.2f) is below the minimum floor (%.2f, %.0f%% of residual value %.2f); raise your price schedule or omit it to use the default",
+			total, floor, awsMarketplaceMinPriceFloorFraction*100, residual)
+	}
+	return nil
+}
+
 func resolveMarketplacePriceSchedule(supplied []MarketplacePriceTier, remainingMonths, originalTerm int, upfrontCost, monthlyCost float64) ([]MarketplacePriceTier, error) {
 	if len(supplied) > 0 {
 		for i, t := range supplied {
 			if t.TermMonths <= 0 {
 				return nil, fmt.Errorf("price_schedule[%d]: term_months must be a positive integer", i)
 			}
-			if t.Price < 0 {
-				return nil, fmt.Errorf("price_schedule[%d]: price must be non-negative", i)
+			if t.Price <= 0 {
+				return nil, fmt.Errorf("price_schedule[%d]: price must be positive (received %.4f); use a non-zero listing price", i, t.Price)
 			}
+		}
+		if err := checkSuppliedScheduleFloor(supplied, remainingMonths, originalTerm, upfrontCost, monthlyCost); err != nil {
+			return nil, err
 		}
 		return supplied, nil
 	}

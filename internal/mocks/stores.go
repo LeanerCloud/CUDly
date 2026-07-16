@@ -449,6 +449,12 @@ func (m *MockConfigStore) UpdatePurchaseHistoryListing(ctx context.Context, purc
 	return args.Error(0)
 }
 
+// StampOfferingClass mocks persisting the offering_class fetched from AWS (issue #292).
+func (m *MockConfigStore) StampOfferingClass(ctx context.Context, purchaseID, offeringClass string) error {
+	args := m.Called(ctx, purchaseID, offeringClass)
+	return args.Error(0)
+}
+
 // ClaimMarketplaceListingSlot mocks the atomic listing-slot claim (issue #292).
 func (m *MockConfigStore) ClaimMarketplaceListingSlot(ctx context.Context, purchaseID string) (bool, error) {
 	args := m.Called(ctx, purchaseID)

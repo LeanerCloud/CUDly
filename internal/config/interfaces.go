@@ -217,6 +217,14 @@ type StoreInterface interface {
 	// on subsequent poll/cancel transitions (issue #292).
 	UpdatePurchaseHistoryListing(ctx context.Context, purchaseID, listingID, listingState string) error
 
+	// StampOfferingClass writes the offering_class value to a purchase_history
+	// row identified by purchase_id. Called by the marketplace-list handler
+	// when offering_class is absent in the DB (pre-migration 000084 rows and
+	// externally-created Standard RIs): after fetching the class from AWS
+	// DescribeReservedInstances it is persisted so subsequent requests do not
+	// incur an extra AWS API call.
+	StampOfferingClass(ctx context.Context, purchaseID, offeringClass string) error
+
 	// ClaimMarketplaceListingSlot atomically reserves the marketplace-listing
 	// slot for a purchase_history row so two concurrent marketplace-list
 	// requests cannot both proceed to create a duplicate AWS listing (issue

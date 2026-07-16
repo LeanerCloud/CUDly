@@ -438,6 +438,10 @@ func (m *mockConfigStore) ClaimMarketplaceListingSlot(_ context.Context, _ strin
 	return true, nil
 }
 
+func (m *mockConfigStore) StampOfferingClass(_ context.Context, _, _ string) error {
+	return nil
+}
+
 // strPtr is a test helper for *string fields.
 func strPtr(s string) *string { return &s }
 

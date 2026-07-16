@@ -1693,6 +1693,20 @@ func (s *PostgresStore) UpdatePurchaseHistoryListing(ctx context.Context, purcha
 	return nil
 }
 
+// StampOfferingClass writes the offering_class value onto a purchase_history
+// row identified by purchase_id. Used by the marketplace-list handler to
+// lazily persist offering_class fetched from AWS DescribeReservedInstances for
+// rows created before migration 000084 or for externally-created Standard RIs.
+// A no-match (row not found) is treated as a non-fatal warning by callers.
+func (s *PostgresStore) StampOfferingClass(ctx context.Context, purchaseID, offeringClass string) error {
+	query := `UPDATE purchase_history SET offering_class = $1 WHERE purchase_id = $2`
+	_, err := s.db.Exec(ctx, query, offeringClass, purchaseID)
+	if err != nil {
+		return fmt.Errorf("failed to stamp offering_class for purchase %s: %w", purchaseID, err)
+	}
+	return nil
+}
+
 // ClaimMarketplaceListingSlot atomically reserves the marketplace-listing slot
 // for a purchase_history row so two concurrent marketplace-list requests cannot
 // both proceed to create a duplicate AWS listing (issue #292). The single

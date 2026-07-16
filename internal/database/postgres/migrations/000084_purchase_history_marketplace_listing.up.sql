@@ -1,4 +1,4 @@
--- Migration 000068: add RI Marketplace listing columns to purchase_history.
+-- Migration 000084: add RI Marketplace listing columns to purchase_history.
 --
 -- offering_class: 'convertible' or 'standard'; NULL for pre-migration rows.
 -- The Sell button renders only when offering_class = 'standard' and the RI is

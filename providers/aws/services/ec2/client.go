@@ -1042,6 +1042,26 @@ func (c *Client) DescribeMarketplaceListing(ctx context.Context, listingID strin
 	return MarketplaceListingResult{ListingID: resolvedID, State: state}, nil
 }
 
+// FetchOfferingClass calls ec2:DescribeReservedInstances to fetch the
+// offering_class ("standard" or "convertible") for a specific Reserved
+// Instance ID. Used by the marketplace-list handler to lazily populate
+// offering_class for rows created before migration 000084 or for externally-
+// created (pre-CUDly) Standard RIs whose offering_class was never stamped.
+// Returns an error when the RI is not found (e.g. it has expired or was
+// exchanged) because a missing RI cannot be listed.
+func (c *Client) FetchOfferingClass(ctx context.Context, reservedInstancesID string) (string, error) {
+	out, err := c.client.DescribeReservedInstances(ctx, &ec2.DescribeReservedInstancesInput{
+		ReservedInstancesIds: []string{reservedInstancesID},
+	})
+	if err != nil {
+		return "", fmt.Errorf("DescribeReservedInstances(%s): %w", reservedInstancesID, err)
+	}
+	if len(out.ReservedInstances) == 0 {
+		return "", fmt.Errorf("reserved instance %s not found (may have expired or been exchanged)", reservedInstancesID)
+	}
+	return string(out.ReservedInstances[0].OfferingClass), nil
+}
+
 // CancelMarketplaceListing calls ec2:CancelReservedInstancesListing to
 // withdraw an active listing. Returns the updated listing state.
 func (c *Client) CancelMarketplaceListing(ctx context.Context, listingID string) (MarketplaceListingResult, error) {
