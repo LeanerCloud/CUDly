@@ -368,22 +368,24 @@ const (
 	ActionRetryOwn = "retry-own"
 	ActionRetryAny = "retry-any"
 	// ActionApproveOwn / ActionApproveAny gate the session-authed Approve
-	// button on pending Purchase History rows (issue #286). Mirror image
-	// of the cancel-{own,any} verbs above:
+	// button on pending Purchase History rows (issue #286).
 	//
+	// Default grants (four-eyes policy, issue #1407):
 	//   * RoleAdmin — implicit via {ActionAdmin, ResourceAll}; covers
 	//     both verbs.
-	//   * RoleUser — DefaultUserPermissions() adds approve-own:purchases.
-	//     Allows approving pending executions whose created_by_user_id
-	//     matches the session user. Legacy rows with NULL creator are
-	//     out of reach for non-admins via this verb; admins still
-	//     approve them via approve-any.
+	//   * RoleUser — NO default grant (issue #1407). Four-eyes principle:
+	//     the submitter of a purchase must not approve it by default.
+	//     approve-own must be explicitly added to a custom group for
+	//     organizations that deliberately permit self-approval.
 	//   * RoleReadOnly — neither verb. Read-only users cannot approve.
 	//
-	// approve-any has no default non-admin grant; the constant exists so
-	// future operator roles can be granted broad approve rights without
-	// escalating to admin. Add it to a custom group's Permissions to
-	// enable that path.
+	// approve-any: seeded by the Purchaser group (migration 000059);
+	//   not a default non-admin grant. Add it to a custom group's
+	//   Permissions to enable broad approve rights without escalating
+	//   to admin.
+	// approve-own: no system-managed group holds this by default
+	//   (issue #1407); add to a custom group when self-approval is an
+	//   explicit policy for that group.
 	//
 	// The legacy email-token approve path stays unchanged as an escape
 	// hatch and is gated by token possession + the per-account
@@ -524,14 +526,13 @@ func DefaultUserPermissions() []Permission {
 		// and the retry-attempt counter on the chain to be below the
 		// soft-block threshold (overridable with ?force=true).
 		{Action: ActionRetryOwn, Resource: ResourcePurchases},
-		// approve-own:purchases — every authenticated user can approve
-		// pending purchase executions they created themselves (issue #286).
-		// The handler still requires the execution to be in an approvable
-		// state (pending/notified) and the creator UUID to match the
-		// session UserID before honoring the request. The legacy email-
-		// token approve path stays as an escape hatch for non-session
-		// approvers.
-		{Action: ActionApproveOwn, Resource: ResourcePurchases},
+		// approve-own:purchases is intentionally NOT granted here (issue #1407).
+		// Four-eyes principle: the same user who submits a purchase must NOT
+		// be able to approve it by default. The approve-own verb must be
+		// explicitly granted to a custom group when self-approval is a
+		// deliberate policy choice for that group. Roles without an explicit
+		// approve-own or approve-any grant cannot approve any purchase,
+		// including their own.
 		// revoke-own:purchases — every authenticated user can revoke completed
 		// purchases they created themselves while still within the provider's
 		// free-cancel window (issue #290). The handler verifies the window has

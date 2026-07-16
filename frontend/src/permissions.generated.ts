@@ -20,7 +20,6 @@ export const ADMIN_PERMS: ReadonlySet<string> = new Set([
 ]);
 
 export const USER_PERMS: ReadonlySet<string> = new Set([
-  'approve-own:purchases',
   'cancel-own:purchases',
   'create:plans',
   'delete:plans',

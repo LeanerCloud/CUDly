@@ -580,6 +580,70 @@ func TestHandler_approvePurchase_RejectsGlobalNotifyWhenContactSet(t *testing.T)
 	mockPurchase.AssertNotCalled(t, "ApproveExecution")
 }
 
+// TestHandler_approvePurchase_RejectsCreatorWithoutApprovePermission is the
+// security regression guard for issue #1407 (four-eyes). Before the fix,
+// DefaultUserPermissions granted approve-own to all standard users, meaning
+// any creator could silently approve their own purchase. After the fix,
+// approve-own is removed from DefaultUserPermissions; this test confirms that
+// a session whose user IS the execution creator but holds NEITHER approve-any
+// nor approve-own is denied at the authorizeSessionApprove gate (403).
+//
+// Fail-before scenario: with approve-own in DefaultUserPermissions this user
+// would reach approvePurchaseViaSession and succeed.
+// Pass-after scenario: without approve-own the session is denied with 403 and
+// the handler falls through to the token branch (which also rejects: no token).
+func TestHandler_approvePurchase_RejectsCreatorWithoutApprovePermission(t *testing.T) {
+	ctx := context.Background()
+	execID := "12345678-1234-1234-1234-123456789abc"
+	creatorUserID := "creator-user-uuid"
+	creatorEmail := "creator@example.com"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:     execID,
+		ApprovalToken:   "valid-token",
+		Status:          "pending",
+		CreatedByUserID: &creatorUserID,
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+
+	mockAuth := new(MockAuthService)
+	// Session belongs to the creator themselves but holds no approve verb.
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{
+		UserID: creatorUserID,
+		Email:  creatorEmail,
+	}, nil)
+	// Four-eyes enforcement: neither approve-any nor approve-own is granted.
+	mockAuth.On("HasPermissionAPI", ctx, creatorUserID, "approve-any", "purchases").Return(false, nil)
+	mockAuth.On("HasPermissionAPI", ctx, creatorUserID, "approve-own", "purchases").Return(false, nil)
+	// approvePurchase: when token is empty and the session has 403, execution
+	// falls through to the final approvePurchaseViaSession call (line 506),
+	// which starts with a CSRF check. Stub it (.Maybe) so the mock doesn't
+	// panic; the CSRF error returns a 403 before the purchase manager is
+	// reached, which is equivalent to the authorizeSessionApprove 403 for the
+	// purpose of this regression guard.
+	mockAuth.On("ValidateCSRFToken", mock.Anything, mock.Anything, mock.Anything).
+		Return(errors.New("csrf invalid")).Maybe()
+
+	mockPurchase := new(MockPurchaseManager)
+
+	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
+
+	// No approval token: the token branch is unavailable, so the 403 from
+	// authorizeSessionApprove (or CSRF fallback) surfaces to the caller.
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	_, err := handler.approvePurchase(ctx, req, execID, "")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a ClientError, got %T: %v", err, err)
+	assert.Equal(t, 403, ce.code, "creator without approve permission must be denied 403")
+	// Purchase manager must never be reached.
+	mockPurchase.AssertNotCalled(t, "ApproveExecution")
+	mockPurchase.AssertNotCalled(t, "ApproveAndExecute")
+}
+
 // TestRouter_approvePurchaseHandler_RateLimited is a regression test for issue #400.
 // The approve endpoint is AuthPublic (token-only); without rate limiting any
 // attacker can flood approve attempts to brute-force a valid token.
