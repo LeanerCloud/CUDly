@@ -1015,6 +1015,32 @@ func TestFanOutPerAccount_PartialSuccess(t *testing.T) {
 		"LastErr should reflect the failed account's error")
 }
 
+// TestFanOutPerAccount_FailedCollectionNotInSucceededAccountIDs is the
+// scheduler-side COR-03 regression test: an account whose collection fn
+// errors (the shape Azure mergeServiceResults / GCP mergeRegionResults now
+// produce when every service call failed) must NOT land in
+// SucceededAccountIDs. UpsertRecommendations evicts stale rows only for
+// accounts listed there, so this is what preserves the previously collected
+// rows of an account hit by a transient full-provider failure.
+func TestFanOutPerAccount_FailedCollectionNotInSucceededAccountIDs(t *testing.T) {
+	accounts := []config.CloudAccount{
+		{ID: "acct-ok", Name: "acct-ok", ExternalID: "e-ok"},
+		{ID: "acct-all-services-failed", Name: "acct-all-services-failed", ExternalID: "e-bad"},
+	}
+	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+		if acct.ID == "acct-all-services-failed" {
+			return nil, errors.New("all 6 Azure recommendation services failed: 429 too many requests")
+		}
+		return []config.RecommendationRecord{{ID: acct.ID, Provider: "azure"}}, nil
+	}
+
+	_, outcome := fanOutPerAccount(context.Background(), "Azure", accounts, fn)
+	assert.Equal(t, []string{"acct-ok"}, outcome.SucceededAccountIDs,
+		"a failed collection must not be eligible for stale-row eviction")
+	assert.Equal(t, 1, outcome.FailedCount)
+	assert.Contains(t, outcome.LastErr, "all 6 Azure recommendation services failed")
+}
+
 // TestFanOutPerAccount_ZeroAccounts: empty input → empty outcome,
 // no errors. The caller's "FailedCount == len(accounts) > 0" guard
 // correctly skips the all-failed error path.
@@ -1447,8 +1473,19 @@ func TestScheduler_CollectAWSRecommendations_GetRecsError(t *testing.T) {
 	assert.Nil(t, recs)
 }
 
-// Test successful Azure recommendations.
-func TestScheduler_CollectAzureRecommendations_Success(t *testing.T) {
+// TestScheduler_CollectAzureRecommendations_AllAccountsFailLoud pins the
+// COR-03 contract end-to-end on the Azure path: when the only registered
+// Azure account has unusable managed_identity credentials in the test
+// environment (no IMDS, no federated token), every per-service call inside
+// mergeServiceResults errors, the all-attempted-failed guard fires, the
+// per-account call returns an error, fanOutPerAccount marks the account as
+// failed, and collectAzureRecommendations propagates an "all accounts
+// failed" error to the caller instead of returning (empty, nil).
+//
+// Pre-fix this test asserted require.NoError and validated the silent-skip
+// behavior the COR-03 fix removes. Keeping that assertion would have
+// regressed the very property this PR is trying to enforce.
+func TestScheduler_CollectAzureRecommendations_AllAccountsFailLoud(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 
@@ -1469,17 +1506,17 @@ func TestScheduler_CollectAzureRecommendations_Success(t *testing.T) {
 	}
 	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return(azureAccounts, nil)
 
-	// The managed_identity path will try DefaultAzureCredential which will
-	// fail in tests, so we expect an error log but no crash.
 	scheduler := &Scheduler{
 		config: mockStore,
 	}
 
-	recs, _, err := scheduler.collectAzureRecommendations(ctx, globalCfg)
-	require.NoError(t, err)
-	// In test environment without Azure credentials, 0 recommendations is expected
-	// (the error is logged and skipped). The test validates the per-account loop runs.
-	_ = recs
+	recs, succeeded, err := scheduler.collectAzureRecommendations(ctx, globalCfg)
+	require.Error(t, err, "collectAzureRecommendations must fail loud when the only account has unusable credentials (COR-03)")
+	assert.Contains(t, err.Error(), "Azure: all 1 accounts failed",
+		"the per-account fan-out must surface the all-accounts-failed shape so the scheduler keeps stale rows and records last_collection_error")
+	assert.Nil(t, recs)
+	assert.Empty(t, succeeded,
+		"the failed account must not land in SucceededAccountIDs (stale-row eviction guard)")
 }
 
 // Test GCP recommendations with no accounts — should skip gracefully.

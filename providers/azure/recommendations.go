@@ -97,8 +97,17 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 		})
 	}
 
+	// Record which services the params filter lets through so the merge can
+	// distinguish "skipped by filter" from "attempted and succeeded with zero
+	// recommendations" when applying the all-attempted-failed guard.
+	includeCompute := shouldIncludeService(params, common.ServiceCompute)
+	includeDB := shouldIncludeService(params, common.ServiceRelationalDB)
+	includeCache := shouldIncludeService(params, common.ServiceCache)
+	includeCosmos := shouldIncludeService(params, common.ServiceNoSQL)
+	includeSP := shouldIncludeService(params, common.ServiceSavingsPlans)
+
 	// Compute (VM) recommendations — subscription-wide.
-	if shouldIncludeService(params, common.ServiceCompute) {
+	if includeCompute {
 		goService(&computeErr, func() {
 			computeClient := compute.NewClient(r.cred, r.subscriptionID, "")
 			computeRecs, computeErr = computeClient.GetRecommendations(gctx, params)
@@ -106,7 +115,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	}
 
 	// Database (SQL) recommendations — subscription-wide.
-	if shouldIncludeService(params, common.ServiceRelationalDB) {
+	if includeDB {
 		goService(&dbErr, func() {
 			dbClient := database.NewClient(r.cred, r.subscriptionID, "")
 			dbRecs, dbErr = dbClient.GetRecommendations(gctx, params)
@@ -114,7 +123,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	}
 
 	// Cache (Redis) recommendations — subscription-wide.
-	if shouldIncludeService(params, common.ServiceCache) {
+	if includeCache {
 		goService(&cacheErr, func() {
 			cacheClient := cache.NewClient(r.cred, r.subscriptionID, "")
 			cacheRecs, cacheErr = cacheClient.GetRecommendations(gctx, params)
@@ -122,7 +131,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	}
 
 	// CosmosDB (NoSQL) recommendations — subscription-wide.
-	if shouldIncludeService(params, common.ServiceNoSQL) {
+	if includeCosmos {
 		goService(&cosmosErr, func() {
 			cosmosClient := cosmosdb.NewClient(r.cred, r.subscriptionID, "")
 			cosmosRecs, cosmosErr = cosmosClient.GetRecommendations(gctx, params)
@@ -132,9 +141,9 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	// Savings Plans — Azure has no stable public API for SP purchase
 	// recommendations (Benefits Recommendations API is still in preview).
 	// The call returns an empty slice so the service appears in the fan-out
-	// and will start returning data once the API stabilises without requiring
+	// and will start returning data once the API stabilizes without requiring
 	// a scheduler change.
-	if shouldIncludeService(params, common.ServiceSavingsPlans) {
+	if includeSP {
 		goService(&spErr, func() {
 			spClient := savingsplans.NewClient(r.cred, r.subscriptionID, "")
 			spRecs, spErr = spClient.GetRecommendations(gctx, params)
@@ -160,12 +169,28 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 		return nil, err
 	}
 
-	return mergeServiceResults(serviceResult{"compute", computeRecs, computeErr},
-		serviceResult{"database", dbRecs, dbErr},
-		serviceResult{"cache", cacheRecs, cacheErr},
-		serviceResult{"cosmosdb", cosmosRecs, cosmosErr},
-		serviceResult{"savingsplans", spRecs, spErr},
-		serviceResult{"advisor", advisorRecs, advisorErr}), nil
+	return mergeServiceResults(serviceResult{"compute", computeRecs, computeErr, includeCompute},
+		serviceResult{"database", dbRecs, dbErr, includeDB},
+		serviceResult{"cache", cacheRecs, cacheErr, includeCache},
+		serviceResult{"cosmosdb", cosmosRecs, cosmosErr, includeCosmos},
+		// The savingsplans client is a stub that unconditionally returns
+		// ([], nil) until the Benefits Recommendations API stabilizes (see
+		// services/savingsplans Client.GetRecommendations). Counting its
+		// built-in success as an attempted service would keep the
+		// all-attempted-failed guard from ever firing on a total provider
+		// failure (expired credential, subscription-wide throttle), so it is
+		// excluded from the guard until it makes real API calls.
+		serviceResult{"savingsplans", spRecs, spErr, false},
+		// The Advisor client is excluded from the all-attempted-failed guard
+		// for the same reason: getAdvisorRecommendations swallows pagination
+		// errors (the auth failure from an expired credential surfaces as a
+		// 401 during pager.NextPage, not during client construction) and
+		// always returns (recs, nil). Counting its unconditional success as
+		// an attempted service would keep the guard from firing on a total
+		// credential failure -- the same hazard the savingsplans exclusion
+		// prevents. When getAdvisorRecommendations is changed to propagate
+		// hard errors, flip this flag back to true.
+		serviceResult{"advisor", advisorRecs, advisorErr, false})
 }
 
 // serviceResult bundles a per-service collection outcome for the deterministic
@@ -176,6 +201,12 @@ type serviceResult struct {
 	name string
 	recs []common.Recommendation
 	err  error
+	// attempted records whether the service call was actually launched
+	// (i.e. not skipped by the params service filter). Skipped services
+	// carry nil recs and nil err, which is indistinguishable from a
+	// successful zero-recommendation call, so the all-attempted-failed
+	// guard below needs this flag to avoid counting skips as successes.
+	attempted bool
 }
 
 // mergeServiceResults logs per-service errors (matches the previous sequential
@@ -184,10 +215,31 @@ type serviceResult struct {
 // the canonical compute → database → cache → cosmosdb → savingsplans → advisor
 // order so that order-sensitive consumers remain stable. The advisor entry's
 // error is logged via logging.Errorf to match the pre-parallelisation severity.
-func mergeServiceResults(results ...serviceResult) []common.Recommendation {
+//
+// Partial failure is tolerated: as long as at least one attempted service
+// succeeded, the successful services' recommendations are returned with a nil
+// error. But when EVERY attempted service errored (e.g. an expired federated
+// credential or a subscription-wide throttle), the merge returns a wrapped
+// error instead of an empty-but-nil-error result, porting the AWS 08-H4 guard
+// from providers/aws/recommendations/client.go. Returning (recs, nil) on a
+// total failure makes a broken run indistinguishable from "no savings
+// available": the scheduler would count the account as succeeded, evict its
+// previously collected rows, and clear last_collection_error (COR-03).
+func mergeServiceResults(results ...serviceResult) ([]common.Recommendation, error) {
 	total := 0
+	attempted := 0
+	failures := 0
+	var lastErr error
 	for _, r := range results {
 		total += len(r.recs)
+		if !r.attempted {
+			continue
+		}
+		attempted++
+		if r.err != nil {
+			failures++
+			lastErr = r.err
+		}
 	}
 	out := make([]common.Recommendation, 0, total)
 	for _, r := range results {
@@ -201,7 +253,10 @@ func mergeServiceResults(results ...serviceResult) []common.Recommendation {
 		}
 		out = append(out, r.recs...)
 	}
-	return out
+	if failures > 0 && failures == attempted {
+		return nil, fmt.Errorf("all %d Azure recommendation services failed: %w", failures, lastErr)
+	}
+	return out, nil
 }
 
 // GetRecommendationsForService retrieves Azure reservation recommendations for a specific service
