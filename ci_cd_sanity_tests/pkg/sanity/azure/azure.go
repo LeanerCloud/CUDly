@@ -103,7 +103,7 @@ func Run(ctx context.Context, opts Options) (*report.Report, error) {
 
 	runCmd := func(name string, args ...string) ([]byte, report.CheckResult) {
 		start := time.Now().UTC()
-		cmd := exec.CommandContext(rctx, "az", args...) // #nosec G702,G204 -- CI sanity test tooling; binary is hardcoded "az" (Azure CLI), args are Azure CLI subcommands constructed within the test code
+		cmd := exec.CommandContext(rctx, "az", args...) // #nosec G702,G204 -- CI sanity test tooling; binary is hardcoded "az" (Azure CLI). Args are Azure CLI subcommands constructed in test code plus opts.SubscriptionID from config/CLI, which exec.CommandContext passes as a single argv value (no shell interpretation), so it cannot inject commands
 		out, err := cmd.CombinedOutput()
 		end := time.Now().UTC()
 
