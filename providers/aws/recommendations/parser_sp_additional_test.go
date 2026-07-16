@@ -253,6 +253,10 @@ func (m *mockCostExplorerForSP) GetSavingsPlansUtilization(_ context.Context, _ 
 	return &costexplorer.GetSavingsPlansUtilizationOutput{}, nil
 }
 
+func (m *mockCostExplorerForSP) GetCostAndUsage(_ context.Context, _ *costexplorer.GetCostAndUsageInput, _ ...func(*costexplorer.Options)) (*costexplorer.GetCostAndUsageOutput, error) {
+	return &costexplorer.GetCostAndUsageOutput{}, nil
+}
+
 func TestGetSavingsPlansRecommendations_WithFilters(t *testing.T) {
 	mockAPI := &mockCostExplorerForSP{
 		responses: map[types.SupportedSavingsPlansType]*costexplorer.GetSavingsPlansPurchaseRecommendationOutput{
@@ -454,6 +458,12 @@ func (m *multiPageSPMock) GetSavingsPlansUtilization(
 	return &costexplorer.GetSavingsPlansUtilizationOutput{}, nil
 }
 
+func (m *multiPageSPMock) GetCostAndUsage(
+	_ context.Context, _ *costexplorer.GetCostAndUsageInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetCostAndUsageOutput, error) {
+	return &costexplorer.GetCostAndUsageOutput{}, nil
+}
+
 // alwaysNextPageSPMock returns pages each carrying a non-nil non-empty NextPageToken.
 type alwaysNextPageSPMock struct {
 	calls int
@@ -496,6 +506,12 @@ func (m *alwaysNextPageSPMock) GetSavingsPlansUtilization(
 	_ context.Context, _ *costexplorer.GetSavingsPlansUtilizationInput, _ ...func(*costexplorer.Options),
 ) (*costexplorer.GetSavingsPlansUtilizationOutput, error) {
 	return &costexplorer.GetSavingsPlansUtilizationOutput{}, nil
+}
+
+func (m *alwaysNextPageSPMock) GetCostAndUsage(
+	_ context.Context, _ *costexplorer.GetCostAndUsageInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetCostAndUsageOutput, error) {
+	return &costexplorer.GetCostAndUsageOutput{}, nil
 }
 
 // TestGetSavingsPlansRecommendations_Paginates asserts multi-page accumulation (issue #692).

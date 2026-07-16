@@ -60,6 +60,10 @@ func (m *mockCostExplorerAPI) GetSavingsPlansUtilization(ctx context.Context, pa
 	return &costexplorer.GetSavingsPlansUtilizationOutput{}, nil
 }
 
+func (m *mockCostExplorerAPI) GetCostAndUsage(_ context.Context, _ *costexplorer.GetCostAndUsageInput, _ ...func(*costexplorer.Options)) (*costexplorer.GetCostAndUsageOutput, error) {
+	return &costexplorer.GetCostAndUsageOutput{}, nil
+}
+
 func TestNewClient(t *testing.T) {
 	cfg := aws.Config{
 		Region: "us-west-2",
@@ -701,6 +705,12 @@ func (m *multiPageRIMock) GetSavingsPlansUtilization(
 	return &costexplorer.GetSavingsPlansUtilizationOutput{}, nil
 }
 
+func (m *multiPageRIMock) GetCostAndUsage(
+	_ context.Context, _ *costexplorer.GetCostAndUsageInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetCostAndUsageOutput, error) {
+	return &costexplorer.GetCostAndUsageOutput{}, nil
+}
+
 // riDetail returns a minimal ReservationPurchaseRecommendation with n EC2 details.
 func riDetail(n int) types.ReservationPurchaseRecommendation {
 	details := make([]types.ReservationPurchaseRecommendationDetail, n)
@@ -831,6 +841,12 @@ func (m *alwaysNextPageRIMock) GetSavingsPlansUtilization(
 	_ context.Context, _ *costexplorer.GetSavingsPlansUtilizationInput, _ ...func(*costexplorer.Options),
 ) (*costexplorer.GetSavingsPlansUtilizationOutput, error) {
 	return &costexplorer.GetSavingsPlansUtilizationOutput{}, nil
+}
+
+func (m *alwaysNextPageRIMock) GetCostAndUsage(
+	_ context.Context, _ *costexplorer.GetCostAndUsageInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetCostAndUsageOutput, error) {
+	return &costexplorer.GetCostAndUsageOutput{}, nil
 }
 
 // TestGetRecommendations_RI_PaginationCapError asserts that exceeding
