@@ -427,6 +427,8 @@ Resources:
               - ec2:DescribeReservedInstancesOfferings
               - ec2:DescribeReservedInstances
               - ec2:PurchaseReservedInstancesOffering
+              - ec2:GetReservedInstancesExchangeQuote
+              - ec2:AcceptReservedInstancesExchangeQuote
               - ec2:DescribeRegions
               - ec2:DescribeInstanceTypeOfferings
             Resource: "*"
@@ -464,6 +466,7 @@ Resources:
             Action:
               - savingsplans:DescribeSavingsPlans
               - savingsplans:CreateSavingsPlan
+              - savingsplans:DescribeSavingsPlansOfferings
               - savingsplans:DescribeSavingsPlansOfferingRates
             Resource: "*"
 
@@ -474,6 +477,7 @@ Resources:
               - sts:GetCallerIdentity
               - organizations:ListAccounts
               - organizations:DescribeAccount
+              - organizations:DescribeOrganization
             Resource: "*"
 
           # Cross-account role assumption for multi-account plans
