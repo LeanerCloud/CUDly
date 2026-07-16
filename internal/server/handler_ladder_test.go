@@ -467,7 +467,7 @@ func TestHandleLadderRun_MultiAccountSkip_CountedAndIsolated(t *testing.T) {
 
 	// Put the foreign config first to prove isolation is order-independent.
 	configs := []config.LadderConfigDB{cfgForeign, cfgHealthy}
-	result := app.runLadderConfigs(ctx, configs, ownAccount, "us-east-1", pkgladder.Term1Year, pkgladder.PaymentNoUpfront, now)
+	result := app.runLadderConfigs(ctx, configs, ownAccount, "us-east-1", pkgladder.Term1Year, pkgladder.PaymentNoUpfront, now, false)
 
 	require.NotNil(t, result)
 	// (a) The foreign config must be counted as SkippedMultiAccount.
@@ -869,7 +869,7 @@ func TestProcessOneLadderConfig_CadenceDBError_Errored(t *testing.T) {
 		},
 	}
 
-	result := app.runLadderConfigs(ctx, []config.LadderConfigDB{dbCfg}, ownAccount, "us-east-1", pkgladder.Term1Year, pkgladder.PaymentNoUpfront, now)
+	result := app.runLadderConfigs(ctx, []config.LadderConfigDB{dbCfg}, ownAccount, "us-east-1", pkgladder.Term1Year, pkgladder.PaymentNoUpfront, now, false)
 
 	assert.Equal(t, 1, result.Errored, "a cadence lookup error must count the config Errored")
 	assert.Equal(t, 0, result.Planned)
@@ -993,7 +993,7 @@ func TestHandleLadderRun_MultiConfigIsolation(t *testing.T) {
 	// Order the broken config first to prove a leading failure does not abort
 	// the healthy config that follows.
 	configs := []config.LadderConfigDB{cfgBroken, cfgHealthy}
-	result := app.runLadderConfigs(ctx, configs, ownAccount, "us-east-1", pkgladder.Term1Year, pkgladder.PaymentNoUpfront, now)
+	result := app.runLadderConfigs(ctx, configs, ownAccount, "us-east-1", pkgladder.Term1Year, pkgladder.PaymentNoUpfront, now, false)
 
 	require.NotNil(t, result)
 	assert.Equal(t, 1, result.Planned, "the healthy config must still be planned despite the broken one")

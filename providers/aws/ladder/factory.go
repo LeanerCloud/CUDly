@@ -4,12 +4,17 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	sdksp "github.com/aws/aws-sdk-go-v2/service/savingsplans"
+	sptypes "github.com/aws/aws-sdk-go-v2/service/savingsplans/types"
 
+	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/exchange"
 	pkgladder "github.com/LeanerCloud/CUDly/pkg/ladder"
 	"github.com/LeanerCloud/CUDly/providers/aws/recommendations"
 	ec2svc "github.com/LeanerCloud/CUDly/providers/aws/services/ec2"
+	savingsplansvc "github.com/LeanerCloud/CUDly/providers/aws/services/savingsplans"
 )
 
 // NewFromAWSConfig constructs a fully wired AWSLadder for the given region and
@@ -87,4 +92,44 @@ func NewFromAWSConfig(ctx context.Context, region, accountID string) (pkgladder.
 		return nil, fmt.Errorf("awsladder.NewFromAWSConfig: %w", err)
 	}
 	return l, nil
+}
+
+// disabledPurchaser is the riPurchaser / spPurchaser implementation used when
+// ladder_execution_enabled=false. Every call returns ErrLadderExecutionDisabled
+// without touching any AWS API.
+type disabledPurchaser struct{}
+
+func (disabledPurchaser) PurchaseCommitment(_ context.Context, _ common.Recommendation, _ common.PurchaseOptions) (common.PurchaseResult, error) {
+	return common.PurchaseResult{}, fmt.Errorf("%w: purchase blocked by kill-switch", ErrLadderExecutionDisabled)
+}
+
+// disabledExchangeRunner is the exchangeRunner implementation used when
+// ladder_execution_enabled=false. Every call returns ErrLadderExecutionDisabled
+// without touching any AWS or DB API.
+type disabledExchangeRunner struct{}
+
+func (disabledExchangeRunner) RunAutoExchange(_ context.Context, _ exchange.RIExchangeConfig, _ *string, _ bool) (*exchange.AutoExchangeResult, error) {
+	return nil, fmt.Errorf("%w: exchange blocked by kill-switch", ErrLadderExecutionDisabled)
+}
+
+// WireWriteSideDisabled wires the ladder's write side with disabled
+// implementations that return ErrLadderExecutionDisabled on every call.
+// Use this when ladder_execution_enabled=false in global_config: the
+// ladder is wired (errWriteNotWired is not returned) but executes nothing
+// and allows callers to detect the disabled state via errors.Is.
+func WireWriteSideDisabled(l *AWSLadder) (*AWSLadder, error) {
+	return l.WithWriteSide(disabledPurchaser{}, disabledPurchaser{}, disabledExchangeRunner{})
+}
+
+// WireWriteSide wires the ladder's write side with real AWS SDK clients.
+// Use this when ladder_execution_enabled=true in global_config.
+// ex is the exchangeRunner (typically *internal/server.exchangeRunnerAdapter)
+// which owns the exchange store, EC2 exchange client, and offering lookup.
+// The savingsplans client is created in umbrella mode (empty planType) so a
+// single purchaser serves both EC2Instance and Compute SP layers; plan-type
+// routing happens at purchase time via resolveSPPlanType.
+func WireWriteSide(l *AWSLadder, awsCfg aws.Config, ex exchangeRunner) (*AWSLadder, error) {
+	riP := ec2svc.NewClient(awsCfg)
+	spP := savingsplansvc.NewClient(awsCfg, sptypes.SavingsPlanType(""))
+	return l.WithWriteSide(riP, spP, ex)
 }
