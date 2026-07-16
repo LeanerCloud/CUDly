@@ -867,6 +867,65 @@ func TestGetUsageBaseline_FreshAndCompleteSeries_NoError(t *testing.T) {
 	require.NotNil(t, bl.LowWaterUSDPerHour, "LowWaterUSDPerHour must be set on a valid baseline")
 }
 
+// TestGetUsageBaseline_AgeExactlyAtBoundary_NoError locks the off-by-one on the
+// freshness comparison: a series whose most-recent point is EXACTLY
+// maxSeriesAgeDays old must pass (the check is age > max, not age >= max).
+func TestGetUsageBaseline_AgeExactlyAtBoundary_NoError(t *testing.T) {
+	// End the series exactly maxSeriesAgeDays days ago. Truncate to the UTC day
+	// and step back one extra hour so integer-day age floors to exactly
+	// maxSeriesAgeDays rather than maxSeriesAgeDays-1 due to sub-day rounding.
+	end := time.Now().Add(-time.Duration(maxSeriesAgeDays)*24*time.Hour - time.Hour).UTC().Truncate(24 * time.Hour)
+	points := make([]DailyPoint, 30)
+	for i := range points {
+		points[i] = DailyPoint{Date: end.AddDate(0, 0, -(29 - i)), USDPerHour: float64(i + 1)}
+	}
+	cov := &fakeCoverageSource{onDemandPoints: points}
+	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, cov, &fakeUtilizationSource{})
+
+	_, err := a.GetUsageBaseline(context.Background(), testScope(), 30, 5.0)
+	require.NoError(t, err, "a series exactly maxSeriesAgeDays old must pass (boundary is age > max)")
+}
+
+// TestGetUsageBaseline_CoverageExactlyAtBoundary_NoError locks the off-by-one on
+// the coverage comparison: exactly lookbackDays - maxMissingDays points must
+// pass (the check is len < minRequired, not len <= minRequired).
+func TestGetUsageBaseline_CoverageExactlyAtBoundary_NoError(t *testing.T) {
+	const lookbackDays = 30
+	n := lookbackDays - maxMissingDays // exactly the minimum required
+	cov := &fakeCoverageSource{onDemandPoints: makeRecentPoints(n)}
+	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, cov, &fakeUtilizationSource{})
+
+	_, err := a.GetUsageBaseline(context.Background(), testScope(), lookbackDays, 5.0)
+	require.NoError(t, err, "exactly lookbackDays-maxMissingDays points must pass (boundary is len < minRequired)")
+}
+
+// TestGetUsageBaseline_NonMonotonicDates_ReturnsError covers the chronology
+// hardening: an out-of-order or duplicate-date series must fail loud rather than
+// let validateSeriesFreshness trust the last element as newest.
+func TestGetUsageBaseline_NonMonotonicDates_ReturnsError(t *testing.T) {
+	t.Run("swapped pair", func(t *testing.T) {
+		points := makeRecentPoints(30)
+		points[10], points[11] = points[11], points[10] // break strict ordering
+		cov := &fakeCoverageSource{onDemandPoints: points}
+		a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, cov, &fakeUtilizationSource{})
+
+		_, err := a.GetUsageBaseline(context.Background(), testScope(), 30, 5.0)
+		require.Error(t, err, "an out-of-order series must be rejected")
+		assert.Contains(t, err.Error(), "strictly increasing")
+	})
+
+	t.Run("duplicate date", func(t *testing.T) {
+		points := makeRecentPoints(30)
+		points[15].Date = points[14].Date // duplicate calendar day
+		cov := &fakeCoverageSource{onDemandPoints: points}
+		a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, cov, &fakeUtilizationSource{})
+
+		_, err := a.GetUsageBaseline(context.Background(), testScope(), 30, 5.0)
+		require.Error(t, err, "a duplicate-date series must be rejected")
+		assert.Contains(t, err.Error(), "strictly increasing")
+	})
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

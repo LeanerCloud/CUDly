@@ -131,15 +131,26 @@ func (a *AWSLadder) GetUsageBaseline(ctx context.Context, scope ladder.Scope, lo
 	}, nil
 }
 
-// validateSeriesFreshness returns an error when the most-recent DailyPoint is
-// older than maxSeriesAgeDays calendar days. It is called after the series has
-// been confirmed non-empty and above minBaselineSeriesDays by GetUsageBaseline,
-// so len(points) > 0 is guaranteed.
+// validateSeriesFreshness returns an error when the series is not in strictly
+// increasing calendar-day order or when its most-recent DailyPoint is older
+// than maxSeriesAgeDays calendar days. It is called after the series has been
+// confirmed non-empty and above minBaselineSeriesDays by GetUsageBaseline, so
+// len(points) > 0 is guaranteed.
+//
+// The chronology check comes first and fails loud on any non-monotonic or
+// duplicate calendar date: the freshness check trusts the last element to be
+// the newest point, so an unsorted or duplicate-date series (e.g. from a future
+// CE adapter that returns pages out of order) could otherwise make a stale tail
+// pass or a fresh series falsely error. It also catches duplicate-date rows the
+// count-based coverage check cannot see (N points spanning fewer than N days).
 //
 // Age is computed as integer days (floor of elapsed hours / 24), which is
 // precise enough for a 3-day threshold and avoids DST and leap-second edge
 // cases that a Date difference would introduce.
 func validateSeriesFreshness(points []DailyPoint) error {
+	if err := validateSeriesChronology(points); err != nil {
+		return err
+	}
 	latestDate := points[len(points)-1].Date
 	ageDays := int(time.Since(latestDate).Hours() / 24)
 	if ageDays > maxSeriesAgeDays {
@@ -147,6 +158,25 @@ func validateSeriesFreshness(points []DailyPoint) error {
 			"on-demand series is stale: most recent data point is %s (%d days old, maximum %d); check that the CE data feed is active or that the lookback date range ends near today",
 			latestDate.Format("2006-01-02"), ageDays, maxSeriesAgeDays,
 		)
+	}
+	return nil
+}
+
+// validateSeriesChronology verifies the series is in strictly increasing
+// calendar-day order (oldest-to-newest, no duplicate days). Dates are compared
+// after truncation to the UTC day so that a same-day pair with differing
+// time-of-day components is still rejected as a duplicate. The error names the
+// offending index and both dates so a data-source ordering bug is traceable.
+func validateSeriesChronology(points []DailyPoint) error {
+	for i := 1; i < len(points); i++ {
+		prev := points[i-1].Date.UTC().Truncate(24 * time.Hour)
+		cur := points[i].Date.UTC().Truncate(24 * time.Hour)
+		if !cur.After(prev) {
+			return fmt.Errorf(
+				"on-demand series is not in strictly increasing date order: point %d (%s) does not come after point %d (%s); the series source must return one entry per day, oldest-to-newest",
+				i, points[i].Date.Format("2006-01-02"), i-1, points[i-1].Date.Format("2006-01-02"),
+			)
+		}
 	}
 	return nil
 }
