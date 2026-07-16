@@ -942,7 +942,7 @@ async function loadPlanAccountNames(planId: string, cardEl: Element): Promise<vo
 // actions that require an account (Add Purchases, Edit) are suppressed
 // — only History and Delete remain — and a read-only "Unassigned" badge
 // is shown so operators can identify and re-scope the plan.
-function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan: boolean): string {
+function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan: boolean, canAddPurchases: boolean): string {
   const info = extractPlanInfo(plan);
   const status = getStatusBadge(plan.enabled, plan.auto_purchase);
   const rampSchedule = plan.ramp_schedule || { type: 'immediate', current_step: 0, total_steps: 1 };
@@ -1006,7 +1006,7 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
           ` : ''}
         </div>
         <div class="plan-actions">
-          ${canManagePlan && !isUnassigned ? `<button data-action="add-purchases" data-id="${escapeHtmlAttr(plan.id)}" data-name="${escapeHtmlAttr(plan.name)}" class="primary">Add Purchases</button>` : ''}
+          ${canAddPurchases && !isUnassigned ? `<button data-action="add-purchases" data-id="${escapeHtmlAttr(plan.id)}" data-name="${escapeHtmlAttr(plan.name)}" class="primary">Add Purchases</button>` : ''}
           ${canManagePlan && !isUnassigned ? `<button data-action="edit-plan" data-id="${escapeHtmlAttr(plan.id)}">Edit</button>` : ''}
           <button data-action="view-history" data-id="${escapeHtmlAttr(plan.id)}" class="secondary">History</button>
           ${canDeletePlan ? `<button data-action="delete-plan" data-id="${escapeHtmlAttr(plan.id)}" class="danger">Delete</button>` : ''}
@@ -1030,6 +1030,11 @@ function renderPlans(plans: LocalPlan[]): void {
   // 600 times. Action buttons hidden for sessions that lack the verb.
   const canManagePlan = canAccess('update', 'plans');
   const canDeletePlan = canAccess('delete', 'plans');
+  // Issue #1406 / #1418: "Add Purchases" requires BOTH plan-management AND
+  // purchase-write permission. Plan Authors hold update:plans but not
+  // update:purchases; Standard Users hold both. Gate the button on the
+  // conjunction so Plan Authors cannot schedule purchases.
+  const canAddPurchases = canManagePlan && canAccess('update', 'purchases');
 
   // Issue #973: split plans into assigned (have plan_accounts rows) and
   // unassigned (legacy plans with zero plan_accounts rows, flagged by the
@@ -1039,13 +1044,13 @@ function renderPlans(plans: LocalPlan[]): void {
   const unassignedPlans = plans.filter(p => (p as unknown as BackendPlan).unassigned);
 
   const assignedHtml = assignedPlans.map(rawPlan =>
-    renderPlanCard(rawPlan as unknown as BackendPlan, canManagePlan, canDeletePlan)
+    renderPlanCard(rawPlan as unknown as BackendPlan, canManagePlan, canDeletePlan, canAddPurchases)
   ).join('');
 
   let unassignedHtml = '';
   if (unassignedPlans.length > 0) {
     const cards = unassignedPlans.map(rawPlan =>
-      renderPlanCard(rawPlan as unknown as BackendPlan, canManagePlan, canDeletePlan)
+      renderPlanCard(rawPlan as unknown as BackendPlan, canManagePlan, canDeletePlan, canAddPurchases)
     ).join('');
     unassignedHtml = `
       <div class="plans-section-header unassigned-plans-header">

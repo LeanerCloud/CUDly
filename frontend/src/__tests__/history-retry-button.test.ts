@@ -82,7 +82,19 @@ import { ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID } from '../permissions';
 // existing admins on first deploy of issue #923). retry-any:purchases is
 // carved out of admin:* and requires Purchaser group membership.
 const ADMIN_USER = { id: 'admin-uuid', email: 'admin@example.com', groups: [ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID] };
-const REG_USER = { id: 'user-uuid', email: 'user@example.com', groups: [] };
+// REG_USER carries retry-own:purchases in effectivePermissions so canAccess
+// returns the correct value. The old shape (groups: [], no effectivePermissions)
+// silently allowed the creator check to bypass the permission check -- exactly
+// the bug canRetryFailedRow now fixes (issue #1418).
+const REG_USER = {
+  id: 'user-uuid',
+  email: 'user@example.com',
+  groups: [],
+  effectivePermissions: [
+    { action: 'retry-own', resource: 'purchases' },
+    { action: 'cancel-own', resource: 'purchases' },
+  ],
+};
 // Admin WITHOUT Purchaser membership. retry-any:purchases is carved
 // out of admin:* by issue #923, so this user MUST NOT see Retry on
 // rows they did not create. Regression guard for CR #924 F5 -- if a
@@ -471,5 +483,58 @@ describe('History inline Retry button (issue #47)', () => {
     // Retry renders only via the retry-own fallback (matching
     // created_by_user_id), NOT retry-any.
     expect(ids).toEqual(['fail-mine']);
+  });
+});
+
+// Issue #1418 regression: user without retry-own:purchases sees no Retry button
+// even on rows they created (closes the same pattern fixed for approve-own by
+// PR #1422 / issue #1407).
+describe('History retry-own permission gate (issue #1418)', () => {
+  beforeEach(() => {
+    setupDOM();
+    jest.clearAllMocks();
+  });
+
+  test('user without retry-own:purchases sees no Retry button on own failed row', async () => {
+    // A Plan Authors-style user: holds plan verbs only, no purchase retry perm.
+    const planAuthorUser = {
+      id: 'plan-author-uuid',
+      email: 'plan-author@example.com',
+      groups: [],
+      effectivePermissions: [
+        { action: 'create', resource: 'plans' },
+        { action: 'update', resource: 'plans' },
+        { action: 'delete', resource: 'plans' },
+      ],
+    };
+    (getCurrentUser as jest.Mock).mockReturnValue(planAuthorUser);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({ purchase_id: 'own-fail', created_by_user_id: planAuthorUser.id }),
+      ],
+    });
+
+    await loadHistory();
+
+    // Fail-before: without the retry-own check the button appeared; now it must not.
+    expect(document.querySelectorAll('.history-retry-btn')).toHaveLength(0);
+  });
+
+  test('user with retry-own:purchases sees Retry on own failed rows', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(REG_USER);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({ purchase_id: 'own-fail', created_by_user_id: REG_USER.id }),
+        makeRow({ purchase_id: 'other-fail', created_by_user_id: OTHER_UUID }),
+      ],
+    });
+
+    await loadHistory();
+
+    const buttons = document.querySelectorAll<HTMLButtonElement>('.history-retry-btn');
+    const ids = Array.from(buttons).map((b) => b.dataset['retryId']);
+    expect(ids).toEqual(['own-fail']);
   });
 });
