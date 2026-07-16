@@ -78,13 +78,34 @@ func newOnDemandClient(m *mockOnDemandCE) *Client {
 	return NewClientWithAPI(m, "us-east-1")
 }
 
-// generate30Days builds a single-page mock returning 30 daily entries,
+// utcDate parses a "2006-01-02" string into midnight UTC, failing the test
+// on malformed input. Mirrors the production ceDateLayout parse so date
+// assertions compare like with like.
+func utcDate(t *testing.T, dateStr string) time.Time {
+	t.Helper()
+	d, err := time.Parse(ceDateLayout, dateStr)
+	require.NoError(t, err)
+	return d
+}
+
+// requireStrictlyIncreasingDays asserts the series dates are unique ascending
+// UTC calendar days (the ladder baseline's chronology contract).
+func requireStrictlyIncreasingDays(t *testing.T, series []DailyCost) {
+	t.Helper()
+	for i := 1; i < len(series); i++ {
+		require.True(t, series[i].Date.After(series[i-1].Date),
+			"series dates must be strictly increasing: index %d (%s) not after index %d (%s)",
+			i, series[i].Date.Format(ceDateLayout), i-1, series[i-1].Date.Format(ceDateLayout))
+	}
+}
+
+// generate30DayPage builds a single-page mock returning 30 daily entries,
 // each billing totalPerDay USD total (i.e. totalPerDay/24 USD/hr per entry).
 func generate30DayPage(startDate time.Time, totalPerDay float64) []*costexplorer.GetCostAndUsageOutput {
 	results := make([]types.ResultByTime, 30)
 	for i := range results {
 		day := startDate.AddDate(0, 0, i)
-		results[i] = dailyResult(day.Format("2006-01-02"), totalPerDay)
+		results[i] = dailyResult(day.Format(ceDateLayout), totalPerDay)
 	}
 	return []*costexplorer.GetCostAndUsageOutput{
 		{ResultsByTime: results},
@@ -92,7 +113,8 @@ func generate30DayPage(startDate time.Time, totalPerDay float64) []*costexplorer
 }
 
 // TestGetOnDemandSeries_HappyPath verifies that 30 daily entries at
-// $240/day each return 30 elements of $10/hr ($240/24h).
+// $240/day each return 30 dated points of $10/hr ($240/24h) with strictly
+// increasing unique UTC days and a fresh (most recent CE day) tail.
 func TestGetOnDemandSeries_HappyPath(t *testing.T) {
 	start := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -30)
 	mock := &mockOnDemandCE{pages: generate30DayPage(start, 240.0)}
@@ -101,14 +123,22 @@ func TestGetOnDemandSeries_HappyPath(t *testing.T) {
 	series, err := client.GetOnDemandSeries(context.Background(), "us-east-1", 30)
 
 	require.NoError(t, err)
-	assert.Len(t, series, 30, "series must have one element per returned day")
-	for i, v := range series {
-		assert.InDelta(t, 10.0, v, 1e-9, "day %d: expected $10/hr ($240/24h)", i)
+	require.Len(t, series, 30, "series must have one element per returned day")
+	for i, p := range series {
+		assert.InDelta(t, 10.0, p.USDPerHour, 1e-9, "day %d: expected $10/hr ($240/24h)", i)
+		assert.Equal(t, start.AddDate(0, 0, i), p.Date,
+			"day %d: Date must be the UTC day from the CE period start", i)
 	}
+	requireStrictlyIncreasingDays(t, series)
+	// Freshness contract: the last point is the most recent CE day (start+29
+	// = yesterday), within the baseline's maxSeriesAgeDays.
+	assert.Equal(t, start.AddDate(0, 0, 29), series[len(series)-1].Date,
+		"last point must be the most recent CE day")
 }
 
 // TestGetOnDemandSeries_OldestFirst verifies that days are returned in
-// chronological (oldest-to-newest) order regardless of map iteration order.
+// chronological (oldest-to-newest) order by Date regardless of the order CE
+// returned them in.
 func TestGetOnDemandSeries_OldestFirst(t *testing.T) {
 	// Provide 3 days with distinct costs so order is detectable.
 	pages := []*costexplorer.GetCostAndUsageOutput{{
@@ -125,13 +155,17 @@ func TestGetOnDemandSeries_OldestFirst(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, series, 3)
-	assert.InDelta(t, 1.0, series[0], 1e-9, "oldest day first")
-	assert.InDelta(t, 2.0, series[1], 1e-9, "middle day second")
-	assert.InDelta(t, 3.0, series[2], 1e-9, "newest day last")
+	assert.Equal(t, utcDate(t, "2026-01-01"), series[0].Date, "oldest day first")
+	assert.InDelta(t, 1.0, series[0].USDPerHour, 1e-9)
+	assert.Equal(t, utcDate(t, "2026-01-02"), series[1].Date, "middle day second")
+	assert.InDelta(t, 2.0, series[1].USDPerHour, 1e-9)
+	assert.Equal(t, utcDate(t, "2026-01-03"), series[2].Date, "newest day last")
+	assert.InDelta(t, 3.0, series[2].USDPerHour, 1e-9)
+	requireStrictlyIncreasingDays(t, series)
 }
 
 // TestGetOnDemandSeries_Paginated verifies that two pages are fetched and
-// their results merged into a single sorted series.
+// their results merged into a single date-sorted series.
 func TestGetOnDemandSeries_Paginated(t *testing.T) {
 	pages := []*costexplorer.GetCostAndUsageOutput{
 		{
@@ -154,9 +188,13 @@ func TestGetOnDemandSeries_Paginated(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, series, 3, "both pages must be merged")
-	assert.InDelta(t, 1.0, series[0], 1e-9)
-	assert.InDelta(t, 2.0, series[1], 1e-9)
-	assert.InDelta(t, 3.0, series[2], 1e-9)
+	assert.Equal(t, utcDate(t, "2026-01-01"), series[0].Date)
+	assert.InDelta(t, 1.0, series[0].USDPerHour, 1e-9)
+	assert.Equal(t, utcDate(t, "2026-01-02"), series[1].Date)
+	assert.InDelta(t, 2.0, series[1].USDPerHour, 1e-9)
+	assert.Equal(t, utcDate(t, "2026-01-03"), series[2].Date)
+	assert.InDelta(t, 3.0, series[2].USDPerHour, 1e-9)
+	requireStrictlyIncreasingDays(t, series)
 	// Verify exactly 2 CE calls were made (one per page).
 	assert.Len(t, mock.gotInputs, 2, "should have fetched 2 pages")
 	// Second call must carry the token from the first response.
@@ -207,6 +245,24 @@ func TestGetOnDemandSeries_ParseErrorFails(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot parse CE amount")
+}
+
+// TestGetOnDemandSeries_BadDateFails verifies that a malformed CE period-start
+// date fails loud instead of being skipped or misdated
+// (feedback_no_silent_fallbacks).
+func TestGetOnDemandSeries_BadDateFails(t *testing.T) {
+	pages := []*costexplorer.GetCostAndUsageOutput{{
+		ResultsByTime: []types.ResultByTime{
+			dailyResult("not-a-date", 24.0),
+		},
+	}}
+	mock := &mockOnDemandCE{pages: pages}
+	client := newOnDemandClient(mock)
+
+	_, err := client.GetOnDemandSeries(context.Background(), "us-east-1", 7)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot parse CE period start date")
 }
 
 // TestGetOnDemandSeries_CorrectFilterParams verifies the CE query uses the
@@ -263,7 +319,8 @@ func TestGetOnDemandSeries_ContextCancelled(t *testing.T) {
 }
 
 // TestGetOnDemandSeries_MissingMetricKey verifies that a day with a missing
-// metric key is treated as $0 rather than causing an error.
+// metric key is treated as $0 rather than causing an error, and keeps its
+// correct calendar date in the series.
 func TestGetOnDemandSeries_MissingMetricKey(t *testing.T) {
 	pages := []*costexplorer.GetCostAndUsageOutput{{
 		ResultsByTime: []types.ResultByTime{
@@ -279,7 +336,12 @@ func TestGetOnDemandSeries_MissingMetricKey(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, series, 3)
-	assert.InDelta(t, 1.0, series[0], 1e-9)
-	assert.InDelta(t, 0.0, series[1], 1e-9, "missing metric key is treated as $0/hr")
-	assert.InDelta(t, 2.0, series[2], 1e-9)
+	assert.Equal(t, utcDate(t, "2026-01-01"), series[0].Date)
+	assert.InDelta(t, 1.0, series[0].USDPerHour, 1e-9)
+	assert.Equal(t, utcDate(t, "2026-01-02"), series[1].Date,
+		"the zero-spend day must keep its calendar date")
+	assert.InDelta(t, 0.0, series[1].USDPerHour, 1e-9, "missing metric key is treated as $0/hr")
+	assert.Equal(t, utcDate(t, "2026-01-03"), series[2].Date)
+	assert.InDelta(t, 2.0, series[2].USDPerHour, 1e-9)
+	requireStrictlyIncreasingDays(t, series)
 }
