@@ -7,7 +7,10 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+
+	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
 // mockExchangeStore implements RIExchangeStore for testing.
@@ -17,6 +20,9 @@ type mockExchangeStore struct {
 	staleRecords   []ExchangeRecord
 	dailySpend     string
 	dailySpendErr  error
+	// cancelByOriginLast captures the origin argument of the last
+	// CancelPendingExchangesByOrigin call for assertion in scoping tests.
+	cancelByOriginLast *common.ExchangeOrigin
 }
 
 func (m *mockExchangeStore) SaveRIExchangeRecord(_ context.Context, record *ExchangeRecord) error {
@@ -28,6 +34,11 @@ func (m *mockExchangeStore) SaveRIExchangeRecord(_ context.Context, record *Exch
 }
 
 func (m *mockExchangeStore) CancelAllPendingExchanges(_ context.Context) (int64, error) {
+	return m.cancelledCount, nil
+}
+
+func (m *mockExchangeStore) CancelPendingExchangesByOrigin(_ context.Context, origin common.ExchangeOrigin) (int64, error) {
+	m.cancelByOriginLast = &origin
 	return m.cancelledCount, nil
 }
 
@@ -48,6 +59,51 @@ func (m *mockExchangeStore) CompleteRIExchange(_ context.Context, _ string, _ st
 
 func (m *mockExchangeStore) FailRIExchange(_ context.Context, _ string, _ string) error {
 	return nil
+}
+
+// testifyExchangeStore is a testify mock.Mock-based store for tests that need
+// mock.AssertExpectations enforcement (e.g. the dry-run test that must assert
+// zero mutations were attempted).
+type testifyExchangeStore struct {
+	mock.Mock
+}
+
+func (m *testifyExchangeStore) SaveRIExchangeRecord(ctx context.Context, record *ExchangeRecord) error {
+	args := m.Called(ctx, record)
+	return args.Error(0)
+}
+
+func (m *testifyExchangeStore) CancelAllPendingExchanges(ctx context.Context) (int64, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(int64), args.Error(1)
+}
+
+func (m *testifyExchangeStore) CancelPendingExchangesByOrigin(ctx context.Context, origin common.ExchangeOrigin) (int64, error) {
+	args := m.Called(ctx, origin)
+	return args.Get(0).(int64), args.Error(1)
+}
+
+func (m *testifyExchangeStore) GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]ExchangeRecord, error) {
+	args := m.Called(ctx, olderThan)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]ExchangeRecord), args.Error(1)
+}
+
+func (m *testifyExchangeStore) GetRIExchangeDailySpend(ctx context.Context, date time.Time) (string, error) {
+	args := m.Called(ctx, date)
+	return args.String(0), args.Error(1)
+}
+
+func (m *testifyExchangeStore) CompleteRIExchange(ctx context.Context, id string, exchangeID string) error {
+	args := m.Called(ctx, id, exchangeID)
+	return args.Error(0)
+}
+
+func (m *testifyExchangeStore) FailRIExchange(ctx context.Context, id string, errMsg string) error {
+	args := m.Called(ctx, id, errMsg)
+	return args.Error(0)
 }
 
 // mockExchangeClient implements ExchangeClientInterface for testing.
@@ -309,4 +365,149 @@ func TestRunAutoExchange_IdleRI_Skipped(t *testing.T) {
 
 	assert.Len(t, result.Skipped, 1)
 	assert.Contains(t, result.Skipped[0].Reason, "idle")
+}
+
+// ─── Scoped cancellation tests ────────────────────────────────────────────────
+
+// TestRunAutoExchange_StandaloneDoesNotCancelLadderPendings is the regression
+// test for gap G10: before this fix, RunAutoExchange called
+// CancelAllPendingExchanges (store-wide), so the standalone ri_exchange_reshape
+// task would silently wipe out ladder-linked pending reshapes. After the fix,
+// the standalone run calls CancelPendingExchangesByOrigin with
+// common.ExchangeOriginStandalone, which only cancels records where
+// ladder_run_id IS NULL.
+func TestRunAutoExchange_StandaloneDoesNotCancelLadderPendings(t *testing.T) {
+	t.Parallel()
+	store := &mockExchangeStore{dailySpend: "0"}
+	client := &mockExchangeClient{quoteResult: defaultQuote()}
+	params := defaultParams(store, client)
+	// LadderRunID=nil means standalone origin.
+	params.LadderRunID = nil
+
+	_, err := RunAutoExchange(context.Background(), params)
+	require.NoError(t, err)
+
+	// Must have called the scoped cancel with the standalone origin, NOT the
+	// store-wide CancelAllPendingExchanges. cancelByOriginLast tracks the
+	// argument passed to CancelPendingExchangesByOrigin.
+	require.NotNil(t, store.cancelByOriginLast,
+		"CancelPendingExchangesByOrigin must have been called (not the store-wide variant)")
+	assert.Equal(t, common.ExchangeOriginStandalone, *store.cancelByOriginLast,
+		"standalone run must cancel only non-ladder pendings (origin=standalone)")
+}
+
+// TestRunAutoExchange_LadderDoesNotCancelStandalonePendings verifies that a
+// ladder-originated run calls CancelPendingExchangesByOrigin with
+// common.ExchangeOriginLadder, which only cancels records where ladder_run_id
+// IS NOT NULL, leaving standalone pending records intact.
+func TestRunAutoExchange_LadderDoesNotCancelStandalonePendings(t *testing.T) {
+	t.Parallel()
+	store := &mockExchangeStore{dailySpend: "0"}
+	client := &mockExchangeClient{quoteResult: defaultQuote()}
+	params := defaultParams(store, client)
+	ladderRunID := "ladder-run-abc-123"
+	params.LadderRunID = &ladderRunID
+
+	_, err := RunAutoExchange(context.Background(), params)
+	require.NoError(t, err)
+
+	require.NotNil(t, store.cancelByOriginLast,
+		"CancelPendingExchangesByOrigin must have been called")
+	assert.Equal(t, common.ExchangeOriginLadder, *store.cancelByOriginLast,
+		"ladder run must cancel only ladder-linked pendings (origin=ladder)")
+}
+
+// ─── Dry-run tests ────────────────────────────────────────────────────────────
+
+// TestRunAutoExchange_DryRun_ManualMode_ZeroMutations verifies that a dry-run
+// in manual mode produces simulated pending outcomes without any store writes
+// or cancellation calls. mock.AssertExpectations enforces the zero-mutation
+// contract (fail-loud gate: any registered-but-uncalled or called-but-unregistered
+// method on a testify mock fails the test).
+func TestRunAutoExchange_DryRun_ManualMode_ZeroMutations(t *testing.T) {
+	t.Parallel()
+	store := &testifyExchangeStore{}
+	// Only GetStaleProcessingExchanges is a read-only call expected in dry-run.
+	store.On("GetStaleProcessingExchanges", mock.Anything, staleProcessingThreshold).
+		Return(nil, nil)
+	t.Cleanup(func() { store.AssertExpectations(t) })
+
+	client := &mockExchangeClient{quoteResult: defaultQuote()}
+	params := defaultParams(store, client)
+	params.DryRun = true
+
+	result, err := RunAutoExchange(context.Background(), params)
+	require.NoError(t, err)
+
+	// Outcome must be simulated — no real token, no record ID.
+	require.Len(t, result.Pending, 1)
+	assert.True(t, result.Pending[0].Simulated, "outcome must be tagged Simulated in dry-run")
+	assert.Empty(t, result.Pending[0].ApprovalToken, "no live approval token must be generated in dry-run")
+	assert.Empty(t, result.Pending[0].RecordID, "no record must be saved in dry-run")
+}
+
+// TestRunAutoExchange_DryRun_AutoMode_ZeroMutations verifies that a dry-run
+// in auto mode produces simulated completed outcomes without executing any
+// exchange or saving any record.
+func TestRunAutoExchange_DryRun_AutoMode_ZeroMutations(t *testing.T) {
+	t.Parallel()
+	store := &testifyExchangeStore{}
+	store.On("GetStaleProcessingExchanges", mock.Anything, staleProcessingThreshold).
+		Return(nil, nil)
+	t.Cleanup(func() { store.AssertExpectations(t) })
+
+	client := &mockExchangeClient{quoteResult: defaultQuote(), executeResult: "exch-dryrun-ignored"}
+	params := defaultParams(store, client)
+	params.Config.Mode = "auto"
+	params.DryRun = true
+
+	result, err := RunAutoExchange(context.Background(), params)
+	require.NoError(t, err)
+
+	// Auto mode dry-run lands in Completed (would have executed) but Simulated.
+	require.Len(t, result.Completed, 1)
+	assert.True(t, result.Completed[0].Simulated, "auto dry-run outcome must be tagged Simulated")
+	assert.Empty(t, result.Completed[0].ExchangeID, "no real exchange must be executed in dry-run")
+}
+
+// ─── LadderRunID round-trip test ──────────────────────────────────────────────
+
+// TestRunAutoExchange_LadderRunID_StampedOnRecords verifies that when
+// RunAutoExchangeParams.LadderRunID is set, every saved record (pending,
+// completed, failed) carries that ID so the DB column is actually written.
+func TestRunAutoExchange_LadderRunID_StampedOnRecords(t *testing.T) {
+	t.Parallel()
+	store := &mockExchangeStore{dailySpend: "0"}
+	client := &mockExchangeClient{quoteResult: defaultQuote()}
+	params := defaultParams(store, client)
+	ladderRunID := "ladder-run-999"
+	params.LadderRunID = &ladderRunID
+
+	result, err := RunAutoExchange(context.Background(), params)
+	require.NoError(t, err)
+
+	require.Len(t, result.Pending, 1, "expected one pending record in manual mode")
+	require.Len(t, store.savedRecords, 1)
+	require.NotNil(t, store.savedRecords[0].LadderRunID, "LadderRunID must be non-nil")
+	assert.Equal(t, ladderRunID, *store.savedRecords[0].LadderRunID,
+		"saved record must carry the LadderRunID from params")
+}
+
+// TestRunAutoExchange_NoLadderRunID_RecordHasNilLadderRunID verifies that
+// standalone (LadderRunID=nil) runs save records with nil LadderRunID, so
+// the DB column remains NULL and CancelPendingExchangesByOrigin(false) can
+// correctly target them.
+func TestRunAutoExchange_NoLadderRunID_RecordHasNilLadderRunID(t *testing.T) {
+	t.Parallel()
+	store := &mockExchangeStore{dailySpend: "0"}
+	client := &mockExchangeClient{quoteResult: defaultQuote()}
+	params := defaultParams(store, client)
+	params.LadderRunID = nil
+
+	_, err := RunAutoExchange(context.Background(), params)
+	require.NoError(t, err)
+
+	require.Len(t, store.savedRecords, 1)
+	assert.Nil(t, store.savedRecords[0].LadderRunID,
+		"standalone run must save record with nil LadderRunID")
 }

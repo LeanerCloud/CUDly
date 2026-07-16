@@ -28,21 +28,23 @@ const unlimitedCapUSD = math.MaxFloat64
 // store, quote/execute client, offering lookup, and RI/utilization inventory
 // (the same wiring internal/server.executeRIExchangeReshape performs).
 //
-// WARNING — store-wide side effect: the underlying exchange.RunAutoExchange
-// begins by unconditionally canceling ALL pending exchange records in the
-// store (CancelAllPendingExchanges), including pendings created by the
-// standalone ri_exchange_reshape scheduled task. Callers MUST NOT run
-// ReshapeBuffer concurrently with that task against the same store; the
-// pipeline phase that invokes this method must coordinate with (or disable)
-// the standalone scheduler.
+// Origin-scoped cancellation (gap G10, issue #1348): exchange.RunAutoExchange
+// scopes its pending-cancellation by origin — standalone runs
+// (LadderRunID=nil) cancel only ladder_run_id IS NULL pendings, and ladder
+// runs (LadderRunID set) cancel only ladder_run_id IS NOT NULL pendings. This
+// method forwards cfg.LadderRunID through the exchangeRunner seam so a ladder
+// reshape scopes correctly. NOTE: the standalone scoping is active today; the
+// ladder-side scoping only takes effect once a concrete exchangeRunner is
+// wired (L16) — no production caller wires the write side yet, so ReshapeBuffer
+// fails loud with errWriteNotWired until then. The seam REQUIRES LadderRunID so
+// the L16 runner cannot drop it and reintroduce the cross-origin bug.
 //
-// DryRun is NOT supported: there is no true simulation mode in pkg/exchange
-// yet (tracked upstream), and mapping DryRun onto the exchange flow's manual
-// mode would be a false simulation — manual mode persists pending
-// ExchangeRecords with live approval tokens (actionable money instruments)
-// and still triggers the store-wide pending cancellation above. cfg.DryRun
-// therefore fails loud; the engine previews reshapes via ActionReshape
-// rationales without calling ReshapeBuffer.
+// DryRun is forwarded through the seam (cfg.DryRun -> the runner's dryRun
+// argument -> exchange.RunAutoExchangeParams.DryRun, which skips every
+// mutation and returns Simulated outcomes). It is honored by the concrete
+// runner wired in L16; today no production runner is wired, so a dry-run
+// ReshapeBuffer call reaches only a test double or fails loud with
+// errWriteNotWired.
 //
 // Config mapping (BufferReshapeConfig -> exchange.RIExchangeConfig):
 //
@@ -83,20 +85,15 @@ func (a *AWSLadder) ReshapeBuffer(ctx context.Context, scope ladder.Scope, cfg l
 	if err := a.validateScope(scope); err != nil {
 		return ladder.ReshapeSummary{}, err
 	}
-	if cfg.DryRun {
-		// Fail loud beats false simulation: the exchange flow's manual mode
-		// persists actionable approval records and cancels unrelated pendings
-		// store-wide — neither is a dry run. See the godoc warning above.
-		return ladder.ReshapeSummary{}, fmt.Errorf(
-			"ReshapeBuffer: dry-run is not supported by the AWS exchange flow yet (a true simulation mode in pkg/exchange is tracked upstream); the engine previews reshapes via ActionReshape rationales without calling ReshapeBuffer")
-	}
-
 	runCfg, err := buildRIExchangeConfig(cfg)
 	if err != nil {
 		return ladder.ReshapeSummary{}, fmt.Errorf("ReshapeBuffer: %w", err)
 	}
 
-	result, err := a.exchange.RunAutoExchange(ctx, runCfg)
+	// Forward LadderRunID and DryRun through the seam so the concrete runner
+	// (L16) scopes cancellation to this origin and honors dry-run. See the
+	// godoc and the exchangeRunner interface for why these are explicit params.
+	result, err := a.exchange.RunAutoExchange(ctx, runCfg, cfg.LadderRunID, cfg.DryRun)
 	if err != nil {
 		return ladder.ReshapeSummary{}, fmt.Errorf("ReshapeBuffer: auto exchange run failed: %w", err)
 	}
@@ -127,9 +124,10 @@ func buildRIExchangeConfig(cfg ladder.BufferReshapeConfig) (exchange.RIExchangeC
 		return exchange.RIExchangeConfig{}, fmt.Errorf("LookbackDays must be > 0, got %d", cfg.LookbackDays)
 	}
 
-	// Mode is always auto: ReshapeBuffer rejects DryRun before this point
-	// (no true simulation mode exists in pkg/exchange; manual mode is not a
-	// simulation — see the ReshapeBuffer godoc warning).
+	// Mode is always auto. DryRun is not folded into RIExchangeConfig; it is
+	// forwarded as an explicit seam argument so the runner routes it to
+	// exchange.RunAutoExchangeParams.DryRun (which simulates without mutating,
+	// regardless of Mode). See the ReshapeBuffer godoc.
 	return exchange.RIExchangeConfig{
 		Mode:                     string(exchange.ExchangeModeAuto),
 		UtilizationThreshold:     cfg.UtilizationThresholdPct,

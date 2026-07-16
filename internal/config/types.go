@@ -804,7 +804,20 @@ type RIExchangeRecord struct {
 	CreatedByUserID *string `json:"created_by_user_id,omitempty"`
 	// ApprovedBy carries the email of the session user who approved the exchange
 	// via the dashboard Approve button (issue #300). Nil for token-authed approvals.
-	ApprovedBy     *string    `json:"approved_by,omitempty"`
+	ApprovedBy *string `json:"approved_by,omitempty"`
+	// LadderRunID links this exchange record to the ladder run that created it
+	// (cudly-ladder engine). Nil for standalone ri_exchange_reshape task records.
+	// The database column ri_exchange_history.ladder_run_id was added in migration
+	// 000080 and is the authoritative source for origin scoping in
+	// CancelPendingExchangesByOrigin.
+	//
+	// KNOWN/ACCEPTABLE: the FK is ON DELETE SET NULL (migration 000080), so
+	// deleting a ladder_runs row nulls this column and reclassifies the record
+	// as standalone. A still-pending reshape then becomes standalone-cancellable
+	// (the standalone-origin sweep would cancel it). This is acceptable: a
+	// deleted run has no owner to approve its pendings, so cancelling them on the
+	// next standalone sweep is the safe outcome, not a leak.
+	LadderRunID    *string    `json:"ladder_run_id,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 	CompletedAt    *time.Time `json:"completed_at,omitempty"`

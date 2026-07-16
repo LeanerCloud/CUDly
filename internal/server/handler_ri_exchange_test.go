@@ -11,6 +11,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/email"
 	"github.com/LeanerCloud/CUDly/internal/testutil"
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/exchange"
 	"github.com/LeanerCloud/CUDly/providers/aws/recommendations"
 	ec2svc "github.com/LeanerCloud/CUDly/providers/aws/services/ec2"
@@ -790,12 +791,13 @@ func TestExecuteRIExchangeReshape_DailyCapHitMidRun(t *testing.T) {
 // --- Mock types ---
 
 type mockConfigStoreForExchange struct {
-	mockConfigStoreForHealth // embed base mock for unused methods
-	globalConfig             *config.GlobalConfig
-	globalConfigErr          error
-	saveRIExchangeRecordFunc func(ctx context.Context, record *config.RIExchangeRecord) error
-	cancelAllPendingFunc     func(ctx context.Context) (int64, error)
-	getDailySpendFunc        func(ctx context.Context, date time.Time) (string, error)
+	mockConfigStoreForHealth  // embed base mock for unused methods
+	globalConfig              *config.GlobalConfig
+	globalConfigErr           error
+	saveRIExchangeRecordFunc  func(ctx context.Context, record *config.RIExchangeRecord) error
+	cancelAllPendingFunc      func(ctx context.Context) (int64, error)
+	cancelPendingByOriginFunc func(ctx context.Context, origin common.ExchangeOrigin) (int64, error)
+	getDailySpendFunc         func(ctx context.Context, date time.Time) (string, error)
 }
 
 func (m *mockConfigStoreForExchange) GetGlobalConfig(ctx context.Context) (*config.GlobalConfig, error) {
@@ -818,6 +820,13 @@ func (m *mockConfigStoreForExchange) SaveRIExchangeRecord(ctx context.Context, r
 func (m *mockConfigStoreForExchange) CancelAllPendingExchanges(ctx context.Context) (int64, error) {
 	if m.cancelAllPendingFunc != nil {
 		return m.cancelAllPendingFunc(ctx)
+	}
+	return 0, nil
+}
+
+func (m *mockConfigStoreForExchange) CancelPendingExchangesByOrigin(ctx context.Context, origin common.ExchangeOrigin) (int64, error) {
+	if m.cancelPendingByOriginFunc != nil {
+		return m.cancelPendingByOriginFunc(ctx, origin)
 	}
 	return 0, nil
 }

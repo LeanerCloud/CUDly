@@ -15,6 +15,8 @@ import (
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
 // newMock creates a pgxmock pool with regexp query matching.
@@ -988,6 +990,7 @@ func riExchangeRow(now time.Time) []interface{} {
 		"manual",
 		now, now, sql.NullTime{}, sql.NullTime{},
 		sql.NullString{}, sql.NullString{}, // created_by_user_id, approved_by
+		sql.NullString{}, // ladder_run_id (NULL for standalone)
 	}
 }
 
@@ -997,7 +1000,7 @@ var riExchangeCols = []string{
 	"target_instance_type", "target_count", "payment_due",
 	"status", "approval_token", "error", "mode",
 	"created_at", "updated_at", "completed_at", "expires_at",
-	"created_by_user_id", "approved_by",
+	"created_by_user_id", "approved_by", "ladder_run_id",
 }
 
 func TestPGXMock_GetRIExchangeRecord_Success(t *testing.T) {
@@ -1032,6 +1035,7 @@ func TestPGXMock_GetRIExchangeRecord_WithTimestamps(t *testing.T) {
 		"auto",
 		now, now, sql.NullTime{Valid: true, Time: now}, sql.NullTime{Valid: true, Time: now},
 		sql.NullString{}, sql.NullString{}, // created_by_user_id, approved_by
+		sql.NullString{}, // ladder_run_id
 	}
 	rows := pgxmock.NewRows(riExchangeCols).AddRow(row...)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
@@ -1813,6 +1817,78 @@ func TestPGXMock_CancelAllPendingExchanges_Success(t *testing.T) {
 	n, err := store.CancelAllPendingExchanges(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), n)
+}
+
+// ─── CancelPendingExchangesByOrigin ──────────────────────────────────────────
+
+// The regex pins each test to its own WHERE clause so a branch mix-up (both
+// branches emitting the same SQL) fails the test. "ladder_run_id IS NULL" is
+// NOT a substring of "ladder_run_id IS NOT NULL", so the two matchers are
+// mutually exclusive.
+func TestPGXMock_CancelPendingExchangesByOrigin_Standalone(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	// Standalone origin must target WHERE ladder_run_id IS NULL only.
+	mock.ExpectExec("ladder_run_id IS NULL").WillReturnResult(pgxmock.NewResult("UPDATE", 2))
+
+	n, err := store.CancelPendingExchangesByOrigin(ctx, common.ExchangeOriginStandalone)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), n)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPGXMock_CancelPendingExchangesByOrigin_Ladder(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	// Ladder origin must target WHERE ladder_run_id IS NOT NULL only.
+	mock.ExpectExec("ladder_run_id IS NOT NULL").WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	n, err := store.CancelPendingExchangesByOrigin(ctx, common.ExchangeOriginLadder)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPGXMock_CancelPendingExchangesByOrigin_UnknownOrigin_FailsLoud(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	// An unknown origin must fail at the boundary WITHOUT issuing any query
+	// (no ExpectExec registered → ExpectationsWereMet stays satisfied).
+	n, err := store.CancelPendingExchangesByOrigin(ctx, common.ExchangeOrigin("bogus"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown exchange origin")
+	assert.Equal(t, int64(0), n)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// ─── SaveRIExchangeRecord ─────────────────────────────────────────────────────
+
+func TestPGXMock_SaveRIExchangeRecord_InsertColumnAlignment(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	// 21 columns/placeholders: original 20 + ladder_run_id ($21, issue #1348).
+	// A column/placeholder count drift makes WithArgs(anyArgsCfg(21)) fail.
+	mock.ExpectExec("INSERT INTO ri_exchange_history").WithArgs(anyArgsCfg(21)...).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+	ladderRunID := "run-123"
+	err := store.SaveRIExchangeRecord(ctx, &RIExchangeRecord{
+		AccountID:   "acc-1",
+		Region:      "us-east-1",
+		Status:      "pending",
+		Mode:        "manual",
+		LadderRunID: &ladderRunID,
+	})
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 // ─── CleanupOldExecutions ─────────────────────────────────────────────────────

@@ -12,6 +12,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/email"
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/exchange"
 	awsprovider "github.com/LeanerCloud/CUDly/providers/aws"
 	"github.com/LeanerCloud/CUDly/providers/aws/recommendations"
@@ -294,6 +295,10 @@ func (a *configExchangeStoreAdapter) CancelAllPendingExchanges(ctx context.Conte
 	return a.store.CancelAllPendingExchanges(ctx)
 }
 
+func (a *configExchangeStoreAdapter) CancelPendingExchangesByOrigin(ctx context.Context, origin common.ExchangeOrigin) (int64, error) {
+	return a.store.CancelPendingExchangesByOrigin(ctx, origin)
+}
+
 func (a *configExchangeStoreAdapter) GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]exchange.ExchangeRecord, error) {
 	cfgRecords, err := a.store.GetStaleProcessingExchanges(ctx, olderThan)
 	if err != nil {
@@ -335,6 +340,7 @@ func exchangeToConfigRecord(r *exchange.ExchangeRecord) *config.RIExchangeRecord
 		ApprovalToken:      r.ApprovalToken,
 		Error:              r.Error,
 		Mode:               r.Mode,
+		LadderRunID:        r.LadderRunID,
 		CreatedAt:          r.CreatedAt,
 		UpdatedAt:          r.UpdatedAt,
 		CompletedAt:        r.CompletedAt,
@@ -359,6 +365,7 @@ func configToExchangeRecord(r *config.RIExchangeRecord) exchange.ExchangeRecord 
 		ApprovalToken:      r.ApprovalToken,
 		Error:              r.Error,
 		Mode:               r.Mode,
+		LadderRunID:        r.LadderRunID,
 		CreatedAt:          r.CreatedAt,
 		UpdatedAt:          r.UpdatedAt,
 		CompletedAt:        r.CompletedAt,

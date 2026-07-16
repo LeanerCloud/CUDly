@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
 // TestPostgresStore_SaveRIExchangeRecord_GeneratesID verifies that SaveRIExchangeRecord
@@ -160,6 +162,20 @@ func TestPostgresStore_CancelAllPendingExchanges_NilDB(t *testing.T) {
 
 	panicked := callWithRecover(func() {
 		_, _ = store.CancelAllPendingExchanges(ctx)
+	})
+
+	assert.True(t, panicked, "expected panic with nil db connection")
+}
+
+// TestPostgresStore_CancelPendingExchangesByOrigin_NilDB exercises the method entry.
+func TestPostgresStore_CancelPendingExchangesByOrigin_NilDB(t *testing.T) {
+	store := NewPostgresStore(nil)
+	ctx := context.Background()
+
+	// Pass a VALID origin so the method reaches the nil db (an invalid origin
+	// would fail loud at Validate before touching the connection).
+	panicked := callWithRecover(func() {
+		_, _ = store.CancelPendingExchangesByOrigin(ctx, common.ExchangeOriginStandalone)
 	})
 
 	assert.True(t, panicked, "expected panic with nil db connection")

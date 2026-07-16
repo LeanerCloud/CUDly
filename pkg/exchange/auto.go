@@ -29,16 +29,32 @@ type ExchangeRecord struct {
 	ApprovalToken      string
 	Error              string
 	Mode               string
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
-	CompletedAt        *time.Time
-	ExpiresAt          *time.Time
+	// LadderRunID links this exchange record to the ladder run that created it.
+	// Nil for standalone ri_exchange_reshape task records.
+	// The database column ri_exchange_history.ladder_run_id was added in
+	// migration 000080 and is the authoritative source for origin scoping.
+	LadderRunID *string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	CompletedAt *time.Time
+	ExpiresAt   *time.Time
 }
 
 // RIExchangeStore is the subset of store operations needed by RunAutoExchange.
 type RIExchangeStore interface {
 	SaveRIExchangeRecord(ctx context.Context, record *ExchangeRecord) error
+	// CancelAllPendingExchanges cancels every pending record regardless of origin.
+	// Kept for interface compatibility; RunAutoExchange now calls
+	// CancelPendingExchangesByOrigin instead to avoid cross-origin contamination.
 	CancelAllPendingExchanges(ctx context.Context) (int64, error)
+	// CancelPendingExchangesByOrigin cancels only pending records whose origin
+	// matches:
+	//   - common.ExchangeOriginStandalone: cancels WHERE ladder_run_id IS NULL
+	//   - common.ExchangeOriginLadder:     cancels WHERE ladder_run_id IS NOT NULL
+	// This prevents the standalone task from wiping out ladder-linked pending
+	// reshapes and vice versa. Implementations must validate the origin and
+	// fail loud on an unknown value (money path).
+	CancelPendingExchangesByOrigin(ctx context.Context, origin common.ExchangeOrigin) (int64, error)
 	GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]ExchangeRecord, error)
 	GetRIExchangeDailySpend(ctx context.Context, date time.Time) (string, error)
 	CompleteRIExchange(ctx context.Context, id string, exchangeID string) error
@@ -77,6 +93,19 @@ type RunAutoExchangeParams struct {
 
 	// RIMetadata maps RI ID to its metadata (product description, tenancy, scope, duration).
 	RIMetadata map[string]RIMetadataInfo
+
+	// LadderRunID links all exchange records created by this run to the ladder
+	// run that originated them. Nil for the standalone ri_exchange_reshape task.
+	// When set, RunAutoExchange calls CancelPendingExchangesByOrigin with
+	// ladderScoped=true (cancels only ladder-linked pendings). When nil, it
+	// cancels only standalone (ladder_run_id IS NULL) pendings.
+	LadderRunID *string
+
+	// DryRun skips all state mutations (cancellations, record saves, exchange
+	// executions). Outcomes are returned with Simulated=true. No store write
+	// is performed; mock.AssertExpectations will catch any accidental mutation
+	// call in tests (fail-loud gate).
+	DryRun bool
 }
 
 // RIMetadataInfo holds the offering metadata for a specific RI.
@@ -109,6 +138,9 @@ type ExchangeOutcome struct {
 	ExchangeID         string
 	UtilizationPct     float64
 	Error              string
+	// Simulated is true when RunAutoExchangeParams.DryRun was set. The outcome
+	// was analyzed and quoted but no record was saved and no exchange was executed.
+	Simulated bool
 }
 
 // SkippedRecommendation captures a recommendation that was not processed.
@@ -124,16 +156,25 @@ const staleProcessingThreshold = 15 * time.Minute
 func RunAutoExchange(ctx context.Context, params RunAutoExchangeParams) (*AutoExchangeResult, error) {
 	result := &AutoExchangeResult{Mode: params.Config.Mode}
 
-	// 1. Cancel all stale pending records.
+	// 1. Cancel stale pending records with origin-scoped cancellation.
+	// DryRun skips ALL mutations including cancellation (no state is changed).
+	// Non-DryRun: cancel only pending records that share this run's origin so
+	// the standalone task does not wipe out ladder-linked pendings and vice versa.
 	// Race condition note: if a user clicks approve at 5h59m while this new run
 	// fires and cancels pending records, the TransitionRIExchangeStatus atomic
 	// WHERE clause prevents the exchange from executing (record already cancelled
 	// → returns nil → handler returns 409).
-	cancelled, err := params.Store.CancelAllPendingExchanges(ctx)
-	if err != nil {
-		logging.Warnf("failed to cancel pending exchanges: %v", err)
-	} else if cancelled > 0 {
-		logging.Infof("cancelled %d stale pending exchange records", cancelled)
+	if !params.DryRun {
+		origin := common.ExchangeOriginStandalone
+		if params.LadderRunID != nil {
+			origin = common.ExchangeOriginLadder
+		}
+		cancelled, err := params.Store.CancelPendingExchangesByOrigin(ctx, origin)
+		if err != nil {
+			logging.Warnf("failed to cancel pending exchanges: %v", err)
+		} else if cancelled > 0 {
+			logging.Infof("cancelled %d stale pending exchange records (origin=%s)", cancelled, origin)
+		}
 	}
 
 	// 2. Log warning for stale processing records
@@ -275,6 +316,22 @@ func getValidatedQuote(ctx context.Context, params RunAutoExchangeParams, rec Re
 }
 
 func processManualExchange(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID, paymentDueStr string) ExchangeOutcome {
+	// DryRun: return a simulated pending outcome without any record save or
+	// token generation (tokens are actionable money instruments — never issue
+	// live tokens in a dry run).
+	if params.DryRun {
+		return ExchangeOutcome{
+			SourceRIID:         rec.SourceRIID,
+			SourceInstanceType: rec.SourceInstanceType,
+			TargetInstanceType: rec.TargetInstanceType,
+			TargetOfferingID:   offeringID,
+			TargetCount:        rec.TargetCount,
+			PaymentDue:         paymentDueStr,
+			UtilizationPct:     rec.UtilizationPercent,
+			Simulated:          true,
+		}
+	}
+
 	token, err := common.GenerateApprovalToken()
 	if err != nil {
 		logging.Errorf("failed to generate approval token for %s: %v", rec.SourceRIID, err)
@@ -296,7 +353,7 @@ func processManualExchange(ctx context.Context, params RunAutoExchangeParams, re
 		}
 	}
 	// 24h is a safety net; the email says "approve within 6 hours" because
-	// CancelAllPendingExchanges at the next run start (every 6h) will cancel
+	// CancelPendingExchangesByOrigin at the next run start (every 6h) will cancel
 	// this record. The 24h expiry catches edge cases where the scheduled run
 	// is delayed or disabled.
 	expiresAt := time.Now().Add(24 * time.Hour)
@@ -315,6 +372,7 @@ func processManualExchange(ctx context.Context, params RunAutoExchangeParams, re
 		ApprovalToken:      token,
 		Mode:               string(ExchangeModeManual),
 		ExpiresAt:          &expiresAt,
+		LadderRunID:        params.LadderRunID,
 	}
 
 	if err := params.Store.SaveRIExchangeRecord(ctx, record); err != nil {
@@ -358,6 +416,14 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 		TargetCount:        rec.TargetCount,
 		PaymentDue:         paymentDueStr,
 		UtilizationPct:     rec.UtilizationPercent,
+	}
+
+	// DryRun: return a simulated completed outcome without executing the exchange
+	// or saving any record. The daily cap is intentionally skipped so the
+	// simulation reflects what would happen if the cap were not a factor.
+	if params.DryRun {
+		outcome.Simulated = true
+		return outcome
 	}
 
 	// Check daily cap
@@ -412,7 +478,7 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 		return outcome
 	}
 
-	// Save completed record
+	// Save completed record with ladder linkage when applicable.
 	now := time.Now()
 	record := &ExchangeRecord{
 		AccountID:          params.AccountID,
@@ -428,6 +494,7 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 		Status:             "completed",
 		Mode:               string(ExchangeModeAuto),
 		CompletedAt:        &now,
+		LadderRunID:        params.LadderRunID,
 	}
 
 	if err := params.Store.SaveRIExchangeRecord(ctx, record); err != nil {
@@ -467,6 +534,7 @@ func saveFailedRecord(ctx context.Context, params RunAutoExchangeParams, rec Res
 		Status:             "failed",
 		Error:              errMsg,
 		Mode:               string(mode),
+		LadderRunID:        params.LadderRunID,
 	}
 	if err := params.Store.SaveRIExchangeRecord(ctx, record); err != nil {
 		logging.Errorf("failed to save failed exchange record for %s: %v", rec.SourceRIID, err)

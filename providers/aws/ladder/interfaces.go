@@ -199,6 +199,16 @@ type spPurchaser interface {
 // AWSLadder only supplies the run configuration; injecting the full
 // exchange.RunAutoExchangeParams surface here would drag store and exchange
 // client dependencies into this package for no benefit.
+//
+// ladderRunID and dryRun are explicit parameters (not folded into
+// RIExchangeConfig) so the seam is correct-by-construction: the concrete
+// runner (wired in L16) is FORCED to forward them to
+// exchange.RunAutoExchangeParams.{LadderRunID,DryRun}. A non-nil ladderRunID
+// makes exchange.RunAutoExchange scope its pending-cancellation to the ladder
+// origin (ladder_run_id IS NOT NULL); a nil ladderRunID keeps the standalone
+// origin. Passing them here prevents a future runner from defaulting
+// ladderRunID to nil and silently cancelling the standalone task's pendings
+// (gap G10 / issue #1348).
 type exchangeRunner interface {
-	RunAutoExchange(ctx context.Context, cfg exchange.RIExchangeConfig) (*exchange.AutoExchangeResult, error)
+	RunAutoExchange(ctx context.Context, cfg exchange.RIExchangeConfig, ladderRunID *string, dryRun bool) (*exchange.AutoExchangeResult, error)
 }

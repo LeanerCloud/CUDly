@@ -81,6 +81,16 @@ type BufferReshapeConfig struct {
 	LookbackDays int
 	// DryRun, when true, simulates the reshape without executing any exchanges.
 	DryRun bool
+	// LadderRunID links the exchange records this reshape creates to the ladder
+	// run that triggered it, so the exchange layer scopes its pending
+	// cancellation to this origin (ladder) instead of the standalone task's
+	// pendings (gap G10 / issue #1348). Nil means "no ladder run" (the caller is
+	// not a ladder run); the reshape runner then behaves as the standalone
+	// origin. The concrete runner (wired in L16) MUST forward this to
+	// exchange.RunAutoExchangeParams.LadderRunID — the exchangeRunner seam
+	// requires it so a future runner cannot silently drop it and reintroduce the
+	// cross-origin cancellation bug.
+	LadderRunID *string
 }
 
 // ReshapeSummary reports the outcome of a buffer reshape operation.
