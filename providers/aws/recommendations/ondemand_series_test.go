@@ -281,8 +281,23 @@ func TestGetOnDemandSeries_CorrectFilterParams(t *testing.T) {
 
 	assert.Equal(t, types.GranularityDaily, input.Granularity,
 		"granularity must be DAILY for the daily series")
-	assert.Equal(t, []string{onDemandMetric}, input.Metrics,
-		"metric must be UNBLENDED_COST")
+	// The literal CamelCase value is asserted on purpose: GetCostAndUsage's
+	// Metrics vocabulary is CamelCase ("UnblendedCost"), NOT the
+	// types.MetricUnblendedCost enum's "UNBLENDED_COST" (that enum belongs to
+	// other CE APIs and triggers a ValidationException here). Locking the
+	// literal prevents a "cleanup" back to the enum from passing tests.
+	assert.Equal(t, []string{"UnblendedCost"}, input.Metrics,
+		"metric must be the CamelCase UnblendedCost accepted by GetCostAndUsage")
+
+	// TimePeriod contract: [today-lookbackDays, today) with an exclusive end
+	// at midnight UTC today, so today's partial data is never included.
+	wantEnd := time.Now().UTC().Truncate(24 * time.Hour)
+	wantStart := wantEnd.AddDate(0, 0, -7)
+	require.NotNil(t, input.TimePeriod)
+	assert.Equal(t, wantStart.Format(ceDateLayout), aws.ToString(input.TimePeriod.Start),
+		"start must be today-lookbackDays (UTC)")
+	assert.Equal(t, wantEnd.Format(ceDateLayout), aws.ToString(input.TimePeriod.End),
+		"end must be midnight UTC today (exclusive: today's partial day excluded)")
 
 	require.NotNil(t, input.Filter, "filter must be present")
 	require.Len(t, input.Filter.And, 3, "filter must be a three-clause AND")
@@ -318,14 +333,62 @@ func TestGetOnDemandSeries_ContextCancelled(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestGetOnDemandSeries_MissingMetricKey verifies that a day with a missing
-// metric key is treated as $0 rather than causing an error, and keeps its
-// correct calendar date in the series.
-func TestGetOnDemandSeries_MissingMetricKey(t *testing.T) {
+// TestGetOnDemandSeries_MissingMetricKeyFails verifies that a result row
+// missing the requested metric key fails loud instead of fabricating a $0
+// day. CE echoes every requested metric on every row (genuine $0 days arrive
+// as Amount:"0"), so a missing key means the request vocabulary is wrong;
+// silently writing 0 would corrupt the baseline
+// (feedback_no_silent_fallbacks).
+func TestGetOnDemandSeries_MissingMetricKeyFails(t *testing.T) {
 	pages := []*costexplorer.GetCostAndUsageOutput{{
 		ResultsByTime: []types.ResultByTime{
 			dailyResult("2026-01-01", 24.0),
-			dailyResultNoMetric("2026-01-02"), // missing metric -> treated as 0
+			dailyResultNoMetric("2026-01-02"), // missing metric -> hard error
+			dailyResult("2026-01-03", 48.0),
+		},
+	}}
+	mock := &mockOnDemandCE{pages: pages}
+	client := newOnDemandClient(mock)
+
+	_, err := client.GetOnDemandSeries(context.Background(), "us-east-1", 7)
+
+	require.Error(t, err, "a missing metric key must fail loud, not fabricate $0")
+	assert.Contains(t, err.Error(), "missing the \"UnblendedCost\" metric")
+	assert.Contains(t, err.Error(), "2026-01-02", "error must name the offending day")
+}
+
+// TestGetOnDemandSeries_AllZeroSeriesFails verifies that a complete series of
+// $0 rows is rejected. When a filter or metric name is wrong, CE returns
+// every day as a $0 row (not an empty result), producing a fresh,
+// chronological all-zero series that would pass every downstream validation
+// and make the engine size purchases from fabricated data. An account with
+// genuinely zero on-demand spend all window has nothing to ladder, so
+// erroring is correct there too.
+func TestGetOnDemandSeries_AllZeroSeriesFails(t *testing.T) {
+	pages := []*costexplorer.GetCostAndUsageOutput{{
+		ResultsByTime: []types.ResultByTime{
+			dailyResult("2026-01-01", 0),
+			dailyResult("2026-01-02", 0),
+			dailyResult("2026-01-03", 0),
+		},
+	}}
+	mock := &mockOnDemandCE{pages: pages}
+	client := newOnDemandClient(mock)
+
+	_, err := client.GetOnDemandSeries(context.Background(), "us-east-1", 7)
+
+	require.Error(t, err, "an all-zero series must be rejected")
+	assert.Contains(t, err.Error(), "all-zero")
+}
+
+// TestGetOnDemandSeries_MixedZeroDaysOK verifies that genuine $0 days
+// (Amount:"0") interleaved with non-zero days are accepted and keep their
+// calendar dates: only the ALL-zero case is rejected.
+func TestGetOnDemandSeries_MixedZeroDaysOK(t *testing.T) {
+	pages := []*costexplorer.GetCostAndUsageOutput{{
+		ResultsByTime: []types.ResultByTime{
+			dailyResult("2026-01-01", 24.0),
+			dailyResult("2026-01-02", 0), // genuine $0 day: Amount:"0"
 			dailyResult("2026-01-03", 48.0),
 		},
 	}}
@@ -334,13 +397,13 @@ func TestGetOnDemandSeries_MissingMetricKey(t *testing.T) {
 
 	series, err := client.GetOnDemandSeries(context.Background(), "us-east-1", 7)
 
-	require.NoError(t, err)
+	require.NoError(t, err, "genuine zero days mixed with spend must be accepted")
 	require.Len(t, series, 3)
 	assert.Equal(t, utcDate(t, "2026-01-01"), series[0].Date)
 	assert.InDelta(t, 1.0, series[0].USDPerHour, 1e-9)
 	assert.Equal(t, utcDate(t, "2026-01-02"), series[1].Date,
 		"the zero-spend day must keep its calendar date")
-	assert.InDelta(t, 0.0, series[1].USDPerHour, 1e-9, "missing metric key is treated as $0/hr")
+	assert.InDelta(t, 0.0, series[1].USDPerHour, 1e-9)
 	assert.Equal(t, utcDate(t, "2026-01-03"), series[2].Date)
 	assert.InDelta(t, 2.0, series[2].USDPerHour, 1e-9)
 	requireStrictlyIncreasingDays(t, series)

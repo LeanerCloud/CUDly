@@ -28,21 +28,50 @@ type activeSPListAPI interface {
 	DescribeSavingsPlans(ctx context.Context, params *sdksp.DescribeSavingsPlansInput, optFns ...func(*sdksp.Options)) (*sdksp.DescribeSavingsPlansOutput, error)
 }
 
-// spListerAdapter implements the spLister interface using the AWS Savings Plans
-// SDK directly. It filters to Active-state plans only (not queued or
-// pending-return, which are not yet generating commitment costs). Commitment
-// strings are parsed with strconv.ParseFloat; parse errors fail loud per
-// feedback_strict_int_parse and feedback_no_silent_fallbacks.
-type spListerAdapter struct {
-	api activeSPListAPI
+// spListerStates is the set of Savings Plan states counted as existing
+// commitment.
+//   - active: currently billing.
+//   - payment-pending: purchase accepted, first payment in flight. A
+//     just-purchased SP sits in this state briefly; it MUST count as existing
+//     commitment immediately, or the next scheduled run would not see it and
+//     double-purchase. Safe default before the L6 write side lands.
+//   - queued (future-dated) SPs are deliberately EXCLUDED: they have not
+//     started, so counting them would suppress purchases the queued SP will
+//     not cover until its start date. Revisit with L14 (expiry alignment),
+//     which can reason about future-dated coverage explicitly.
+var spListerStates = []sptypes.SavingsPlanState{
+	sptypes.SavingsPlanStateActive,
+	sptypes.SavingsPlanStatePaymentPending,
 }
 
-// ListActiveSPs lists all active Savings Plans and maps them to the AWSLadder
-// view. Only types.SavingsPlanStateActive plans are included; queued and
-// pending-return plans are excluded because they have not yet started billing.
-// PlanType and Commitment are validated at the boundary: unknown plan types
-// and unparseable commitment strings fail loud (feedback_prefer_typed_enums,
-// feedback_strict_int_parse). Pagination is fully exhausted (issue #692).
+// spListerAdapter implements the spLister interface using the AWS Savings
+// Plans SDK directly. It filters to spListerStates (active + payment-pending;
+// see that var for rationale) and scopes EC2Instance SPs to the ladder's
+// region. Commitment strings are parsed with strconv.ParseFloat; parse errors
+// fail loud per feedback_strict_int_parse and feedback_no_silent_fallbacks.
+type spListerAdapter struct {
+	api activeSPListAPI
+	// region is the ladder's configured region. DescribeSavingsPlans is an
+	// account-wide API, but the ladder's layer state is region-scoped:
+	// EC2Instance SPs from other regions must not inflate this region's
+	// ExistingUSDPerHour (that would understate the gap and under-purchase).
+	region string
+}
+
+// ListActiveSPs lists the account's Savings Plans in spListerStates and maps
+// them to the AWSLadder view, region-scoped:
+//
+//   - EC2Instance SPs are region-bound; entries whose Region differs from the
+//     adapter's region are EXCLUDED (they cover other regions' usage).
+//   - Compute SPs are global and are counted fully in every region. This is
+//     deliberately conservative: attributing the full global commitment to
+//     this region can only make the engine see MORE existing coverage and
+//     purchase LESS, never over-purchase. Multi-region laddering (L18) will
+//     revisit this attribution.
+//
+// Commitment strings and SP dates are validated at the boundary and fail
+// loud (feedback_strict_int_parse, feedback_no_silent_fallbacks).
+// Pagination is fully exhausted (issue #692).
 func (a *spListerAdapter) ListActiveSPs(ctx context.Context) ([]ActiveSP, error) {
 	var sps []ActiveSP
 	var nextToken *string
@@ -58,7 +87,7 @@ func (a *spListerAdapter) ListActiveSPs(ctx context.Context) ([]ActiveSP, error)
 		}
 
 		input := &sdksp.DescribeSavingsPlansInput{
-			States:     []sptypes.SavingsPlanState{sptypes.SavingsPlanStateActive},
+			States:     spListerStates,
 			NextToken:  nextToken,
 			MaxResults: aws.Int32(100),
 		}
@@ -67,12 +96,9 @@ func (a *spListerAdapter) ListActiveSPs(ctx context.Context) ([]ActiveSP, error)
 			return nil, fmt.Errorf("ListActiveSPs: DescribeSavingsPlans page %d: %w", page, err)
 		}
 
-		for _, sp := range out.SavingsPlans {
-			entry, err := mapActiveSP(sp)
-			if err != nil {
-				return nil, err
-			}
-			sps = append(sps, entry)
+		sps, err = appendRegionScopedSPs(sps, out.SavingsPlans, a.region)
+		if err != nil {
+			return nil, err
 		}
 
 		if out.NextToken == nil || aws.ToString(out.NextToken) == "" {
@@ -83,11 +109,33 @@ func (a *spListerAdapter) ListActiveSPs(ctx context.Context) ([]ActiveSP, error)
 	return sps, nil
 }
 
+// appendRegionScopedSPs maps one DescribeSavingsPlans page onto the
+// accumulated slice, applying the region-scoping rule: EC2Instance SPs bound
+// to another region cover that region's usage, not ours; including them
+// would inflate ExistingUSDPerHour and under-purchase. Compute SPs are
+// global and always kept (see ListActiveSPs doc). Extracted to keep
+// ListActiveSPs under the cyclomatic complexity limit.
+func appendRegionScopedSPs(sps []ActiveSP, page []sptypes.SavingsPlan, region string) ([]ActiveSP, error) {
+	for _, sp := range page {
+		entry, err := mapActiveSP(sp)
+		if err != nil {
+			return nil, err
+		}
+		if entry.PlanType == spPlanTypeEC2Instance && entry.Region != region {
+			continue
+		}
+		sps = append(sps, entry)
+	}
+	return sps, nil
+}
+
 // mapActiveSP converts one DescribeSavingsPlans entry to ActiveSP.
-// Fails loud on a missing SavingsPlanId (would make the entry un-identifiable)
-// and on a non-numeric Commitment string (money path: cannot represent an
-// absent number as 0, per feedback_nullable_not_zero and
-// feedback_strict_int_parse).
+// Fails loud on a missing SavingsPlanId (would make the entry
+// un-identifiable), on a non-numeric Commitment string (money path: cannot
+// represent an absent number as 0, per feedback_nullable_not_zero and
+// feedback_strict_int_parse), and on missing or unparseable Start/End dates
+// (a silently zero EndDate would drop the SP from sumExpiringSPHourlyCost
+// and understate expiring commitment).
 func mapActiveSP(sp sptypes.SavingsPlan) (ActiveSP, error) {
 	if sp.SavingsPlanId == nil {
 		return ActiveSP{}, fmt.Errorf("ListActiveSPs: DescribeSavingsPlans returned entry with nil SavingsPlanId")
@@ -98,25 +146,41 @@ func mapActiveSP(sp sptypes.SavingsPlan) (ActiveSP, error) {
 		return ActiveSP{}, fmt.Errorf("ListActiveSPs: cannot parse Commitment %q for SP %s: %w",
 			commitment, *sp.SavingsPlanId, err)
 	}
+	start, err := parseSPDate("Start", sp.Start, *sp.SavingsPlanId)
+	if err != nil {
+		return ActiveSP{}, err
+	}
+	end, err := parseSPDate("End", sp.End, *sp.SavingsPlanId)
+	if err != nil {
+		return ActiveSP{}, err
+	}
 
-	entry := ActiveSP{
+	return ActiveSP{
 		PlanID:              *sp.SavingsPlanId,
 		PlanType:            string(sp.SavingsPlanType),
 		State:               string(sp.State),
 		Region:              aws.ToString(sp.Region),
+		StartDate:           start,
+		EndDate:             end,
 		HourlyCommitmentUSD: hourly,
+	}, nil
+}
+
+// parseSPDate parses a DescribeSavingsPlans RFC3339 date field, failing loud
+// on a nil or unparseable value. Expiry math (sumExpiringSPHourlyCost)
+// depends on EndDate; a silently zero date would exclude the SP from the
+// expiring sum and understate expiring commitment
+// (feedback_no_silent_fallbacks).
+func parseSPDate(field string, value *string, planID string) (time.Time, error) {
+	if value == nil {
+		return time.Time{}, fmt.Errorf("ListActiveSPs: SP %s has nil %s date; expiry math requires it", planID, field)
 	}
-	if sp.Start != nil {
-		if t, err := time.Parse(time.RFC3339, *sp.Start); err == nil {
-			entry.StartDate = t
-		}
+	t, err := time.Parse(time.RFC3339, *value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("ListActiveSPs: cannot parse %s date %q for SP %s: %w",
+			field, *value, planID, err)
 	}
-	if sp.End != nil {
-		if t, err := time.Parse(time.RFC3339, *sp.End); err == nil {
-			entry.EndDate = t
-		}
-	}
-	return entry, nil
+	return t, nil
 }
 
 // onDemandSeriesAdapter implements onDemandSeriesSource by wrapping

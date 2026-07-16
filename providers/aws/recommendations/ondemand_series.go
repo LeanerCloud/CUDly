@@ -23,12 +23,22 @@ const ec2ComputeService = "Amazon Elastic Compute Cloud - Compute"
 // so the engine correctly nets it into the gap calculation.
 const purchaseTypeOnDemand = "On Demand Instances"
 
-// onDemandMetric is the CE metric for GetCostAndUsage. UNBLENDED_COST is the
-// actual charge to the account at the billed rate; for on-demand instances
-// this equals on-demand rate x hours. Named constant (not magic string) per
-// feedback_no_hardcoded_magic_values; the SDK types.MetricUnblendedCost is
-// used to derive it so it cannot drift from the CE enum vocabulary.
-const onDemandMetric = string(types.MetricUnblendedCost)
+// onDemandMetric is the CE metric name for GetCostAndUsage. UnblendedCost is
+// the actual charge to the account at the billed rate; for on-demand
+// instances this equals on-demand rate x hours.
+//
+// The valid Metrics vocabulary for THIS operation is CamelCase
+// ("AmortizedCost", "BlendedCost", "NetAmortizedCost", "NetUnblendedCost",
+// "NormalizedUsageAmount", "UnblendedCost", "UsageQuantity") per the
+// GetCostAndUsageInput.Metrics SDK doc (api_op_GetCostAndUsage.go). Do NOT
+// substitute string(types.MetricUnblendedCost): that enum yields
+// SCREAMING_SNAKE "UNBLENDED_COST", which belongs to other CE APIs
+// (recommendation/utilization), and GetCostAndUsage rejects it with a
+// ValidationException on every call (feedback_verify_api_filter_contracts:
+// verify against the actual API op's doc, not a same-SDK enum). The same
+// name keys the per-day r.Total lookup because CE echoes request metric
+// names as response keys.
+const onDemandMetric = "UnblendedCost"
 
 // ceDateLayout is the calendar-day format CE uses for DateInterval boundaries
 // and ResultByTime period starts ("YYYY-MM-DD"). time.Parse with this layout
@@ -64,7 +74,7 @@ type DailyCost struct {
 //
 // CE query parameters:
 //   - Granularity: DAILY (one entry per calendar day)
-//   - Metric: UNBLENDED_COST (actual on-demand billed rate; spec: unblended)
+//   - Metric: UnblendedCost (actual on-demand billed rate; see onDemandMetric)
 //   - Filter: SERVICE = EC2 compute AND PURCHASE_TYPE = On Demand Instances
 //     AND REGION = region (three-clause AND)
 //   - Time window: [now-lookbackDays, now) exclusive end
@@ -75,8 +85,20 @@ type DailyCost struct {
 //
 // CE typically lags ~24-48h, so the returned series may be shorter than
 // lookbackDays. The caller (baseline.GetUsageBaseline) enforces minimum
-// length, in-window coverage, and freshness; this function only errors on a
-// completely empty result.
+// length, in-window coverage, and freshness.
+//
+// Fail-loud conditions (feedback_no_silent_fallbacks):
+//   - Empty result: error.
+//   - A result row missing the requested metric key (or with a nil Amount):
+//     error. CE echoes every requested metric on every row (genuine $0 days
+//     arrive as Amount:"0"), so a missing key means the request vocabulary is
+//     wrong, and fabricating a 0 would silently corrupt the baseline.
+//   - An all-zero series: error. When a filter or metric name is wrong, CE
+//     returns a complete, fresh, chronological series of $0 rows that would
+//     pass every downstream validation and make the engine size purchases
+//     from fabricated data. An account with genuinely zero on-demand EC2
+//     spend for the whole lookback has nothing to ladder, so erroring is
+//     correct there too.
 func (c *Client) GetOnDemandSeries(ctx context.Context, region string, lookbackDays int) ([]DailyCost, error) {
 	if err := validateOnDemandSeriesArgs(region, lookbackDays); err != nil {
 		return nil, err
@@ -126,12 +148,7 @@ func (c *Client) GetOnDemandSeries(ctx context.Context, region string, lookbackD
 		nextToken = out.NextPageToken
 	}
 
-	if len(byDate) == 0 {
-		return nil, fmt.Errorf("GetOnDemandSeries: CE returned no on-demand data for region %q over the past %d days (account may have no on-demand EC2 spend, or CE data not yet available)",
-			region, lookbackDays)
-	}
-
-	series, err := sortedDailyCosts(byDate)
+	series, err := buildDailySeries(byDate, region, lookbackDays)
 	if err != nil {
 		return nil, fmt.Errorf("GetOnDemandSeries: %w", err)
 	}
@@ -203,11 +220,15 @@ func onDemandSeriesFilter(region string) *types.Expression {
 }
 
 // accumulateDailyResults extracts daily USD/hr values from one page of
-// GetCostAndUsage results and merges them into byDate. Days with a missing or
-// nil metric are stored as 0 (CE may omit a day if spend was exactly $0).
-// Days with an unparseable amount string fail loud (feedback_strict_int_parse).
-// Dividing by 24 converts daily USD to USD/hr; 24 is derived from the DAILY
-// granularity contract (one day = 24 hours), not a magic constant.
+// GetCostAndUsage results and merges them into byDate. A row missing the
+// requested metric key (or carrying a nil Amount) fails loud: CE echoes
+// every requested metric on every returned row, with genuine $0 days arriving
+// as Amount:"0" -- a missing key therefore signals a request-vocabulary bug,
+// and writing a fabricated 0 would silently corrupt the baseline
+// (feedback_no_silent_fallbacks). Unparseable amount strings also fail loud
+// (feedback_strict_int_parse). Dividing by 24 converts daily USD to USD/hr;
+// 24 is derived from the DAILY granularity contract (one day = 24 hours),
+// not a magic constant.
 func accumulateDailyResults(byDate map[string]float64, out *costexplorer.GetCostAndUsageOutput) error {
 	for _, r := range out.ResultsByTime {
 		if r.TimePeriod == nil || r.TimePeriod.Start == nil {
@@ -216,8 +237,8 @@ func accumulateDailyResults(byDate map[string]float64, out *costexplorer.GetCost
 		dateStr := aws.ToString(r.TimePeriod.Start)
 		mv, ok := r.Total[onDemandMetric]
 		if !ok || mv.Amount == nil {
-			byDate[dateStr] = 0
-			continue
+			return fmt.Errorf("CE result row for day %s is missing the %q metric; CE echoes every requested metric on every row, so this indicates a request-vocabulary bug (genuine $0 days arrive as Amount:\"0\")",
+				dateStr, onDemandMetric)
 		}
 		usd, err := strconv.ParseFloat(aws.ToString(mv.Amount), 64)
 		if err != nil {
@@ -231,26 +252,47 @@ func accumulateDailyResults(byDate map[string]float64, out *costexplorer.GetCost
 	return nil
 }
 
-// sortedDailyCosts converts a date-keyed cost map to a []DailyCost sorted
-// oldest-to-newest (lexicographic sort on "2006-01-02" strings is
-// chronological). Map keys are unique, so the result has strictly increasing
-// unique UTC days, which the ladder baseline's chronology check requires.
-// A date string that does not parse fails loud: it indicates a CE contract
-// violation the caller must see, not skip (feedback_no_silent_fallbacks).
-func sortedDailyCosts(byDate map[string]float64) ([]DailyCost, error) {
+// buildDailySeries converts the date-keyed cost map into the final validated
+// []DailyCost:
+//   - Empty map: error (no data from CE).
+//   - Sorted oldest-to-newest (lexicographic sort on "2006-01-02" strings is
+//     chronological). Map keys are unique, so the result has strictly
+//     increasing unique UTC days, which the ladder baseline's chronology
+//     check requires.
+//   - A date string that does not parse fails loud: it indicates a CE
+//     contract violation the caller must see (feedback_no_silent_fallbacks).
+//   - An all-zero series fails loud: a wrong filter or metric name makes CE
+//     return a complete series of $0 rows that would pass every downstream
+//     validation and let the engine size purchases from fabricated data. An
+//     account with genuinely zero on-demand EC2 spend over the whole window
+//     has nothing to ladder, so erroring is correct in that case too.
+func buildDailySeries(byDate map[string]float64, region string, lookbackDays int) ([]DailyCost, error) {
+	if len(byDate) == 0 {
+		return nil, fmt.Errorf("CE returned no on-demand data for region %q over the past %d days (account may have no on-demand EC2 spend, or CE data not yet available)",
+			region, lookbackDays)
+	}
+
 	dates := make([]string, 0, len(byDate))
 	for d := range byDate {
 		dates = append(dates, d)
 	}
 	sort.Strings(dates)
 
+	allZero := true
 	series := make([]DailyCost, len(dates))
 	for i, d := range dates {
 		day, err := time.Parse(ceDateLayout, d)
 		if err != nil {
 			return nil, fmt.Errorf("cannot parse CE period start date %q: %w", d, err)
 		}
+		if byDate[d] != 0 {
+			allZero = false
+		}
 		series[i] = DailyCost{Date: day, USDPerHour: byDate[d]}
+	}
+	if allZero {
+		return nil, fmt.Errorf("CE returned an all-zero on-demand series for region %q over the past %d days; either the account has no on-demand EC2 spend to ladder, or the CE filter/metric vocabulary is wrong (a bad filter yields complete $0 rows, not an empty result)",
+			region, lookbackDays)
 	}
 	return series, nil
 }

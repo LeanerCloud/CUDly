@@ -75,12 +75,12 @@ func NewFromAWSConfig(ctx context.Context, region, accountID string) (pkgladder.
 	}
 	l, err := New(
 		cfg,
-		ec2Client,                              // riLister
-		&spListerAdapter{api: spSDKClient},     // spLister
-		recoClient,                             // riCoverageSource
+		ec2Client, // riLister
+		&spListerAdapter{api: spSDKClient, region: region}, // spLister (region-scoped)
+		recoClient, // riCoverageSource
 		&onDemandSeriesAdapter{client: recoClient}, // onDemandSeriesSource
-		recoClient,                             // utilizationSource
-		&spCoverageAdapter{client: recoClient}, // spCoverageSource
+		recoClient,                                // utilizationSource
+		&spCoverageAdapter{client: recoClient},    // spCoverageSource
 		&spUtilizationAdapter{client: recoClient}, // spUtilizationSource
 	)
 	if err != nil {
