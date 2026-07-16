@@ -1696,7 +1696,7 @@ func (s *PostgresStore) UpdatePurchaseHistoryListing(ctx context.Context, purcha
 // StampOfferingClass writes the offering_class value onto a purchase_history
 // row identified by purchase_id. Used by the marketplace-list handler to
 // lazily persist offering_class fetched from AWS DescribeReservedInstances for
-// rows created before migration 000084 or for externally-created Standard RIs.
+// rows created before migration 000085 or for externally-created Standard RIs.
 // A no-match (row not found) is treated as a non-fatal warning by callers.
 func (s *PostgresStore) StampOfferingClass(ctx context.Context, purchaseID, offeringClass string) error {
 	query := `UPDATE purchase_history SET offering_class = $1 WHERE purchase_id = $2`

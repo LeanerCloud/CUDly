@@ -219,7 +219,7 @@ type StoreInterface interface {
 
 	// StampOfferingClass writes the offering_class value to a purchase_history
 	// row identified by purchase_id. Called by the marketplace-list handler
-	// when offering_class is absent in the DB (pre-migration 000084 rows and
+	// when offering_class is absent in the DB (pre-migration 000085 rows and
 	// externally-created Standard RIs): after fetching the class from AWS
 	// DescribeReservedInstances it is persisted so subsequent requests do not
 	// incur an extra AWS API call.

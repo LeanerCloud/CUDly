@@ -41,7 +41,7 @@ type marketplaceEC2Client interface {
 	// FetchOfferingClass calls AWS DescribeReservedInstances to determine
 	// whether a given Reserved Instance is 'standard' or 'convertible'. Used
 	// when the purchase_history row has no offering_class stored (pre-migration
-	// 000084 rows and externally-created Standard RIs).
+	// 000085 rows and externally-created Standard RIs).
 	FetchOfferingClass(ctx context.Context, reservedInstancesID string) (string, error)
 }
 
@@ -166,7 +166,7 @@ func (h *Handler) marketplaceList(ctx context.Context, req *events.LambdaFunctio
 	ec2Client := h.buildMarketplaceEC2Client(cfg)
 
 	// Populate offering_class from AWS when the DB row has none. This covers
-	// two cases: (1) pre-migration 000084 rows purchased by CUDly before this
+	// two cases: (1) pre-migration 000085 rows purchased by CUDly before this
 	// column existed, and (2) externally-created Standard RIs whose
 	// offering_class was never stamped. After population the value is persisted
 	// so subsequent requests do not require an extra AWS API call.

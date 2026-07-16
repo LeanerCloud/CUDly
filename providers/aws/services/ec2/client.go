@@ -1045,7 +1045,7 @@ func (c *Client) DescribeMarketplaceListing(ctx context.Context, listingID strin
 // FetchOfferingClass calls ec2:DescribeReservedInstances to fetch the
 // offering_class ("standard" or "convertible") for a specific Reserved
 // Instance ID. Used by the marketplace-list handler to lazily populate
-// offering_class for rows created before migration 000084 or for externally-
+// offering_class for rows created before migration 000085 or for externally-
 // created (pre-CUDly) Standard RIs whose offering_class was never stamped.
 // Returns an error when the RI is not found (e.g. it has expired or was
 // exchanged) because a missing RI cannot be listed.
