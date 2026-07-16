@@ -335,12 +335,94 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 	}, nil
 }
 
+// requireDeleteOrCancelPurchasePermission validates the request session and
+// returns it when the caller holds any of: delete:purchases (management),
+// cancel-any:purchases (operator-scope cancel), or cancel-own:purchases
+// (creator-scope cancel, issue #1400). Ownership is enforced separately by
+// authorizePlannedPurchaseCancel; this gate is the minimum-verb check.
+func (h *Handler) requireDeleteOrCancelPurchasePermission(ctx context.Context, req *events.LambdaFunctionURLRequest) (*Session, error) {
+	apiKey := extractAPIKey(req)
+	if h.checkAdminAPIKey(apiKey) {
+		return &Session{UserID: apiKeyAdminUserID}, nil
+	}
+	if h.auth == nil {
+		return nil, fmt.Errorf("authentication service not configured")
+	}
+	token := h.extractBearerToken(req)
+	if token == "" {
+		return nil, NewClientError(401, "no authorization token provided")
+	}
+	session, err := h.auth.ValidateSession(ctx, token)
+	if err != nil {
+		return nil, NewClientError(401, "invalid session")
+	}
+	for _, verb := range []string{auth.ActionDelete, auth.ActionCancelAny, auth.ActionCancelOwn} {
+		has, checkErr := h.auth.HasPermissionAPI(ctx, session.UserID, verb, auth.ResourcePurchases)
+		if checkErr != nil {
+			return nil, fmt.Errorf("permission check failed: %w", checkErr)
+		}
+		if has {
+			return session, nil
+		}
+	}
+	return nil, NewClientError(403, "permission denied: requires delete, cancel-any, or cancel-own on purchases")
+}
+
+// authorizePlannedPurchaseCancel enforces the ownership + cancel permission
+// check for DELETE /api/purchases/planned/{id} (issue #1400). It extends
+// authorizeExecutionManagement to also accept cancel-any:purchases for
+// full-scope cancel (without requiring delete:purchases), and allows the
+// creator-scope path without a prior delete:purchases check.
+//
+// Gate logic:
+//   - stateless admin API key: always permitted.
+//   - update-any:purchases or cancel-any:purchases: permitted without an
+//     owner check (full-scope management and cancel-any operator paths).
+//   - otherwise: fetch the execution and require creator match.
+//     Legacy rows with a NULL creator are out of reach for non-privileged
+//     users (matching cancel-own / approve-own / retry-own behavior).
+func (h *Handler) authorizePlannedPurchaseCancel(ctx context.Context, session *Session, executionID string) error {
+	if session.UserID == apiKeyAdminUserID {
+		return nil
+	}
+	if h.auth == nil {
+		return NewClientError(500, "authentication service not configured")
+	}
+	// update-any and cancel-any both grant full-scope access without an owner check.
+	for _, verb := range []string{auth.ActionUpdateAny, auth.ActionCancelAny} {
+		has, err := h.auth.HasPermissionAPI(ctx, session.UserID, verb, auth.ResourcePurchases)
+		if err != nil {
+			return fmt.Errorf("permission check failed: %w", err)
+		}
+		if has {
+			return nil
+		}
+	}
+	execution, err := h.config.GetExecutionByID(ctx, executionID)
+	if errors.Is(err, config.ErrNotFound) {
+		return errNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("failed to get execution: %w", err)
+	}
+	// requireDeleteOrCancelPurchasePermission already validated the session;
+	// UserID is either the API-key sentinel (handled above) or a real user UUID
+	// from ValidateSession. The nil/empty guard here is therefore defensive.
+	if execution.CreatedByUserID == nil || *execution.CreatedByUserID != session.UserID {
+		return NewClientError(403, "permission denied: cannot cancel another user's scheduled purchase")
+	}
+	return nil
+}
+
 func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) (*StatusResponse, error) {
 	if err := validateUUID(executionID); err != nil {
 		return nil, err
 	}
 
-	session, err := h.requirePermission(ctx, req, "delete", "purchases")
+	// Accept delete:purchases (management), cancel-any:purchases, or
+	// cancel-own:purchases (issue #1400: Standard users must be able to
+	// cancel their own upcoming purchases from the Home page).
+	session, err := h.requireDeleteOrCancelPurchasePermission(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -348,7 +430,7 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 	if err != nil {
 		return nil, err
 	}
-	err = h.authorizeExecutionManagement(ctx, session, executionID)
+	err = h.authorizePlannedPurchaseCancel(ctx, session, executionID)
 	if err != nil {
 		return nil, err
 	}
