@@ -292,10 +292,7 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 	if err != nil {
 		return "", err
 	}
-	tag := execID
-	if tag == "" {
-		tag = "no-exec"
-	}
+	tag := resolveTag(execID)
 	t0 := time.Now()
 	log.Printf("purchase[%s]: MemoryDB findOfferingID starting (nodeType=%s term=%s payment=%s)",
 		tag, rec.ResourceType, rec.Term, rec.PaymentOption)
@@ -378,6 +375,17 @@ func scanMemoryDBOfferingPage(offerings []types.ReservedNodesOffering, wantOffer
 // Pulled out of findOfferingID to keep that function under the cyclomatic limit.
 func isLastMemoryDBPage(nextToken *string) bool {
 	return nextToken == nil || aws.ToString(nextToken) == ""
+}
+
+// resolveTag returns execID when non-empty, or a sentinel "no-exec" string for
+// log correlation when called outside of a purchase flow (e.g. ValidateOffering,
+// GetOfferingDetails). Extracted from findOfferingID to keep cyclomatic complexity
+// within the pre-commit gocyclo limit (issue #1388).
+func resolveTag(execID string) string {
+	if execID == "" {
+		return "no-exec"
+	}
+	return execID
 }
 
 // getDurationStringForAPI converts the term string to a duration value accepted

@@ -290,10 +290,7 @@ func (c *Client) paginateElastiCacheOfferings(ctx context.Context, rec common.Re
 	if err != nil {
 		return "", err
 	}
-	tag := execID
-	if tag == "" {
-		tag = "no-exec"
-	}
+	tag := resolveTag(execID)
 	t0 := time.Now()
 	log.Printf("purchase[%s]: ElastiCache findOfferingID starting (nodeType=%s engine=%s duration=%s payment=%s)",
 		tag, rec.ResourceType, details.Engine, duration, offeringType)
@@ -357,6 +354,17 @@ func scanElastiCacheOfferingPage(offerings []types.ReservedCacheNodesOffering, r
 		return aws.ToString(o.ReservedCacheNodesOfferingId), nil
 	}
 	return "", nil
+}
+
+// resolveTag returns execID when non-empty, or a sentinel "no-exec" string for
+// log correlation when called outside of a purchase flow (e.g. ValidateOffering,
+// GetOfferingDetails). Extracted from paginateElastiCacheOfferings to keep
+// cyclomatic complexity within the pre-commit gocyclo limit (issue #1388).
+func resolveTag(execID string) string {
+	if execID == "" {
+		return "no-exec"
+	}
+	return execID
 }
 
 // ValidateOffering checks if an offering exists without purchasing
