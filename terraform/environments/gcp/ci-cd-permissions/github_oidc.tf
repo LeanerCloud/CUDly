@@ -29,6 +29,11 @@ resource "google_iam_workload_identity_pool_provider" "github" {
 
   # Restrict to the specific repo AND only allow the designated deploy branch.
   # PRs, tags, forks, and workflow_dispatch from other refs are blocked.
+  #
+  # deploy_ref defaults to refs/heads/main. Override in terraform.tfvars only
+  # when temporarily deploying from a feature branch; flip back to main once
+  # that branch merges. Forgetting to flip locks out main-branch deploys with
+  # "unauthorized_client: The given credential is rejected by the attribute condition."
   attribute_condition = "assertion.repository == '${var.github_repo}' && assertion.ref == '${var.deploy_ref}'"
 }
 
