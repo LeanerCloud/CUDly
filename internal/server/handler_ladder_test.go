@@ -123,6 +123,11 @@ type ladderTestStore struct {
 	cloudAcctByID    map[string]*config.CloudAccount
 	cloudAcctErrByID map[string]error
 
+	// L5: configurable in-flight hourly commitment returned by
+	// GetInFlightLadderCommitUSDHr. Defaults to zero (nil -> 0.0 pointer).
+	inFlightUSDHr *float64
+	inFlightErr   error
+
 	// Capture fields: non-nil if the call was made. savedRuns accumulates every
 	// SaveLadderRun call so multi-config tests can assert on each persisted run;
 	// savedRun mirrors the most recent one for single-config convenience.
@@ -182,9 +187,9 @@ func (s *ladderTestStore) SaveLadderTranches(_ context.Context, tranches []confi
 	return nil
 }
 
-// SaveLadderRunWithTranches models the single-transaction persist the handler
-// now uses. It mirrors atomicity: if either the run or the tranche insert is
-// configured to fail, NOTHING is captured (the transaction rolls back).
+// SaveLadderRunWithTranches models the single-transaction persist (without the
+// cancel-and-replace step). Kept for tests that exercise the non-superseding
+// path directly.
 func (s *ladderTestStore) SaveLadderRunWithTranches(_ context.Context, run *config.LadderRunDB, tranches []config.LadderTrancheDB) (*config.LadderRunDB, error) {
 	if s.saveLadderRunErr != nil {
 		return nil, s.saveLadderRunErr
@@ -196,6 +201,36 @@ func (s *ladderTestStore) SaveLadderRunWithTranches(_ context.Context, run *conf
 	s.savedRuns = append(s.savedRuns, run)
 	s.savedTranches = tranches
 	return run, nil
+}
+
+// SaveLadderRunWithTranchesAndSupersede models the L5 cancel-and-replace. It
+// captures the same fields as SaveLadderRunWithTranches; a real DB would also
+// mark prior scheduled tranches cancelled, but the unit test only needs to
+// verify the handler wires the correct method.
+func (s *ladderTestStore) SaveLadderRunWithTranchesAndSupersede(_ context.Context, run *config.LadderRunDB, tranches []config.LadderTrancheDB) (*config.LadderRunDB, error) {
+	if s.saveLadderRunErr != nil {
+		return nil, s.saveLadderRunErr
+	}
+	if s.saveLadderTranchesErr != nil {
+		return nil, s.saveLadderTranchesErr
+	}
+	s.savedRun = run
+	s.savedRuns = append(s.savedRuns, run)
+	s.savedTranches = tranches
+	return run, nil
+}
+
+// GetInFlightLadderCommitUSDHr returns the configurable in-flight value.
+// When inFlightUSDHr is nil, returns a pointer to 0.0 (no in-flight default).
+func (s *ladderTestStore) GetInFlightLadderCommitUSDHr(_ context.Context, _ string) (*float64, error) {
+	if s.inFlightErr != nil {
+		return nil, s.inFlightErr
+	}
+	if s.inFlightUSDHr != nil {
+		return s.inFlightUSDHr, nil
+	}
+	zero := 0.0
+	return &zero, nil
 }
 
 // ============================================================
@@ -1055,8 +1090,10 @@ func TestRatToFloat64Ptr_PositiveValue(t *testing.T) {
 	// Build a *big.Rat from an Allocation's GapUSDPerHour (same boundary path
 	// used in the handler). ratToFloat64Ptr lives in this package so no import
 	// of math/big is needed in the test.
+	zeroInflight := 0.0
 	allocResult, err := pkgladder.Allocate(&pkgladder.AllocationInput{
-		Now: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+		Now:                time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+		InFlightUSDPerHour: &zeroInflight,
 		Baseline: pkgladder.UsageBaseline{
 			LowWaterUSDPerHour: nonZeroFloat64(5.0),
 			StableUSDPerHour:   nonZeroFloat64(4.5),

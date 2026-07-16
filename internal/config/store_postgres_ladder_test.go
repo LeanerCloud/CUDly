@@ -359,3 +359,216 @@ func TestPostgresStore_SaveLadderRunWithTranches_Atomicity(t *testing.T) {
 		assert.Equal(t, 0, count, "no tranche may survive a rolled-back transaction")
 	})
 }
+
+// seedLadderConfigWithExtID seeds a cloud_account (with the given externalID
+// to avoid the UNIQUE(provider, external_id) constraint) and a ladder_config,
+// returning the ladder_config id.
+func seedLadderConfigWithExtID(ctx context.Context, t *testing.T, store *PostgresStore, externalID string) string {
+	t.Helper()
+	acctID := uuid.New().String()
+	_, err := store.db.Exec(ctx, `
+		INSERT INTO cloud_accounts
+			(id, name, enabled, provider, external_id, aws_is_org_root, created_at, updated_at)
+		VALUES ($1, 'Ladder Test Account', true, 'aws', $2, false, now(), now())
+	`, acctID, externalID)
+	require.NoError(t, err, "seed cloud_accounts (ext=%s)", externalID)
+
+	cfg := &LadderConfigDB{
+		CloudAccountID:             acctID,
+		Provider:                   "aws",
+		Enabled:                    true,
+		Mode:                       "email_approval",
+		Cadence:                    "daily",
+		TargetCoverage:             80.0,
+		BufferFraction:             0.1,
+		BaselinePercentile:         5.0,
+		LookbackDays:               30,
+		BufferUtilizationThreshold: 50.0,
+		MaxActionsPerRun:           5,
+		RampSchedule:               []byte(`{"steps":[{"after_days":0,"fraction":1.0}]}`),
+	}
+	saved, err := store.UpsertLadderConfig(ctx, cfg)
+	require.NoError(t, err, "seed ladder_config (ext=%s)", externalID)
+	require.NotEmpty(t, saved.ID)
+	return saved.ID
+}
+
+// TestPostgresStore_GetInFlightLadderCommitUSDHr tests the in-flight sum
+// query (L5 netting). It verifies:
+//   - zero is returned (not nil) when no tranches exist.
+//   - scheduled + fired tranches are summed; completed/cancelled/failed are excluded.
+//   - tranches from a different config are not included.
+func TestPostgresStore_GetInFlightLadderCommitUSDHr(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	store := setupLadderStore(ctx, t)
+	// Use distinct external_ids to satisfy UNIQUE(provider, external_id).
+	configID := seedLadderConfigWithExtID(ctx, t, store, "111111111111")
+	otherConfigID := seedLadderConfigWithExtID(ctx, t, store, "222222222222")
+	cfgID := configID
+	fire := time.Now().UTC().Add(7 * 24 * time.Hour).Truncate(time.Microsecond)
+
+	insertTranche := func(t *testing.T, cID *string, amount float64, status ladder.TrancheStatus) {
+		t.Helper()
+		tr := LadderTrancheDB{
+			ID:            uuid.New().String(),
+			ConfigID:      cID,
+			LayerType:     ladder.LayerConvertibleRI,
+			Term:          ladder.Term1Year,
+			PaymentOption: ladder.PaymentNoUpfront,
+			Status:        status,
+			AmountUSDHr:   amount,
+			ScheduledDate: fire,
+		}
+		require.NoError(t, store.SaveLadderTranches(ctx, []LadderTrancheDB{tr}))
+	}
+
+	t.Run("zero when no tranches exist", func(t *testing.T) {
+		// Use the other config which has no tranches yet.
+		otherID := otherConfigID
+		result, err := store.GetInFlightLadderCommitUSDHr(ctx, otherID)
+		require.NoError(t, err)
+		require.NotNil(t, result, "must return non-nil *float64 even when sum is zero")
+		assert.InDelta(t, 0.0, *result, 1e-6)
+	})
+
+	// Insert tranches with various statuses for the main config.
+	insertTranche(t, &cfgID, 3.0, ladder.TrancheStatusScheduled) // included
+	insertTranche(t, &cfgID, 2.0, ladder.TrancheStatusFired)     // included
+	insertTranche(t, &cfgID, 5.0, ladder.TrancheStatusCompleted) // excluded (terminal)
+	insertTranche(t, &cfgID, 1.0, ladder.TrancheStatusCancelled) // excluded (terminal)
+	insertTranche(t, &cfgID, 4.0, ladder.TrancheStatusFailed)    // excluded (terminal)
+
+	// A tranche belonging to a different config must not be summed in.
+	otherID := otherConfigID
+	insertTranche(t, &otherID, 99.0, ladder.TrancheStatusScheduled)
+
+	t.Run("sums scheduled and fired only", func(t *testing.T) {
+		result, err := store.GetInFlightLadderCommitUSDHr(ctx, configID)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		// Only 3.0 (scheduled) + 2.0 (fired) = 5.0 must be returned.
+		assert.InDelta(t, 5.0, *result, 1e-6, "in-flight sum must include scheduled+fired only")
+	})
+
+	t.Run("other config is not contaminated", func(t *testing.T) {
+		result, err := store.GetInFlightLadderCommitUSDHr(ctx, otherConfigID)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		// Only the 99.0 (scheduled) tranche we just inserted for the other config.
+		assert.InDelta(t, 99.0, *result, 1e-6, "other config must see only its own tranches")
+	})
+}
+
+// TestPostgresStore_SaveLadderRunWithTranchesAndSupersede tests the L5 atomic
+// cancel-and-replace:
+//   - prior scheduled tranches for the config are marked cancelled within the
+//     same transaction that inserts the new run+tranches.
+//   - fired/completed tranches are NOT touched.
+//   - a tranche-insert failure (duplicate ID) rolls back ALL three steps so no
+//     orphaned cancellations or run rows persist.
+//   - two configs remain isolated: supersede for config A does not cancel
+//     config B's tranches.
+func TestPostgresStore_SaveLadderRunWithTranchesAndSupersede(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	store := setupLadderStore(ctx, t)
+	// Use distinct external_ids to satisfy UNIQUE(provider, external_id).
+	configID := seedLadderConfigWithExtID(ctx, t, store, "333333333333")
+	otherConfigID := seedLadderConfigWithExtID(ctx, t, store, "444444444444")
+	cfgID := configID
+	otherID := otherConfigID
+	fire := time.Now().UTC().Add(7 * 24 * time.Hour).Truncate(time.Microsecond)
+
+	insertTranche := func(t *testing.T, cID *string, status ladder.TrancheStatus) string {
+		t.Helper()
+		id := uuid.New().String()
+		tr := LadderTrancheDB{
+			ID:            id,
+			ConfigID:      cID,
+			LayerType:     ladder.LayerConvertibleRI,
+			Term:          ladder.Term1Year,
+			PaymentOption: ladder.PaymentNoUpfront,
+			Status:        status,
+			AmountUSDHr:   1.0,
+			ScheduledDate: fire,
+		}
+		require.NoError(t, store.SaveLadderTranches(ctx, []LadderTrancheDB{tr}))
+		return id
+	}
+
+	statusOf := func(t *testing.T, id string) string {
+		t.Helper()
+		var s string
+		require.NoError(t, store.db.QueryRow(ctx,
+			`SELECT status FROM ladder_tranches WHERE id = $1`, id).Scan(&s))
+		return s
+	}
+
+	// Seed prior generation for the main config.
+	priorScheduledID := insertTranche(t, &cfgID, ladder.TrancheStatusScheduled)
+	priorFiredID := insertTranche(t, &cfgID, ladder.TrancheStatusFired) // must survive supersede
+	// Seed a tranche for another config; it must not be touched.
+	otherScheduledID := insertTranche(t, &otherID, ladder.TrancheStatusScheduled)
+
+	t.Run("cancel-and-replace succeeds atomically", func(t *testing.T) {
+		runID := uuid.New().String()
+		run := &LadderRunDB{ID: runID, ConfigID: &cfgID, StartedAt: time.Now().UTC(), Status: ladder.RunStatusPlanned}
+		newTr := LadderTrancheDB{
+			ID:            uuid.New().String(),
+			ConfigID:      &cfgID,
+			RunID:         &runID,
+			LayerType:     ladder.LayerConvertibleRI,
+			Term:          ladder.Term1Year,
+			PaymentOption: ladder.PaymentNoUpfront,
+			Status:        ladder.TrancheStatusScheduled,
+			AmountUSDHr:   2.5,
+			ScheduledDate: fire,
+		}
+
+		saved, err := store.SaveLadderRunWithTranchesAndSupersede(ctx, run, []LadderTrancheDB{newTr})
+		require.NoError(t, err)
+		require.NotNil(t, saved)
+		assert.Equal(t, runID, saved.ID)
+
+		// Prior scheduled tranche must now be cancelled.
+		assert.Equal(t, "cancelled", statusOf(t, priorScheduledID), "prior scheduled tranche must be cancelled")
+		// Fired tranche must be untouched (not in the scheduled->cancelled CAS).
+		assert.Equal(t, "fired", statusOf(t, priorFiredID), "fired tranche must not be touched")
+		// Other config's scheduled tranche must be untouched.
+		assert.Equal(t, "scheduled", statusOf(t, otherScheduledID), "other config's tranche must not be cancelled")
+
+		// The new tranche must be persisted with the correct status.
+		var count int
+		require.NoError(t, store.db.QueryRow(ctx,
+			`SELECT count(*) FROM ladder_tranches WHERE run_id = $1 AND status = 'scheduled'`, runID).Scan(&count))
+		assert.Equal(t, 1, count, "new scheduled tranche must be persisted")
+	})
+
+	t.Run("rollback on duplicate tranche ID: no orphan cancellations", func(t *testing.T) {
+		// Seed a fresh scheduled tranche that should NOT be cancelled if tx rolls back.
+		freshScheduledID := insertTranche(t, &cfgID, ladder.TrancheStatusScheduled)
+
+		runID := uuid.New().String()
+		run := &LadderRunDB{ID: runID, ConfigID: &cfgID, StartedAt: time.Now().UTC(), Status: ladder.RunStatusPlanned}
+		// Two identical IDs will cause a PK violation on the second insert.
+		dupID := uuid.New().String()
+		bad1 := LadderTrancheDB{ID: dupID, ConfigID: &cfgID, RunID: &runID,
+			LayerType: ladder.LayerConvertibleRI, Term: ladder.Term1Year,
+			PaymentOption: ladder.PaymentNoUpfront, Status: ladder.TrancheStatusScheduled,
+			AmountUSDHr: 1.0, ScheduledDate: fire}
+		bad2 := bad1 // same ID
+
+		_, err := store.SaveLadderRunWithTranchesAndSupersede(ctx, run, []LadderTrancheDB{bad1, bad2})
+		require.Error(t, err, "duplicate tranche ID must fail the transaction")
+
+		// The fresh scheduled tranche must still be scheduled (cancellations rolled back).
+		assert.Equal(t, "scheduled", statusOf(t, freshScheduledID),
+			"rollback must undo the cancellation of prior scheduled tranches")
+
+		// The run row must not exist.
+		got, err := store.GetLadderRun(ctx, runID)
+		require.NoError(t, err)
+		assert.Nil(t, got, "run row must be rolled back on tranche insert failure")
+	})
+}

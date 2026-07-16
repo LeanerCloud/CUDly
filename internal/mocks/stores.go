@@ -1444,6 +1444,43 @@ func (m *MockConfigStore) LatestLadderRunStartedAt(ctx context.Context, configID
 	return v, args.Error(1)
 }
 
+// GetInFlightLadderCommitUSDHr mocks the GetInFlightLadderCommitUSDHr
+// operation. Returns a pointer to zero (no in-flight commitment) when no
+// expectation is registered, matching the happy-path default.
+func (m *MockConfigStore) GetInFlightLadderCommitUSDHr(ctx context.Context, configID string) (*float64, error) {
+	if !isExpected(&m.Mock, "GetInFlightLadderCommitUSDHr") {
+		zero := 0.0
+		return &zero, nil
+	}
+	args := m.Called(ctx, configID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(*float64)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *float64, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
+// SaveLadderRunWithTranchesAndSupersede mocks the atomic cancel-and-replace
+// operation (L5 spec). Returns the run unchanged when no expectation is
+// registered, mirroring the SaveLadderRunWithTranches default.
+func (m *MockConfigStore) SaveLadderRunWithTranchesAndSupersede(ctx context.Context, run *config.LadderRunDB, tranches []config.LadderTrancheDB) (*config.LadderRunDB, error) {
+	if !isExpected(&m.Mock, "SaveLadderRunWithTranchesAndSupersede") {
+		return run, nil
+	}
+	args := m.Called(ctx, run, tranches)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(*config.LadderRunDB)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *config.LadderRunDB, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
 // TransitionLadderRunStatus mocks the TransitionLadderRunStatus operation.
 // Returns (nil, nil) when no expectation is registered (CAS race-lost path).
 func (m *MockConfigStore) TransitionLadderRunStatus(ctx context.Context, id string, fromStatuses []ladder.RunStatus, toStatus ladder.RunStatus) (*config.LadderRunDB, error) {

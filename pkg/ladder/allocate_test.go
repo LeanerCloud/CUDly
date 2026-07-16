@@ -131,12 +131,13 @@ func TestAllocate_NilBaseline(t *testing.T) {
 	t.Parallel()
 	layers := awsLayers()
 	in := &AllocationInput{
-		Config:      validConfigAWS(),
-		Layers:      layers,
-		Baseline:    UsageBaseline{}, // LowWaterUSDPerHour is nil
-		LayerStates: zeroStates(layers),
-		Now:         nowFixed(),
-		DataSources: []string{"cost-explorer"},
+		Config:             validConfigAWS(),
+		Layers:             layers,
+		Baseline:           UsageBaseline{}, // LowWaterUSDPerHour is nil
+		LayerStates:        zeroStates(layers),
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
+		DataSources:        []string{"cost-explorer"},
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -167,11 +168,12 @@ func TestAllocate_GapBelowMin(t *testing.T) {
 	// B = $10/hr, Ctgt = $10/hr (100% coverage), gap = 0 -> below min
 	states = withExisting(states, LayerComputeSP, 10.0)
 	in := &AllocationInput{
-		Config:      validConfigAWS(),
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(8.0)},
-		LayerStates: states,
-		Now:         nowFixed(),
+		Config:             validConfigAWS(),
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(8.0)},
+		LayerStates:        states,
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -204,11 +206,12 @@ func TestAllocate_ExistingAboveTarget_Hold(t *testing.T) {
 	// existing = $15/hr on flex vs B = Ctgt = $10/hr -> gap = -5
 	states = withExisting(states, LayerComputeSP, 15.0)
 	in := &AllocationInput{
-		Config:      validConfigAWS(),
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(8.0)},
-		LayerStates: states,
-		Now:         nowFixed(),
+		Config:             validConfigAWS(),
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(8.0)},
+		LayerStates:        states,
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -255,12 +258,13 @@ func TestAllocate_AWS3LayerSplit(t *testing.T) {
 	states = withExisting(states, LayerEC2InstanceSP, 1.0) // $1/hr on base
 
 	in := &AllocationInput{
-		Config:      cfg,
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
-		LayerStates: states,
-		Now:         nowFixed(),
-		DataSources: []string{"cost-explorer"},
+		Config:             cfg,
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates:        states,
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
+		DataSources:        []string{"cost-explorer"},
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -306,11 +310,12 @@ func TestAllocate_BufferFractionZero(t *testing.T) {
 	cfg.BufferFraction = 0 // no buffer allocation
 	layers := awsLayers()
 	in := &AllocationInput{
-		Config:      cfg,
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
-		LayerStates: zeroStates(layers),
-		Now:         nowFixed(),
+		Config:             cfg,
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates:        zeroStates(layers),
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -334,11 +339,12 @@ func TestAllocate_StableUnknown_BaseZeroFlexGetsAll(t *testing.T) {
 	cfg.BufferFraction = 0.5 // exactly representable
 	layers := awsLayers()
 	in := &AllocationInput{
-		Config:      cfg,
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0)}, // StableUSDPerHour nil
-		LayerStates: zeroStates(layers),
-		Now:         nowFixed(),
+		Config:             cfg,
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0)}, // StableUSDPerHour nil
+		LayerStates:        zeroStates(layers),
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -378,11 +384,12 @@ func TestAllocate_NoBaseLayer_NoteNamesActualReason(t *testing.T) {
 	cfg := validConfigAWS()
 	cfg.BufferFraction = 0.5
 	in := &AllocationInput{
-		Config:      cfg,
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
-		LayerStates: zeroStates(layers),
-		Now:         nowFixed(),
+		Config:             cfg,
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates:        zeroStates(layers),
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -418,11 +425,12 @@ func TestAllocate_ExpiringExceedsExisting_Error(t *testing.T) {
 	states = withExpiring(states, LayerConvertibleRI, 5.0)
 
 	in := &AllocationInput{
-		Config:      validConfigAWS(),
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
-		LayerStates: states,
-		Now:         nowFixed(),
+		Config:             validConfigAWS(),
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates:        states,
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	_, err := Allocate(in)
 	if err == nil {
@@ -446,11 +454,12 @@ func TestAllocate_UtilizationClamp(t *testing.T) {
 	states = withExisting(states, LayerComputeSP, 3.0) // E = $3/hr
 
 	in := &AllocationInput{
-		Config:      cfg,
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
-		LayerStates: states,
-		Now:         nowFixed(),
+		Config:             cfg,
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates:        states,
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	// B=$10, Ctgt=$10, E=$3, gap=min(7,7)=$7
 	result, err := Allocate(in)
@@ -479,11 +488,12 @@ func TestAllocate_AzureMergedBaseBuffer(t *testing.T) {
 	cfg := validConfigAzure()
 	cfg.BufferFraction = 0.5 // exactly representable
 	in := &AllocationInput{
-		Config:      cfg,
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
-		LayerStates: zeroStates(layers),
-		Now:         nowFixed(),
+		Config:             cfg,
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates:        zeroStates(layers),
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -519,11 +529,12 @@ func TestAllocate_CapScaling(t *testing.T) {
 
 	layers := awsLayers()
 	in := &AllocationInput{
-		Config:      cfg,
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
-		LayerStates: zeroStates(layers),
-		Now:         nowFixed(),
+		Config:             cfg,
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates:        zeroStates(layers),
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -573,12 +584,13 @@ func TestAllocate_MaxActionsExceeded_Truncates(t *testing.T) {
 	cfg.MaxActionsPerRun = 2 // 3 allocations would normally be produced
 	layers := awsLayers()
 	in := &AllocationInput{
-		Config:      cfg,
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
-		LayerStates: zeroStates(layers),
-		Now:         nowFixed(),
-		DataSources: []string{"cost-explorer"},
+		Config:             cfg,
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates:        zeroStates(layers),
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
+		DataSources:        []string{"cost-explorer"},
 	}
 	result, err := Allocate(in)
 	// Regression: pre-fix this returned an error; post-fix must succeed.
@@ -662,12 +674,13 @@ func TestAllocate_MaxActions_ReshapeRetained(t *testing.T) {
 	states = withExisting(states, LayerConvertibleRI, 5.0)
 	states = withBufferUtilization(states, 50.0) // below 90% threshold -> reshape
 	in := &AllocationInput{
-		Config:      cfg,
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
-		LayerStates: states,
-		Now:         nowFixed(),
-		DataSources: []string{"cost-explorer"},
+		Config:             cfg,
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates:        states,
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
+		DataSources:        []string{"cost-explorer"},
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -717,12 +730,13 @@ func TestAllocate_MaxActions_ReshapesFillCap(t *testing.T) {
 	states = withExisting(states, LayerConvertibleRI, 5.0)
 	states = withBufferUtilization(states, 50.0) // below 90% threshold -> reshape
 	in := &AllocationInput{
-		Config:      cfg,
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
-		LayerStates: states,
-		Now:         nowFixed(),
-		DataSources: []string{"cost-explorer"},
+		Config:             cfg,
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates:        states,
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
+		DataSources:        []string{"cost-explorer"},
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -780,12 +794,13 @@ func TestAllocate_ExactCap_Untouched(t *testing.T) {
 	cfg.MaxActionsPerRun = 3 // exactly the number of allocations produced
 	layers := awsLayers()
 	in := &AllocationInput{
-		Config:      cfg,
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
-		LayerStates: zeroStates(layers),
-		Now:         nowFixed(),
-		DataSources: []string{"cost-explorer"},
+		Config:             cfg,
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates:        zeroStates(layers),
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
+		DataSources:        []string{"cost-explorer"},
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -810,11 +825,12 @@ func TestAllocate_MissingLayerState(t *testing.T) {
 	delete(states, LayerConvertibleRI) // remove buffer layer state
 
 	in := &AllocationInput{
-		Config:      validConfigAWS(),
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
-		LayerStates: states,
-		Now:         nowFixed(),
+		Config:             validConfigAWS(),
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
+		LayerStates:        states,
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	_, err := Allocate(in)
 	if err == nil {
@@ -834,11 +850,12 @@ func TestAllocate_NilExistingUSDPerHour(t *testing.T) {
 	states[LayerConvertibleRI] = s
 
 	in := &AllocationInput{
-		Config:      validConfigAWS(),
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
-		LayerStates: states,
-		Now:         nowFixed(),
+		Config:             validConfigAWS(),
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
+		LayerStates:        states,
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	_, err := Allocate(in)
 	if err == nil {
@@ -858,11 +875,12 @@ func TestAllocate_NilExpiringUSDPerHour(t *testing.T) {
 	states[LayerConvertibleRI] = s
 
 	in := &AllocationInput{
-		Config:      validConfigAWS(),
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
-		LayerStates: states,
-		Now:         nowFixed(),
+		Config:             validConfigAWS(),
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
+		LayerStates:        states,
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	_, err := Allocate(in)
 	if err == nil {
@@ -880,11 +898,12 @@ func TestAllocate_NaNInput(t *testing.T) {
 	states = withExisting(states, LayerConvertibleRI, math.NaN())
 
 	in := &AllocationInput{
-		Config:      validConfigAWS(),
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
-		LayerStates: states,
-		Now:         nowFixed(),
+		Config:             validConfigAWS(),
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
+		LayerStates:        states,
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	_, err := Allocate(in)
 	if err == nil {
@@ -902,11 +921,12 @@ func TestAllocate_NegativeInput(t *testing.T) {
 	states = withExisting(states, LayerComputeSP, -1.0)
 
 	in := &AllocationInput{
-		Config:      validConfigAWS(),
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
-		LayerStates: states,
-		Now:         nowFixed(),
+		Config:             validConfigAWS(),
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
+		LayerStates:        states,
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	_, err := Allocate(in)
 	if err == nil {
@@ -921,11 +941,12 @@ func TestAllocate_NegativeBaseline(t *testing.T) {
 	t.Parallel()
 	layers := awsLayers()
 	in := &AllocationInput{
-		Config:      validConfigAWS(),
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(-5.0)},
-		LayerStates: zeroStates(layers),
-		Now:         nowFixed(),
+		Config:             validConfigAWS(),
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(-5.0)},
+		LayerStates:        zeroStates(layers),
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	_, err := Allocate(in)
 	if err == nil {
@@ -946,11 +967,12 @@ func TestAllocate_ReshapeEmittedUnderThreshold(t *testing.T) {
 	states = withExisting(states, LayerConvertibleRI, 2.0)
 	states = withBufferUtilization(states, 70.0)
 	in := &AllocationInput{
-		Config:      validConfigAWS(), // threshold=90%
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
-		LayerStates: states,
-		Now:         nowFixed(),
+		Config:             validConfigAWS(), // threshold=90%
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates:        states,
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -982,11 +1004,12 @@ func TestAllocate_NoReshapeAtThreshold(t *testing.T) {
 	states = withExisting(states, LayerConvertibleRI, 2.0)
 	states = withBufferUtilization(states, DefaultBufferUtilizationThresholdPct)
 	in := &AllocationInput{
-		Config:      validConfigAWS(),
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
-		LayerStates: states,
-		Now:         nowFixed(),
+		Config:             validConfigAWS(),
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates:        states,
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -1005,11 +1028,12 @@ func TestAllocate_NoReshapeAboveThreshold(t *testing.T) {
 	states = withExisting(states, LayerConvertibleRI, 2.0)
 	states = withBufferUtilization(states, 95.0)
 	in := &AllocationInput{
-		Config:      validConfigAWS(),
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
-		LayerStates: states,
-		Now:         nowFixed(),
+		Config:             validConfigAWS(),
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates:        states,
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -1028,11 +1052,12 @@ func TestAllocate_UtilizationNil_InformationalHold(t *testing.T) {
 	// informational hold. (Empty buffer layers are skipped and emit nothing.)
 	states = withExisting(states, LayerConvertibleRI, 2.0)
 	in := &AllocationInput{
-		Config:      validConfigAWS(),
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
-		LayerStates: states,
-		Now:         nowFixed(),
+		Config:             validConfigAWS(),
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates:        states,
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -1061,11 +1086,12 @@ func TestAllocate_EmptyBufferLayer_NoNoise(t *testing.T) {
 	states := zeroStates(layers) // buffer existing = 0
 	states = withBufferUtilization(states, 0.0)
 	in := &AllocationInput{
-		Config:      validConfigAWS(),
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
-		LayerStates: states,
-		Now:         nowFixed(),
+		Config:             validConfigAWS(),
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates:        states,
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -1125,11 +1151,12 @@ func TestAllocate_InvalidConfig(t *testing.T) {
 	cfg := validConfigAWS()
 	cfg.TargetCoveragePct = 0 // invalid
 	in := &AllocationInput{
-		Config:      cfg,
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
-		LayerStates: zeroStates(layers),
-		Now:         nowFixed(),
+		Config:             cfg,
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
+		LayerStates:        zeroStates(layers),
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	_, err := Allocate(in)
 	if err == nil {
@@ -1140,11 +1167,12 @@ func TestAllocate_InvalidConfig(t *testing.T) {
 func TestAllocate_EmptyLayers(t *testing.T) {
 	t.Parallel()
 	in := &AllocationInput{
-		Config:      validConfigAWS(),
-		Layers:      nil,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
-		LayerStates: map[LayerType]LayerState{},
-		Now:         nowFixed(),
+		Config:             validConfigAWS(),
+		Layers:             nil,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
+		LayerStates:        map[LayerType]LayerState{},
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	_, err := Allocate(in)
 	if err == nil {
@@ -1161,11 +1189,12 @@ func TestAllocate_NoFlexLayer(t *testing.T) {
 		{Type: LayerConvertibleRI, Roles: []LayerRole{RoleBuffer}},
 	}
 	in := &AllocationInput{
-		Config:      validConfigAWS(),
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
-		LayerStates: zeroStates(layers),
-		Now:         nowFixed(),
+		Config:             validConfigAWS(),
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
+		LayerStates:        zeroStates(layers),
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	_, err := Allocate(in)
 	if err == nil {
@@ -1186,11 +1215,12 @@ func TestAllocate_TwoBaseLayers(t *testing.T) {
 		{Type: LayerComputeSP, Roles: []LayerRole{RoleFlex}},
 	}
 	in := &AllocationInput{
-		Config:      validConfigAWS(),
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
-		LayerStates: zeroStates(layers),
-		Now:         nowFixed(),
+		Config:             validConfigAWS(),
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
+		LayerStates:        zeroStates(layers),
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	_, err := Allocate(in)
 	if err == nil {
@@ -1210,11 +1240,12 @@ func TestAllocate_TwoFlexLayers(t *testing.T) {
 		{Type: LayerEC2InstanceSP, Roles: []LayerRole{RoleFlex}},
 	}
 	in := &AllocationInput{
-		Config:      validConfigAWS(),
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
-		LayerStates: zeroStates(layers),
-		Now:         nowFixed(),
+		Config:             validConfigAWS(),
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
+		LayerStates:        zeroStates(layers),
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	_, err := Allocate(in)
 	if err == nil {
@@ -1298,11 +1329,12 @@ func TestAllocate_LayerTopologyValidation(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			in := &AllocationInput{
-				Config:      validConfigAzure(),
-				Layers:      c.layers,
-				Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
-				LayerStates: zeroStates(c.layers),
-				Now:         nowFixed(),
+				Config:             validConfigAzure(),
+				Layers:             c.layers,
+				Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+				LayerStates:        zeroStates(c.layers),
+				Now:                nowFixed(),
+				InFlightUSDPerHour: ptr(0.0),
 			}
 			_, err := Allocate(in)
 			if c.errContains == "" {
@@ -1348,11 +1380,12 @@ func TestAllocate_UtilizationPctValidation(t *testing.T) {
 			states = withExisting(states, LayerConvertibleRI, 2.0)
 			states = withBufferUtilization(states, c.pct)
 			in := &AllocationInput{
-				Config:      validConfigAWS(),
-				Layers:      layers,
-				Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
-				LayerStates: states,
-				Now:         nowFixed(),
+				Config:             validConfigAWS(),
+				Layers:             layers,
+				Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+				LayerStates:        states,
+				Now:                nowFixed(),
+				InFlightUSDPerHour: ptr(0.0),
 			}
 			_, err := Allocate(in)
 			if c.wantErr {
@@ -1384,11 +1417,12 @@ func TestAllocate_NoBufferLayerWithBufferFraction_Error(t *testing.T) {
 	}
 	cfg := validConfigAWS() // BufferFraction = 0.10 > 0
 	in := &AllocationInput{
-		Config:      cfg,
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
-		LayerStates: zeroStates(layers),
-		Now:         nowFixed(),
+		Config:             cfg,
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates:        zeroStates(layers),
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	_, err := Allocate(in)
 	if err == nil {
@@ -1414,11 +1448,12 @@ func TestAllocate_NoBufferLayerZeroFraction_OK(t *testing.T) {
 	cfg := validConfigAWS()
 	cfg.BufferFraction = 0
 	in := &AllocationInput{
-		Config:      cfg,
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
-		LayerStates: zeroStates(layers),
-		Now:         nowFixed(),
+		Config:             cfg,
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates:        zeroStates(layers),
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -1452,11 +1487,12 @@ func TestAllocate_TargetMet_ReshapeStillEmitted(t *testing.T) {
 	states = withExisting(states, LayerConvertibleRI, 2.0)
 	states = withBufferUtilization(states, 70.0) // below 90% threshold
 	in := &AllocationInput{
-		Config:      validConfigAWS(),
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(8.0)},
-		LayerStates: states,
-		Now:         nowFixed(),
+		Config:             validConfigAWS(),
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(8.0)},
+		LayerStates:        states,
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -1486,11 +1522,12 @@ func TestAllocate_NilBaseline_ReshapeStillEmitted(t *testing.T) {
 	states = withExisting(states, LayerConvertibleRI, 2.0)
 	states = withBufferUtilization(states, 70.0) // below 90% threshold
 	in := &AllocationInput{
-		Config:      validConfigAWS(),
-		Layers:      layers,
-		Baseline:    UsageBaseline{}, // LowWaterUSDPerHour nil
-		LayerStates: states,
-		Now:         nowFixed(),
+		Config:             validConfigAWS(),
+		Layers:             layers,
+		Baseline:           UsageBaseline{}, // LowWaterUSDPerHour nil
+		LayerStates:        states,
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -1527,11 +1564,12 @@ func TestAllocate_UnknownLayerStateKey_Error(t *testing.T) {
 		ExpiringUSDPerHour: ptr(0.0),
 	}
 	in := &AllocationInput{
-		Config:      validConfigAWS(),
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
-		LayerStates: states,
-		Now:         nowFixed(),
+		Config:             validConfigAWS(),
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
+		LayerStates:        states,
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	_, err := Allocate(in)
 	if err == nil {
@@ -1556,11 +1594,12 @@ func TestAllocate_SubMinimumBufferSkipped(t *testing.T) {
 	cfg.BufferFraction = 0.0005
 	layers := awsLayers()
 	in := &AllocationInput{
-		Config:      cfg,
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
-		LayerStates: zeroStates(layers),
-		Now:         nowFixed(),
+		Config:             cfg,
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates:        zeroStates(layers),
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -1600,9 +1639,10 @@ func TestAllocate_AllSplitsSubMinimum(t *testing.T) {
 		Layers: layers,
 		// gap = $0.011 (just above the min-gap threshold); stable unknown so
 		// base gets nothing and flex receives the whole core gap of $0.0099.
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(0.011)},
-		LayerStates: zeroStates(layers),
-		Now:         nowFixed(),
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(0.011)},
+		LayerStates:        zeroStates(layers),
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	result, err := Allocate(in)
 	if err != nil {
@@ -1635,11 +1675,12 @@ func TestAllocate_AzureMerged_StableUnknown_NoteOnFlexOnly(t *testing.T) {
 	cfg := validConfigAzure()
 	cfg.BufferFraction = 0.5
 	in := &AllocationInput{
-		Config:      cfg,
-		Layers:      layers,
-		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0)}, // stable unknown
-		LayerStates: zeroStates(layers),
-		Now:         nowFixed(),
+		Config:             cfg,
+		Layers:             layers,
+		Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(10.0)}, // stable unknown
+		LayerStates:        zeroStates(layers),
+		Now:                nowFixed(),
+		InFlightUSDPerHour: ptr(0.0),
 	}
 	// bufferGap=5, coreGap=5, baseGap=0 (stable unknown), flexGap=5, merged=5
 	result, err := Allocate(in)
@@ -1662,6 +1703,108 @@ func TestAllocate_AzureMerged_StableUnknown_NoteOnFlexOnly(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestAllocate_ConvergenceNetting is the L5 regression guard: three sequential
+// daily runs with identical usage must not accumulate planned commitment beyond
+// the initial gap. Without in-flight netting each run would re-plan the full
+// gap and the system would diverge; with netting only the first run allocates
+// and subsequent runs hold.
+//
+// To confirm the test guards the real behaviour, the second sub-test ("no
+// netting diverges") shows that feeding zero in-flight to every run produces
+// three allocations totalling 3x the gap -- this sub-test MUST FAIL if the L5
+// netting logic is removed from Allocate.
+func TestAllocate_ConvergenceNetting(t *testing.T) {
+	t.Parallel()
+
+	// Baseline: low-water $10/hr, target coverage 80% => target $8/hr.
+	// Existing = $0, so initial gap = $8.
+	const targetPct = 80.0
+	const lowWater = 10.0
+	const initialGap = 8.0 // min($8-$0, $10-$0) = $8
+
+	makeInput := func(inFlight float64) *AllocationInput {
+		layers := awsLayers()
+		states := zeroStates(layers)
+		cfg := validConfigAWS()
+		cfg.TargetCoveragePct = targetPct
+		return &AllocationInput{
+			Config:             cfg,
+			Layers:             layers,
+			Baseline:           UsageBaseline{LowWaterUSDPerHour: ptr(lowWater), StableUSDPerHour: ptr(lowWater * 0.9)},
+			LayerStates:        states,
+			Now:                nowFixed(),
+			DataSources:        []string{"cost-explorer"},
+			InFlightUSDPerHour: &inFlight,
+		}
+	}
+
+	t.Run("with netting converges", func(t *testing.T) {
+		t.Parallel()
+		var totalPlanned float64
+
+		// Run 1: no in-flight -> allocates the full gap.
+		r1, err := Allocate(makeInput(0.0))
+		if err != nil {
+			t.Fatalf("run1 Allocate: %v", err)
+		}
+		for _, a := range r1.Allocations {
+			f, _ := a.GapUSDPerHour.Float64()
+			totalPlanned += f
+		}
+		if len(r1.Allocations) == 0 {
+			t.Fatalf("run1: expected at least one allocation with zero in-flight, got hold: %+v", r1.Holds)
+		}
+
+		// Run 2: in-flight = totalPlanned from run 1 -> should hold (gap <= min).
+		r2, err := Allocate(makeInput(totalPlanned))
+		if err != nil {
+			t.Fatalf("run2 Allocate: %v", err)
+		}
+		if len(r2.Allocations) != 0 {
+			t.Errorf("run2: expected Hold (gap covered by in-flight), got %d allocations", len(r2.Allocations))
+		}
+		if len(r2.Holds) == 0 {
+			t.Errorf("run2: expected at least one Hold action, got none")
+		}
+
+		// Run 3: same in-flight as run 2 -> still Hold.
+		r3, err := Allocate(makeInput(totalPlanned))
+		if err != nil {
+			t.Fatalf("run3 Allocate: %v", err)
+		}
+		if len(r3.Allocations) != 0 {
+			t.Errorf("run3: expected Hold (gap covered by in-flight), got %d allocations", len(r3.Allocations))
+		}
+
+		// Total planned must be approx the initial gap (not 2x or 3x).
+		if totalPlanned < initialGap*0.5 || totalPlanned > initialGap*1.5 {
+			t.Errorf("total planned = %.4f, want approx %.4f (1x gap, not accumulated)", totalPlanned, initialGap)
+		}
+	})
+
+	t.Run("no netting diverges", func(t *testing.T) {
+		// This sub-test verifies that IGNORING in-flight (always passing 0)
+		// produces 3x the initial gap. It is a canary: if the L5 gap subtraction
+		// is removed from Allocate this sub-test changes meaning but the
+		// "with netting" sub-test above will fail first, which is the real guard.
+		t.Parallel()
+		var totalWithoutNetting float64
+		for i := 0; i < 3; i++ {
+			r, err := Allocate(makeInput(0.0)) // zero in-flight every time
+			if err != nil {
+				t.Fatalf("run%d Allocate: %v", i+1, err)
+			}
+			for _, a := range r.Allocations {
+				f, _ := a.GapUSDPerHour.Float64()
+				totalWithoutNetting += f
+			}
+		}
+		if totalWithoutNetting < initialGap*2.0 {
+			t.Errorf("without netting: expected total >= 2x gap (%.4f), got %.4f; the divergence canary is broken", initialGap*2.0, totalWithoutNetting)
+		}
+	})
 }
 
 // TestAllocateResult_IsNoOp verifies IsNoOp across the result shapes.

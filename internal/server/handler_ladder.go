@@ -272,6 +272,18 @@ func (app *Application) processOneLadderConfig(
 //
 // It is split from handleLadderRun so tests can inject a hermetic
 // LadderCapability (fake) and a mock store without touching AWS or PostgreSQL.
+//
+// L5 netting: before calling Allocate, the handler fetches the total in-flight
+// commitment (scheduled + fired non-terminal tranches plus any in-progress
+// purchase executions linked to this config). The Allocate engine subtracts
+// this from the raw gap so each daily run plans only what is still needed,
+// preventing pile-up when prior tranches have not yet fired.
+//
+// The cancel-and-replace is performed atomically inside
+// SaveLadderRunWithTranchesAndSupersede: the same transaction that inserts the
+// new run and its tranches also cancels the config's prior scheduled (not yet
+// fired) tranches, ensuring at most one generation of scheduled tranches exists
+// for each config at any point in time.
 func (app *Application) executeLadderRun(
 	ctx context.Context,
 	dbCfg *config.LadderConfigDB,
@@ -300,16 +312,35 @@ func (app *Application) executeLadderRun(
 		return fmt.Errorf("GetLayerStates: %w", err)
 	}
 
+	// L5: Fetch in-flight commitment BEFORE Allocate so the engine can subtract
+	// it from the gap. In-flight = scheduled (not-yet-fired) tranches +
+	// fired tranches whose execution has not reached a terminal state +
+	// any in-progress purchase executions linked to this config's runs.
+	// This query includes prior scheduled tranches (from earlier runs) so the
+	// engine correctly accounts for en-route commitment and produces a ~zero
+	// gap (Hold) when prior tranches already cover the target.
+	inFlight, err := app.Config.GetInFlightLadderCommitUSDHr(ctx, dbCfg.ID)
+	if err != nil {
+		return fmt.Errorf("GetInFlightLadderCommitUSDHr: %w", err)
+	}
+	if inFlight == nil {
+		// The store must return a non-nil value; nil signals an impossible
+		// query state (e.g. driver bug). Treat as fail-loud.
+		return fmt.Errorf("GetInFlightLadderCommitUSDHr returned nil for config %s", dbCfg.ID)
+	}
+
 	supportedLayers := capability.SupportedLayers()
 
-	// Run Allocate.
+	// Run Allocate with the in-flight figure so the gap is net of prior
+	// scheduled and fired tranches.
 	allocResult, err := pkgladder.Allocate(&pkgladder.AllocationInput{
-		Now:         now,
-		Baseline:    baseline,
-		LayerStates: layerStates,
-		Layers:      supportedLayers,
-		Config:      engineCfg,
-		DataSources: []string{dataSourceAWSCostExplorer},
+		Now:                now,
+		Baseline:           baseline,
+		LayerStates:        layerStates,
+		Layers:             supportedLayers,
+		Config:             engineCfg,
+		DataSources:        []string{dataSourceAWSCostExplorer},
+		InFlightUSDPerHour: inFlight,
 	})
 	if err != nil {
 		return fmt.Errorf("allocate: %w", err)
@@ -334,6 +365,9 @@ func (app *Application) executeLadderRun(
 	plan := assembleLadderPlan(scope, now, allocResult, layerStates, baseline, engineCfg.TargetCoveragePct, term, paymentOpt)
 
 	// Validate and persist the run row + tranche audit rows.
+	// SaveLadderRunWithTranchesAndSupersede cancels any existing scheduled
+	// tranches for this config within the same transaction, then inserts the
+	// new run + tranches atomically (cancel-and-replace, L5 spec).
 	return app.persistLadderRun(ctx, dbCfg, runID, now, plan, baseline, allocResult, trancheResult)
 }
 
@@ -390,12 +424,14 @@ func (app *Application) persistLadderRun(
 		return fmt.Errorf("buildTrancheDBRows: %w", err)
 	}
 
-	// Persist the run row AND its tranches in a single transaction so a
-	// tranche-insert failure can never leave a status=planned run with no
-	// tranches (which the 20h cadence gate would then suppress a retry of).
-	savedRun, err := app.Config.SaveLadderRunWithTranches(ctx, runRow, trancheRows)
+	// L5: persist run + tranches atomically AND cancel any prior scheduled
+	// tranches for this config in the same transaction. This guarantees at
+	// most one generation of scheduled tranches per config exists at any
+	// point, preventing pile-up when repeated daily runs each see the full
+	// gap before prior tranches fire.
+	savedRun, err := app.Config.SaveLadderRunWithTranchesAndSupersede(ctx, runRow, trancheRows)
 	if err != nil {
-		return fmt.Errorf("SaveLadderRunWithTranches: %w", err)
+		return fmt.Errorf("SaveLadderRunWithTranchesAndSupersede: %w", err)
 	}
 
 	log.Printf("ladder_run: config %s: persisted run %s (status=%s, allocations=%d, tranches=%d, holds=%d)",

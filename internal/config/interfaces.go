@@ -378,8 +378,24 @@ type StoreInterface interface {
 	// transaction: a tranche-insert failure rolls back the run row too, so a
 	// status=planned run never persists without its tranches (which would let
 	// the cadence gate suppress the retry for a full window).
+	//
+	// SaveLadderRunWithTranchesAndSupersede is the atomic cancel-and-replace
+	// variant (L5 spec). Within a single transaction it:
+	//  1. Cancels all status=scheduled tranches for the run's config_id,
+	//  2. Inserts the new ladder_runs row, and
+	//  3. Inserts the new ladder_tranches rows.
+	// This guarantees at most one generation of scheduled tranches per config
+	// exists at any point; a partial failure rolls back all three steps.
+	//
+	// GetInFlightLadderCommitUSDHr returns the total hourly USD commitment in
+	// flight for the given config: the sum of amount_usd_hr for all tranches
+	// with status IN ('scheduled', 'fired'). Returns a non-nil pointer (zero
+	// when no in-flight tranches exist) so callers can pass it directly to
+	// AllocationInput.InFlightUSDPerHour. Never returns nil without an error.
 	SaveLadderRun(ctx context.Context, run *LadderRunDB) (*LadderRunDB, error)
 	SaveLadderRunWithTranches(ctx context.Context, run *LadderRunDB, tranches []LadderTrancheDB) (*LadderRunDB, error)
+	SaveLadderRunWithTranchesAndSupersede(ctx context.Context, run *LadderRunDB, tranches []LadderTrancheDB) (*LadderRunDB, error)
+	GetInFlightLadderCommitUSDHr(ctx context.Context, configID string) (*float64, error)
 	GetLadderRun(ctx context.Context, id string) (*LadderRunDB, error)
 	SaveLadderTranches(ctx context.Context, tranches []LadderTrancheDB) error
 	LatestLadderRunStartedAt(ctx context.Context, configID string) (*time.Time, error)

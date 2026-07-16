@@ -35,6 +35,16 @@ func minAllocatableGap() *big.Rat {
 // and causes Allocate to return an error (fail loud: incomplete provider data
 // aborts the run).
 //
+// InFlightUSDPerHour is the total hourly commitment already in flight for
+// this config's scope: the sum of all scheduled (not-yet-fired) and fired
+// (not-yet-terminal) ladder tranches, plus any in-progress purchase
+// executions linked to this config's runs. It is required non-nil (fail
+// loud) so callers must always explicitly account for in-flight commitment.
+// A genuinely zero in-flight must be passed as a pointer to 0.0, not nil.
+// Subtracting in-flight from the gap prevents new runs from re-planning
+// commitment that is already en route, eliminating the pile-up that occurs
+// when multiple daily runs each see the full gap before prior tranches fire.
+//
 // DataSources lists the data feeds (e.g. "cost-explorer", "cloudwatch") used
 // to derive the inputs. The slice is propagated verbatim to every Allocation
 // and PlannedAction produced by Allocate so that approval emails and audit
@@ -42,12 +52,13 @@ func minAllocatableGap() *big.Rat {
 //
 // Now must be set by the caller; Allocate never calls time.Now internally.
 type AllocationInput struct {
-	Now         time.Time
-	LayerStates map[LayerType]LayerState
-	Layers      []LayerSpec
-	DataSources []string
-	Baseline    UsageBaseline
-	Config      LadderConfig
+	Now                time.Time
+	LayerStates        map[LayerType]LayerState
+	Layers             []LayerSpec
+	DataSources        []string
+	Baseline           UsageBaseline
+	Config             LadderConfig
+	InFlightUSDPerHour *float64
 }
 
 // Allocation is a per-layer sizing decision produced by Allocate. The
@@ -125,12 +136,20 @@ func Allocate(in *AllocationInput) (*AllocateResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The second min arm is defensive: it guards against future target
-	// derivations exceeding the observed floor. Today target <= lowWater
-	// always holds because TargetCoveragePct is validated to be <= 100.
-	gap := minRat(new(big.Rat).Sub(target, existingTotal), new(big.Rat).Sub(lowWater, existingTotal))
+	inFlight, err := ratFromFloat("in_flight_usd_hr", *in.InFlightUSDPerHour)
+	if err != nil {
+		return nil, fmt.Errorf("in_flight_usd_hr: %w", err)
+	}
+	// gap = min(target-E, lowWater-E) - inFlight.
+	// The two-arm min is defensive: it guards against future target derivations
+	// exceeding the observed floor (today target<=lowWater always holds because
+	// TargetCoveragePct is validated to be <=100). Subtracting inFlight nets
+	// out scheduled/fired tranches that are already en route so repeated runs
+	// on the same day do not re-plan commitment that is already in flight.
+	preInflightGap := minRat(new(big.Rat).Sub(target, existingTotal), new(big.Rat).Sub(lowWater, existingTotal))
+	gap := new(big.Rat).Sub(preInflightGap, inFlight)
 	if gap.Cmp(minAllocatableGap()) <= 0 {
-		return withMaintenance(gapBelowMinHold(gap, lowWater, target, existingTotal, in), reshapes, maintHolds), nil
+		return withMaintenance(gapBelowMinHold(gap, lowWater, target, existingTotal, inFlight, in), reshapes, maintHolds), nil
 	}
 	return buildResult(in, lowWater, target, existingTotal, gap, nets, reshapes, maintHolds)
 }
@@ -176,9 +195,12 @@ func fmtRatUSD(r *big.Rat) string {
 	return fmt.Sprintf("$%.4f/hr", f)
 }
 
-// validateAllocateInput validates the config, layer list, and layer states in
-// one pass. Returns the first error encountered.
+// validateAllocateInput validates the config, layer list, layer states, and
+// the required in-flight commitment figure. Returns the first error encountered.
 func validateAllocateInput(in *AllocationInput) error {
+	if in.InFlightUSDPerHour == nil {
+		return fmt.Errorf("InFlightUSDPerHour must not be nil: callers must always supply the in-flight commitment; pass a pointer to 0.0 when there is no in-flight commitment")
+	}
 	if err := in.Config.Validate(); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
@@ -415,14 +437,15 @@ func baselineUnavailableHold(in *AllocationInput) *AllocateResult {
 }
 
 // gapBelowMinHold returns a Hold result explaining that the target is already
-// met. Concrete numbers (low-water, target %, existing, gap) are embedded in
-// the rationale.
-func gapBelowMinHold(gap, lowWater, target, existingTotal *big.Rat, in *AllocationInput) *AllocateResult {
+// met (accounting for in-flight commitment). Concrete numbers (low-water,
+// target %, existing, in-flight, gap) are embedded in the rationale so
+// operators can distinguish "gap closed by prior commitment" from "truly met".
+func gapBelowMinHold(gap, lowWater, target, existingTotal, inFlight *big.Rat, in *AllocationInput) *AllocateResult {
 	flexLayer, _ := findLayerForRole(in.Layers, RoleFlex)
 	rationale := fmt.Sprintf(
-		"target already met: low_water=%s, target=%.2f%%, existing=%s, target_commitment=%s, gap=%s <= min_allocatable=%s",
-		fmtRatUSD(lowWater), in.Config.TargetCoveragePct, fmtRatUSD(existingTotal), fmtRatUSD(target),
-		fmtRatUSD(gap), fmtRatUSD(minAllocatableGap()),
+		"target already met: low_water=%s, target=%.2f%%, existing=%s, in_flight=%s, target_commitment=%s, gap=%s <= min_allocatable=%s",
+		fmtRatUSD(lowWater), in.Config.TargetCoveragePct, fmtRatUSD(existingTotal), fmtRatUSD(inFlight),
+		fmtRatUSD(target), fmtRatUSD(gap), fmtRatUSD(minAllocatableGap()),
 	)
 	return &AllocateResult{
 		Holds: []PlannedAction{
