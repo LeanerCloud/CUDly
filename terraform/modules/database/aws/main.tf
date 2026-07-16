@@ -122,7 +122,12 @@ resource "aws_db_instance" "main" {
   engine     = "postgres"
 
   engine_version = var.engine_version
-  instance_class = var.instance_class
+  # Major-only engine_version pin: the provider stores the real minor in
+  # engine_version_actual and suppresses diff on auto-minor upgrades.
+  # auto_minor_version_upgrade must be explicitly true so the intent is
+  # self-describing (incident: 2026-07-16, #1372).
+  auto_minor_version_upgrade = true
+  instance_class             = var.instance_class
 
   db_name  = var.database_name
   username = var.master_username
