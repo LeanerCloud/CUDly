@@ -28,6 +28,7 @@ import (
 	ec2svc "github.com/LeanerCloud/CUDly/providers/aws/services/ec2"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	smithy "github.com/aws/smithy-go"
 	"github.com/google/uuid"
 )
@@ -41,7 +42,7 @@ type marketplaceEC2Client interface {
 	// FetchOfferingClass calls AWS DescribeReservedInstances to determine
 	// whether a given Reserved Instance is 'standard' or 'convertible'. Used
 	// when the purchase_history row has no offering_class stored (pre-migration
-	// 000085 rows and externally-created Standard RIs).
+	// 000087 rows and externally-created Standard RIs).
 	FetchOfferingClass(ctx context.Context, reservedInstancesID string) (string, error)
 }
 
@@ -92,7 +93,8 @@ func (h *Handler) validateMarketplaceListRequest(ctx context.Context, req *event
 		return nil, body, err
 	}
 
-	if err := validateUUID(purchaseID); err != nil {
+	err = validateUUID(purchaseID)
+	if err != nil {
 		return nil, body, err
 	}
 
@@ -145,14 +147,11 @@ func (h *Handler) marketplaceList(ctx context.Context, req *events.LambdaFunctio
 	// rather than the full contract term (which overprices older RIs).
 	remainingMonths := computeRemainingMonths(row.Timestamp, row.Term)
 
-	// Validate and normalise the price schedule. A nil MonthlyCost means the
-	// provider recorded no recurring breakdown (issue #258 made the field
-	// nullable); treat absent as zero recurring contribution to residual value.
-	monthlyCost := 0.0
-	if row.MonthlyCost != nil {
-		monthlyCost = *row.MonthlyCost
-	}
-	schedule, err := resolveMarketplacePriceSchedule(body.PriceSchedule, remainingMonths, row.Term, row.UpfrontCost, monthlyCost)
+	// Validate and normalise the price schedule. Row-total UpfrontCost and the
+	// instance Count are passed so pricing is computed per instance; recurring
+	// (monthly) cost is deliberately excluded because the Marketplace buyer
+	// assumes recurring charges post-transfer (issue #292 money-path review).
+	schedule, err := resolveMarketplacePriceSchedule(body.PriceSchedule, remainingMonths, row.Term, row.Count, row.UpfrontCost)
 	if err != nil {
 		return nil, NewClientError(400, err.Error())
 	}
@@ -166,7 +165,7 @@ func (h *Handler) marketplaceList(ctx context.Context, req *events.LambdaFunctio
 	ec2Client := h.buildMarketplaceEC2Client(cfg)
 
 	// Populate offering_class from AWS when the DB row has none. This covers
-	// two cases: (1) pre-migration 000085 rows purchased by CUDly before this
+	// two cases: (1) pre-migration 000087 rows purchased by CUDly before this
 	// column existed, and (2) externally-created Standard RIs whose
 	// offering_class was never stamped. After population the value is persisted
 	// so subsequent requests do not require an extra AWS API call.
@@ -178,7 +177,7 @@ func (h *Handler) marketplaceList(ctx context.Context, req *events.LambdaFunctio
 		}
 	}
 	// Definitive offering_class gate: only Standard RIs can be listed.
-	if !strings.EqualFold(offeringClass, "standard") {
+	if !strings.EqualFold(offeringClass, string(ec2types.OfferingClassTypeStandard)) {
 		return nil, NewClientError(400, "only Standard Reserved Instances can be listed on the AWS Marketplace; this purchase has offering_class="+offeringClass)
 	}
 
@@ -279,7 +278,11 @@ func (h *Handler) reserveAndCreateListing(ctx context.Context, purchaseID string
 func (h *Handler) populateOfferingClass(ctx context.Context, purchaseID string, ec2Client marketplaceEC2Client) (string, error) {
 	class, err := ec2Client.FetchOfferingClass(ctx, purchaseID)
 	if err != nil {
-		return "", fmt.Errorf("offering_class not set and could not fetch from AWS: %w", err)
+		// Route through mapAWSMarketplaceError so an AWS client fault (e.g. an
+		// InvalidReservedInstancesID.NotFound for an RI that has expired or been
+		// exchanged) surfaces as a 400, not a generic 500. Server-side AWS
+		// failures still map to 502.
+		return "", mapAWSMarketplaceError("offering_class not set and could not fetch from AWS", err)
 	}
 	if stampErr := h.config.StampOfferingClass(ctx, purchaseID, class); stampErr != nil {
 		logging.Errorf("marketplace: failed to persist offering_class %q for purchase %s: %v", class, purchaseID, stampErr)
@@ -306,7 +309,8 @@ func (h *Handler) marketplaceCancel(ctx context.Context, req *events.LambdaFunct
 		return nil, err
 	}
 
-	if err := validateUUID(purchaseID); err != nil {
+	err = validateUUID(purchaseID)
+	if err != nil {
 		return nil, err
 	}
 
@@ -318,7 +322,8 @@ func (h *Handler) marketplaceCancel(ctx context.Context, req *events.LambdaFunct
 		return nil, NewClientError(404, "purchase not found")
 	}
 
-	if err := h.authorizeSessionSell(ctx, session, row.CloudAccountID); err != nil {
+	err = h.authorizeSessionSell(ctx, session, row.CloudAccountID)
+	if err != nil {
 		return nil, err
 	}
 
@@ -503,56 +508,92 @@ func mapAWSMarketplaceError(opMsg string, err error) error {
 	return NewClientError(502, opMsg+": "+err.Error())
 }
 
-// resolveMarketplacePriceSchedule returns a normalised price schedule for the
-// given RI. When the caller supplied an explicit schedule it is validated and
-// returned unchanged. When the caller omitted the schedule (nil / empty), a
-// single-tier default is computed: (upfront_remaining + future_recurring) *
-// awsMarketplaceBuyerDiscountFactor (5% discount to attract buyers; the
-// awsMarketplaceFeePercent% AWS fee is applied by the Marketplace on top).
-//
-// remainingMonths must be the actual remaining months (computed via
-// computeRemainingMonths from purchase timestamp and total term -- NOT the raw
-// term field, which would overprice older RIs).
-// originalTerm is the full contract term in months, used to prorate the
-// upfront cost to its remaining value.
 // isKnownNonStandardOfferingClass reports true when offering_class is
 // explicitly set to a non-standard value (e.g. "convertible"). An empty string
 // returns false because the class is not yet known and will be resolved lazily.
 func isKnownNonStandardOfferingClass(class string) bool {
-	return class != "" && !strings.EqualFold(class, "standard")
+	return class != "" && !strings.EqualFold(class, string(ec2types.OfferingClassTypeStandard))
 }
 
-// checkSuppliedScheduleFloor returns a non-nil error when the total value of
-// a caller-supplied price schedule falls below awsMarketplaceMinPriceFloorFraction
-// of the computed residual value. Extracted from resolveMarketplacePriceSchedule
-// to keep that function within the gocyclo budget. The check is skipped when
-// residual is zero (fully-elapsed term or $0 RI) to avoid spurious rejections.
-func checkSuppliedScheduleFloor(tiers []MarketplacePriceTier, remainingMonths, originalTerm int, upfrontCost, monthlyCost float64) error {
+// marketplaceResidualPerUnit returns the prorated per-instance upfront residual
+// of an RI: the still-unconsumed portion of the upfront cost, divided by the
+// instance count. This is the seller's recoverable basis on the RI Marketplace.
+//
+// Two money-path invariants (issue #292 review) are baked in here so every
+// caller shares them:
+//   - Per instance: purchase_history.UpfrontCost is the row total for all
+//     `count` instances, but Marketplace prices are per instance, so divide by
+//     count. A legacy/corrupt count <= 0 is treated as 1 (matching
+//     reserveAndCreateListing's floor-at-1) so a single unit still prices.
+//   - Upfront only: recurring (monthly) cost is excluded because the buyer
+//     assumes recurring charges after transfer -- the seller recovers only the
+//     upfront remainder. Including it would overprice partial-upfront RIs and
+//     make no-upfront RIs unpriceable.
+//
+// Returns 0 when the term or upfront basis is non-positive (a $0 no-upfront RI
+// or a fully-elapsed term), signaling callers to skip the per-unit price floor.
+func marketplaceResidualPerUnit(remainingMonths, originalTerm, count int, upfrontCost float64) float64 {
+	if remainingMonths <= 0 || originalTerm <= 0 || upfrontCost <= 0 {
+		return 0
+	}
+	units := count
+	if units <= 0 {
+		units = 1
+	}
+	upfrontRemaining := upfrontCost * (float64(remainingMonths) / float64(originalTerm))
+	return upfrontRemaining / float64(units)
+}
+
+// checkSuppliedScheduleFloor validates a caller-supplied price schedule against
+// two money-path guardrails (issue #292):
+//  1. no tier's TermMonths may exceed the RI's remaining months -- an
+//     out-of-range term would inflate the tier's implied value arbitrarily; and
+//  2. each tier's one-time sale Price must be at least
+//     awsMarketplaceMinPriceFloorFraction of the per-unit residual prorated to
+//     that tier's term.
+//
+// AWS's PriceScheduleSpecification.Price is the ONE-TIME sale price a buyer pays
+// when TermMonths remain (NOT a per-month rate), so the floor is applied to
+// Price directly -- never Price*TermMonths, which would over-credit a cheap
+// schedule up to ~term-fold and let a near-zero listing slip past the floor.
+// When the per-unit residual is zero (a $0 no-upfront RI) the price floor is
+// skipped, but the term-range check still applies.
+func checkSuppliedScheduleFloor(tiers []MarketplacePriceTier, remainingMonths, originalTerm, count int, upfrontCost float64) error {
 	if remainingMonths <= 0 {
 		return nil
 	}
-	upfrontRemaining := 0.0
-	if originalTerm > 0 {
-		upfrontRemaining = upfrontCost * (float64(remainingMonths) / float64(originalTerm))
-	}
-	residual := upfrontRemaining + monthlyCost*float64(remainingMonths)
-	if residual <= 0 {
-		return nil
-	}
-	floor := residual * awsMarketplaceMinPriceFloorFraction
-	var total float64
-	for _, t := range tiers {
-		total += t.Price * float64(t.TermMonths)
-	}
-	if total < floor {
-		return fmt.Errorf(
-			"total listing price (%.2f) is below the minimum floor (%.2f, %.0f%% of residual value %.2f); raise your price schedule or omit it to use the default",
-			total, floor, awsMarketplaceMinPriceFloorFraction*100, residual)
+	perUnit := marketplaceResidualPerUnit(remainingMonths, originalTerm, count, upfrontCost)
+	for i, t := range tiers {
+		if t.TermMonths > int64(remainingMonths) {
+			return fmt.Errorf(
+				"price_schedule[%d]: term_months (%d) exceeds the RI's remaining term (%d months)",
+				i, t.TermMonths, remainingMonths)
+		}
+		if perUnit <= 0 {
+			continue
+		}
+		proratedResidual := perUnit * (float64(t.TermMonths) / float64(remainingMonths))
+		floor := proratedResidual * awsMarketplaceMinPriceFloorFraction
+		if t.Price < floor {
+			return fmt.Errorf(
+				"price_schedule[%d]: price (%.2f) is below the minimum floor (%.2f, %.0f%% of the %.2f per-unit residual for %d remaining months); raise the price or omit the schedule to use the default",
+				i, t.Price, floor, awsMarketplaceMinPriceFloorFraction*100, proratedResidual, t.TermMonths)
+		}
 	}
 	return nil
 }
 
-func resolveMarketplacePriceSchedule(supplied []MarketplacePriceTier, remainingMonths, originalTerm int, upfrontCost, monthlyCost float64) ([]MarketplacePriceTier, error) {
+// resolveMarketplacePriceSchedule returns a normalised price schedule for the
+// given RI. A caller-supplied schedule is validated (positive term/price, the
+// term-range and per-unit price-floor guardrails in checkSuppliedScheduleFloor)
+// and returned unchanged. When the caller omitted the schedule (nil / empty) a
+// single-tier default is computed from the per-unit upfront residual.
+//
+// remainingMonths must be the actual remaining months (from computeRemainingMonths,
+// NOT the raw term, which would overprice older RIs). originalTerm is the full
+// contract term in months. count is the row's instance count (pricing is per
+// instance). upfrontCost is the row-total upfront paid across all instances.
+func resolveMarketplacePriceSchedule(supplied []MarketplacePriceTier, remainingMonths, originalTerm, count int, upfrontCost float64) ([]MarketplacePriceTier, error) {
 	if len(supplied) > 0 {
 		for i, t := range supplied {
 			if t.TermMonths <= 0 {
@@ -562,25 +603,22 @@ func resolveMarketplacePriceSchedule(supplied []MarketplacePriceTier, remainingM
 				return nil, fmt.Errorf("price_schedule[%d]: price must be positive (received %.4f); use a non-zero listing price", i, t.Price)
 			}
 		}
-		if err := checkSuppliedScheduleFloor(supplied, remainingMonths, originalTerm, upfrontCost, monthlyCost); err != nil {
+		if err := checkSuppliedScheduleFloor(supplied, remainingMonths, originalTerm, count, upfrontCost); err != nil {
 			return nil, err
 		}
 		return supplied, nil
 	}
 
-	// Default: spread (upfront_remaining + future_recurring) * awsMarketplaceBuyerDiscountFactor
-	// across remaining term. The upfront cost is prorated by (remaining/original) to
-	// avoid overpricing older RIs (a 12-month RI at month 6 retains only half
-	// the upfront value; using the full amount would overprice by ~2x).
+	// Default: a single tier priced at the per-unit upfront residual discounted
+	// by awsMarketplaceBuyerDiscountFactor. Per instance (Count-divided) and
+	// upfront-only (recurring is the buyer's post-transfer obligation). The
+	// awsMarketplaceFeePercent% AWS fee is deducted by the Marketplace on top.
+	// The upfront cost is prorated by (remaining/original) so an older RI is not
+	// overpriced (a 12-month RI at month 6 retains only half its upfront value).
 	if remainingMonths <= 0 {
 		remainingMonths = 1 // defensive: should not happen for an active RI
 	}
-	upfrontRemaining := 0.0
-	if originalTerm > 0 {
-		upfrontRemaining = upfrontCost * (float64(remainingMonths) / float64(originalTerm))
-	}
-	totalValue := upfrontRemaining + (monthlyCost * float64(remainingMonths))
-	listPrice := totalValue * awsMarketplaceBuyerDiscountFactor
+	listPrice := marketplaceResidualPerUnit(remainingMonths, originalTerm, count, upfrontCost) * awsMarketplaceBuyerDiscountFactor
 	if listPrice < 0 {
 		listPrice = 0
 	}

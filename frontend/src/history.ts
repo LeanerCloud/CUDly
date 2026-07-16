@@ -609,7 +609,14 @@ function retryThresholdReached(p: HistoryPurchase): boolean {
 //
 // Conditions:
 //   * row must be a completed purchase (status "completed" or absent);
-//   * offering_class must be "standard";
+//   * row must be an AWS EC2 RI (marketplace is EC2-only);
+//   * offering_class must be "standard" OR still unknown (empty). CUDly stamps
+//     "convertible" on its own EC2 purchases, but externally-created Standard
+//     RIs (and pre-migration rows) have an empty offering_class until the
+//     backend lazily populates it from AWS on the list call. The backend
+//     definitively gates -- it 400s a fetched "convertible" -- so we show the
+//     button for unknown-class EC2 rows and let the backend decide, otherwise
+//     the feature is unreachable end-to-end for the very case it targets;
 //   * no active listing already (listing_state != "active"); and
 //   * admin, or non-admin user (sell-own covers their own accounts --
 //     we can't efficiently check per-account ownership client-side, so
@@ -618,7 +625,12 @@ function retryThresholdReached(p: HistoryPurchase): boolean {
 function canSellOnMarketplace(p: HistoryPurchase): boolean {
   const status = normalizeStatus(p).toLowerCase();
   if (status !== 'completed') return false;
-  if ((p.offering_class || '').toLowerCase() !== 'standard') return false;
+  // Marketplace listing is AWS EC2 Standard-RI only. Gate on provider/service
+  // so unknown-class rows for non-EC2 providers never show the Sell button.
+  if ((p.provider || '').toLowerCase() !== 'aws') return false;
+  if ((p.service || '').toLowerCase() !== 'ec2') return false;
+  const offeringClass = (p.offering_class || '').toLowerCase();
+  if (offeringClass !== 'standard' && offeringClass !== '') return false;
   if ((p.listing_state || '').toLowerCase() === 'active') return false;
   const user = getCurrentUser();
   if (!user) return false;

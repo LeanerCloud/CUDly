@@ -17,6 +17,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/provider"
 	azureprovider "github.com/LeanerCloud/CUDly/providers/azure"
 	gcpprovider "github.com/LeanerCloud/CUDly/providers/gcp"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/google/uuid"
 )
@@ -791,7 +792,7 @@ func (m *Manager) savePurchaseHistory(ctx context.Context, exec *config.Purchase
 	// ensures the marketplace-sell guard can distinguish eligibility without
 	// an extra AWS round-trip for CUDly-purchased rows (issue #292).
 	if rec.Provider == string(common.ProviderAWS) && rec.Service == string(common.ServiceEC2) {
-		historyRecord.OfferingClass = "convertible"
+		historyRecord.OfferingClass = string(ec2types.OfferingClassTypeConvertible)
 	}
 	if err := m.config.SavePurchaseHistory(ctx, historyRecord); err != nil {
 		logging.Errorf("Failed to save history: %v", err)

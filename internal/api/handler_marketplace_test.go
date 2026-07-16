@@ -346,21 +346,32 @@ func TestMarketplaceList_DBFailureCompensatingRollback(t *testing.T) {
 }
 
 func TestMarketplaceList_DefaultScheduleProrationMath(t *testing.T) {
-	// remaining=12, term=12, upfront=1200, monthly=0 => (1200*12/12 + 0)*0.95 = 1140.
-	schedule, err := resolveMarketplacePriceSchedule(nil, 12, 12, 1200, 0)
+	// remaining=12, term=12, count=1, upfront=1200 => per-unit residual
+	// 1200*12/12/1 = 1200; default price = 1200*0.95 = 1140.
+	schedule, err := resolveMarketplacePriceSchedule(nil, 12, 12, 1, 1200)
 	require.NoError(t, err)
 	require.Len(t, schedule, 1)
 	assert.Equal(t, int64(12), schedule[0].TermMonths)
 	assert.InDelta(t, 1140.0, schedule[0].Price, 0.001)
 
-	// Half the term elapsed: remaining=6, term=12, upfront=1200, monthly=10.
-	// upfront_remaining = 1200 * 6/12 = 600; recurring = 10*6 = 60;
-	// (600 + 60) * 0.95 = 627.
-	schedule, err = resolveMarketplacePriceSchedule(nil, 6, 12, 1200, 10)
+	// Half the term elapsed, count=1: remaining=6, term=12, upfront=1200.
+	// per-unit residual = 1200*6/12/1 = 600; recurring is excluded (the buyer
+	// assumes it post-transfer); default price = 600*0.95 = 570.
+	schedule, err = resolveMarketplacePriceSchedule(nil, 6, 12, 1, 1200)
 	require.NoError(t, err)
 	require.Len(t, schedule, 1)
 	assert.Equal(t, int64(6), schedule[0].TermMonths)
-	assert.InDelta(t, 627.0, schedule[0].Price, 0.001)
+	assert.InDelta(t, 570.0, schedule[0].Price, 0.001)
+
+	// Per-instance pricing: count=3 on the same $1200 row-total upfront divides
+	// the residual by the instance count, so the default per-unit price is a
+	// third of the count=1 price (1200/3=400 per-unit residual; 400*0.95=380),
+	// NOT the row-total (which would 3x-overprice each listed unit).
+	schedule, err = resolveMarketplacePriceSchedule(nil, 12, 12, 3, 1200)
+	require.NoError(t, err)
+	require.Len(t, schedule, 1)
+	assert.Equal(t, int64(12), schedule[0].TermMonths)
+	assert.InDelta(t, 380.0, schedule[0].Price, 0.001)
 }
 
 func TestMarketplaceCancel_HappyPath(t *testing.T) {
@@ -469,23 +480,57 @@ func TestMarketplaceList_ClaimErrorMapsToInternal(t *testing.T) {
 func TestResolveMarketplacePriceSchedule_ZeroPriceRejected(t *testing.T) {
 	_, err := resolveMarketplacePriceSchedule([]MarketplacePriceTier{
 		{TermMonths: 6, Price: 0},
-	}, 6, 12, 1200, 0)
+	}, 6, 12, 1, 1200)
 	require.Error(t, err, "Price=0 must be rejected")
 	assert.Contains(t, err.Error(), "positive")
 }
 
-// TestResolveMarketplacePriceSchedule_BelowFloorRejected verifies Defect 3:
-// A schedule whose total value is below awsMarketplaceMinPriceFloorFraction of
-// the residual must be rejected. The fixture has residual=$1200 (upfront $1200,
-// no monthly, remaining=12 of 12 months) so the floor at 5% is $60; a price of
-// $0.01/month for 12 months totals $0.12 and must be rejected.
+// TestResolveMarketplacePriceSchedule_BelowFloorRejected verifies Defect A
+// (money): the floor is enforced PER TIER on the one-time sale Price, not
+// Price*TermMonths. A $5 one-time price on a $1,200 per-unit residual with 12
+// of 12 months remaining is 0.4% of residual and must be rejected (floor is 5%
+// = $60). This FAILS on the pre-fix code, which multiplied Price*TermMonths
+// (5*12 = $60) and compared against a $60 floor, letting it pass.
 func TestResolveMarketplacePriceSchedule_BelowFloorRejected(t *testing.T) {
 	_, err := resolveMarketplacePriceSchedule([]MarketplacePriceTier{
-		{TermMonths: 12, Price: 0.01},
-	}, 12, 12, 1200, 0)
-	require.Error(t, err, "sub-floor schedule must be rejected")
+		{TermMonths: 12, Price: 5.0},
+	}, 12, 12, 1, 1200)
+	require.Error(t, err, "a $5 one-time price on a $1,200 residual must be rejected by the per-tier floor")
 	assert.Contains(t, err.Error(), "floor")
 	assert.Contains(t, err.Error(), "residual")
+}
+
+// TestResolveMarketplacePriceSchedule_PerUnitFloor verifies Defect B (money):
+// the floor basis is PER INSTANCE. On a $1,200 row-total upfront with count=3,
+// the per-unit residual is $400, so the 5% floor is $20/unit. A $19 one-time
+// price is rejected; a $21 price is accepted -- proving the floor divides the
+// row total by count instead of applying the $1,200 row total per unit.
+func TestResolveMarketplacePriceSchedule_PerUnitFloor(t *testing.T) {
+	_, errBelow := resolveMarketplacePriceSchedule([]MarketplacePriceTier{
+		{TermMonths: 12, Price: 19.0},
+	}, 12, 12, 3, 1200)
+	require.Error(t, errBelow, "$19 is below the $20 per-unit floor (5%% of $400 per-unit residual)")
+	assert.Contains(t, errBelow.Error(), "per-unit residual")
+
+	schedule, errAbove := resolveMarketplacePriceSchedule([]MarketplacePriceTier{
+		{TermMonths: 12, Price: 21.0},
+	}, 12, 12, 3, 1200)
+	require.NoError(t, errAbove, "$21 clears the $20 per-unit floor")
+	require.Len(t, schedule, 1)
+	assert.InDelta(t, 21.0, schedule[0].Price, 0.001)
+}
+
+// TestResolveMarketplacePriceSchedule_TermExceedsRemainingRejected verifies the
+// Defect A term-range guardrail: a tier whose TermMonths exceeds the RI's
+// remaining months is rejected outright (an out-of-range term would let a
+// caller arbitrarily inflate the tier's implied value). remaining=6, tier
+// term=12 -> rejected.
+func TestResolveMarketplacePriceSchedule_TermExceedsRemainingRejected(t *testing.T) {
+	_, err := resolveMarketplacePriceSchedule([]MarketplacePriceTier{
+		{TermMonths: 12, Price: 1000},
+	}, 6, 12, 1, 1200)
+	require.Error(t, err, "term_months exceeding remaining term must be rejected")
+	assert.Contains(t, err.Error(), "exceeds the RI's remaining term")
 }
 
 // TestMarketplaceList_EmptyOfferingClassFetchedStandard verifies Defect 2:
