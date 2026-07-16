@@ -1356,6 +1356,103 @@ describe('users/userActions', () => {
       expect(api.updateUser).toHaveBeenCalledTimes(1);
       expect(api.updateUser).toHaveBeenCalledWith('1', { groups: ['admins'] });
     });
+
+    // -----------------------------------------------------------------------
+    // Contradictory group combination guard on the bulk path (issue #1405).
+    // Regression: before the fix, bulkAddToGroup wrote the contradictory
+    // combination without validation. These assert the bulk path enforces
+    // the same rule as the inline expand panel and the modal.
+    // -----------------------------------------------------------------------
+    describe('contradictory group combination guard (issue #1405)', () => {
+      const permGroups = [
+        {
+          id: 'viewers', name: 'Viewers',
+          permissions: [{ action: 'view', resource: 'aws' }],
+          description: '', allowed_accounts: [],
+        },
+        {
+          id: 'editors', name: 'Editors',
+          permissions: [{ action: 'create', resource: 'aws' }],
+          description: '', allowed_accounts: [],
+        },
+      ];
+      const permUsers = [
+        // Alice already holds the view-only group.
+        { id: 'a', email: 'alice@test.com', groups: ['viewers'], mfa_enabled: false },
+        // Bob has no groups yet.
+        { id: 'b', email: 'bob@test.com', groups: [], mfa_enabled: false },
+      ];
+
+      beforeEach(() => {
+        userState.setAllUsers(permUsers as any);
+        userState.setAvailableGroups(permGroups as any);
+        (global.confirm as jest.Mock).mockReturnValue(true);
+        (api.listUsers as jest.Mock).mockResolvedValue({ users: permUsers });
+        (api.listGroups as jest.Mock).mockResolvedValue({ groups: permGroups });
+      });
+
+      it('does not call updateUser and shows an error when bulk-adding a write group to a view-only user', async () => {
+        userState.addSelectedUserId('a');
+
+        await userActions.bulkAddToGroup('editors');
+
+        // Pre-fix: this called updateUser('a', { groups: ['viewers', 'editors'] }).
+        // Post-fix: the contradictory combination is skipped, no API call.
+        expect(api.updateUser).not.toHaveBeenCalled();
+        const toast = document.querySelector('.toast-error');
+        expect(toast).toBeTruthy();
+        expect(toast?.querySelector('.toast-message')?.textContent).toContain('contradictory');
+        expect(toast?.querySelector('.toast-message')?.textContent).toContain('alice@test.com');
+      });
+
+      it('keeps the skipped contradictory user selected so the admin can fix it', async () => {
+        userState.addSelectedUserId('a');
+
+        await userActions.bulkAddToGroup('editors');
+
+        expect(userState.selectedUserIds.has('a')).toBe(true);
+      });
+
+      it('applies to compatible users and skips only the contradictory ones in a mixed selection', async () => {
+        userState.addSelectedUserId('a'); // view-only -> would conflict
+        userState.addSelectedUserId('b'); // no groups -> safe to add
+
+        await userActions.bulkAddToGroup('editors');
+
+        // Bob gets the write group; Alice is skipped.
+        expect(api.updateUser).toHaveBeenCalledTimes(1);
+        expect(api.updateUser).toHaveBeenCalledWith('b', { groups: ['editors'] });
+        // Compatible user is deselected, contradictory user stays selected.
+        expect(userState.selectedUserIds.has('b')).toBe(false);
+        expect(userState.selectedUserIds.has('a')).toBe(true);
+        // The error toast names the skipped user.
+        expect(document.querySelector('.toast-error')?.textContent).toContain('alice@test.com');
+      });
+
+      it('bulk-adding a compatible write group to a user with only write groups still works', async () => {
+        const writeOnly = [
+          { id: 'c', email: 'carol@test.com', groups: ['editors'], mfa_enabled: false },
+        ];
+        const extraGroups = [
+          ...permGroups,
+          {
+            id: 'admins2', name: 'Admins2',
+            permissions: [{ action: 'delete', resource: 'aws' }],
+            description: '', allowed_accounts: [],
+          },
+        ];
+        userState.setAllUsers(writeOnly as any);
+        userState.setAvailableGroups(extraGroups as any);
+        (api.listUsers as jest.Mock).mockResolvedValue({ users: writeOnly });
+        (api.listGroups as jest.Mock).mockResolvedValue({ groups: extraGroups });
+        userState.addSelectedUserId('c');
+
+        await userActions.bulkAddToGroup('admins2');
+
+        expect(api.updateUser).toHaveBeenCalledWith('c', { groups: ['editors', 'admins2'] });
+        expect(document.querySelector('.toast-error')).toBeFalsy();
+      });
+    });
   });
 });
 

@@ -11,9 +11,10 @@ import {
   selectedUserIds,
   setAllUsers,
   setAvailableGroups,
-  clearSelectedUserIds
+  clearSelectedUserIds,
+  removeSelectedUserId
 } from './state';
-import { showError, showSuccess } from './utils';
+import { showError, showSuccess, validateGroupCombination } from './utils';
 import { confirmDialog } from '../confirmDialog';
 import { applyFilters } from './filters';
 import { renderUsers, renderUserStats, populateBulkGroupSelect } from './userList';
@@ -200,21 +201,50 @@ export async function bulkAddToGroup(groupId: string): Promise<void> {
     return;
   }
 
+  // Partition the selected users by whether adding this group would produce a
+  // contradictory combination (view-only group + write-capable group, issue
+  // #1405). The bulk path must enforce the same rule as the inline expand
+  // panel and the create/edit modal -- otherwise selecting a Viewer-group
+  // user and bulk-adding a write group silently creates the exact
+  // combination #1405 is meant to prevent. Contradictory users are skipped
+  // (never silently written) and named in an error toast so the admin knows
+  // which ones were left unchanged.
+  const applicable: { userId: string; groups: string[] }[] = [];
+  const skipped: string[] = [];
+  for (const userId of selectedUserIds) {
+    const user = allUsers.find(u => u.id === userId);
+    if (!user) continue;
+
+    const updatedGroups = [...new Set([...user.groups, groupId])];
+    if (validateGroupCombination(updatedGroups, availableGroups)) {
+      skipped.push(user.email);
+    } else {
+      applicable.push({ userId, groups: updatedGroups });
+    }
+  }
+
+  if (skipped.length > 0) {
+    showError(
+      `Skipped ${skipped.length} user(s) whose group set would be contradictory: ` +
+      `${skipped.join(', ')}. A view-only group cannot be combined with ` +
+      `write-capable groups. Remove the conflicting membership first.`
+    );
+  }
+
+  // Nothing safe to apply -- leave the selection intact so the admin can
+  // adjust the offending memberships and retry.
+  if (applicable.length === 0) return;
+
   try {
-    // Get current user data and add group
-    const updates = Array.from(selectedUserIds).map(async userId => {
-      const user = allUsers.find(u => u.id === userId);
-      if (!user) return;
+    await Promise.all(
+      applicable.map(({ userId, groups }) => api.updateUser(userId, { groups })),
+    );
 
-      const updatedGroups = [...new Set([...user.groups, groupId])];
-      await api.updateUser(userId, { groups: updatedGroups });
-    });
-
-    await Promise.all(updates);
-
-    clearSelectedUserIds();
+    // Deselect only the successfully-applied users so any skipped
+    // (contradictory) users stay selected for the admin to fix.
+    applicable.forEach(({ userId }) => removeSelectedUserId(userId));
     await loadUsers();
-    showSuccess(`Successfully added ${count} user(s) to group`);
+    showSuccess(`Successfully added ${applicable.length} user(s) to group`);
   } catch (error) {
     console.error('Failed to add users to group:', error);
     showError('Failed to add some users to group');
