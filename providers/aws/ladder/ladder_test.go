@@ -816,7 +816,8 @@ func TestGetUsageBaseline_WrongScope_ReturnsError(t *testing.T) {
 func TestGetUsageBaseline_StaleSeries_ReturnsError(t *testing.T) {
 	// Build a 30-point series whose most-recent point is maxSeriesAgeDays+1 days
 	// in the past, simulating a CE feed that stopped (or a wrong date range).
-	staleEnd := time.Now().AddDate(0, 0, -(maxSeriesAgeDays + 1)).UTC().Truncate(24 * time.Hour)
+	// The date is built from the UTC calendar day so it is hour-independent.
+	staleEnd := utcDay(time.Now()).AddDate(0, 0, -(maxSeriesAgeDays + 1))
 	points := make([]DailyPoint, 30)
 	for i := range points {
 		points[i] = DailyPoint{
@@ -836,21 +837,49 @@ func TestGetUsageBaseline_StaleSeries_ReturnsError(t *testing.T) {
 // TestGetUsageBaseline_SparseSeries_ReturnsError is a regression test for gap G6a:
 // before coverage detection was added, a series with too many missing days for the
 // requested lookback window would silently yield a percentile over incomplete data.
-// Now GetUsageBaseline must return an error when the series has fewer than
-// lookbackDays - maxMissingDays points.
+// Now GetUsageBaseline must return an error when fewer than
+// lookbackDays - maxMissingDays points fall inside the window.
 func TestGetUsageBaseline_SparseSeries_ReturnsError(t *testing.T) {
 	const lookbackDays = 30
 	// n is one point below the minimum: lookbackDays - maxMissingDays - 1.
-	// At n=26 (>= minBaselineSeriesDays=7) the coverage check fires, not the
-	// absolute-minimum check.
+	// All n points are recent (in-window), so at n=26 (>= minBaselineSeriesDays=7)
+	// the in-window coverage check fires, not the absolute-minimum check.
 	n := lookbackDays - maxMissingDays - 1
 	cov := &fakeCoverageSource{onDemandPoints: makeRecentPoints(n)}
 	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, cov, &fakeUtilizationSource{})
 
 	_, err := a.GetUsageBaseline(context.Background(), testScope(), lookbackDays, 5.0)
 	require.Error(t, err, "a series with too many gaps for the lookback window must be rejected")
-	assert.Contains(t, err.Error(), fmt.Sprintf("%d points", n), "error must report the actual point count")
+	assert.Contains(t, err.Error(), fmt.Sprintf("%d points", n), "error must report the actual in-window point count")
 	assert.Contains(t, err.Error(), fmt.Sprintf("%d-day lookback", lookbackDays), "error must report the requested lookback")
+}
+
+// TestGetUsageBaseline_InsufficientInWindowCoverage_ReturnsError is a regression
+// test for the count-vs-window bug (CodeRabbit finding 1): the coverage check
+// must count only points INSIDE the lookback window, not the total. Here there
+// are 27 total points (enough to pass a naive total-count check) but only 20
+// fall within [today-30, today]; the oldest 7 are pushed far into the past.
+func TestGetUsageBaseline_InsufficientInWindowCoverage_ReturnsError(t *testing.T) {
+	const lookbackDays = 30
+	today := utcDay(time.Now())
+	points := make([]DailyPoint, 0, 27)
+	// 7 points far outside the window (days -60..-54): defeat a naive count check.
+	for d := 60; d >= 54; d-- {
+		points = append(points, DailyPoint{Date: today.AddDate(0, 0, -d), USDPerHour: 1.0})
+	}
+	// 20 fresh, in-window points (days -20..-1).
+	for d := 20; d >= 1; d-- {
+		points = append(points, DailyPoint{Date: today.AddDate(0, 0, -d), USDPerHour: 2.0})
+	}
+	require.Len(t, points, 27, "27 total points, enough to defeat a total-count check")
+
+	cov := &fakeCoverageSource{onDemandPoints: points}
+	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, cov, &fakeUtilizationSource{})
+
+	_, err := a.GetUsageBaseline(context.Background(), testScope(), lookbackDays, 5.0)
+	require.Error(t, err, "27 total but only 20 in-window points must be rejected")
+	assert.Contains(t, err.Error(), "20 points inside the 30-day lookback window",
+		"error must report the in-window count, not the total")
 }
 
 // TestGetUsageBaseline_FreshAndCompleteSeries_NoError is a regression test
@@ -871,10 +900,11 @@ func TestGetUsageBaseline_FreshAndCompleteSeries_NoError(t *testing.T) {
 // freshness comparison: a series whose most-recent point is EXACTLY
 // maxSeriesAgeDays old must pass (the check is age > max, not age >= max).
 func TestGetUsageBaseline_AgeExactlyAtBoundary_NoError(t *testing.T) {
-	// End the series exactly maxSeriesAgeDays days ago. Truncate to the UTC day
-	// and step back one extra hour so integer-day age floors to exactly
-	// maxSeriesAgeDays rather than maxSeriesAgeDays-1 due to sub-day rounding.
-	end := time.Now().Add(-time.Duration(maxSeriesAgeDays)*24*time.Hour - time.Hour).UTC().Truncate(24 * time.Hour)
+	// Most-recent point exactly maxSeriesAgeDays UTC calendar days ago -> age ==
+	// maxSeriesAgeDays, which must pass (rejection is age > max). The date is
+	// built directly from the UTC calendar day (no hour arithmetic) so the test
+	// does not depend on the current UTC hour.
+	end := utcDay(time.Now()).AddDate(0, 0, -maxSeriesAgeDays)
 	points := make([]DailyPoint, 30)
 	for i := range points {
 		points[i] = DailyPoint{Date: end.AddDate(0, 0, -(29 - i)), USDPerHour: float64(i + 1)}
@@ -887,16 +917,16 @@ func TestGetUsageBaseline_AgeExactlyAtBoundary_NoError(t *testing.T) {
 }
 
 // TestGetUsageBaseline_CoverageExactlyAtBoundary_NoError locks the off-by-one on
-// the coverage comparison: exactly lookbackDays - maxMissingDays points must
-// pass (the check is len < minRequired, not len <= minRequired).
+// the coverage comparison: exactly lookbackDays - maxMissingDays in-window
+// points must pass (the check is inWindow < minRequired, not <= minRequired).
 func TestGetUsageBaseline_CoverageExactlyAtBoundary_NoError(t *testing.T) {
 	const lookbackDays = 30
-	n := lookbackDays - maxMissingDays // exactly the minimum required
+	n := lookbackDays - maxMissingDays // exactly the minimum required, all in-window
 	cov := &fakeCoverageSource{onDemandPoints: makeRecentPoints(n)}
 	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, cov, &fakeUtilizationSource{})
 
 	_, err := a.GetUsageBaseline(context.Background(), testScope(), lookbackDays, 5.0)
-	require.NoError(t, err, "exactly lookbackDays-maxMissingDays points must pass (boundary is len < minRequired)")
+	require.NoError(t, err, "exactly lookbackDays-maxMissingDays in-window points must pass (boundary is inWindow < minRequired)")
 }
 
 // TestGetUsageBaseline_NonMonotonicDates_ReturnsError covers the chronology
@@ -945,7 +975,9 @@ func makeRange(n int) []float64 {
 // keeps the series well within the maxSeriesAgeDays freshness window while
 // being realistic for a real CE feed. Ordered oldest-to-newest.
 func makeRecentPoints(n int) []DailyPoint {
-	yesterday := time.Now().AddDate(0, 0, -1).UTC().Truncate(24 * time.Hour)
+	// utcDay(now)-1 day = yesterday's UTC calendar day, constructed via calendar
+	// arithmetic so the series is independent of the current UTC hour.
+	yesterday := utcDay(time.Now()).AddDate(0, 0, -1)
 	out := make([]DailyPoint, n)
 	for i := range out {
 		out[i] = DailyPoint{
@@ -959,7 +991,7 @@ func makeRecentPoints(n int) []DailyPoint {
 // makeConstantPoints returns n DailyPoints all with the given USDPerHour value,
 // ending yesterday. Ordered oldest-to-newest.
 func makeConstantPoints(n int, value float64) []DailyPoint {
-	yesterday := time.Now().AddDate(0, 0, -1).UTC().Truncate(24 * time.Hour)
+	yesterday := utcDay(time.Now()).AddDate(0, 0, -1)
 	out := make([]DailyPoint, n)
 	for i := range out {
 		out[i] = DailyPoint{

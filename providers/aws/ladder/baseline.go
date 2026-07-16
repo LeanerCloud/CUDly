@@ -63,8 +63,9 @@ const maxSeriesAgeDays = 3
 //   - Series empty: hard error (no data from the coverage source).
 //   - Series shorter than minBaselineSeriesDays: hard error (insufficient
 //     history for a reliable percentile estimate).
-//   - Series with too few points for the lookback window (more than
-//     maxMissingDays gaps): hard error (coverage check).
+//   - Too few points INSIDE the lookback window (more than maxMissingDays
+//     missing days): hard error (coverage check; total count is not enough,
+//     the points must actually fall within [today-lookbackDays, today]).
 //   - Most-recent point older than maxSeriesAgeDays days: hard error (stale
 //     series; GetUsageBaseline fails loud rather than trusting stale data).
 //   - Series containing a non-finite (NaN/Inf) or negative element: hard error
@@ -91,19 +92,20 @@ func (a *AWSLadder) GetUsageBaseline(ctx context.Context, scope ladder.Scope, lo
 			len(points), minBaselineSeriesDays,
 		)
 	}
-	// Coverage check: the series must span most of the requested lookback
-	// window. CE typically lags 24-48h, so up to maxMissingDays absent days
-	// is acceptable; more indicates truncated date ranges or feed gaps.
-	if minRequired := lookbackDays - maxMissingDays; len(points) < minRequired {
-		return ladder.UsageBaseline{}, fmt.Errorf(
-			"GetUsageBaseline: series has %d points for a %d-day lookback window (minimum %d = %d - maxMissingDays %d); the on-demand series source may have gaps or a truncated date range",
-			len(points), lookbackDays, minRequired, lookbackDays, maxMissingDays,
-		)
+	// today is normalized once to midnight UTC and shared by both the coverage
+	// window and the freshness check so all date math uses the same calendar-day
+	// reference (see utcDay).
+	today := utcDay(time.Now())
+	// Coverage check: enough points must fall INSIDE the requested lookback
+	// window. CE typically lags 24-48h, so up to maxMissingDays absent days is
+	// acceptable; more indicates truncated date ranges or feed gaps.
+	if cErr := validateInWindowCoverage(points, lookbackDays, today); cErr != nil {
+		return ladder.UsageBaseline{}, fmt.Errorf("GetUsageBaseline: %w", cErr)
 	}
 	// Freshness check: the most-recent point must be within maxSeriesAgeDays.
 	// A stale tail means the CE feed has stopped or the date range is wrong;
 	// computing a baseline from stale data would yield a confidently wrong clamp.
-	if fErr := validateSeriesFreshness(points); fErr != nil {
+	if fErr := validateSeriesFreshness(points, today); fErr != nil {
 		return ladder.UsageBaseline{}, fmt.Errorf("GetUsageBaseline: %w", fErr)
 	}
 
@@ -131,6 +133,41 @@ func (a *AWSLadder) GetUsageBaseline(ctx context.Context, scope ladder.Scope, lo
 	}, nil
 }
 
+// utcDay normalizes t to the start of its UTC calendar day (midnight UTC).
+// All freshness and lookback-window math compares dates as whole UTC calendar
+// days; funneling every date through utcDay keeps those comparisons
+// deterministic and independent of the current time-of-day.
+func utcDay(t time.Time) time.Time {
+	return t.UTC().Truncate(24 * time.Hour)
+}
+
+// validateInWindowCoverage rejects a series that does not have enough points
+// falling INSIDE the lookback window [today-lookbackDays, today]. Counting the
+// total number of points is insufficient: N points smeared across more than N
+// days (e.g. 27 points spread over 53 days) would pass a naive count check
+// while leaving the recent window sparsely covered, so the percentile would be
+// computed over data that does not represent the requested window. Every date
+// is normalized to its UTC calendar day (utcDay) before comparison.
+//
+// today must already be normalized via utcDay by the caller.
+func validateInWindowCoverage(points []DailyPoint, lookbackDays int, today time.Time) error {
+	windowStart := today.AddDate(0, 0, -lookbackDays)
+	inWindow := 0
+	for _, p := range points {
+		d := utcDay(p.Date)
+		if !d.Before(windowStart) && !d.After(today) {
+			inWindow++
+		}
+	}
+	if minRequired := lookbackDays - maxMissingDays; inWindow < minRequired {
+		return fmt.Errorf(
+			"on-demand series has %d points inside the %d-day lookback window (minimum %d = %d - maxMissingDays %d); the series source may have gaps or a truncated/misaligned date range",
+			inWindow, lookbackDays, minRequired, lookbackDays, maxMissingDays,
+		)
+	}
+	return nil
+}
+
 // validateSeriesFreshness returns an error when the series is not in strictly
 // increasing calendar-day order or when its most-recent DailyPoint is older
 // than maxSeriesAgeDays calendar days. It is called after the series has been
@@ -144,19 +181,19 @@ func (a *AWSLadder) GetUsageBaseline(ctx context.Context, scope ladder.Scope, lo
 // pass or a fresh series falsely error. It also catches duplicate-date rows the
 // count-based coverage check cannot see (N points spanning fewer than N days).
 //
-// Age is computed as integer days (floor of elapsed hours / 24), which is
-// precise enough for a 3-day threshold and avoids DST and leap-second edge
-// cases that a Date difference would introduce.
-func validateSeriesFreshness(points []DailyPoint) error {
+// Age is the difference in whole UTC calendar days between today and the
+// most-recent point (both normalized via utcDay), so the result is
+// time-of-day independent. today must already be normalized by the caller.
+func validateSeriesFreshness(points []DailyPoint, today time.Time) error {
 	if err := validateSeriesChronology(points); err != nil {
 		return err
 	}
-	latestDate := points[len(points)-1].Date
-	ageDays := int(time.Since(latestDate).Hours() / 24)
+	latestDay := utcDay(points[len(points)-1].Date)
+	ageDays := int(today.Sub(latestDay).Hours() / 24)
 	if ageDays > maxSeriesAgeDays {
 		return fmt.Errorf(
 			"on-demand series is stale: most recent data point is %s (%d days old, maximum %d); check that the CE data feed is active or that the lookback date range ends near today",
-			latestDate.Format("2006-01-02"), ageDays, maxSeriesAgeDays,
+			latestDay.Format("2006-01-02"), ageDays, maxSeriesAgeDays,
 		)
 	}
 	return nil
