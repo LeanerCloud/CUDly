@@ -294,7 +294,7 @@ func (v *Validator) Middleware(next http.Handler) http.Handler {
 
 		authz := r.Header.Get("Authorization")
 		if err := v.Validate(r.Context(), authz); err != nil {
-			log.Printf("scheduledauth: rejected %s %s: %v", r.Method, r.URL.Path, err) // #nosec G706 -- HTTP method and path logged for auth audit; Go net/http normalizes paths before handler dispatch; err is constructed by Validate() which quotes token-derived values via %q before embedding them
+			log.Printf("scheduledauth: rejected %s %s: %q", r.Method, r.URL.Path, err.Error()) // #nosec G706 -- HTTP method and path logged for auth audit; Go net/http normalizes paths before handler dispatch; %q quotes the error string to prevent log injection from any token-derived values
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -368,7 +368,7 @@ func (v *Validator) validateOIDC(ctx context.Context, authz string) error {
 		return fmt.Errorf("%w: subject %q not in allowlist", ErrUnauthorized, idToken.Subject)
 	}
 
-	log.Printf("scheduledauth: oidc token accepted (sub=%s, aud=%q)", idToken.Subject, idToken.Audience) // #nosec G706 -- subject is validated against allowlist; audience is quoted (%q) to prevent log injection from attacker-controlled OIDC claim values
+	log.Printf("scheduledauth: oidc token accepted (sub=%q, aud=%q)", idToken.Subject, idToken.Audience) // #nosec G706 -- both sub and aud are quoted (%q) to prevent log injection; sub is additionally validated against the allowlist
 	return nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"time"
 
@@ -27,6 +28,11 @@ func main() {
 	)
 	flag.Parse()
 	requireInt32Range("--max-list", *maxList)
+
+	if *maxList < 1 || *maxList > math.MaxInt32 {
+		fmt.Fprintf(os.Stderr, "ERROR: --max-list must be between 1 and %d, got %d\n", math.MaxInt32, *maxList)
+		os.Exit(2)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 

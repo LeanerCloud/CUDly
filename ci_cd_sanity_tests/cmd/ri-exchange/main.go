@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -25,15 +26,6 @@ type Output struct {
 	TargetCount      int32    `json:"target_count"`
 }
 
-// validateTargetCount exits with an error message when n is outside the int32
-// range. Extracted to keep main's cyclomatic complexity within the project limit.
-func validateTargetCount(n int) {
-	if n < 1 || n > (1<<31-1) {
-		fmt.Fprintln(os.Stderr, "ERROR: --target-count must be between 1 and math.MaxInt32")
-		os.Exit(2)
-	}
-}
-
 func parseIDs(s string) []string {
 	var out []string
 	for _, p := range strings.Split(s, ",") {
@@ -43,6 +35,25 @@ func parseIDs(s string) []string {
 		}
 	}
 	return out
+}
+
+// validateRequiredFlags checks that the required CLI flags are present and
+// that --target-count can safely be narrowed to int32. It exits on the first
+// failure so callers do not need to handle the error return.
+func validateRequiredFlags(riIDsCSV, targetOffering string, ids []string, targetCount int) {
+	if len(ids) == 0 {
+		fmt.Fprintln(os.Stderr, "ERROR: --ri-ids is required (comma-separated)")
+		os.Exit(2)
+	}
+	if strings.TrimSpace(targetOffering) == "" {
+		fmt.Fprintln(os.Stderr, "ERROR: --target-offering-id is required")
+		os.Exit(2)
+	}
+	if targetCount < 1 || targetCount > math.MaxInt32 {
+		fmt.Fprintf(os.Stderr, "ERROR: --target-count must be between 1 and %d, got %d\n", math.MaxInt32, targetCount)
+		os.Exit(2)
+	}
+	_ = riIDsCSV // used indirectly via ids
 }
 
 func main() {
@@ -64,21 +75,10 @@ func main() {
 	)
 	flag.Parse()
 
-	validateTargetCount(*targetCount)
+	ids := parseIDs(*riIDsCSV)
+	validateRequiredFlags(*riIDsCSV, *targetOffering, ids, *targetCount)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*timeoutSec)*time.Second)
-
-	ids := parseIDs(*riIDsCSV)
-	if len(ids) == 0 {
-		cancel()
-		fmt.Fprintln(os.Stderr, "ERROR: --ri-ids is required (comma-separated)")
-		os.Exit(2)
-	}
-	if strings.TrimSpace(*targetOffering) == "" {
-		cancel()
-		fmt.Fprintln(os.Stderr, "ERROR: --target-offering-id is required")
-		os.Exit(2)
-	}
 
 	o := Output{
 		Region:           *region,

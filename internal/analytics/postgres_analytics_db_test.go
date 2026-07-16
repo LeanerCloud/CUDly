@@ -26,7 +26,7 @@ import (
 func skipIfNoDocker(t *testing.T) {
 	t.Helper()
 
-	// Skip if explicitly requested
+	// Skip if SKIP_DB_TESTS is set (CI without a live DB, or local opt-out).
 	if os.Getenv("SKIP_DB_TESTS") != "" {
 		t.Skip("Skipping database tests (SKIP_DB_TESTS is set)")
 	}
