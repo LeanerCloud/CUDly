@@ -122,9 +122,9 @@ variable "database_username" {
 }
 
 variable "database_engine_version" {
-  description = "PostgreSQL version"
+  description = "PostgreSQL major engine version (major-only pin, e.g. \"16\"). The AWS provider resolves to the latest minor release and stores it in engine_version_actual, suppressing drift when RDS auto-upgrades the minor version. Pinning a full minor version (e.g. \"16.6\") causes downgrade failures if RDS auto-upgrades beyond it (incident: 2026-07-16, #1372)."
   type        = string
-  default     = "16.6"
+  default     = "16"
 }
 
 variable "database_instance_class" {
