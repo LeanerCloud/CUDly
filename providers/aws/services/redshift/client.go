@@ -416,7 +416,7 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 	if err != nil {
 		return "", err
 	}
-	tag := resolveTag(execID)
+	tag := purchasecfg.ResolveTag(execID)
 	t0 := time.Now()
 	log.Printf("purchase[%s]: Redshift findOfferingID starting (nodeType=%s term=%s payment=%s)",
 		tag, rec.ResourceType, rec.Term, rec.PaymentOption)
@@ -687,15 +687,4 @@ func getTermMonthsFromDuration(duration int32) int {
 		return 36
 	}
 	return 12
-}
-
-// resolveTag returns execID when non-empty, or a sentinel "no-exec" string for
-// log correlation when called outside of a purchase flow (e.g. ValidateOffering,
-// GetOfferingDetails). Extracted from findOfferingID to keep cyclomatic complexity
-// within the pre-commit gocyclo limit (issue #1388).
-func resolveTag(execID string) string {
-	if execID == "" {
-		return "no-exec"
-	}
-	return execID
 }

@@ -32,6 +32,16 @@ const (
 	HTTPTimeout = 15 * time.Second
 )
 
+// ResolveTag returns execID when non-empty, or the sentinel string "no-exec"
+// for log correlation when a call occurs outside of a purchase flow (e.g.
+// ValidateOffering, GetOfferingDetails).
+func ResolveTag(execID string) string {
+	if execID == "" {
+		return "no-exec"
+	}
+	return execID
+}
+
 // NewConfig returns a copy of base with purchase-path-appropriate retry and
 // HTTP timeout settings applied. The original base config is not modified.
 //
