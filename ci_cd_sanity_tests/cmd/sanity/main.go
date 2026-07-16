@@ -12,9 +12,9 @@ import (
 )
 
 // requireInt32Range exits with an error when n is outside [1, math.MaxInt32].
-func requireInt32Range(flag string, n int) {
+func requireInt32Range(flagName string, n int) {
 	if n < 1 || n > (1<<31-1) {
-		fmt.Fprintf(os.Stderr, "ERROR: %s must be between 1 and math.MaxInt32\n", flag)
+		fmt.Fprintf(os.Stderr, "ERROR: %s must be between 1 and math.MaxInt32\n", flagName)
 		os.Exit(2)
 	}
 }
