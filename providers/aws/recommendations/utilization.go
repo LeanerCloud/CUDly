@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/concurrency"
 )
 
 // RIUtilization is an alias for common.RIUtilization so existing callers that
@@ -97,6 +98,9 @@ func buildUtilizations(agg map[string]*riAccumulator) []RIUtilization {
 }
 
 // fetchUtilizationPage calls the Cost Explorer API with rate-limit retry.
+// The shared concurrency semaphore (CUDLY_MAX_PARALLELISM) is held only
+// across the outbound SDK call, matching fetchRIPageWithRetry, so callers
+// running under a semaphore-carrying context stay inside the global IO cap.
 func (c *Client) fetchUtilizationPage(ctx context.Context, input *costexplorer.GetReservationUtilizationInput) (*costexplorer.GetReservationUtilizationOutput, error) {
 	c.rateLimiter.Reset()
 	for {
@@ -104,7 +108,11 @@ func (c *Client) fetchUtilizationPage(ctx context.Context, input *costexplorer.G
 			return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
 		}
 
+		if acqErr := concurrency.Acquire(ctx); acqErr != nil {
+			return nil, fmt.Errorf("concurrency acquire failed: %w", acqErr)
+		}
 		result, err := c.costExplorerClient.GetReservationUtilization(ctx, input)
+		concurrency.Release(ctx)
 		if !c.rateLimiter.ShouldRetry(err) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to get reservation utilization: %w", err)
