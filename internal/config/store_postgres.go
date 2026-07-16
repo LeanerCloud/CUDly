@@ -2475,7 +2475,7 @@ func (s *PostgresStore) CancelAllPendingExchanges(ctx context.Context) (int64, e
 //   - common.ExchangeOriginLadder:     cancels WHERE ladder_run_id IS NOT NULL
 //
 // The origin is validated at this boundary; an unknown value fails loud rather
-// than silently cancelling the wrong partition on a money path.
+// than silently canceling the wrong partition on a money path.
 //
 // DELIBERATE COARSE PARTITION: the ExchangeOriginLadder branch cancels EVERY
 // ladder-linked pending record (ladder_run_id IS NOT NULL) across ALL ladder

@@ -815,7 +815,7 @@ type RIExchangeRecord struct {
 	// deleting a ladder_runs row nulls this column and reclassifies the record
 	// as standalone. A still-pending reshape then becomes standalone-cancellable
 	// (the standalone-origin sweep would cancel it). This is acceptable: a
-	// deleted run has no owner to approve its pendings, so cancelling them on the
+	// deleted run has no owner to approve its pendings, so canceling them on the
 	// next standalone sweep is the safe outcome, not a leak.
 	LadderRunID    *string    `json:"ladder_run_id,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
