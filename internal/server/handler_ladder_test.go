@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -331,6 +332,54 @@ func TestHandleLadderRun_AccountResolutionFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "resolve caller AWS account")
 	assert.Nil(t, result, "no result struct on a hard failure (not a false success)")
 	assert.Nil(t, store.savedRun, "nothing may be persisted when the account is unresolved")
+	assert.Empty(t, store.savedRuns)
+}
+
+// resolveLadderIdentity must fail loud on an empty region BEFORE calling STS:
+// an empty region would make NewFromAWSConfig reject every config later, turning
+// the task into a silent all-Errored no-op that still reports success. The
+// region check short-circuits, so this exercises the new guard with no
+// credentials/STS involved.
+func TestResolveLadderIdentity_EmptyRegion_FailsLoud(t *testing.T) {
+	ctx := testutil.TestContext(t)
+
+	accountID, region, err := resolveLadderIdentity(ctx, aws.Config{Region: ""})
+
+	require.Error(t, err, "an empty region must fail loud, not fall through to STS")
+	assert.Contains(t, err.Error(), "region")
+	assert.Empty(t, accountID, "no account ID may be returned on the empty-region failure")
+	assert.Empty(t, region, "no region may be returned on the empty-region failure")
+}
+
+// B1 (region): an empty-region resolution failure must abort the whole
+// handleLadderRun task loud, mirroring TestHandleLadderRun_AccountResolutionFailure.
+// Nothing may be persisted and no config may be marked skipped.
+func TestHandleLadderRun_EmptyRegionResolution_FailsLoud(t *testing.T) {
+	ctx := testutil.TestContext(t)
+	dbCfg := validTestDBConfig("cfg-1")
+	store := &ladderTestStore{
+		globalCfg:     validTestGlobalCfg(),
+		ladderConfigs: []config.LadderConfigDB{dbCfg},
+	}
+	app := &Application{
+		Config: store,
+		// The default resolver would return this exact error for an empty region;
+		// the stub keeps the test off STS while asserting the fail-loud contract.
+		LadderAccountResolver: func(c context.Context) (string, string, error) {
+			return resolveLadderIdentity(c, aws.Config{Region: ""})
+		},
+		LadderCapabilityFactory: func(_ context.Context, _, _ string) (pkgladder.LadderCapability, error) {
+			t.Fatal("factory must not be called when the region is unresolved")
+			return nil, nil
+		},
+	}
+
+	result, err := app.handleLadderRun(ctx)
+
+	require.Error(t, err, "an empty region must fail the whole task loud")
+	assert.Contains(t, err.Error(), "region")
+	assert.Nil(t, result, "no result struct on a hard failure (not a false success)")
+	assert.Nil(t, store.savedRun, "nothing may be persisted when the region is unresolved")
 	assert.Empty(t, store.savedRuns)
 }
 

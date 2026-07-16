@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/google/uuid"
@@ -150,6 +151,23 @@ func defaultLadderAccountResolver(ctx context.Context) (string, string, error) {
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
 		return "", "", fmt.Errorf("load AWS config: %w", err)
+	}
+	return resolveLadderIdentity(ctx, awsCfg)
+}
+
+// resolveLadderIdentity validates the region and resolves the caller account ID
+// from an already-loaded aws.Config. Split from defaultLadderAccountResolver so
+// the region short-circuit is unit-testable without loading real credentials or
+// calling STS.
+//
+// The region is validated FIRST: an empty region would make NewFromAWSConfig
+// reject EVERY config later, turning the whole task into a silent all-Errored
+// no-op that still returns success. Failing loud here aborts handleLadderRun
+// before any config is processed (same silent-degradation class as the missing
+// STS account ID below).
+func resolveLadderIdentity(ctx context.Context, awsCfg aws.Config) (string, string, error) {
+	if awsCfg.Region == "" {
+		return "", "", fmt.Errorf("AWS region is empty; set AWS_REGION / AWS_DEFAULT_REGION or a region in the shared config")
 	}
 	stsClient := sts.NewFromConfig(awsCfg)
 	identity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
