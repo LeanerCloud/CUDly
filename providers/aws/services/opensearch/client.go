@@ -367,6 +367,10 @@ const maxOfferingPages = 5
 // execID is the purchase execution UUID for log correlation; pass "" when
 // calling outside of a purchase flow (ValidateOffering, GetOfferingDetails).
 func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, execID string) (string, error) {
+	requiredMonths, err := requiredMonthsForTerm(rec.Term)
+	if err != nil {
+		return "", err
+	}
 	tag := execID
 	if tag == "" {
 		tag = "no-exec"
@@ -403,7 +407,7 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 		log.Printf("purchase[%s]: OpenSearch findOfferingID page %d: %d offerings in %s",
 			tag, page, len(result.ReservedInstanceOfferings), time.Since(pageStart))
 
-		if id, scanErr := c.scanOpenSearchOfferingPage(result.ReservedInstanceOfferings, rec); scanErr != nil {
+		if id, scanErr := c.scanOpenSearchOfferingPage(result.ReservedInstanceOfferings, rec, requiredMonths); scanErr != nil {
 			return "", scanErr
 		} else if id != "" {
 			log.Printf("purchase[%s]: OpenSearch findOfferingID found match on page %d after %s total",
@@ -427,13 +431,13 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 // Returns ("", nil) when no match is found on the page so the caller can continue paginating.
 // Returns an error when an offering matches on instance type and duration but the payment
 // option differs -- this surfaces API filter mismatches rather than silently skipping them.
-func (c *Client) scanOpenSearchOfferingPage(offerings []types.ReservedInstanceOffering, rec common.Recommendation) (string, error) {
+func (c *Client) scanOpenSearchOfferingPage(offerings []types.ReservedInstanceOffering, rec common.Recommendation, requiredMonths int) (string, error) {
 	wantPayment := normalizeOpenSearchPaymentOption(rec.PaymentOption)
 	for _, offering := range offerings {
 		if string(offering.InstanceType) != rec.ResourceType {
 			continue
 		}
-		if !c.matchesDuration(offering.Duration, rec.Term) {
+		if !c.matchesDuration(offering.Duration, requiredMonths) {
 			continue
 		}
 		gotPayment := string(offering.PaymentOption)
@@ -476,13 +480,25 @@ func (c *Client) matchesPaymentOption(offeringOption types.ReservedInstancePayme
 	}
 }
 
-// matchesDuration checks if the offering duration matches
-func (c *Client) matchesDuration(offeringDuration int32, term string) bool {
-	offeringMonths := offeringDuration / 2592000 // 30 days in seconds
-	requiredMonths := 12
-	if term == "3yr" || term == "3" {
-		requiredMonths = 36
+// requiredMonthsForTerm converts a reservation term string to the offering
+// duration in months. Returns an error on any unrecognized or empty input so
+// callers fail loud rather than silently matching (and buying) a 1-year
+// offering when another commitment length was intended.
+func requiredMonthsForTerm(term string) (int, error) {
+	switch term {
+	case "3yr", "3":
+		return 36, nil
+	case "1yr", "1":
+		return 12, nil
+	default:
+		return 0, fmt.Errorf("unsupported OpenSearch reservation term %q: must be one of 1yr, 1, 3yr, 3", term)
 	}
+}
+
+// matchesDuration checks if the offering duration matches the required term
+// length in months (as produced by requiredMonthsForTerm).
+func (c *Client) matchesDuration(offeringDuration int32, requiredMonths int) bool {
+	offeringMonths := offeringDuration / 2592000 // 30 days in seconds
 	return int(offeringMonths) >= requiredMonths-1 && int(offeringMonths) <= requiredMonths+1
 }
 

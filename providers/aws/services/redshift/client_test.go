@@ -463,19 +463,54 @@ func TestClient_MatchesDuration(t *testing.T) {
 	tests := []struct {
 		name             string
 		offeringDuration *int32
-		term             string
+		requiredMonths   int
 		expected         bool
 	}{
-		{"1 year match", aws.Int32(31536000), "1yr", true},
-		{"3 years match", aws.Int32(94608000), "3yr", true},
-		{"3 numeric term", aws.Int32(94608000), "3", true},
-		{"no match", aws.Int32(31536000), "3yr", false},
-		{"nil duration", nil, "1yr", false},
+		{"1 year match", aws.Int32(31536000), 12, true},
+		{"3 years match", aws.Int32(94608000), 36, true},
+		{"no match", aws.Int32(31536000), 36, false},
+		{"nil duration", nil, 12, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := client.matchesDuration(tt.offeringDuration, tt.term)
+			result := client.matchesDuration(tt.offeringDuration, tt.requiredMonths)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestRequiredMonthsForTerm(t *testing.T) {
+	tests := []struct {
+		name      string
+		term      string
+		expected  int
+		expectErr bool
+	}{
+		{"1 year", "1yr", 12, false},
+		{"1 numeric", "1", 12, false},
+		{"3 years", "3yr", 36, false},
+		{"3 numeric", "3", 36, false},
+		// Regression for ARCH-04 (issue #1192): unrecognized or empty terms
+		// must error instead of silently matching a 1-year offering. An empty
+		// term is what a 0/NULL Term DB row produces on the scheduler
+		// purchase path.
+		{"invalid term errors", "invalid", 0, true},
+		{"empty term errors", "", 0, true},
+		{"zero term errors", "0", 0, true},
+		{"2yr term errors", "2yr", 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := requiredMonthsForTerm(tt.term)
+			if tt.expectErr {
+				if assert.Error(t, err) {
+					assert.Contains(t, err.Error(), "unsupported Redshift reservation term")
+				}
+				return
+			}
+			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -1431,4 +1466,28 @@ func TestDerivePaymentOption(t *testing.T) {
 	assert.Equal(t, "no-upfront", derivePaymentOption(rsOffering("x", 0, 0.1)))
 	assert.Equal(t, "partial-upfront", derivePaymentOption(rsOffering("x", 500, 0.05)))
 	assert.Equal(t, "unknown", derivePaymentOption(rsOffering("x", 0, 0)))
+}
+
+// TestFindOfferingID_InvalidTerm_ErrorsBeforeAPICall is the ARCH-04 (issue
+// #1192) call-path regression test: an unrecognized or empty term must abort
+// the offering lookup before any DescribeReservedNodeOfferings call, rather
+// than silently matching (and buying) a 1-year offering. A "0" term is what a
+// 0/NULL Term DB row produces on the scheduler purchase path.
+func TestFindOfferingID_InvalidTerm_ErrorsBeforeAPICall(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	t.Cleanup(func() { mockRS.AssertExpectations(t) })
+	client := &Client{client: mockRS, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "dc2.large",
+		PaymentOption: "no-upfront",
+		Term:          "0",
+	}
+
+	_, err := client.findOfferingID(context.Background(), rec, "")
+
+	if assert.Error(t, err, "findOfferingID must error on an unrecognized term (ARCH-04)") {
+		assert.Contains(t, err.Error(), "unsupported Redshift reservation term")
+	}
+	mockRS.AssertNotCalled(t, "DescribeReservedNodeOfferings", mock.Anything, mock.Anything)
 }
