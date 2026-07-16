@@ -122,7 +122,7 @@ describe('users/utils', () => {
   describe('escapeHtml', () => {
     it('should escape HTML special characters', () => {
       expect(userUtils.escapeHtml('<script>alert("xss")</script>')).toBe(
-        '&lt;script&gt;alert("xss")&lt;/script&gt;'
+        '&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;'
       );
     });
 
@@ -134,14 +134,28 @@ describe('users/utils', () => {
       expect(userUtils.escapeHtml('Tom & Jerry')).toBe('Tom &amp; Jerry');
     });
 
+    // Regression for ARCH-07 (issue #1195): the previous local DOM
+    // round-trip implementation left both quote characters unescaped,
+    // so values interpolated inside double-quoted attributes (e.g. the
+    // aria-label carrying the user email in userList.ts) could break
+    // out of the attribute and inject markup.
     it('should escape single quotes', () => {
       const result = userUtils.escapeHtml("It's a test");
-      expect(result).toBe("It's a test");
+      expect(result).toBe('It&#39;s a test');
     });
 
     it('should escape double quotes', () => {
       const result = userUtils.escapeHtml('Say "Hello"');
-      expect(result).toBe('Say "Hello"');
+      expect(result).toBe('Say &quot;Hello&quot;');
+    });
+
+    it('issue #1195: quote in attribute position cannot break out of the attribute', () => {
+      const malicious = 'a@b.com" onmouseover="alert(1)';
+      const div = document.createElement('div');
+      div.innerHTML = `<button aria-label="${userUtils.escapeHtml(malicious)}">x</button>`;
+      const btn = div.querySelector('button');
+      expect(btn?.getAttribute('onmouseover')).toBeNull();
+      expect(btn?.getAttribute('aria-label')).toBe(malicious);
     });
 
     it('should handle empty string', () => {
@@ -150,7 +164,7 @@ describe('users/utils', () => {
 
     it('should handle multiple special characters', () => {
       expect(userUtils.escapeHtml('<div class="test">&</div>')).toBe(
-        '&lt;div class="test"&gt;&amp;&lt;/div&gt;'
+        '&lt;div class=&quot;test&quot;&gt;&amp;&lt;/div&gt;'
       );
     });
   });
@@ -668,11 +682,15 @@ describe('users/filters', () => {
       userFilters.updateGroupFilterDropdown();
 
       const select = document.getElementById('user-group-filter') as HTMLSelectElement;
+      // No element may be injected out of the value attribute.
+      expect(select.querySelector('img')).toBeNull();
       // The raw payload must not appear verbatim inside the rendered HTML.
       expect(select.innerHTML).not.toContain('"><img src=x');
-      // The option's value should be the escaped form.
+      // With full escaping (issue #1195 made escapeHtml quote-safe), the
+      // option value round-trips the original id intact instead of being
+      // truncated at the first double quote.
       const opt = select.options[1];
-      expect(opt?.value).not.toContain('<img');
+      expect(opt?.value).toBe('"><img src=x onerror=alert(1)>');
     });
   });
 });
