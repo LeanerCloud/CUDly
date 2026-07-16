@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -399,10 +400,17 @@ func TestValidate_OIDC_AudienceListClaim(t *testing.T) {
 }
 
 func TestValidate_OIDC_KeyRotation_RefreshOnUnknownKid(t *testing.T) {
-	// 1. Server starts with key A. Token signed by A → validates.
+	// 1. Server starts with key A. Token signed by A validates.
 	// 2. Provider rotates: server now publishes key B. Token signed by B
 	//    arrives with a previously-unseen kid. The validator MUST refresh
 	//    the JWKS and accept the new token.
+	//
+	// The verifyWithRotationRetry path in validateOIDC makes this
+	// deterministic: when the cached (or in-flight) JWKS lacks kid-B, the
+	// first Verify returns a signature error, the verifier is rebuilt with a
+	// fresh RemoteKeySet, and the retry fetches the rotated JWKS. No goroutine
+	// timing is relied upon - see also TestValidate_OIDC_KeyRotation_StaleInflight
+	// for a direct exercise of the stale-inflight path.
 	keyA := newTestKey(t, "kid-A")
 	keyB := newTestKey(t, "kid-B")
 	srv := newJWKSServer(t, jwks(keyA))
@@ -416,27 +424,14 @@ func TestValidate_OIDC_KeyRotation_RefreshOnUnknownKid(t *testing.T) {
 		t.Fatalf("kid A: %v", err)
 	}
 
-	// Sign tokB before issuing the swap so that the RSA operation
-	// (CPU-bound, ~1 ms) gives the go-oidc cleanup goroutine time to
-	// set inflight=nil under the mutex. Without this, fast loopback
-	// HTTP on Linux CI completes the swap POST without a goroutine
-	// switch, leaving the stale inflight visible to the next Validate
-	// call and causing it to reuse the pre-rotation key set.
-	tokB := signToken(t, keyB, baseClaims(time.Now(),
-		testSchedulerSubject,
-		"https://api.example.com",
-		"https://accounts.example.com"))
-
 	// Swap the JWKS to publish kid B.
 	//
 	// Both the request build and the response status are checked: if the
-	// /swap handler 5xx's (or -- more subtly -- returns a non-200 because
-	// the body short-read), the JWKS would silently NOT update. The test
-	// would then fail later at "unknown kid" instead of pointing at the
-	// real cause. Surfacing the swap failure here keeps the diagnostic
-	// chain short.
+	// /swap handler 5xx's (or returns non-200 due to a body short-read),
+	// the JWKS would silently NOT update and the test would fail later at
+	// "unknown kid" instead of pointing at the real cause.
 	jwksB := jwks(keyB)
-	swap, err := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/swap", strings.NewReader(string(jwksB)))
+	swap, err := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/swap", bytes.NewReader(jwksB))
 	if err != nil {
 		t.Fatalf("build swap request: %v", err)
 	}
@@ -452,8 +447,235 @@ func TestValidate_OIDC_KeyRotation_RefreshOnUnknownKid(t *testing.T) {
 	}
 	resp.Body.Close()
 
+	tokB := signToken(t, keyB, baseClaims(time.Now(),
+		testSchedulerSubject,
+		"https://api.example.com",
+		"https://accounts.example.com"))
 	if err := v.Validate(context.Background(), "Bearer "+tokB); err != nil {
 		t.Fatalf("kid B (post-rotation): %v", err)
+	}
+}
+
+func TestValidate_OIDC_KeyRotation_StaleInflight(t *testing.T) {
+	// Directly exercise the stale-inflight race diagnosed in issue #1381.
+	//
+	// go-oidc's RemoteKeySet uses a single goroutine ("inflight") to fetch
+	// JWKS. The goroutine calls inflight.done(keys) to unblock callers, then
+	// must re-acquire the mutex to set inflight=nil. In the window between
+	// done() and inflight=nil, a new caller joins the same inflight and
+	// receives the pre-rotation keys, causing a spurious signature failure.
+	//
+	// Setup: a JWKS server that holds its first response (simulating the
+	// inflight window). While the first fetch is blocked, the JWKS rotates
+	// to key B. A second validation (tokB, signed with key B) joins the
+	// blocked inflight and will receive stale key-A keys.
+	//
+	// Pre-fix behavior: tokB fails with "failed to verify id token signature".
+	// Post-fix behavior: the retry rebuilds the RemoteKeySet (fresh, no stale
+	// inflight), fetches the rotated JWKS, and verifies tokB successfully.
+	keyA := newTestKey(t, "kid-A")
+	keyB := newTestKey(t, "kid-B")
+
+	var (
+		fetchCount   atomic.Int64
+		firstArrived = make(chan struct{})
+		release      = make(chan struct{})
+		jwksA        = jwks(keyA)
+		jwksB        = jwks(keyB)
+	)
+
+	// The JWKS server is deterministic by request number:
+	//   request 1: serves keyA JWKS (held until release) - simulates the
+	//              inflight completing with pre-rotation keys
+	//   request 2+: serves keyB JWKS - the post-rotation state that the
+	//               retry must pick up
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		n := fetchCount.Add(1)
+		var body []byte
+		if n == 1 {
+			close(firstArrived) // signal: first JWKS request is in progress
+			<-release           // hold until the test releases (stale-inflight window)
+			body = jwksA
+		} else {
+			body = jwksB
+		}
+		w.Header().Set("Content-Type", "application/jwk-set+json")
+		_, _ = w.Write(body)
+	})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	v := newOIDCValidator(t, ts.URL)
+
+	tokA := signToken(t, keyA, baseClaims(time.Now(),
+		testSchedulerSubject, "https://api.example.com", "https://accounts.example.com"))
+	tokB := signToken(t, keyB, baseClaims(time.Now(),
+		testSchedulerSubject, "https://api.example.com", "https://accounts.example.com"))
+
+	// Start tokA validation in background; it triggers the first (held) JWKS fetch.
+	errA := make(chan error, 1)
+	go func() { errA <- v.Validate(context.Background(), "Bearer "+tokA) }()
+
+	// Wait for the first JWKS fetch to start (inflight#1 is now active).
+	<-firstArrived
+
+	// Start tokB validation while inflight#1 is blocked. go-oidc deduplicates
+	// concurrent fetches via single-flight, so tokB joins the same inflight
+	// and will receive key-A keys when the inflight is released.
+	// NOTE: the inflight join is best-effort (Gosched below, no hard sync
+	// hook into go-oidc internals) - this test exercises the retry only when
+	// the join wins; either way tokB must succeed. The error-string contract
+	// the retry depends on is pinned deterministically by
+	// TestIsSignatureError_MatchesGoOIDCContract.
+	errB := make(chan error, 1)
+	go func() { errB <- v.Validate(context.Background(), "Bearer "+tokB) }()
+
+	// Yield the scheduler a few times to let the tokB goroutine progress
+	// into keysFromRemote and join the active inflight before we release it.
+	for i := 0; i < 20; i++ {
+		runtime.Gosched()
+	}
+
+	// Release the first fetch. The inflight returns key-A keys.
+	// tokA verifies (kid-A present). tokB fails (kid-B absent in key-A set)
+	// and the validator's retry rebuilds the RemoteKeySet, fetches the
+	// rotated JWKS (request 2, returns key-B), and accepts tokB.
+	close(release)
+
+	if err := <-errA; err != nil {
+		t.Errorf("tokA: expected success, got %v", err)
+	}
+	if err := <-errB; err != nil {
+		t.Errorf("tokB (stale-inflight retry): expected success, got %v", err)
+	}
+}
+
+func TestVerifyRetry_RebuildRateLimited(t *testing.T) {
+	// Amplification-DoS guard: sequential bad-signature tokens must trigger
+	// at most ONE verifier rebuild per minRebuildInterval. Without the rate
+	// limit, every garbage token would rebuild the keyset and fire an extra
+	// outbound JWKS GET on the retry.
+	//
+	// Expected JWKS fetch budget with the limit in place (server always
+	// serves keyA; both tokens carry unknown kid-X):
+	//   token 1: fetch#1 (lazy initial) -> sig fail -> rebuild -> fetch#2
+	//            (retry on fresh keyset) -> sig fail -> 401
+	//   token 2: cached keys present -> kid miss -> fetch#3 (go-oidc's own
+	//            refresh-on-unknown-kid, unavoidable) -> sig fail ->
+	//            rate-limited: NO rebuild, NO retry -> 401
+	// Total: exactly 3 fetches. Without the rate limit token 2 would add a
+	// rebuild + retry fetch (4+).
+	keyA := newTestKey(t, "kid-A")
+	keyX := newTestKey(t, "kid-X") // never published
+	srv := newJWKSServer(t, jwks(keyA))
+	v := newOIDCValidator(t, srv.URL)
+
+	// Freeze the clock so the second token is deterministically within
+	// minRebuildInterval of the first rebuild.
+	t0 := time.Now()
+	v.now = func() time.Time { return t0 }
+
+	for i := 1; i <= 2; i++ {
+		tok := signToken(t, keyX, baseClaims(t0,
+			testSchedulerSubject, "https://api.example.com", "https://accounts.example.com"))
+		if err := v.Validate(context.Background(), "Bearer "+tok); !errors.Is(err, ErrUnauthorized) {
+			t.Fatalf("bad token %d: expected ErrUnauthorized, got: %v", i, err)
+		}
+	}
+
+	if hits := srv.hits.Load(); hits != 3 {
+		t.Fatalf("expected exactly 3 JWKS fetches (one rebuild) for 2 sequential bad tokens, got %d", hits)
+	}
+}
+
+func TestVerifyRetry_RotationRecoversAfterInterval(t *testing.T) {
+	// The rebuild rate limit must not permanently wedge the validator: once
+	// minRebuildInterval elapses, a genuine rotation (still-stale cached
+	// keys) must trigger a fresh rebuild and succeed.
+	//
+	// The server simulates a slow-to-converge JWKS CDN: fetches 1-3 return
+	// the pre-rotation keyA document, fetch 4+ return the rotated keyB.
+	// Sequence (all fetches sequential, so counts are deterministic):
+	//   t0:      Validate(tokB) -> fetch#1 (A) fail -> rebuild#1 ->
+	//            fetch#2 (A) fail -> 401; lastRebuild = t0
+	//   t0+11s:  Validate(tokB) -> cached A, kid miss -> fetch#3 (A) fail ->
+	//            interval elapsed -> rebuild#2 -> fetch#4 (B) -> success
+	keyA := newTestKey(t, "kid-A")
+	keyB := newTestKey(t, "kid-B")
+	jwksA := jwks(keyA)
+	jwksB := jwks(keyB)
+
+	var fetchCount atomic.Int64
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		n := fetchCount.Add(1)
+		body := jwksA
+		if n >= 4 {
+			body = jwksB
+		}
+		w.Header().Set("Content-Type", "application/jwk-set+json")
+		_, _ = w.Write(body)
+	})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	v := newOIDCValidator(t, ts.URL)
+
+	// Injectable clock (same pattern as the skew tests): start at t0, then
+	// jump past minRebuildInterval. No sleeping.
+	t0 := time.Now()
+	current := t0
+	v.now = func() time.Time { return current }
+
+	tokB := signToken(t, keyB, baseClaims(t0,
+		testSchedulerSubject, "https://api.example.com", "https://accounts.example.com"))
+
+	if err := v.Validate(context.Background(), "Bearer "+tokB); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("t0: expected ErrUnauthorized while JWKS is stale, got: %v", err)
+	}
+
+	current = t0.Add(minRebuildInterval + time.Second)
+	if err := v.Validate(context.Background(), "Bearer "+tokB); err != nil {
+		t.Fatalf("post-interval: expected rotation to recover via rebuild, got: %v", err)
+	}
+	if hits := fetchCount.Load(); hits != 4 {
+		t.Fatalf("expected exactly 4 JWKS fetches (2 rebuilds, 1 interval apart), got %d", hits)
+	}
+}
+
+func TestIsSignatureError_MatchesGoOIDCContract(t *testing.T) {
+	// Guard: the retry path keys off go-oidc's literal error string
+	// "failed to verify signature" (verify.go in go-oidc/v3). If a future
+	// go-oidc bump rewords it, this test fails loudly instead of the retry
+	// being silently disabled. It drives REAL tokens through the actual
+	// verifier rather than asserting against a hand-built error.
+	key := newTestKey(t, "kid-1")
+	imposter := newTestKey(t, "kid-1") // same kid, different key -> pure signature failure
+	srv := newJWKSServer(t, jwks(key))
+	v := newOIDCValidator(t, srv.URL)
+
+	badSig := signToken(t, imposter, baseClaims(time.Now(),
+		testSchedulerSubject, "https://api.example.com", "https://accounts.example.com"))
+	_, err := v.verifier.Verify(context.Background(), badSig)
+	if err == nil {
+		t.Fatalf("expected signature verification to fail")
+	}
+	if !isSignatureError(err) {
+		t.Fatalf("isSignatureError = false for a real go-oidc signature failure: %v\n"+
+			"go-oidc likely reworded its error string - update isSignatureError to match", err)
+	}
+
+	// Negative: a claim failure (wrong issuer) must NOT be classified as a
+	// signature error, otherwise iss failures would start triggering retries.
+	wrongIss := signToken(t, key, baseClaims(time.Now(),
+		testSchedulerSubject, "https://api.example.com", "https://attacker-iss.example.com"))
+	_, err = v.verifier.Verify(context.Background(), wrongIss)
+	if err == nil {
+		t.Fatalf("expected issuer verification to fail")
+	}
+	if isSignatureError(err) {
+		t.Fatalf("isSignatureError = true for an issuer failure; retry must not fire on claim errors: %v", err)
 	}
 }
 
