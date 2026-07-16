@@ -273,17 +273,21 @@ func (app *Application) processOneLadderConfig(
 // It is split from handleLadderRun so tests can inject a hermetic
 // LadderCapability (fake) and a mock store without touching AWS or PostgreSQL.
 //
-// L5 netting: before calling Allocate, the handler fetches the total in-flight
-// commitment (scheduled + fired non-terminal tranches plus any in-progress
-// purchase executions linked to this config). The Allocate engine subtracts
-// this from the raw gap so each daily run plans only what is still needed,
-// preventing pile-up when prior tranches have not yet fired.
+// L5 netting: before calling Allocate, the handler fetches the config's in-flight
+// commitment (the sum of its status=scheduled, not-yet-fired ladder tranches
+// ONLY). The Allocate engine subtracts this from the raw gap so each daily run
+// plans only what is still needed, preventing pile-up when prior scheduled
+// tranches have not yet fired. Fired/completed tranches are deliberately NOT
+// counted here: they are executed purchases already reflected in the engine's
+// ExistingUSDPerHour, so counting them again would double-subtract.
 //
-// The cancel-and-replace is performed atomically inside
-// SaveLadderRunWithTranchesAndSupersede: the same transaction that inserts the
-// new run and its tranches also cancels the config's prior scheduled (not yet
-// fired) tranches, ensuring at most one generation of scheduled tranches exists
-// for each config at any point in time.
+// Cancel-and-replace is CONDITIONAL (see persistLadderRun): it runs only when
+// this run produces a materially new generation of scheduled tranches. A Hold
+// run (the netting says we are covered) persists the run row WITHOUT cancelling
+// the existing scheduled ramp, so those tranches keep their original fire dates
+// and remain the live ramp. Unconditional cancellation would fight the netting:
+// run2 nets to a Hold, but cancelling its own scheduled ramp would let run3
+// re-plan from zero (oscillation; late tranches would never fire).
 func (app *Application) executeLadderRun(
 	ctx context.Context,
 	dbCfg *config.LadderConfigDB,
@@ -313,12 +317,12 @@ func (app *Application) executeLadderRun(
 	}
 
 	// L5: Fetch in-flight commitment BEFORE Allocate so the engine can subtract
-	// it from the gap. In-flight = scheduled (not-yet-fired) tranches +
-	// fired tranches whose execution has not reached a terminal state +
-	// any in-progress purchase executions linked to this config's runs.
-	// This query includes prior scheduled tranches (from earlier runs) so the
-	// engine correctly accounts for en-route commitment and produces a ~zero
-	// gap (Hold) when prior tranches already cover the target.
+	// it from the gap. In-flight = the config's status=scheduled (not-yet-fired)
+	// ladder tranches ONLY. Fired/completed tranches are excluded because they
+	// are executed purchases already counted in ExistingUSDPerHour; netting them
+	// again would double-subtract. Including prior-run scheduled tranches lets
+	// the engine account for en-route commitment and produce a ~zero gap (Hold)
+	// when the scheduled ramp already covers the target.
 	inFlight, err := app.Config.GetInFlightLadderCommitUSDHr(ctx, dbCfg.ID)
 	if err != nil {
 		return fmt.Errorf("GetInFlightLadderCommitUSDHr: %w", err)
@@ -331,8 +335,8 @@ func (app *Application) executeLadderRun(
 
 	supportedLayers := capability.SupportedLayers()
 
-	// Run Allocate with the in-flight figure so the gap is net of prior
-	// scheduled and fired tranches.
+	// Run Allocate with the in-flight figure so the gap is net of the config's
+	// prior scheduled (not-yet-fired) tranches.
 	allocResult, err := pkgladder.Allocate(&pkgladder.AllocationInput{
 		Now:                now,
 		Baseline:           baseline,
@@ -424,20 +428,43 @@ func (app *Application) persistLadderRun(
 		return fmt.Errorf("buildTrancheDBRows: %w", err)
 	}
 
-	// L5: persist run + tranches atomically AND cancel any prior scheduled
-	// tranches for this config in the same transaction. This guarantees at
-	// most one generation of scheduled tranches per config exists at any
-	// point, preventing pile-up when repeated daily runs each see the full
-	// gap before prior tranches fire.
-	savedRun, err := app.Config.SaveLadderRunWithTranchesAndSupersede(ctx, runRow, trancheRows)
+	// L5: persist the run, using cancel-and-replace supersede ONLY when this
+	// run produced a materially new generation of scheduled tranches.
+	savedRun, err := app.persistPlannedLadderRun(ctx, runRow, trancheRows)
 	if err != nil {
-		return fmt.Errorf("SaveLadderRunWithTranchesAndSupersede: %w", err)
+		return fmt.Errorf("persist ladder run: %w", err)
 	}
 
 	log.Printf("ladder_run: config %s: persisted run %s (status=%s, allocations=%d, tranches=%d, holds=%d)",
 		dbCfg.ID, savedRun.ID, savedRun.Status,
 		len(allocResult.Allocations), len(trancheResult.Tranches), len(allocResult.Holds))
 	return nil
+}
+
+// persistPlannedLadderRun writes the ladder_runs row, choosing between the
+// cancel-and-replace supersede path and the plain (preserve) path based on
+// whether this run produced a materially new generation of scheduled tranches:
+//
+//   - len(trancheRows) > 0: this run planned a new scheduled ramp, so
+//     cancel-and-replace the config's prior scheduled tranches atomically
+//     (SaveLadderRunWithTranchesAndSupersede). Exactly one generation of
+//     scheduled tranches survives per config.
+//   - len(trancheRows) == 0: a Hold (the L5 netting says the config is already
+//     covered by its live scheduled ramp) or a buy-now-only run. Persist the
+//     run row via the plain path WITHOUT cancelling the existing scheduled
+//     tranches, so they keep their original fire dates and remain the live
+//     ramp. Superseding here would cancel the ramp the netting just relied on,
+//     causing the next run to re-plan from zero (oscillation).
+//
+// Drift-DOWN note: a Hold that preserves a now-too-large scheduled ramp (usage
+// dropped after the ramp was planned) is intentionally accepted for now. It is
+// bounded by the low-water clamp in Allocate; shrinking an over-large ramp on
+// drift-down is a follow-up (tracked separately), not handled here.
+func (app *Application) persistPlannedLadderRun(ctx context.Context, runRow *config.LadderRunDB, trancheRows []config.LadderTrancheDB) (*config.LadderRunDB, error) {
+	if len(trancheRows) > 0 {
+		return app.Config.SaveLadderRunWithTranchesAndSupersede(ctx, runRow, trancheRows)
+	}
+	return app.Config.SaveLadderRunWithTranches(ctx, runRow, trancheRows)
 }
 
 // ladderWithinCadenceWindow reports whether a new run should be skipped because

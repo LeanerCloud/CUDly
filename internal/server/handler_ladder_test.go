@@ -1139,3 +1139,198 @@ func TestRatToFloat64Ptr_PositiveValue(t *testing.T) {
 	require.NotNil(t, ptr, "non-nil big.Rat must produce non-nil *float64")
 	assert.Greater(t, *ptr, 0.0, "gap must be positive")
 }
+
+// ============================================================
+// L5 convergence + conditional-supersede (handler-level, real pipeline)
+// ============================================================
+
+// ladderStatefulStore is a faithful in-memory stand-in for the ladder tranche
+// persistence that executeLadderRun drives. Unlike ladderTestStore (which
+// returns a FIXED in-flight value), it tracks each persisted tranche's live
+// status so the L5 netting + conditional-supersede interplay can be exercised
+// end-to-end across multiple sequential runs. It mirrors PostgresStore
+// semantics exactly:
+//   - GetInFlightLadderCommitUSDHr sums SCHEDULED tranches only, per config.
+//   - SaveLadderRunWithTranchesAndSupersede cancels the config's live scheduled
+//     tranches, then appends the run + the new generation (cancel-and-replace).
+//   - SaveLadderRunWithTranches appends the run + tranches WITHOUT cancelling
+//     (the Hold/preserve path).
+//
+// The tests below drive the REAL executeLadderRun -> Allocate -> BuildTranches
+// -> persistPlannedLadderRun pipeline; only the store and capability are fakes.
+type ladderStatefulStore struct {
+	mockConfigStoreForHealth
+	tranches []config.LadderTrancheDB // every persisted tranche, live status
+	runs     []*config.LadderRunDB
+}
+
+// scheduledSum totals the config's currently-scheduled tranche amounts. It is
+// the single source of truth reused by GetInFlightLadderCommitUSDHr so the fake
+// cannot drift from its own netting view.
+func (s *ladderStatefulStore) scheduledSum(configID string) float64 {
+	total := 0.0
+	for i := range s.tranches {
+		tr := &s.tranches[i]
+		if tr.ConfigID != nil && *tr.ConfigID == configID && tr.Status == pkgladder.TrancheStatusScheduled {
+			total += tr.AmountUSDHr
+		}
+	}
+	return total
+}
+
+// scheduledTrancheIDs returns the set of currently-scheduled tranche IDs for
+// the config, so preservation across runs can be asserted by identity.
+func (s *ladderStatefulStore) scheduledTrancheIDs(configID string) map[string]bool {
+	ids := map[string]bool{}
+	for i := range s.tranches {
+		tr := &s.tranches[i]
+		if tr.ConfigID != nil && *tr.ConfigID == configID && tr.Status == pkgladder.TrancheStatusScheduled {
+			ids[tr.ID] = true
+		}
+	}
+	return ids
+}
+
+func (s *ladderStatefulStore) GetInFlightLadderCommitUSDHr(_ context.Context, configID string) (*float64, error) {
+	total := s.scheduledSum(configID)
+	return &total, nil
+}
+
+func (s *ladderStatefulStore) SaveLadderRunWithTranches(_ context.Context, run *config.LadderRunDB, tranches []config.LadderTrancheDB) (*config.LadderRunDB, error) {
+	s.runs = append(s.runs, run)
+	s.tranches = append(s.tranches, tranches...)
+	return run, nil
+}
+
+func (s *ladderStatefulStore) SaveLadderRunWithTranchesAndSupersede(_ context.Context, run *config.LadderRunDB, tranches []config.LadderTrancheDB) (*config.LadderRunDB, error) {
+	// Cancel-and-replace: flip the config's live scheduled tranches to
+	// cancelled, then append the new generation.
+	if run.ConfigID != nil {
+		for i := range s.tranches {
+			tr := &s.tranches[i]
+			if tr.ConfigID != nil && *tr.ConfigID == *run.ConfigID && tr.Status == pkgladder.TrancheStatusScheduled {
+				tr.Status = pkgladder.TrancheStatusCancelled
+			}
+		}
+	}
+	s.runs = append(s.runs, run)
+	s.tranches = append(s.tranches, tranches...)
+	return run, nil
+}
+
+// fullyDelayedRamp is a 2-step ramp with NO AfterDays==0 step, so ALL planned
+// commitment lands as SCHEDULED tranches (no buy-now). With a static E=0 fake
+// capability, that scheduled ramp is the only in-flight commitment, so the L5
+// netting alone decides whether a follow-up run Holds.
+func fullyDelayedRamp(t *testing.T) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(pkgladder.RampSchedule{
+		Steps: []pkgladder.RampStep{
+			{AfterDays: 1, Fraction: 0.5},
+			{AfterDays: 7, Fraction: 0.5},
+		},
+	})
+	require.NoError(t, err)
+	return raw
+}
+
+// TestExecuteLadderRun_L5Convergence_PreservesRampAcrossHolds is the core L5
+// regression: three sequential runs with CONSTANT usage must build the ramp
+// once (run1) and then PRESERVE it (run2, run3 Hold), never accumulating and
+// never cancelling the live scheduled ramp.
+//
+// FAILS on the pre-L5 code (unconditional supersede): run2 nets to a Hold but
+// the old code still calls SaveLadderRunWithTranchesAndSupersede with an empty
+// tranche set, cancelling the run1 ramp; the scheduled sum drops to 0, so this
+// test's preservation assertions fail. PASSES after: run2/run3 take the plain
+// preserve path.
+func TestExecuteLadderRun_L5Convergence_PreservesRampAcrossHolds(t *testing.T) {
+	ctx := testutil.TestContext(t)
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	const cfgID = "cfg-l5-converge"
+	dbCfg := validTestDBConfig(cfgID)
+	dbCfg.RampSchedule = fullyDelayedRamp(t)
+
+	store := &ladderStatefulStore{}
+	app := &Application{Config: store}
+	// Constant usage across all three runs: low-water 10 -> target 8 (80%).
+	cap := &fakeLadderCapability{t: t, baseline: testBaseline(10.0)}
+	run := func(at time.Time) {
+		require.NoError(t, app.executeLadderRun(ctx, &dbCfg, cap, "123456789012",
+			pkgladder.Term1Year, pkgladder.PaymentNoUpfront, at))
+	}
+
+	// Run 1: builds the scheduled ramp. gap = 8, all delayed -> scheduled.
+	run(now)
+	gen1 := store.scheduledTrancheIDs(cfgID)
+	require.NotEmpty(t, gen1, "run1 must build a scheduled ramp")
+	assert.InDelta(t, 8.0, store.scheduledSum(cfgID), 1e-9, "run1 ramp must sum to the full gap (8)")
+	require.Len(t, store.runs, 1)
+
+	// Run 2: SAME usage. Netting sees the 8 already scheduled -> Hold. The run
+	// row persists, but the run1 tranches must REMAIN scheduled (same IDs).
+	run(now.Add(24 * time.Hour))
+	gen2 := store.scheduledTrancheIDs(cfgID)
+	assert.Equal(t, gen1, gen2, "run2 Hold must PRESERVE the exact run1 scheduled tranches (same IDs)")
+	assert.InDelta(t, 8.0, store.scheduledSum(cfgID), 1e-9, "run2 Hold must not change the scheduled ramp total")
+	require.Len(t, store.runs, 2, "run2 must still persist a run row")
+	assert.Equal(t, 0.0, store.runs[1].TotalHourlyCommit, "run2 must be a Hold (zero new commitment)")
+
+	// Run 3: SAME usage again -> still Hold, still preserved. No accumulation.
+	run(now.Add(48 * time.Hour))
+	gen3 := store.scheduledTrancheIDs(cfgID)
+	assert.Equal(t, gen1, gen3, "run3 Hold must still preserve the original ramp (same IDs)")
+	assert.InDelta(t, 8.0, store.scheduledSum(cfgID), 1e-9, "three constant-usage runs must not accumulate commitment")
+	assert.Equal(t, 0.0, store.runs[2].TotalHourlyCommit, "run3 must be a Hold (zero new commitment)")
+}
+
+// TestExecuteLadderRun_L5DriftUp_CancelsAndReplaces verifies the drift-UP path:
+// when usage rises so the netted gap re-opens, the run produces a NEW scheduled
+// generation and cancel-and-replaces the old one, leaving exactly one live
+// generation.
+//
+// FAILS on the pre-netting code (which never nets and never cancels
+// conditionally): the old generation would survive alongside the new, so the
+// "old IDs cancelled" and "single live generation" assertions fail. PASSES
+// after: the drift-up run supersedes.
+func TestExecuteLadderRun_L5DriftUp_CancelsAndReplaces(t *testing.T) {
+	ctx := testutil.TestContext(t)
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	const cfgID = "cfg-l5-driftup"
+	dbCfg := validTestDBConfig(cfgID)
+	dbCfg.RampSchedule = fullyDelayedRamp(t)
+
+	store := &ladderStatefulStore{}
+	app := &Application{Config: store}
+
+	// Run 1: low-water 10 -> target 8. Build a scheduled ramp summing 8.
+	lowCap := &fakeLadderCapability{t: t, baseline: testBaseline(10.0)}
+	require.NoError(t, app.executeLadderRun(ctx, &dbCfg, lowCap, "123456789012",
+		pkgladder.Term1Year, pkgladder.PaymentNoUpfront, now))
+	gen1 := store.scheduledTrancheIDs(cfgID)
+	require.NotEmpty(t, gen1, "run1 must build a scheduled ramp")
+	assert.InDelta(t, 8.0, store.scheduledSum(cfgID), 1e-9)
+
+	// Run 2: usage DRIFTS UP (low-water 20 -> target 16). Netting subtracts the
+	// 8 already scheduled, leaving a fresh gap of 8 that re-opens allocation.
+	// This produces a NEW scheduled generation and cancel-and-replaces the old.
+	highCap := &fakeLadderCapability{t: t, baseline: testBaseline(20.0)}
+	require.NoError(t, app.executeLadderRun(ctx, &dbCfg, highCap, "123456789012",
+		pkgladder.Term1Year, pkgladder.PaymentNoUpfront, now.Add(24*time.Hour)))
+
+	// The old generation must now be fully cancelled.
+	for id := range gen1 {
+		assert.False(t, store.scheduledTrancheIDs(cfgID)[id],
+			"drift-up must cancel the old scheduled generation (id %s must no longer be scheduled)", id)
+	}
+	// Exactly one new live generation remains, and it does not include any run1 ID.
+	gen2 := store.scheduledTrancheIDs(cfgID)
+	require.NotEmpty(t, gen2, "drift-up must produce a new scheduled generation")
+	for id := range gen2 {
+		assert.False(t, gen1[id], "the new generation must not reuse a cancelled run1 tranche ID")
+	}
+	// The new live scheduled ramp reflects the re-opened gap (8), not 8+8.
+	assert.InDelta(t, 8.0, store.scheduledSum(cfgID), 1e-9,
+		"only the new generation may be live; the cancelled old one must not add to the scheduled sum")
+	assert.Greater(t, store.runs[1].TotalHourlyCommit, 0.0, "drift-up run must plan positive new commitment")
+}
