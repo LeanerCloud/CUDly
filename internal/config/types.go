@@ -69,6 +69,15 @@ type GlobalConfig struct {
 	// engine runs fire regardless of per-account LadderConfig.Enabled settings.
 	// Set to true to allow per-account configs to activate individually.
 	LadderingEnabled bool `json:"laddering_enabled" db:"laddering_enabled"`
+
+	// LadderExecutionEnabled gates the write side of the ladder capability
+	// (migration 000083). BOTH LadderingEnabled AND LadderExecutionEnabled
+	// must be true for PurchaseLayer / ReshapeBuffer to be wired with real
+	// AWS SDK clients. Default false: existing deployments that enable
+	// laddering produce plans but never call AWS purchase APIs until an
+	// operator explicitly opts in. Fail-loud: wireLadderWriteSide returns
+	// a typed ErrLadderExecutionDisabled when this is false.
+	LadderExecutionEnabled bool `json:"ladder_execution_enabled" db:"ladder_execution_enabled"`
 }
 
 // DefaultGracePeriodDays is the fallback window used when a provider

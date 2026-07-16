@@ -25,6 +25,12 @@ const DefaultLookbackDays = 30
 // a configuration error at the call site, not a permanent constraint.
 var errWriteNotWired = errors.New("write side not wired: wire riPurchaser, spPurchaser, and exchangeRunner via WithWriteSide before calling PurchaseLayer or ReshapeBuffer")
 
+// ErrLadderExecutionDisabled is returned by PurchaseLayer and ReshapeBuffer when
+// the ladder has been wired with a disabled write side (ladder_execution_enabled=false
+// in global_config). Use errors.Is(err, ErrLadderExecutionDisabled) to distinguish
+// this from errWriteNotWired (missing wiring = programming error at the call site).
+var ErrLadderExecutionDisabled = errors.New("ladder write side disabled: set ladder_execution_enabled=true in global_config to enable purchases and reshapes")
+
 // Config holds construction-time parameters for AWSLadder.
 type Config struct {
 	// Region is the AWS region this ladder instance operates on.

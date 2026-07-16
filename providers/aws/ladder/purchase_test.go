@@ -7,6 +7,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -344,4 +345,48 @@ func TestPurchaseLayer_NotSupportedSentinel_PassesThrough(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, common.ErrCommitmentPurchaseNotSupported,
 		"engine callers detect permanent inability via errors.Is; wrapping must preserve it")
+}
+
+// ---------------------------------------------------------------------------
+// Kill-switch (WireWriteSideDisabled / WireWriteSide) tests
+// ---------------------------------------------------------------------------
+
+// TestWireWriteSideDisabled_PurchaseLayer_ReturnsErrLadderExecutionDisabled verifies
+// that a ladder wired via WireWriteSideDisabled returns ErrLadderExecutionDisabled
+// (not the unwired errWriteNotWired) on PurchaseLayer, and never calls any AWS API.
+func TestWireWriteSideDisabled_PurchaseLayer_ReturnsErrLadderExecutionDisabled(t *testing.T) {
+	t.Parallel()
+	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, &fakeCoverageSource{}, &fakeUtilizationSource{})
+	wired, err := WireWriteSideDisabled(a)
+	require.NoError(t, err)
+
+	_, purchaseErr := wired.PurchaseLayer(context.Background(), ladder.LayerConvertibleRI, validRIRec(), validPurchaseOpts())
+	require.Error(t, purchaseErr)
+	assert.ErrorIs(t, purchaseErr, ErrLadderExecutionDisabled,
+		"kill-switch must surface as ErrLadderExecutionDisabled, not errWriteNotWired")
+}
+
+// TestWireWriteSideDisabled_ReshapeBuffer_ReturnsErrLadderExecutionDisabled verifies
+// the same kill-switch behavior for ReshapeBuffer.
+func TestWireWriteSideDisabled_ReshapeBuffer_ReturnsErrLadderExecutionDisabled(t *testing.T) {
+	t.Parallel()
+	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, &fakeCoverageSource{}, &fakeUtilizationSource{})
+	wired, err := WireWriteSideDisabled(a)
+	require.NoError(t, err)
+
+	_, reshapeErr := wired.ReshapeBuffer(context.Background(), testScope(), validReshapeCfg())
+	require.Error(t, reshapeErr)
+	assert.ErrorIs(t, reshapeErr, ErrLadderExecutionDisabled,
+		"kill-switch must surface as ErrLadderExecutionDisabled, not errWriteNotWired")
+}
+
+// TestWireWriteSide_EmptyAWSConfig_WiresWithoutPanic verifies that WireWriteSide
+// does not panic or error at construction time with an empty aws.Config. AWS
+// SDK client constructors are lazy (no credentials or network calls at init).
+func TestWireWriteSide_EmptyAWSConfig_WiresWithoutPanic(t *testing.T) {
+	t.Parallel()
+	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, &fakeCoverageSource{}, &fakeUtilizationSource{})
+	wired, err := WireWriteSide(a, aws.Config{}, &fakeExchangeRunner{})
+	require.NoError(t, err)
+	require.NotNil(t, wired, "WireWriteSide must return a non-nil ladder")
 }
