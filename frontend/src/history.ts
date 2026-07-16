@@ -477,13 +477,14 @@ function canCancelPendingRow(p: HistoryPurchase): boolean {
 // false-positive here surfaces as a 403 toast on click rather than a
 // successful approve.
 //
-// Heuristic:
+// Heuristic (four-eyes — issue #1407):
 //   * status must be "pending" or "notified";
 //   * any session with approve-any:purchases (carved-out admin verb,
 //     seeded on Purchaser group; can also come from a custom group via
-//     effectivePermissions) → approve-any;
-//   * otherwise the row's created_by_user_id must match the current
-//     user (approve-own);
+//     effectivePermissions) → approve-any; shows Approve on every pending row;
+//   * session must also hold approve-own:purchases before ownership is
+//     even evaluated (four-eyes: ownership alone does NOT grant approve);
+//   * only then: the row's created_by_user_id must match the current user;
 //   * legacy rows with NULL created_by_user_id → no (the email-token
 //     path remains the escape hatch).
 function canApprovePendingRow(p: HistoryPurchase): boolean {
@@ -497,6 +498,9 @@ function canApprovePendingRow(p: HistoryPurchase): boolean {
   // verb directly so a non-seeded role with the same grant still
   // approves rows the backend would also let through.
   if (canAccess('approve-any', 'purchases')) return true;
+  // Four-eyes (issue #1407): the session must hold an explicit approve-own
+  // grant before ownership is consulted. Ownership alone never grants approve.
+  if (!canAccess('approve-own', 'purchases')) return false;
   if (!p.created_by_user_id) return false;
   return p.created_by_user_id === user.id;
 }

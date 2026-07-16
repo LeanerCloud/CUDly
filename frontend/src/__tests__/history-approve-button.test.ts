@@ -386,6 +386,48 @@ describe('History inline Approve button (issue #286)', () => {
     expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
   });
 
+  test('user without any approve permission sees NO Approve button even on their own rows (issue #1407 four-eyes)', async () => {
+    // Regression guard for issue #1407. Before the fix, canApprovePendingRow
+    // returned true based on ownership alone (created_by_user_id === user.id)
+    // without verifying that the session holds approve-own or approve-any.
+    // This caused Viewer-role users (no approve-* in effectivePermissions) to
+    // see the Approve button on purchases they submitted.
+    //
+    // After the fix, approve-own must be checked explicitly before ownership is
+    // evaluated; a session without it sees no Approve buttons at all.
+    const VIEWER_USER = {
+      id: 'viewer-uuid',
+      email: 'viewer@example.com',
+      groups: [],
+      effectivePermissions: [
+        { action: 'view', resource: 'recommendations' },
+        { action: 'view', resource: 'plans' },
+        { action: 'view', resource: 'history' },
+        // cancel-own / retry-own / revoke-own present; approve-own intentionally absent.
+        { action: 'cancel-own', resource: 'purchases' },
+      ],
+    };
+
+    (getCurrentUser as jest.Mock).mockReturnValue(VIEWER_USER);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        // Own row: before fix this showed Approve; after fix it must NOT.
+        makeRow({ purchase_id: 'exec-mine', created_by_user_id: VIEWER_USER.id }),
+        makeRow({ purchase_id: 'exec-other', created_by_user_id: OTHER_UUID }),
+      ],
+    });
+
+    await loadHistory();
+
+    // Scope to the history list (not the approval queue card).
+    const list = document.getElementById('history-list')!;
+    const buttons = list.querySelectorAll<HTMLButtonElement>('.history-approve-btn');
+    // No Approve buttons must appear for any row when the session has no
+    // approve-own or approve-any permission.
+    expect(buttons).toHaveLength(0);
+  });
+
   test('admin WITHOUT Purchaser membership does not see Approve on rows they did not create (CR #924 F5)', async () => {
     // Issue #923 + CR #924 F5: approve-any:purchases is carved out of
     // admin:*. canApprovePendingRow must gate on

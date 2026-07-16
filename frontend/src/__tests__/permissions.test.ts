@@ -56,6 +56,9 @@ describe('permissions', () => {
     });
 
     test('user role grants the standard non-admin verbs', () => {
+      // Issue #1407 (four-eyes): approve-own is intentionally absent from the
+      // standard user permission set. Self-approval requires an explicit custom
+      // group grant; ownership alone does not confer the right to approve.
       const perms = getRolePermissions('user');
       const expected = [
         'view:recommendations',
@@ -68,12 +71,13 @@ describe('permissions', () => {
         'update:purchases',
         'cancel-own:purchases',
         'retry-own:purchases',
-        'approve-own:purchases',
         // Added by PR #804: revoke-own gates the History inline Revoke button
         // for completed Azure purchases within the free-cancel window.
         'revoke-own:purchases',
       ];
       expected.forEach((p) => expect(perms.has(p)).toBe(true));
+      // approve-own must NOT be in the standard user permission set (issue #1407).
+      expect(perms.has('approve-own:purchases')).toBe(false);
       expect(perms.size).toBe(expected.length);
     });
 
