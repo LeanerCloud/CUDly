@@ -389,27 +389,36 @@ export const __test__ = { sparklinePoints, attachSparkline, computeServiceStats 
 
 // canCancelUpcomingPurchase returns true when the current session is
 // permitted to cancel the given upcoming purchase via the Dashboard
-// widget (issue #950). UX gate only -- the backend
-// authorizeExecutionManagement in internal/api/handler_purchases.go
+// widget (issues #950, #1400). UX gate only -- the backend
+// authorizePlannedPurchaseCancel in internal/api/handler_purchases.go
 // remains the security boundary; a false-positive surfaces as a 403
 // toast rather than a successful mutation.
 //
-// Mirrors canManageScheduledPurchase in plans.ts so the Plans page and
-// the Dashboard widget agree on which Cancel buttons appear:
-//   * admin (admin:*) or update-any:purchases -> can cancel any row;
-//   * otherwise the row's created_by_user_id must match the current user;
-//   * legacy / scheduler-tick rows with undefined created_by_user_id ->
-//     no Cancel button for non-privileged users (out of reach without
-//     update-any).
-// Additionally requires the base delete:purchases verb the backend
-// handler asks for, mirroring the gate on the Plans page disable button.
+// Full-scope (any row): admin (admin:*), cancel-any:purchases, or
+//   update-any:purchases.
+// Creator-scope (own row only): delete:purchases OR cancel-own:purchases,
+//   PLUS non-null created_by_user_id matching the current user.
+//   delete:purchases mirrors the original ownership gate (issue #950).
+//   cancel-own:purchases enables Standard users to cancel their own
+//   upcoming purchases from the Home page (issue #1400).
+// Legacy / scheduler-tick rows with undefined created_by_user_id ->
+//   no Cancel button for non-privileged users (out of reach without a
+//   full-scope verb).
 export function canCancelUpcomingPurchase(purchase: UpcomingPurchase): boolean {
-  if (!canAccess('delete', 'purchases')) return false;
-  if (canAccess('admin', '*') || canAccess('update-any', 'purchases')) return true;
+  // Full-scope: admin, cancel-any, or update-any grant unrestricted row access.
+  if (
+    canAccess('admin', '*') ||
+    canAccess('cancel-any', 'purchases') ||
+    canAccess('update-any', 'purchases')
+  ) {
+    return true;
+  }
+  // Creator-scope: delete:purchases or cancel-own:purchases + creator match.
   const user = state.getCurrentUser();
   if (!user) return false;
   if (!purchase.created_by_user_id) return false;
-  return purchase.created_by_user_id === user.id;
+  if (purchase.created_by_user_id !== user.id) return false;
+  return canAccess('delete', 'purchases') || canAccess('cancel-own', 'purchases');
 }
 
 function renderUpcomingPurchases(purchases: UpcomingPurchase[]): void {

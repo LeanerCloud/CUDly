@@ -3642,6 +3642,32 @@ func buildManageHandler(userID, creatorID string, hasUpdateAny bool) (*Handler, 
 	mockAuth.On("HasPermissionAPI", mock.Anything, userID, "execute", "purchases").Return(true, nil).Maybe()
 	mockAuth.On("HasPermissionAPI", mock.Anything, userID, "delete", "purchases").Return(true, nil).Maybe()
 	mockAuth.On("HasPermissionAPI", mock.Anything, userID, "update-any", "purchases").Return(hasUpdateAny, nil).Maybe()
+	// cancel-any is checked by authorizePlannedPurchaseCancel on the delete
+	// path when update-any is false; register with false so callers that
+	// use buildManageHandler for the delete path don't get an unexpected-call
+	// panic (issue #1400).
+	mockAuth.On("HasPermissionAPI", mock.Anything, userID, "cancel-any", "purchases").Return(false, nil).Maybe()
+	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, userID).Return([]string{}, nil).Maybe()
+
+	creator := creatorID
+	exec := &config.PurchaseExecution{ExecutionID: ownExecID, Status: "pending", CreatedByUserID: &creator}
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("GetExecutionByID", mock.Anything, ownExecID).Return(exec, nil)
+
+	return &Handler{config: mockConfig, auth: mockAuth}, mockConfig, mockAuth
+}
+
+// buildCancelOwnHandler wires a Standard-user "user-token" session that holds
+// cancel-own:purchases but NOT delete:purchases. Used to verify the issue #1400
+// fix: creator-scope planned-purchase cancel without the management delete verb.
+func buildCancelOwnHandler(userID, creatorID string) (*Handler, *MockConfigStore, *MockAuthService) { //nolint:unparam // userID param intentional for future callers
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", mock.Anything, "user-token").Return(&Session{UserID: userID}, nil)
+	// Standard user: cancel-own only -- no delete, no cancel-any, no update-any.
+	mockAuth.On("HasPermissionAPI", mock.Anything, userID, "delete", "purchases").Return(false, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", mock.Anything, userID, "cancel-any", "purchases").Return(false, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", mock.Anything, userID, "cancel-own", "purchases").Return(true, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", mock.Anything, userID, "update-any", "purchases").Return(false, nil).Maybe()
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, userID).Return([]string{}, nil).Maybe()
 
 	creator := creatorID
@@ -3687,6 +3713,34 @@ func TestHandler_resumePlannedPurchase_NonOwner_Rejected(t *testing.T) {
 
 func TestHandler_deletePlannedPurchase_NonOwner_Rejected(t *testing.T) {
 	handler, mockConfig, _ := buildManageHandler(ownUserA, ownUserB, false)
+
+	_, err := handler.deletePlannedPurchase(context.Background(), manageReq(), ownExecID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	mockConfig.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestHandler_deletePlannedPurchase_CancelOwn_Creator_Allowed verifies that a
+// Standard user with cancel-own:purchases (but NOT delete:purchases) can cancel
+// their own planned purchase from the Home page (issue #1400).
+func TestHandler_deletePlannedPurchase_CancelOwn_Creator_Allowed(t *testing.T) {
+	handler, mockConfig, _ := buildCancelOwnHandler(ownUserA, ownUserA)
+	canceled := &config.PurchaseExecution{ExecutionID: ownExecID, PlanID: "", Status: "canceled"}
+	mockConfig.On("TransitionExecutionStatus", mock.Anything, ownExecID, []string{"pending", "paused"}, "canceled", mock.Anything).
+		Return(canceled, nil)
+
+	result, err := handler.deletePlannedPurchase(context.Background(), manageReq(), ownExecID)
+	require.NoError(t, err)
+	assert.Equal(t, "canceled", result.Status)
+}
+
+// TestHandler_deletePlannedPurchase_CancelOwn_NonCreator_Rejected verifies
+// that cancel-own:purchases does not let a Standard user cancel another user's
+// planned purchase (issue #1400).
+func TestHandler_deletePlannedPurchase_CancelOwn_NonCreator_Rejected(t *testing.T) {
+	handler, mockConfig, _ := buildCancelOwnHandler(ownUserA, ownUserB)
 
 	_, err := handler.deletePlannedPurchase(context.Background(), manageReq(), ownExecID)
 	require.Error(t, err)

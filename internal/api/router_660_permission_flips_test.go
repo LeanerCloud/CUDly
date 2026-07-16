@@ -289,6 +289,9 @@ func TestDeletePlannedPurchase_PermissionGate(t *testing.T) {
 		mockAuth := authForUserWith(ctx, t, userID, "delete", "purchases", true)
 		mockAuth.On("GetAllowedAccountsAPI", ctx, userID).Return([]string{}, nil)
 		mockAuth.On("HasPermissionAPI", ctx, userID, "update-any", "purchases").Return(false, nil)
+		// authorizePlannedPurchaseCancel also checks cancel-any when update-any
+		// is false (issue #1400); register it so the mock does not panic.
+		mockAuth.On("HasPermissionAPI", ctx, userID, "cancel-any", "purchases").Return(false, nil)
 		creator := userID
 		mockStore := new(MockConfigStore)
 		mockStore.On("GetExecutionByID", ctx, execID).
@@ -305,6 +308,9 @@ func TestDeletePlannedPurchase_PermissionGate(t *testing.T) {
 		mockAuth := authForUserWith(ctx, t, userID, "delete", "purchases", true)
 		mockAuth.On("GetAllowedAccountsAPI", ctx, userID).Return([]string{}, nil)
 		mockAuth.On("HasPermissionAPI", ctx, userID, "update-any", "purchases").Return(false, nil)
+		// authorizePlannedPurchaseCancel also checks cancel-any when update-any
+		// is false (issue #1400); register it so the mock does not panic.
+		mockAuth.On("HasPermissionAPI", ctx, userID, "cancel-any", "purchases").Return(false, nil)
 		otherCreator := "99999999-9999-9999-9999-999999999999"
 		mockStore := new(MockConfigStore)
 		mockStore.On("GetExecutionByID", ctx, execID).
@@ -317,10 +323,58 @@ func TestDeletePlannedPurchase_PermissionGate(t *testing.T) {
 	})
 
 	t.Run("user without delete:purchases is rejected with 403", func(t *testing.T) {
+		// Without delete, cancel-any, or cancel-own the first gate rejects.
 		mockAuth := authForUserWith(ctx, t, userID, "delete", "purchases", false)
+		mockAuth.On("HasPermissionAPI", ctx, userID, "cancel-any", "purchases").Return(false, nil)
+		mockAuth.On("HasPermissionAPI", ctx, userID, "cancel-own", "purchases").Return(false, nil)
 		h := &Handler{auth: mockAuth, config: new(MockConfigStore)}
 		_, err := h.deletePlannedPurchase(ctx, reqWithBearer("user-token"), execID)
 		assert403(t, err)
+	})
+
+	t.Run("Standard user with cancel-own:purchases can cancel their own planned purchase (issue #1400)", func(t *testing.T) {
+		// Standard users hold cancel-own but not delete:purchases. They must be
+		// able to cancel their own upcoming purchases from the Home page widget.
+		mockAuth := new(MockAuthService)
+		mockAuth.On("ValidateSession", ctx, "user-token").Return(userSessionFixture(userID), nil)
+		mockAuth.On("HasPermissionAPI", ctx, userID, "delete", "purchases").Return(false, nil)
+		mockAuth.On("HasPermissionAPI", ctx, userID, "cancel-any", "purchases").Return(false, nil)
+		mockAuth.On("HasPermissionAPI", ctx, userID, "cancel-own", "purchases").Return(true, nil)
+		mockAuth.On("GetAllowedAccountsAPI", ctx, userID).Return([]string{}, nil)
+		mockAuth.On("HasPermissionAPI", ctx, userID, "update-any", "purchases").Return(false, nil)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+		creator := userID
+		mockStore := new(MockConfigStore)
+		mockStore.On("GetExecutionByID", ctx, execID).
+			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &creator}, nil)
+		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "canceled", mock.Anything).
+			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "canceled"}, nil)
+
+		h := &Handler{auth: mockAuth, config: mockStore}
+		_, err := h.deletePlannedPurchase(ctx, reqWithBearer("user-token"), execID)
+		assertNotForbidden(t, err)
+	})
+
+	t.Run("Standard user with cancel-own:purchases cannot cancel another user's purchase (issue #1400)", func(t *testing.T) {
+		mockAuth := new(MockAuthService)
+		mockAuth.On("ValidateSession", ctx, "user-token").Return(userSessionFixture(userID), nil)
+		mockAuth.On("HasPermissionAPI", ctx, userID, "delete", "purchases").Return(false, nil)
+		mockAuth.On("HasPermissionAPI", ctx, userID, "cancel-any", "purchases").Return(false, nil)
+		mockAuth.On("HasPermissionAPI", ctx, userID, "cancel-own", "purchases").Return(true, nil)
+		mockAuth.On("GetAllowedAccountsAPI", ctx, userID).Return([]string{}, nil)
+		mockAuth.On("HasPermissionAPI", ctx, userID, "update-any", "purchases").Return(false, nil)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+		otherCreator := "99999999-9999-9999-9999-999999999999"
+		mockStore := new(MockConfigStore)
+		mockStore.On("GetExecutionByID", ctx, execID).
+			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &otherCreator}, nil)
+
+		h := &Handler{auth: mockAuth, config: mockStore}
+		_, err := h.deletePlannedPurchase(ctx, reqWithBearer("user-token"), execID)
+		assert403(t, err)
+		mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	})
 }
 

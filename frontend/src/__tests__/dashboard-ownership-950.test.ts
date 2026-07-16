@@ -101,14 +101,27 @@ const legacyPurchase = {
   created_by_user_id: undefined as string | undefined,
 };
 
-type StubUserOpts = { updateAny?: boolean; admin?: boolean; deletePurchases?: boolean };
+type StubUserOpts = {
+  updateAny?: boolean;
+  admin?: boolean;
+  deletePurchases?: boolean;
+  cancelOwn?: boolean;
+  cancelAny?: boolean;
+};
 const setUser = (id: string, opts: StubUserOpts = {}) => {
   const effectivePermissions: Array<{ action: string; resource: string }> = [];
   if (opts.admin) {
     effectivePermissions.push({ action: 'admin', resource: '*' });
-  } else if (opts.deletePurchases !== false) {
-    // Standard user holds delete:purchases (PR #660 default).
-    effectivePermissions.push({ action: 'delete', resource: 'purchases' });
+  } else {
+    if (opts.deletePurchases) {
+      effectivePermissions.push({ action: 'delete', resource: 'purchases' });
+    }
+    if (opts.cancelOwn) {
+      effectivePermissions.push({ action: 'cancel-own', resource: 'purchases' });
+    }
+    if (opts.cancelAny) {
+      effectivePermissions.push({ action: 'cancel-any', resource: 'purchases' });
+    }
   }
   if (opts.updateAny) {
     effectivePermissions.push({ action: 'update-any', resource: 'purchases' });
@@ -141,19 +154,19 @@ describe('Dashboard upcoming-purchase ownership gating (issue #950)', () => {
     setupDom();
   });
 
-  test('creator sees the Cancel button on their own scheduled purchase', async () => {
-    setUser(CREATOR_ID);
+  test('delete:purchases creator sees the Cancel button on their own scheduled purchase', async () => {
+    setUser(CREATOR_ID, { deletePurchases: true });
     (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [ownedPurchase] });
     await loadDashboard();
     expect(cancelBtns()).toHaveLength(1);
   });
 
-  test('non-creator with the same verbs sees NO Cancel button (the bug)', async () => {
-    setUser(OTHER_ID);
+  test('delete:purchases non-creator sees NO Cancel button', async () => {
+    setUser(OTHER_ID, { deletePurchases: true });
     (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [ownedPurchase] });
     await loadDashboard();
     expect(cancelBtns()).toHaveLength(0);
-    // The card still renders -- the operator sees the row and can click
+    // The card still renders -- the user sees the row and can click
     // "View Details", which is intentionally unrestricted.
     const viewBtns = document.querySelectorAll<HTMLButtonElement>('[data-action="view-purchase"]');
     expect(viewBtns).toHaveLength(1);
@@ -166,7 +179,7 @@ describe('Dashboard upcoming-purchase ownership gating (issue #950)', () => {
     expect(cancelBtns()).toHaveLength(1);
   });
 
-  test('admin sees Cancel on every row (admin:* covers delete:purchases)', async () => {
+  test('admin sees Cancel on every row (admin:* covers all verbs)', async () => {
     setUser(OTHER_ID, { admin: true });
     (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
       purchases: [ownedPurchase, { ...ownedPurchase, execution_id: 'exec-2' }],
@@ -175,17 +188,15 @@ describe('Dashboard upcoming-purchase ownership gating (issue #950)', () => {
     expect(cancelBtns()).toHaveLength(2);
   });
 
-  test('legacy NULL-creator row shows no Cancel for a non-update-any user', async () => {
-    setUser(CREATOR_ID);
+  test('legacy NULL-creator row shows no Cancel for a non-full-scope user', async () => {
+    setUser(CREATOR_ID, { cancelOwn: true });
     (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [legacyPurchase] });
     await loadDashboard();
     expect(cancelBtns()).toHaveLength(0);
   });
 
-  test('user without delete:purchases sees no Cancel even on their own row', async () => {
-    // Read-only style: holds neither delete:purchases nor admin nor
-    // update-any. Even on their own row the button must stay hidden
-    // because the backend would reject the click on verb grounds.
+  test('user with no cancel/delete verb sees no Cancel even on their own row', async () => {
+    // Read-only style: holds only view:purchases -- no cancel-own, no delete.
     (state.getCurrentUser as jest.Mock).mockReturnValue({
       id: CREATOR_ID,
       email: 'ro@example.com',
@@ -195,5 +206,45 @@ describe('Dashboard upcoming-purchase ownership gating (issue #950)', () => {
     (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [ownedPurchase] });
     await loadDashboard();
     expect(cancelBtns()).toHaveLength(0);
+  });
+});
+
+describe('Dashboard upcoming-purchase cancel-own gating (issue #1400)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    setupDom();
+  });
+
+  test('Standard user (cancel-own) sees Cancel on their own scheduled purchase', async () => {
+    // Standard users hold cancel-own:purchases in DefaultUserPermissions.
+    // They must see Cancel on rows they created.
+    setUser(CREATOR_ID, { cancelOwn: true });
+    (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [ownedPurchase] });
+    await loadDashboard();
+    expect(cancelBtns()).toHaveLength(1);
+  });
+
+  test('Standard user (cancel-own) does NOT see Cancel on another user\'s purchase', async () => {
+    setUser(OTHER_ID, { cancelOwn: true });
+    (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [ownedPurchase] });
+    await loadDashboard();
+    expect(cancelBtns()).toHaveLength(0);
+    // View Details is still visible.
+    const viewBtns = document.querySelectorAll<HTMLButtonElement>('[data-action="view-purchase"]');
+    expect(viewBtns).toHaveLength(1);
+  });
+
+  test('Standard user (cancel-own) does NOT see Cancel on legacy NULL-creator row', async () => {
+    setUser(CREATOR_ID, { cancelOwn: true });
+    (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [legacyPurchase] });
+    await loadDashboard();
+    expect(cancelBtns()).toHaveLength(0);
+  });
+
+  test('cancel-any holder sees Cancel on any row (full scope)', async () => {
+    setUser(OTHER_ID, { cancelAny: true });
+    (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [ownedPurchase] });
+    await loadDashboard();
+    expect(cancelBtns()).toHaveLength(1);
   });
 });
