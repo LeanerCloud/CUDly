@@ -652,6 +652,11 @@ resource "aws_lambda_permission" "eventbridge_analytics_collect" {
 # handler is advisory-lock guarded, so overlapping invocations are
 # safe. Default-off until laddering is promoted to GA; enable via
 # var.enable_ladder_run_schedule.
+#
+# The "ladder_run" scheduled action is registered by the ladder_run task
+# (PR #1362). This rule is default-off (count-gated). Enabling it before
+# that task ships, or on an incomplete deploy, causes a loud dispatch error
+# (unknown scheduled task action) rather than a silent no-op.
 
 resource "aws_cloudwatch_event_rule" "ladder_run" {
   count = var.enable_ladder_run_schedule ? 1 : 0

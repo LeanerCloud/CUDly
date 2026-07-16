@@ -979,6 +979,12 @@ resource "aws_iam_role_policy" "eventbridge_ri_exchange" {
 # ==============================================
 # Scheduled Commitment-Ladder Planning Run
 # ==============================================
+#
+# The "ladder_run" scheduled action is registered by the ladder_run task
+# (PR #1362). This rule is default-off (count-gated on
+# var.enable_ladder_run_schedule). Enabling it before that task ships, or on
+# an incomplete deploy, causes a loud dispatch error (unknown scheduled task
+# action) rather than a silent no-op.
 
 resource "aws_cloudwatch_event_rule" "ladder_run" {
   count = var.enable_ladder_run_schedule ? 1 : 0
@@ -1060,6 +1066,11 @@ resource "aws_iam_role_policy" "eventbridge_ladder_run" {
           "ecs:RunTask"
         ]
         Resource = aws_ecs_task_definition.main.arn
+        Condition = {
+          ArnEquals = {
+            "ecs:cluster" = aws_ecs_cluster.main.arn
+          }
+        }
       },
       {
         Effect = "Allow"
@@ -1070,6 +1081,11 @@ resource "aws_iam_role_policy" "eventbridge_ladder_run" {
           aws_iam_role.task_execution.arn,
           aws_iam_role.task.arn
         ]
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "ecs-tasks.amazonaws.com"
+          }
+        }
       }
     ]
   })
@@ -1159,6 +1175,11 @@ resource "aws_iam_role_policy" "eventbridge_fire_scheduled_purchases" {
           "ecs:RunTask"
         ]
         Resource = aws_ecs_task_definition.main.arn
+        Condition = {
+          ArnEquals = {
+            "ecs:cluster" = aws_ecs_cluster.main.arn
+          }
+        }
       },
       {
         Effect = "Allow"
@@ -1169,6 +1190,11 @@ resource "aws_iam_role_policy" "eventbridge_fire_scheduled_purchases" {
           aws_iam_role.task_execution.arn,
           aws_iam_role.task.arn
         ]
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "ecs-tasks.amazonaws.com"
+          }
+        }
       }
     ]
   })
