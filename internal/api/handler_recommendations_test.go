@@ -356,6 +356,103 @@ func TestGetRecommendations_AccountIDFilter(t *testing.T) {
 	}
 }
 
+// TestGetRecommendations_EnabledProvidersFilter is the regression test for
+// issue #1409: when enabled_providers is set in Admin > General Settings,
+// the Opportunities list must exclude disabled providers' recs for ALL users,
+// not just Administrators (the only group that has view:config permission).
+//
+// Fail-before: prior to this fix getRecommendations did not consult
+// enabled_providers; all providers' recs were returned regardless of the
+// setting, and non-admin users saw them all because the client-side filter
+// silently fell through when GET /api/config returned 403.
+// Pass-after: only enabled providers' recs appear in the response.
+func TestGetRecommendations_EnabledProvidersFilter(t *testing.T) {
+	ctx := context.Background()
+
+	awsRec := config.RecommendationRecord{
+		ID: "rec-aws", Provider: "aws", Service: "ec2", Region: "us-east-1", Savings: 100,
+	}
+	azureRec := config.RecommendationRecord{
+		ID: "rec-azure", Provider: "azure", Service: "vm", Region: "eastus", Savings: 50,
+	}
+	gcpRec := config.RecommendationRecord{
+		ID: "rec-gcp", Provider: "gcp", Service: "gce", Region: "us-central1", Savings: 75,
+	}
+
+	t.Run("disabled provider recs are excluded", func(t *testing.T) {
+		mockScheduler := new(MockScheduler)
+		mockScheduler.On("ListRecommendations", ctx, mock.Anything).
+			Return([]config.RecommendationRecord{awsRec, azureRec, gcpRec}, nil)
+		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
+
+		mockStore := new(MockConfigStore)
+		mockStore.On("GetGlobalConfig", mock.Anything).
+			Return(&config.GlobalConfig{EnabledProviders: []string{"aws"}}, nil)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+		handler := &Handler{scheduler: mockScheduler, config: mockStore, apiKey: "test-key"}
+		req := &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"x-api-key": "test-key"},
+		}
+
+		result, err := handler.getRecommendations(ctx, req, map[string]string{})
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		gotIDs := make([]string, len(result.Recommendations))
+		for i, r := range result.Recommendations {
+			gotIDs[i] = r.ID
+		}
+		assert.ElementsMatch(t, []string{"rec-aws"}, gotIDs,
+			"only aws recs should appear when azure and gcp are disabled")
+	})
+
+	t.Run("empty enabled_providers passes all recs through (permissive default)", func(t *testing.T) {
+		mockScheduler := new(MockScheduler)
+		mockScheduler.On("ListRecommendations", ctx, mock.Anything).
+			Return([]config.RecommendationRecord{awsRec, azureRec}, nil)
+		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
+
+		mockStore := new(MockConfigStore)
+		mockStore.On("GetGlobalConfig", mock.Anything).
+			Return(&config.GlobalConfig{EnabledProviders: nil}, nil)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+		handler := &Handler{scheduler: mockScheduler, config: mockStore, apiKey: "test-key"}
+		req := &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"x-api-key": "test-key"},
+		}
+
+		result, err := handler.getRecommendations(ctx, req, map[string]string{})
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Len(t, result.Recommendations, 2,
+			"all recs pass through when no enabled_providers filter is configured")
+	})
+
+	t.Run("config read error is surfaced (fail loud)", func(t *testing.T) {
+		mockScheduler := new(MockScheduler)
+		mockScheduler.On("ListRecommendations", ctx, mock.Anything).
+			Return([]config.RecommendationRecord{awsRec}, nil)
+		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
+
+		mockStore := new(MockConfigStore)
+		mockStore.On("GetGlobalConfig", mock.Anything).
+			Return((*config.GlobalConfig)(nil), errors.New("db down"))
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+		handler := &Handler{scheduler: mockScheduler, config: mockStore, apiKey: "test-key"}
+		req := &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"x-api-key": "test-key"},
+		}
+
+		result, err := handler.getRecommendations(ctx, req, map[string]string{})
+		require.Error(t, err, "config read error must surface, not silently bypass the filter")
+		assert.Nil(t, result)
+		assert.Contains(t, err.Error(), "failed to read global config")
+	})
+}
+
 // TestBuildRecommendationsResponse_CapacityFields is the #219 regression
 // test. It replicates the REAL API shape: VCPU/MemoryGB live nested inside
 // the opaque Details blob (a marshaled common.ComputeDetails), exactly as the

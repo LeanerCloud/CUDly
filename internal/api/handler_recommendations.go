@@ -100,6 +100,15 @@ func (h *Handler) getRecommendations(ctx context.Context, req *events.LambdaFunc
 		return nil, fmt.Errorf("failed to get recommendations: %w", err)
 	}
 
+	// Issue #1409: drop recs for providers disabled in Admin > General Settings.
+	// Runs for ALL users regardless of view:config permission, fixing the
+	// regression where non-admin users saw all providers' recs because the
+	// client-side filter silently fell through when GET /api/config returned 403.
+	recommendations, err = h.filterRecommendationsByEnabledProviders(ctx, recommendations)
+	if err != nil {
+		return nil, err
+	}
+
 	// Filter by allowed accounts if the user has restricted access
 	recommendations, err = h.filterRecommendationsByAllowedAccounts(ctx, session, recommendations)
 	if err != nil {
@@ -143,6 +152,43 @@ func (h *Handler) filterRecommendationsByAllowedAccounts(ctx context.Context, se
 		id := *rec.CloudAccountID
 		if auth.MatchesAccount(allowedAccounts, id, nameByID[id]) {
 			filtered = append(filtered, rec)
+		}
+	}
+	return filtered, nil
+}
+
+// filterRecommendationsByEnabledProviders removes recommendations for providers
+// that are absent from the global config's EnabledProviders list.
+//
+// Semantics:
+//   - Empty EnabledProviders (the admin-facing default): permissive — all recs
+//     pass through unchanged. This preserves backward compatibility when the
+//     setting has never been configured.
+//   - Non-empty EnabledProviders: only recs whose Provider field matches an
+//     entry in the list pass through.
+//   - Config read error: fail-loud — the error is returned to the caller so a
+//     broken config layer cannot silently bypass the enabled-providers gate.
+//   - Nil config store (only possible in unit tests that omit config setup):
+//     skip filtering rather than panic.
+func (h *Handler) filterRecommendationsByEnabledProviders(ctx context.Context, recs []config.RecommendationRecord) ([]config.RecommendationRecord, error) {
+	if h.config == nil {
+		return recs, nil
+	}
+	globalCfg, err := h.config.GetGlobalConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read global config for enabled-providers filter: %w", err)
+	}
+	if len(globalCfg.EnabledProviders) == 0 {
+		return recs, nil // permissive default: no filter configured
+	}
+	enabledSet := make(map[string]struct{}, len(globalCfg.EnabledProviders))
+	for _, p := range globalCfg.EnabledProviders {
+		enabledSet[p] = struct{}{}
+	}
+	filtered := make([]config.RecommendationRecord, 0, len(recs))
+	for i := range recs {
+		if _, ok := enabledSet[recs[i].Provider]; ok {
+			filtered = append(filtered, recs[i])
 		}
 	}
 	return filtered, nil
