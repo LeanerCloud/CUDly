@@ -84,8 +84,12 @@ export function setGlobalDefaultsForTest(defaults: { term: number; payment: stri
   cachedGlobalDefaults = { ...defaults };
 }
 
-/** Returns true when an API error signals a 403 permission-denied response. */
-function isPermissionDeniedError(error: unknown): boolean {
+/**
+ * Returns true when an API error signals a 403 permission-denied response.
+ * Exported so sibling modules (riexchange.ts) can apply the same graceful
+ * degradation without duplicating the predicate.
+ */
+export function isPermissionDeniedError(error: unknown): boolean {
   return error instanceof Error
     && (error as { status?: number }).status === 403
     && error.message.startsWith('permission denied');

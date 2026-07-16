@@ -28,7 +28,7 @@ import type {
 import { openModal, closeModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { canAccess } from './permissions';
-import { applyReadOnlySettings } from './settings';
+import { applyReadOnlySettings, isPermissionDeniedError } from './settings';
 import { showToast } from './toast';
 import { getCurrentUser } from './state';
 
@@ -1900,6 +1900,16 @@ export async function loadAutomationSettings(): Promise<void> {
     const config = await api.getRIExchangeConfig();
     renderAutomationSettings(container, config);
   } catch (error) {
+    // Issue #1413: when the backend returns 403 permission denied the user
+    // legitimately lacks access to the Exchange Automation section. Hide it
+    // silently (same graceful-degradation pattern as loadGlobalSettings for
+    // issue #979) instead of showing an error paragraph at the bottom of the
+    // Purchasing Policies panel. Any other failure (network, 5xx) still
+    // surfaces the error so operators can diagnose the problem.
+    if (isPermissionDeniedError(error)) {
+      container.textContent = '';
+      return;
+    }
     const err = error as Error;
     container.textContent = '';
     const errorP = document.createElement('p');

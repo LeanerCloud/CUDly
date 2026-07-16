@@ -285,8 +285,9 @@ func TestService_GetUserPermissions(t *testing.T) {
 		// + retry-own:purchases (issue #47)
 		// + revoke-own:purchases (issue #290)
 		// + sell-own:purchases (issue #292).
+		// + view:config (migration 000088, issues #1401/#1410/#1413).
 		// NOTE: approve-own removed (issue #1407, four-eyes).
-		assert.Len(t, permissions, 12)
+		assert.Len(t, permissions, 13)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -311,7 +312,7 @@ func TestService_GetUserPermissions(t *testing.T) {
 
 		permissions, err := service.GetUserPermissions(ctx, "readonly-123")
 		require.NoError(t, err)
-		assert.Len(t, permissions, 3) // 3 readonly permissions
+		assert.Len(t, permissions, 4) // 4 readonly permissions (view:config added by migration 000088)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -355,11 +356,13 @@ func TestService_GetUserPermissions(t *testing.T) {
 
 		permissions, err := service.GetUserPermissions(ctx, "user-123")
 		require.NoError(t, err)
-		// 12 standard-group (incl. delete:plans (PR-A #660) + update:purchases (PR-A #660)
+		// 13 standard-group (incl. delete:plans (PR-A #660) + update:purchases (PR-A #660)
 		// + cancel-own (#46) + retry-own (#47)
-		// + revoke-own (#290) + sell-own (#292):purchases; approve-own removed
-		// per #1407 four-eyes) + 1 group1 + 1 group2 = 14
-		assert.Len(t, permissions, 14)
+		// + revoke-own (#290) + sell-own (#292):purchases
+		// + view:config (migration 000088, issues #1401/#1410/#1413);
+		// approve-own removed per #1407 four-eyes)
+		// + 1 group1 (execute:plans) + 1 group2 (update:config) = 15
+		assert.Len(t, permissions, 15)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -408,8 +411,9 @@ func TestService_GetUserPermissions(t *testing.T) {
 		// + retry-own:purchases (issue #47)
 		// + revoke-own:purchases (issue #290)
 		// + sell-own:purchases (issue #292).
+		// + view:config (migration 000088, issues #1401/#1410/#1413).
 		// NOTE: approve-own removed (issue #1407, four-eyes).
-		assert.Len(t, permissions, 12)
+		assert.Len(t, permissions, 13)
 
 		mockStore.AssertExpectations(t)
 	})

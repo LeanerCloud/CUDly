@@ -22,8 +22,9 @@ func TestDefaultPermissions(t *testing.T) {
 		// + retry-own:purchases (issue #47)
 		// + revoke-own:purchases (issue #290)
 		// + sell-own:purchases (issue #292)
-		// NOTE: approve-own was removed (issue #1407, four-eyes) = 12.
-		assert.Len(t, perms, 12)
+		// + view:config (migration 000088, issues #1401/#1410/#1413)
+		// NOTE: approve-own was removed (issue #1407, four-eyes) = 13.
+		assert.Len(t, perms, 13)
 
 		actions := make(map[string]bool)
 		for _, p := range perms {
@@ -34,6 +35,8 @@ func TestDefaultPermissions(t *testing.T) {
 		assert.True(t, actions[ActionView+":"+ResourcePlans])
 		assert.True(t, actions[ActionView+":"+ResourcePurchases])
 		assert.True(t, actions[ActionView+":"+ResourceHistory])
+		assert.True(t, actions[ActionView+":"+ResourceConfig],
+			"view:config must be in DefaultUserPermissions (issues #1401/#1410/#1413)")
 		assert.True(t, actions[ActionCreate+":"+ResourcePlans])
 		assert.True(t, actions[ActionUpdate+":"+ResourcePlans])
 		assert.True(t, actions[ActionDelete+":"+ResourcePlans])
@@ -47,16 +50,30 @@ func TestDefaultPermissions(t *testing.T) {
 			"approve-own must not be in DefaultUserPermissions (four-eyes, issue #1407)")
 		// sell-own:purchases must be a default user permission (issue #292).
 		assert.True(t, actions[ActionSellOwn+":"+ResourcePurchases])
+		// Write-gating: non-admins may read config but not write it.
+		assert.False(t, actions[ActionUpdate+":"+ResourceConfig],
+			"update:config must not be in DefaultUserPermissions")
 	})
 
 	t.Run("DefaultReadOnlyPermissions returns readonly access", func(t *testing.T) {
 		perms := DefaultReadOnlyPermissions()
-		assert.Len(t, perms, 3)
+		// view:config added by migration 000088 (issues #1401/#1413) = 4.
+		assert.Len(t, perms, 4)
 
 		// All should be view actions
 		for _, p := range perms {
 			assert.Equal(t, ActionView, p.Action)
 		}
+
+		actions := make(map[string]bool)
+		for _, p := range perms {
+			actions[p.Action+":"+p.Resource] = true
+		}
+		assert.True(t, actions[ActionView+":"+ResourceConfig],
+			"view:config must be in DefaultReadOnlyPermissions (issues #1401/#1413)")
+		// Read-only must never be able to write config.
+		assert.False(t, actions[ActionUpdate+":"+ResourceConfig],
+			"update:config must not be in DefaultReadOnlyPermissions")
 	})
 
 	t.Run("DefaultPurchaserPermissions contains carved verbs and view grants", func(t *testing.T) {
