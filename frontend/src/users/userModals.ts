@@ -14,7 +14,7 @@ import {
   setCurrentEditingUser,
   availableGroups
 } from './state';
-import { escapeHtml, showError, showSuccess } from './utils';
+import { escapeHtml, showError, showSuccess, validateGroupCombination } from './utils';
 import { loadUsers } from './userActions';
 import { openModal, closeModal } from '../modal';
 
@@ -116,6 +116,14 @@ export async function saveUser(e: Event): Promise<void> {
   // validation message rather than a 400 from the backend.
   if (selectedGroups.length === 0) {
     showError('At least one group is required. Select one or more groups for this user.');
+    return;
+  }
+
+  // Reject contradictory group combinations (view-only + write-capable)
+  // before hitting the API so the user gets an actionable message.
+  const groupConflict = validateGroupCombination(selectedGroups, availableGroups);
+  if (groupConflict) {
+    showError(groupConflict);
     return;
   }
 
