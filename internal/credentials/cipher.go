@@ -37,9 +37,9 @@ var ErrMultipleKeys = errors.New("credentials: multiple encryption-key env vars 
 
 // Env var names used by LoadKey, in priority order.
 const (
-	EnvSecretARN  = "CREDENTIAL_ENCRYPTION_KEY_SECRET_ARN"  // AWS Secrets Manager ARN
-	EnvSecretName = "CREDENTIAL_ENCRYPTION_KEY_SECRET_NAME" // Azure Key Vault secret name
-	EnvSecretID   = "CREDENTIAL_ENCRYPTION_KEY_SECRET_ID"   // GCP Secret Manager secret ID
+	EnvSecretARN  = "CREDENTIAL_ENCRYPTION_KEY_SECRET_ARN"  // #nosec G101 -- env var name for AWS Secrets Manager ARN; not a credential value
+	EnvSecretName = "CREDENTIAL_ENCRYPTION_KEY_SECRET_NAME" // #nosec G101 -- env var name for Azure Key Vault secret; not a credential value
+	EnvSecretID   = "CREDENTIAL_ENCRYPTION_KEY_SECRET_ID"   // #nosec G101 -- env var name for GCP Secret Manager secret; not a credential value
 	EnvRawKey     = "CREDENTIAL_ENCRYPTION_KEY"             // Raw 64-char hex (ops/dev)
 	EnvAllowDev   = "CREDENTIAL_ENCRYPTION_ALLOW_DEV_KEY"   // 1 = permit zero-key fallback
 )

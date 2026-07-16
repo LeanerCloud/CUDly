@@ -31,7 +31,7 @@ func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setCacheHeaders(w, cleanPath)
-	http.ServeFile(w, r, filePath)
+	http.ServeFile(w, r, filePath) // #nosec G703 -- filePath validated by resolveStaticFilePath: filepath.Abs + isPathContainedIn prevents directory traversal
 }
 
 // setCacheHeaders sets Cache-Control based on file type.
@@ -120,7 +120,7 @@ func serveStaticForLambda(dir, urlPath string) (content []byte, contentType stri
 		return nil, "", "", false
 	}
 
-	data, err := os.ReadFile(filePath)
+	data, err := os.ReadFile(filePath) // #nosec G304 -- filePath validated by resolveStaticFilePath: filepath.Abs + isPathContainedIn prevents path traversal
 	if err != nil {
 		return nil, "", "", false
 	}
@@ -142,19 +142,19 @@ func staticDirFromEnv() string {
 	}
 	// Verify the directory and index.html exist
 	indexPath := filepath.Join(dir, "index.html")
-	if _, err := os.Stat(indexPath); err != nil {
+	if _, err := os.Stat(indexPath); err != nil { // #nosec G703 -- dir is STATIC_DIR, an operator-set deployment config env var, not user input
 		if !os.IsNotExist(err) {
-			log.Printf("STATIC_DIR set to %s but index.html not accessible: %v", dir, err)
+			log.Printf("STATIC_DIR set to %s but index.html not accessible: %v", dir, err) // #nosec G706 -- STATIC_DIR is operator-set config; value not reachable from user input
 		}
 		return ""
 	}
 	// Verify it's actually a directory
-	info, err := os.Stat(dir)
+	info, err := os.Stat(dir) // #nosec G703 -- dir is STATIC_DIR, operator-set deployment config env var
 	if err != nil || !info.IsDir() {
-		log.Printf("STATIC_DIR %s is not a directory", dir)
+		log.Printf("STATIC_DIR %s is not a directory", dir) // #nosec G706 -- STATIC_DIR is operator-set config; value not reachable from user input
 		return ""
 	}
-	log.Printf("Static file serving enabled from %s", dir)
+	log.Printf("Static file serving enabled from %s", dir) // #nosec G706 -- STATIC_DIR is operator-set config; value not reachable from user input
 	return dir
 }
 

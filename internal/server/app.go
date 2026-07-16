@@ -185,7 +185,7 @@ func resolveMigrationsTimeout() time.Duration {
 	}
 	d, err := time.ParseDuration(v)
 	if err != nil || d <= 0 {
-		log.Printf("CUDLY_MIGRATION_TIMEOUT invalid (%q); using default %s", v, defaultMigrationsTimeout)
+		log.Printf("CUDLY_MIGRATION_TIMEOUT invalid (%q); using default %s", v, defaultMigrationsTimeout) // #nosec G706 -- env var value is operator-controlled configuration; logged for diagnostics
 		return defaultMigrationsTimeout
 	}
 	return d
@@ -960,7 +960,7 @@ func getEnvInt(key string, defaultVal int) int {
 	if val := os.Getenv(key); val != "" {
 		result, err := strconv.Atoi(val)
 		if err != nil {
-			log.Printf("WARNING: %s=%q is not a valid integer; using default %d", key, val, defaultVal)
+			log.Printf("WARNING: %s=%q is not a valid integer; using default %d", key, val, defaultVal) // #nosec G706 -- env var value is operator-controlled configuration; logged for diagnostics
 			return defaultVal
 		}
 		return result
@@ -977,7 +977,7 @@ func getEnvFloat(key string, defaultVal float64) float64 {
 	if val := os.Getenv(key); val != "" {
 		result, err := strconv.ParseFloat(val, 64)
 		if err != nil {
-			log.Printf("WARNING: %s=%q is not a valid float; using default %g", key, val, defaultVal)
+			log.Printf("WARNING: %s=%q is not a valid float; using default %g", key, val, defaultVal) // #nosec G706 -- env var value is operator-controlled configuration; logged for diagnostics
 			return defaultVal
 		}
 		return result

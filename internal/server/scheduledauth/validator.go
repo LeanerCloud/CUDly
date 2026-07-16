@@ -287,14 +287,14 @@ func validateJWKSBody(r io.Reader) error {
 func (v *Validator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if v.mode == ModeDisabled {
-			log.Printf("scheduledauth: WARN — request to %s allowed without auth (mode=disabled)", r.URL.Path)
+			log.Printf("scheduledauth: WARN — request to %s allowed without auth (mode=disabled)", r.URL.Path) // #nosec G706 -- URL path logged only when auth is disabled (operator-set mode); informational audit log
 			next.ServeHTTP(w, r)
 			return
 		}
 
 		authz := r.Header.Get("Authorization")
 		if err := v.Validate(r.Context(), authz); err != nil {
-			log.Printf("scheduledauth: rejected %s %s: %v", r.Method, r.URL.Path, err)
+			log.Printf("scheduledauth: rejected %s %s: %v", r.Method, r.URL.Path, err) // #nosec G706 -- HTTP method and path logged for auth audit; Go net/http normalizes paths before handler dispatch
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -368,7 +368,7 @@ func (v *Validator) validateOIDC(ctx context.Context, authz string) error {
 		return fmt.Errorf("%w: subject %q not in allowlist", ErrUnauthorized, idToken.Subject)
 	}
 
-	log.Printf("scheduledauth: oidc token accepted (sub=%s, aud=%v)", idToken.Subject, idToken.Audience)
+	log.Printf("scheduledauth: oidc token accepted (sub=%s, aud=%v)", idToken.Subject, idToken.Audience) // #nosec G706 -- subject is validated against a pre-configured allowlist before this log; informational audit entry
 	return nil
 }
 

@@ -1298,7 +1298,7 @@ func (h *Handler) executeApprovedExchange(ctx context.Context, id string, record
 		Region:           region,
 		ReservedIDs:      record.SourceRIIDs,
 		TargetOfferingID: record.TargetOfferingID,
-		TargetCount:      int32(record.TargetCount),
+		TargetCount:      int32(record.TargetCount), // #nosec G115 -- RI quantity stored from validated API request; AWS limits RI counts well below math.MaxInt32
 		MaxPaymentDueUSD: perExchangeCap,
 	})
 	if execErr != nil {

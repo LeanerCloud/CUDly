@@ -79,7 +79,7 @@ func BuildGCPFederatedCredential(
 		return nil, fmt.Errorf("credentials: gcp federated credential requires a target service account email")
 	}
 
-	cfg := externalaccount.Config{
+	cfg := externalaccount.Config{ // #nosec G101 -- TokenURL and ServiceAccountImpersonationURL are public Google API endpoints, not hardcoded credentials
 		Audience:                       audience,
 		SubjectTokenType:               "urn:ietf:params:oauth:token-type:jwt",
 		TokenURL:                       "https://sts.googleapis.com/v1/token",

@@ -302,11 +302,11 @@ func (p *GCPProvider) detectCredentialSource() (provider.CredentialSource, bool)
 func adcWellKnownFileExists() bool {
 	const adcFile = "application_default_credentials.json"
 	if dir := os.Getenv("CLOUDSDK_CONFIG"); dir != "" {
-		_, err := os.Stat(filepath.Join(dir, adcFile))
+		_, err := os.Stat(filepath.Join(dir, adcFile)) // #nosec G703 -- CLOUDSDK_CONFIG is a standard gcloud env var set by the OS or gcloud CLI, not user-controlled input
 		return err == nil
 	}
 	if appData := os.Getenv("APPDATA"); appData != "" {
-		if _, err := os.Stat(filepath.Join(appData, "gcloud", adcFile)); err == nil {
+		if _, err := os.Stat(filepath.Join(appData, "gcloud", adcFile)); err == nil { // #nosec G703 -- APPDATA is a standard Windows system env var set by the OS, not user-controlled input
 			return true
 		}
 	}
@@ -551,7 +551,9 @@ func findActiveProjectInPage(out *string, page *cloudresourcemanager.ListProject
 
 func init() {
 	// Register GCP provider in the global registry
-	provider.RegisterProvider("gcp", func(config *provider.ProviderConfig) (provider.Provider, error) {
+	if err := provider.RegisterProvider("gcp", func(config *provider.ProviderConfig) (provider.Provider, error) {
 		return NewProvider(config)
-	})
+	}); err != nil {
+		panic("failed to register GCP provider: " + err.Error())
+	}
 }

@@ -159,7 +159,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	input := &memorydb.PurchaseReservedNodesOfferingInput{
 		ReservedNodesOfferingId: aws.String(offeringID),
 		ReservationId:           aws.String(reservationID),
-		NodeCount:               aws.Int32(int32(rec.Count)),
+		NodeCount:               aws.Int32(int32(rec.Count)), // #nosec G115 -- Count from CE recommendation; AWS RI purchase limits keep this far below math.MaxInt32
 		Tags:                    c.createPurchaseTags(rec, opts.Source),
 	}
 

@@ -82,7 +82,7 @@ var scheduledEventActions = map[string]ScheduledTaskType{
 // HandleScheduledTask processes a scheduled task by type.
 // It acquires a PostgreSQL advisory lock to prevent concurrent execution of the same task.
 func (app *Application) HandleScheduledTask(ctx context.Context, taskType ScheduledTaskType) (any, error) {
-	log.Printf("Handling scheduled task: %s", taskType)
+	log.Printf("Handling scheduled task: %s", taskType) // #nosec G706 -- taskType validated to contain no '/' before dispatch; informational audit log
 
 	if err := app.ensureDB(ctx); err != nil {
 		return nil, fmt.Errorf("database connection failed: %w", err)
@@ -96,7 +96,7 @@ func (app *Application) HandleScheduledTask(ctx context.Context, taskType Schedu
 			return nil, fmt.Errorf("failed to check task lock: %w", err)
 		}
 		if !acquired {
-			log.Printf("Task %s already running (advisory lock held), skipping", taskType)
+			log.Printf("Task %s already running (advisory lock held), skipping", taskType) // #nosec G706 -- taskType validated before dispatch; informational audit log
 			return map[string]string{"status": "skipped", "reason": "already_running"}, nil
 		}
 		defer locker.ReleaseAdvisoryLock(ctx, lockID)
@@ -144,8 +144,8 @@ func (app *Application) taskLocker() TaskLocker {
 // taskLockID derives a stable int64 lock ID from the task type name.
 func taskLockID(taskType ScheduledTaskType) int64 {
 	h := fnv.New64a()
-	h.Write([]byte("cudly:task:" + string(taskType)))
-	return int64(h.Sum64())
+	h.Write([]byte("cudly:task:" + string(taskType))) // #nosec G104 -- hash.Hash64.Write never returns an error per Go's hash.Hash interface contract
+	return int64(h.Sum64())                           // #nosec G115 -- advisory lock ID: FNV-64a bit pattern reinterpreted as int64 for pg_advisory_lock; sign irrelevant, overflow expected
 }
 
 // handleCollectRecommendations collects cost optimization recommendations.

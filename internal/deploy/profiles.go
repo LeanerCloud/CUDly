@@ -71,7 +71,7 @@ func LoadConfig() (*DeploymentConfig, error) {
 		}, nil
 	}
 
-	data, err := os.ReadFile(configPath)
+	data, err := os.ReadFile(configPath) // #nosec G304 -- configPath is GetConfigPath() = ~/.cudly/deployment.yaml (os.UserHomeDir + hardcoded subpath); not user input
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}

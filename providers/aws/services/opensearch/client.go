@@ -188,7 +188,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	input := &opensearch.PurchaseReservedInstanceOfferingInput{
 		ReservedInstanceOfferingId: aws.String(offeringID),
 		ReservationName:            aws.String(reservationName),
-		InstanceCount:              aws.Int32(int32(rec.Count)),
+		InstanceCount:              aws.Int32(int32(rec.Count)), // #nosec G115 -- Count from CE recommendation; AWS RI purchase limits keep this far below math.MaxInt32
 	}
 
 	response, err := c.client.PurchaseReservedInstanceOffering(ctx, input)

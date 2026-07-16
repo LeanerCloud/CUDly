@@ -539,7 +539,9 @@ func (p *AzureProvider) GetRecommendationsClientForAccount(ctx context.Context, 
 
 // Register the Azure provider with the global registry
 func init() {
-	provider.RegisterProvider("azure", func(config *provider.ProviderConfig) (provider.Provider, error) {
+	if err := provider.RegisterProvider("azure", func(config *provider.ProviderConfig) (provider.Provider, error) {
 		return NewAzureProvider(config)
-	})
+	}); err != nil {
+		panic("failed to register Azure provider: " + err.Error())
+	}
 }

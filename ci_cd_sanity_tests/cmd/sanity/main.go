@@ -10,6 +10,14 @@ import (
 	"github.com/LeanerCloud/CUDly/ci_cd_sanity_tests/pkg/sanity/aws"
 )
 
+// requireInt32Range exits with an error when n is outside [1, math.MaxInt32].
+func requireInt32Range(flag string, n int) {
+	if n < 1 || n > (1<<31-1) {
+		fmt.Fprintf(os.Stderr, "ERROR: %s must be between 1 and math.MaxInt32\n", flag)
+		os.Exit(2)
+	}
+}
+
 func main() {
 	var (
 		region          = flag.String("region", "us-east-1", "AWS region for sanity checks")
@@ -18,6 +26,7 @@ func main() {
 		outPath         = flag.String("out", "sanity_report.json", "Output JSON report path")
 	)
 	flag.Parse()
+	requireInt32Range("--max-list", *maxList)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -25,7 +34,7 @@ func main() {
 	rep, err := aws.Run(ctx, aws.Options{
 		Region:          *region,
 		ExpectedAccount: *expectedAccount,
-		MaxList:         int32(*maxList),
+		MaxList:         int32(*maxList), // #nosec G115 -- range-validated above (1 <= maxList <= math.MaxInt32); int->int32 cannot overflow
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sanity run failed: %v\n", err)

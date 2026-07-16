@@ -34,8 +34,12 @@ func main() {
 	// Export BUILD_TIME and GIT_SHA to the environment so the api package can
 	// read them without importing main (import cycle). VERSION is passed
 	// directly to NewApplication to avoid the env round-trip (04-N1).
-	os.Setenv("BUILD_TIME", BuildTime)
-	os.Setenv("GIT_SHA", GitSHA)
+	if err := os.Setenv("BUILD_TIME", BuildTime); err != nil {
+		log.Printf("failed to export BUILD_TIME: %v", err)
+	}
+	if err := os.Setenv("GIT_SHA", GitSHA); err != nil {
+		log.Printf("failed to export GIT_SHA: %v", err)
+	}
 
 	ctx := context.Background()
 
@@ -88,11 +92,11 @@ func getTaskTimeout() time.Duration {
 	if v := os.Getenv("TASK_TIMEOUT"); v != "" {
 		secs, err := strconv.Atoi(v)
 		if err != nil {
-			log.Printf("WARNING: TASK_TIMEOUT=%q is not a valid integer; using default %v", v, defaultTimeout)
+			log.Printf("WARNING: TASK_TIMEOUT=%q is not a valid integer; using default %v", v, defaultTimeout) // #nosec G706 -- TASK_TIMEOUT env var is operator-controlled; logged for diagnostics
 			return defaultTimeout
 		}
 		if secs <= 0 {
-			log.Printf("WARNING: TASK_TIMEOUT=%q must be a positive number; using default %v", v, defaultTimeout)
+			log.Printf("WARNING: TASK_TIMEOUT=%q must be a positive number; using default %v", v, defaultTimeout) // #nosec G706 -- TASK_TIMEOUT env var is operator-controlled; logged for diagnostics
 			return defaultTimeout
 		}
 		return time.Duration(secs) * time.Second
@@ -120,7 +124,7 @@ func determineRuntimeMode(modeFlag string) string {
 		case "lambda", "http":
 			return runtimeMode
 		default:
-			log.Printf("Warning: unrecognized RUNTIME_MODE %q, falling back to auto-detection", runtimeMode)
+			log.Printf("Warning: unrecognized RUNTIME_MODE %q, falling back to auto-detection", runtimeMode) // #nosec G706 -- RUNTIME_MODE env var is operator-controlled; logged for diagnostics
 		}
 	}
 

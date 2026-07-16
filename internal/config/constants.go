@@ -64,7 +64,7 @@ const (
 	RampImmediate = "immediate"
 
 	// RampWeekly25Pct means 25% per week for 4 weeks.
-	RampWeekly25Pct = "weekly-25pct"
+	RampWeekly25Pct = "weekly-25pct" // #nosec G101 -- schedule constant; gosec misidentifies "pct" suffix as a credential pattern
 
 	// RampMonthly10Pct means 10% per month for 10 months.
 	RampMonthly10Pct = "monthly-10pct"

@@ -369,7 +369,7 @@ func (c *ComputeClient) fetchCapacityProviderState(ctx context.Context, bearerTo
 		return providerRegistrationState{}, fmt.Errorf("check provider: %w", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	resp.Body.Close() // #nosec G104 -- body fully drained by io.ReadAll before Close; transport close error does not affect correctness
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// Non-2xx from the provider check (e.g. 403 permissions, 429 throttle).
@@ -403,7 +403,7 @@ func (c *ComputeClient) triggerCapacityProviderRegistration(ctx context.Context,
 		return fmt.Errorf("register provider: %w", err)
 	}
 	regBody, _ := io.ReadAll(regResp.Body)
-	regResp.Body.Close()
+	regResp.Body.Close() // #nosec G104 -- body fully drained by io.ReadAll before Close; transport close error does not affect correctness
 	if regResp.StatusCode < 200 || regResp.StatusCode >= 300 {
 		return fmt.Errorf("register Microsoft.Capacity provider returned HTTP %d: %s", regResp.StatusCode, string(regBody))
 	}

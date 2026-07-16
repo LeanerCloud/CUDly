@@ -26,6 +26,15 @@ type Output struct {
 	Error            string   `json:"error,omitempty"`
 }
 
+// validateTargetCount exits with an error message when n is outside the int32
+// range. Extracted to keep main's cyclomatic complexity within the project limit.
+func validateTargetCount(n int) {
+	if n < 1 || n > (1<<31-1) {
+		fmt.Fprintln(os.Stderr, "ERROR: --target-count must be between 1 and math.MaxInt32")
+		os.Exit(2)
+	}
+}
+
 func parseIDs(s string) []string {
 	var out []string
 	for _, p := range strings.Split(s, ",") {
@@ -56,6 +65,8 @@ func main() {
 	)
 	flag.Parse()
 
+	validateTargetCount(*targetCount)
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*timeoutSec)*time.Second)
 	defer cancel()
 
@@ -74,7 +85,7 @@ func main() {
 		AccountChk:       *expectedAccount,
 		ReservedIDs:      ids,
 		TargetOfferingID: *targetOffering,
-		TargetCount:      int32(*targetCount),
+		TargetCount:      int32(*targetCount), // #nosec G115 -- range-validated above (1 <= targetCount <= math.MaxInt32); int->int32 cannot overflow
 	}
 
 	if !*execute {
@@ -84,8 +95,8 @@ func main() {
 			ExpectedAccount:  *expectedAccount,
 			ReservedIDs:      ids,
 			TargetOfferingID: *targetOffering,
-			TargetCount:      int32(*targetCount),
-			DryRun:           false, // IAMCheckOnly: false = real quote, true = only verify IAM permissions
+			TargetCount:      int32(*targetCount), // #nosec G115 -- range-validated above (1 <= targetCount <= math.MaxInt32); int->int32 cannot overflow
+			DryRun:           false,               // IAMCheckOnly: false = real quote, true = only verify IAM permissions
 		})
 		if err != nil {
 			o.Error = err.Error()
@@ -133,7 +144,7 @@ func main() {
 		ExpectedAccount:  *expectedAccount,
 		ReservedIDs:      ids,
 		TargetOfferingID: *targetOffering,
-		TargetCount:      int32(*targetCount),
+		TargetCount:      int32(*targetCount), // #nosec G115 -- range-validated above (1 <= targetCount <= math.MaxInt32); int->int32 cannot overflow
 		MaxPaymentDueUSD: maxRat,
 	})
 	o.Quote = q
