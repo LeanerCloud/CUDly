@@ -226,3 +226,64 @@ describe('Plans page permission gating (issue #365)', () => {
     });
   });
 });
+
+// Issue #1406 / #1418: "Add Purchases" button on a plan card must be gated on
+// update:purchases in addition to update:plans. Plan Authors hold the plan verbs
+// but not the purchase verb -- they must NOT see the Add Purchases button.
+describe('Plans page Add Purchases permission gate (issue #1406 / #1418)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    setupDom();
+    (api.getPlans as jest.Mock).mockResolvedValue({ plans: [samplePlan] });
+    (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+  });
+
+  test('Plan Authors (update:plans only, no update:purchases) see Edit Plan but not Add Purchases', async () => {
+    // Simulate a Plan Authors group: plan management verbs, no purchase verbs.
+    (state.getCurrentUser as jest.Mock).mockReturnValue({
+      id: 'plan-author-id',
+      email: 'plan-author@example.com',
+      groups: [],
+      effectivePermissions: [
+        { action: 'create', resource: 'plans' },
+        { action: 'update', resource: 'plans' },
+        { action: 'delete', resource: 'plans' },
+        { action: 'view', resource: 'plans' },
+        { action: 'view', resource: 'purchases' },
+      ],
+    });
+
+    await loadPlans();
+    const html = (document.getElementById('plans-list') as HTMLElement).innerHTML;
+
+    // Fail-before: Add Purchases was shown; pass-after: it must be absent.
+    expect(html).not.toContain('data-action="add-purchases"');
+    // Edit Plan is still shown (update:plans is sufficient for it).
+    expect(html).toContain('data-action="edit-plan"');
+    // Delete Plan is still shown (delete:plans is sufficient).
+    expect(html).toContain('data-action="delete-plan"');
+  });
+
+  test('Standard User (update:plans + update:purchases) sees both Edit Plan and Add Purchases', async () => {
+    (state.getCurrentUser as jest.Mock).mockReturnValue({
+      id: 'std-user-id',
+      email: 'std-user@example.com',
+      groups: [],
+      effectivePermissions: [
+        { action: 'create', resource: 'plans' },
+        { action: 'update', resource: 'plans' },
+        { action: 'delete', resource: 'plans' },
+        { action: 'update', resource: 'purchases' },
+        { action: 'view', resource: 'plans' },
+        { action: 'view', resource: 'purchases' },
+      ],
+    });
+
+    await loadPlans();
+    const html = (document.getElementById('plans-list') as HTMLElement).innerHTML;
+
+    expect(html).toContain('data-action="add-purchases"');
+    expect(html).toContain('data-action="edit-plan"');
+    expect(html).toContain('data-action="delete-plan"');
+  });
+});

@@ -269,7 +269,12 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 		return nil, err
 	}
 
-	session, err := h.requirePermission(ctx, httpReq, "create", "plans")
+	// Require update:purchases — creating scheduled purchase rows is a
+	// purchase-write operation. Standard Users (DefaultUserPermissions)
+	// hold this verb; Plan Authors (create/update/delete:plans only)
+	// do not, closing issue #1406 / #1418. The prior gate ("create","plans")
+	// incorrectly admitted Plan Authors because they hold create:plans.
+	session, err := h.requirePermission(ctx, httpReq, "update", "purchases")
 	if err != nil {
 		return nil, err
 	}

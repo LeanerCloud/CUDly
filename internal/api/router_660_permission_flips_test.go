@@ -185,6 +185,60 @@ func TestUpdatePlan_PermissionGate(t *testing.T) {
 	})
 }
 
+// TestCreatePlannedPurchases_PermissionGate covers
+// POST /api/plans/{id}/purchases (issue #1406 / #1418).
+//
+// The handler was previously gated on create:plans, which incorrectly admitted
+// Plan Authors (create/update/delete:plans only, no purchase verbs). The fix
+// changes the gate to update:purchases: Standard Users hold it; Plan Authors do
+// not. Regression test: user without update:purchases is rejected with 403.
+func TestCreatePlannedPurchases_PermissionGate(t *testing.T) {
+	ctx := context.Background()
+	const userID = "44444444-4444-4444-4444-444444444444"
+	const planID = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+	// Minimal valid body: count in [1,52] and a parseable YYYY-MM-DD date.
+	const body = `{"count":1,"start_date":"2026-07-01"}`
+
+	t.Run("user with update:purchases can add planned purchases", func(t *testing.T) {
+		mockAuth := authForUserWith(ctx, t, userID, "update", "purchases", true)
+		mockAuth.On("GetAllowedAccountsAPI", ctx, userID).Return([]string{}, nil)
+		mockStore := new(MockConfigStore)
+		// After the permission + plan-access gates pass, the handler fetches the
+		// plan. Returning nil, nil yields a 404 ClientError — a domain error that
+		// proves the permission gate was cleared without wiring up the full write path.
+		mockStore.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
+			return nil, nil
+		}
+
+		h := &Handler{auth: mockAuth, config: mockStore}
+		_, err := h.createPlannedPurchases(ctx, reqWithBearerAndBody("user-token", body), planID)
+		assertNotForbidden(t, err)
+	})
+
+	t.Run("user without update:purchases (Plan Authors) is rejected with 403", func(t *testing.T) {
+		// This is the regression case for issue #1406: a Plan Authors user holds
+		// create/update/delete:plans but not update:purchases. Before the fix the
+		// gate was create:plans (which Plan Authors pass); after the fix it is
+		// update:purchases (which Plan Authors do not hold).
+		mockAuth := authForUserWith(ctx, t, userID, "update", "purchases", false)
+		h := &Handler{auth: mockAuth, config: new(MockConfigStore)}
+		_, err := h.createPlannedPurchases(ctx, reqWithBearerAndBody("user-token", body), planID)
+		assert403(t, err)
+	})
+
+	t.Run("admin bypasses permission check", func(t *testing.T) {
+		mockAuth := authForAdmin(ctx, t)
+		mockStore := new(MockConfigStore)
+		mockStore.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
+			return nil, nil
+		}
+
+		h := &Handler{auth: mockAuth, config: mockStore}
+		_, err := h.createPlannedPurchases(ctx, reqWithBearerAndBody("admin-token", body), planID)
+		assertNotForbidden(t, err)
+	})
+}
+
 // ---- Planned Purchases ----------------------------------------------------
 
 // TestPausePlannedPurchase_PermissionGate covers POST /api/purchases/planned/{id}/pause.

@@ -535,6 +535,14 @@ function canRetryFailedRow(p: HistoryPurchase): boolean {
   // verb directly so a non-seeded role with the same grant still
   // retries rows the backend would also let through.
   if (canAccess('retry-any', 'purchases')) return true;
+  // Mirror canCancelPendingRow / canApprovePendingRow (issue #1418): require
+  // the retry-own permission explicitly before checking creator match.
+  // Without this gate a role that holds NO retry permission at all (e.g. a
+  // Plan Authors group with only plan verbs) would still see the Retry button
+  // on rows they created, because the creator check alone was a sufficient
+  // condition. The backend authorizeSessionRetry is the real security boundary;
+  // this closes the UX gap.
+  if (!canAccess('retry-own', 'purchases')) return false;
   if (!p.created_by_user_id) return false;
   return p.created_by_user_id === user.id;
 }
