@@ -294,6 +294,11 @@ func (c *SearchClient) PurchaseCommitment(ctx context.Context, rec common.Recomm
 		},
 		"location": c.region,
 		"properties": map[string]interface{}{
+			// "SearchService" has no counterpart in the armreservations
+			// ReservedResourceType enum (checked v1.1.0 and v2.0.0), so it
+			// cannot be expressed as an SDK constant like the other service
+			// clients do; the literal is kept until verified against the
+			// live reservation catalog (see issue #1189).
 			"reservedResourceType": "SearchService",
 			"billingScopeId":       fmt.Sprintf("/subscriptions/%s", c.subscriptionID),
 			"term":                 fmt.Sprintf("P%dY", termYears),
