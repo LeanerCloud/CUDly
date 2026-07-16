@@ -253,14 +253,14 @@ func (app *Application) processOneLadderConfig(
 		log.Printf("ladder_run: config %s: LadderCapabilityFactory is nil (not wired), erroring", dbCfg.ID)
 		return outcomeErrored
 	}
-	cap, err := app.LadderCapabilityFactory(ctx, region, cloudAcct.ExternalID)
+	capability, err := app.LadderCapabilityFactory(ctx, region, cloudAcct.ExternalID)
 	if err != nil {
 		log.Printf("ladder_run: config %s: failed to build ladder capability: %v", dbCfg.ID, err)
 		return outcomeErrored
 	}
 
 	// Run the plan engine and persist the result.
-	if err := app.executeLadderRun(ctx, dbCfg, cap, cloudAcct.ExternalID, term, paymentOpt, now); err != nil {
+	if err := app.executeLadderRun(ctx, dbCfg, capability, cloudAcct.ExternalID, term, paymentOpt, now); err != nil {
 		log.Printf("ladder_run: config %s: planning failed: %v", dbCfg.ID, err)
 		return outcomeErrored
 	}
@@ -435,7 +435,8 @@ func ladderWithinCadenceWindow(ctx context.Context, store config.StoreInterface,
 		}
 	default:
 		// Unknown cadence: log but do not block the run. The LadderConfig
-		// validator will surface this as an error during Allocate.
+		// validator surfaces this as an error in ladderConfigToEngine (pre-persist,
+		// fail-loud), so the run will fail before any money action is taken.
 		log.Printf("ladder_run: config %s: unknown cadence=%q, proceeding without cadence gate", dbCfg.ID, dbCfg.Cadence)
 	}
 	return false, "", nil

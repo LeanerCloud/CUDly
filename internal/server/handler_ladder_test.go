@@ -419,6 +419,65 @@ func TestHandleLadderRun_AllConfigsDisabled(t *testing.T) {
 	assert.Nil(t, store.savedRun)
 }
 
+// TestHandleLadderRun_MultiAccountSkip_CountedAndIsolated verifies that:
+// (a) an enabled ladder config whose cloud account ExternalID does NOT match the
+//
+//	resolved caller account is counted as SkippedMultiAccount (not Errored),
+//
+// (b) nothing is persisted for that config, and
+// (c) a second healthy config present in the same run is not affected -- it still
+//
+//	plans successfully (per-config isolation).
+func TestHandleLadderRun_MultiAccountSkip_CountedAndIsolated(t *testing.T) {
+	ctx := testutil.TestContext(t)
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	const ownAccount = "123456789012"
+	const foreignAccount = "999999999999"
+
+	// cfgForeign: enabled, but its cloud account ExternalID is a different AWS account.
+	cfgForeign := validTestDBConfig("cfg-foreign")
+	cfgForeign.CloudAccountID = "acct-foreign"
+
+	// cfgHealthy: enabled, cloud account matches the caller account.
+	cfgHealthy := validTestDBConfig("cfg-healthy-ma")
+	cfgHealthy.CloudAccountID = "acct-own"
+
+	store := &ladderTestStore{
+		cloudAcctByID: map[string]*config.CloudAccount{
+			"acct-foreign": {
+				ID:         "acct-foreign",
+				Provider:   "aws",
+				ExternalID: foreignAccount,
+				Enabled:    true,
+			},
+			"acct-own": validTestCloudAccount(ownAccount),
+		},
+	}
+	app := &Application{
+		Config: store,
+		LadderCapabilityFactory: func(_ context.Context, _, _ string) (pkgladder.LadderCapability, error) {
+			return &fakeLadderCapability{t: t, baseline: testBaseline(10.0)}, nil
+		},
+	}
+
+	// Put the foreign config first to prove isolation is order-independent.
+	configs := []config.LadderConfigDB{cfgForeign, cfgHealthy}
+	result := app.runLadderConfigs(ctx, configs, ownAccount, "us-east-1", pkgladder.Term1Year, pkgladder.PaymentNoUpfront, now)
+
+	require.NotNil(t, result)
+	// (a) The foreign config must be counted as SkippedMultiAccount.
+	assert.Equal(t, 1, result.SkippedMultiAccount, "foreign-account config must be counted SkippedMultiAccount")
+	assert.Equal(t, 0, result.Errored, "a multi-account skip is not an error")
+	// (b) Nothing persisted for the foreign config; only the healthy config run.
+	require.Len(t, store.savedRuns, 1, "only the healthy config may persist a run")
+	require.NotNil(t, store.savedRuns[0].ConfigID)
+	assert.Equal(t, "cfg-healthy-ma", *store.savedRuns[0].ConfigID, "persisted run must be from the healthy config, not the skipped one")
+	// (c) The healthy config still processes successfully despite the skip.
+	assert.Equal(t, 1, result.Planned, "the healthy config must still be planned")
+	assert.Equal(t, 0, result.SkippedDisabled)
+	assert.Equal(t, 0, result.SkippedCadence)
+}
+
 // ============================================================
 // executeLadderRun: healthy single-config run
 // ============================================================
