@@ -1483,7 +1483,7 @@ func TestScheduler_CollectAWSRecommendations_GetRecsError(t *testing.T) {
 // failed" error to the caller instead of returning (empty, nil).
 //
 // Pre-fix this test asserted require.NoError and validated the silent-skip
-// behaviour the COR-03 fix removes. Keeping that assertion would have
+// behavior the COR-03 fix removes. Keeping that assertion would have
 // regressed the very property this PR is trying to enforce.
 func TestScheduler_CollectAzureRecommendations_AllAccountsFailLoud(t *testing.T) {
 	ctx := context.Background()
