@@ -103,7 +103,9 @@ func (r *AllocateResult) IsNoOp() bool {
 //  6. Split gap across base, flex, and buffer roles.
 //  7. Apply per-run spend cap (proportional scaling), then drop sub-minimum
 //     allocations with an informational hold each (never silently lost).
-//  8. Enforce MaxActionsPerRun (error if exceeded).
+//  8. Truncate to MaxActionsPerRun: sort purchases by GapUSDPerHour descending,
+//     keep the largest, emit one ActionHold per dropped action for auditability
+//     (reshapes are always retained first; no truncated money action is silently lost).
 func Allocate(in *AllocationInput) (*AllocateResult, error) {
 	if in == nil {
 		return nil, fmt.Errorf("allocation input must not be nil")
@@ -448,17 +450,13 @@ func buildResult(in *AllocationInput, lowWater, target, existingTotal, gap *big.
 		return nil, err
 	}
 	allocs, skipHolds := dropSubMinimumAllocations(allocs, in.DataSources)
-	totalActions := len(allocs) + len(reshapes)
-	if totalActions > in.Config.MaxActionsPerRun {
-		return nil, fmt.Errorf(
-			"plan exceeds max_actions_per_run (%d): %d allocations + %d reshapes = %d actions; adjust config or reduce scope",
-			in.Config.MaxActionsPerRun, len(allocs), len(reshapes), totalActions,
-		)
-	}
+	allocs, reshapes, truncHolds := truncateToMaxActions(allocs, reshapes, in.Config.MaxActionsPerRun, in.LayerStates, in.DataSources)
+	holds := append(maintHolds, skipHolds...)
+	holds = append(holds, truncHolds...)
 	return &AllocateResult{
 		Allocations: allocs,
 		Reshapes:    reshapes,
-		Holds:       append(maintHolds, skipHolds...),
+		Holds:       holds,
 	}, nil
 }
 
@@ -484,6 +482,121 @@ func dropSubMinimumAllocations(allocs []Allocation, dataSources []string) ([]All
 		kept = append(kept, a)
 	}
 	return kept, holds
+}
+
+// truncateToMaxActions deterministically reduces allocs and reshapes to at
+// most max total actions. Reshapes are preferred over purchases (they are
+// risk-reducing with no new spend). Among purchases, the largest GapUSDPerHour
+// are kept; the smallest are dropped. Every dropped action is returned as an
+// ActionHold so no money action is silently lost.
+//
+// Priority rules (per Q-TRUNC):
+//  1. Reshapes are always retained first. If reshapes alone exceed max,
+//     keep the most urgent (lowest utilization in layerStates; nil = treated
+//     as 100 so it is deprioritized), hold the rest.
+//  2. Remaining slots (max - len(reshapes)) go to purchases sorted by
+//     GapUSDPerHour descending; ties broken by layer name for stable ordering.
+func truncateToMaxActions(
+	allocs []Allocation,
+	reshapes []PlannedAction,
+	max int,
+	layerStates map[LayerType]LayerState,
+	dataSources []string,
+) ([]Allocation, []PlannedAction, []PlannedAction) {
+	if len(allocs)+len(reshapes) <= max {
+		return allocs, reshapes, nil
+	}
+	// Case: reshapes alone fill or exceed the cap.
+	if len(reshapes) >= max {
+		kept, holds := truncateReshapes(reshapes, max, layerStates, dataSources)
+		return nil, kept, holds
+	}
+	// Normal case: reshapes fit; truncate the lowest-gap purchases.
+	purchaseCap := max - len(reshapes)
+	kept, holds := truncatePurchases(allocs, purchaseCap, max, dataSources)
+	return kept, reshapes, holds
+}
+
+// truncateReshapes keeps the most urgent (lowest utilization) reshapes up to
+// max, emitting an ActionHold for each dropped one. Split from
+// truncateToMaxActions to keep cyclomatic complexity within the project limit.
+func truncateReshapes(reshapes []PlannedAction, max int, layerStates map[LayerType]LayerState, dataSources []string) ([]PlannedAction, []PlannedAction) {
+	sorted := make([]PlannedAction, len(reshapes))
+	copy(sorted, reshapes)
+	slices.SortStableFunc(sorted, func(a, b PlannedAction) int {
+		au := layerUtilPctOrMax(layerStates, a.Layer)
+		bu := layerUtilPctOrMax(layerStates, b.Layer)
+		if au < bu {
+			return -1
+		}
+		if au > bu {
+			return 1
+		}
+		if a.Layer < b.Layer {
+			return -1
+		}
+		if a.Layer > b.Layer {
+			return 1
+		}
+		return 0
+	})
+	var holds []PlannedAction
+	for _, r := range sorted[max:] {
+		holds = append(holds, PlannedAction{
+			Action:      ActionHold,
+			Layer:       r.Layer,
+			Rationale:   fmt.Sprintf("deferred to a later run: max_actions_per_run=%d reached (dropped reshape on %s)", max, r.Layer),
+			DataSources: dataSources,
+		})
+	}
+	return sorted[:max], holds
+}
+
+// truncatePurchases keeps the largest-GapUSDPerHour allocations up to
+// purchaseCap, emitting an ActionHold for each dropped one. Split from
+// truncateToMaxActions to keep cyclomatic complexity within the project limit.
+func truncatePurchases(allocs []Allocation, purchaseCap, maxActions int, dataSources []string) ([]Allocation, []PlannedAction) {
+	sorted := make([]Allocation, len(allocs))
+	copy(sorted, allocs)
+	slices.SortStableFunc(sorted, func(a, b Allocation) int {
+		// Descending by GapUSDPerHour (largest first).
+		cmp := b.GapUSDPerHour.Cmp(a.GapUSDPerHour)
+		if cmp != 0 {
+			return cmp
+		}
+		// Stable tie-break by layer name.
+		if a.Layer < b.Layer {
+			return -1
+		}
+		if a.Layer > b.Layer {
+			return 1
+		}
+		return 0
+	})
+	var holds []PlannedAction
+	for _, a := range sorted[purchaseCap:] {
+		holds = append(holds, PlannedAction{
+			Action: ActionHold,
+			Layer:  a.Layer,
+			Rationale: fmt.Sprintf(
+				"deferred to a later run: max_actions_per_run=%d reached (dropped %s on %s)",
+				maxActions, fmtRatUSD(a.GapUSDPerHour), a.Layer,
+			),
+			DataSources: dataSources,
+		})
+	}
+	return sorted[:purchaseCap], holds
+}
+
+// layerUtilPctOrMax returns the UtilizationPct for the given layer from
+// layerStates, or 100 when absent or nil. Treating unknown utilization as
+// 100 (fully healthy) deprioritizes it when sorting reshapes by urgency,
+// so confirmed low-utilization layers are retained over unmeasured ones.
+func layerUtilPctOrMax(states map[LayerType]LayerState, layer LayerType) float64 {
+	if st, ok := states[layer]; ok && st.UtilizationPct != nil {
+		return *st.UtilizationPct
+	}
+	return 100
 }
 
 // splitGap distributes gap across the base, buffer, and flex roles. It handles
