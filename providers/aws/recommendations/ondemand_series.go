@@ -220,19 +220,23 @@ func onDemandSeriesFilter(region string) *types.Expression {
 }
 
 // accumulateDailyResults extracts daily USD/hr values from one page of
-// GetCostAndUsage results and merges them into byDate. A row missing the
-// requested metric key (or carrying a nil Amount) fails loud: CE echoes
-// every requested metric on every returned row, with genuine $0 days arriving
-// as Amount:"0" -- a missing key therefore signals a request-vocabulary bug,
-// and writing a fabricated 0 would silently corrupt the baseline
-// (feedback_no_silent_fallbacks). Unparseable amount strings also fail loud
-// (feedback_strict_int_parse). Dividing by 24 converts daily USD to USD/hr;
-// 24 is derived from the DAILY granularity contract (one day = 24 hours),
-// not a magic constant.
+// GetCostAndUsage results and merges them into byDate. All malformed rows
+// fail loud (feedback_no_silent_fallbacks):
+//   - A row missing its TimePeriod/Start cannot be dated; silently skipping
+//     it would leave an incomplete series that can still pass downstream
+//     minimum-length checks and produce an incorrect baseline.
+//   - A row missing the requested metric key (or carrying a nil Amount)
+//     signals a request-vocabulary bug: CE echoes every requested metric on
+//     every returned row, with genuine $0 days arriving as Amount:"0";
+//     writing a fabricated 0 would silently corrupt the baseline.
+//   - Unparseable amount strings fail loud (feedback_strict_int_parse).
+//
+// Dividing by 24 converts daily USD to USD/hr; 24 is derived from the DAILY
+// granularity contract (one day = 24 hours), not a magic constant.
 func accumulateDailyResults(byDate map[string]float64, out *costexplorer.GetCostAndUsageOutput) error {
-	for _, r := range out.ResultsByTime {
+	for i, r := range out.ResultsByTime {
 		if r.TimePeriod == nil || r.TimePeriod.Start == nil {
-			continue
+			return fmt.Errorf("CE result row %d is missing its period start; a row that cannot be dated would leave an undetectable gap in the daily series", i)
 		}
 		dateStr := aws.ToString(r.TimePeriod.Start)
 		mv, ok := r.Total[onDemandMetric]

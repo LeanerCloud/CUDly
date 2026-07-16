@@ -65,7 +65,8 @@ func dailyResult(dateStr string, totalUSD float64) types.ResultByTime {
 }
 
 // dailyResultNoMetric builds a ResultByTime entry with a missing metric key,
-// exercising the "metric absent" branch that falls back to 0.
+// exercising the missing-metric error path (production fails loud rather
+// than fabricating a $0 day).
 func dailyResultNoMetric(dateStr string) types.ResultByTime {
 	return types.ResultByTime{
 		TimePeriod: &types.DateInterval{Start: aws.String(dateStr)},
@@ -355,6 +356,30 @@ func TestGetOnDemandSeries_MissingMetricKeyFails(t *testing.T) {
 	require.Error(t, err, "a missing metric key must fail loud, not fabricate $0")
 	assert.Contains(t, err.Error(), "missing the \"UnblendedCost\" metric")
 	assert.Contains(t, err.Error(), "2026-01-02", "error must name the offending day")
+}
+
+// TestGetOnDemandSeries_MissingPeriodStartFails verifies that a result row
+// missing its TimePeriod/Start fails loud instead of being silently skipped:
+// an undatable row dropped from the series leaves a gap that can still pass
+// downstream minimum-length checks and produce an incorrect baseline.
+func TestGetOnDemandSeries_MissingPeriodStartFails(t *testing.T) {
+	pages := []*costexplorer.GetCostAndUsageOutput{{
+		ResultsByTime: []types.ResultByTime{
+			dailyResult("2026-01-01", 24.0),
+			{ // undatable row: nil TimePeriod
+				TimePeriod: nil,
+				Total:      map[string]types.MetricValue{onDemandMetric: {Amount: aws.String("48")}},
+			},
+		},
+	}}
+	mock := &mockOnDemandCE{pages: pages}
+	client := newOnDemandClient(mock)
+
+	_, err := client.GetOnDemandSeries(context.Background(), "us-east-1", 7)
+
+	require.Error(t, err, "a row missing its period start must fail loud, not be skipped")
+	assert.Contains(t, err.Error(), "missing its period start")
+	assert.Contains(t, err.Error(), "row 1", "error must name the offending row index")
 }
 
 // TestGetOnDemandSeries_AllZeroSeriesFails verifies that a complete series of

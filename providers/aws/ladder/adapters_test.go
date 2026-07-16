@@ -3,6 +3,7 @@ package ladder
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -205,6 +206,51 @@ func TestSPLister_PaginationExhausted(t *testing.T) {
 	assert.Equal(t, "sp-1", got[0].PlanID)
 	assert.Equal(t, "sp-2", got[1].PlanID)
 	assert.Equal(t, 2, mock.calls, "two API calls expected")
+}
+
+// TestSPLister_DeepPaginationNoCap verifies there is NO fixed page cap:
+// DescribeSavingsPlans documents no page limit, so an account with more SPs
+// than any arbitrary cap must still be fully listed (a truncated listing
+// would understate existing commitment). 25 pages > the removed 20-page cap.
+func TestSPLister_DeepPaginationNoCap(t *testing.T) {
+	const n = 25
+	pages := make([]*sdksp.DescribeSavingsPlansOutput, n)
+	tokens := make([]string, n-1)
+	for i := 0; i < n; i++ {
+		sp := makeSPEntry(fmt.Sprintf("sp-%02d", i), string(sptypes.SavingsPlanTypeCompute), "1.00", "", sptypes.SavingsPlanStateActive)
+		out := &sdksp.DescribeSavingsPlansOutput{SavingsPlans: []sptypes.SavingsPlan{sp}}
+		if i < n-1 {
+			tok := fmt.Sprintf("tok%02d", i+1)
+			out.NextToken = aws.String(tok)
+			tokens[i] = tok
+		}
+		pages[i] = out
+	}
+	mock := &mockDescribeSP{pages: pages, tokens: tokens}
+	lister := newSPLister(mock)
+
+	got, err := lister.ListActiveSPs(context.Background())
+
+	require.NoError(t, err, "deep pagination must not hit an artificial page cap")
+	assert.Len(t, got, n, "all %d pages must be listed", n)
+	assert.Equal(t, n, mock.calls)
+}
+
+// TestSPLister_RepeatedTokenFails verifies the loop guard that replaced the
+// page cap: a NextToken that repeats indicates API misbehavior and must abort
+// with an error instead of looping forever.
+func TestSPLister_RepeatedTokenFails(t *testing.T) {
+	pages := []*sdksp.DescribeSavingsPlansOutput{
+		{NextToken: aws.String("tok1")},
+		{NextToken: aws.String("tok1")}, // same token again -> loop
+	}
+	mock := &mockDescribeSP{pages: pages, tokens: []string{"tok1"}}
+	lister := newSPLister(mock)
+
+	_, err := lister.ListActiveSPs(context.Background())
+
+	require.Error(t, err, "a repeated pagination token must abort the loop")
+	assert.Contains(t, err.Error(), "repeated pagination token")
 }
 
 // TestSPLister_InvalidCommitmentFails verifies fail-loud on a non-numeric

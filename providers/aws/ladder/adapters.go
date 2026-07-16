@@ -15,10 +15,6 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/aws/recommendations"
 )
 
-// maxSPListPages caps the DescribeSavingsPlans pagination loop to guard against
-// a runaway token loop (mirrors the pattern from issue #692 / #1019).
-const maxSPListPages = 20
-
 // activeSPListAPI is the minimal interface for listing Savings Plans.
 // Only DescribeSavingsPlans is needed; the full SavingsPlansAPI from
 // providers/aws/services/savingsplans includes purchase and offering methods
@@ -71,10 +67,16 @@ type spListerAdapter struct {
 //
 // Commitment strings and SP dates are validated at the boundary and fail
 // loud (feedback_strict_int_parse, feedback_no_silent_fallbacks).
-// Pagination is fully exhausted (issue #692).
+//
+// Pagination is fully exhausted (issue #692): DescribeSavingsPlans documents
+// no page limit, so a fixed page cap would silently truncate accounts with
+// more Savings Plans than the cap (understating existing commitment). The
+// only loop guard needed is against a REPEATED NextToken, which indicates
+// API misbehavior rather than a legitimately long listing.
 func (a *spListerAdapter) ListActiveSPs(ctx context.Context) ([]ActiveSP, error) {
 	var sps []ActiveSP
 	var nextToken *string
+	seenTokens := make(map[string]struct{})
 	page := 0
 
 	for {
@@ -82,9 +84,6 @@ func (a *spListerAdapter) ListActiveSPs(ctx context.Context) ([]ActiveSP, error)
 			return nil, fmt.Errorf("ListActiveSPs: context cancelled: %w", err)
 		}
 		page++
-		if page > maxSPListPages {
-			return nil, fmt.Errorf("ListActiveSPs: exceeded %d page cap; possible API token loop", maxSPListPages)
-		}
 
 		input := &sdksp.DescribeSavingsPlansInput{
 			States:     spListerStates,
@@ -101,9 +100,14 @@ func (a *spListerAdapter) ListActiveSPs(ctx context.Context) ([]ActiveSP, error)
 			return nil, err
 		}
 
-		if out.NextToken == nil || aws.ToString(out.NextToken) == "" {
+		tok := aws.ToString(out.NextToken)
+		if tok == "" {
 			break
 		}
+		if _, dup := seenTokens[tok]; dup {
+			return nil, fmt.Errorf("ListActiveSPs: DescribeSavingsPlans returned a repeated pagination token on page %d; aborting to avoid an infinite loop", page)
+		}
+		seenTokens[tok] = struct{}{}
 		nextToken = out.NextToken
 	}
 	return sps, nil
