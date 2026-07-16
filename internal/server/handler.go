@@ -53,6 +53,12 @@ const (
 	// record is eventually consistent without requiring the user to retry (which
 	// would be rejected by Azure). See issue #290 Finding #6.
 	TaskFinalizeRevocations ScheduledTaskType = "finalize_revocations"
+	// TaskLadderRun runs the commitment-laddering planner for every enabled
+	// ladder_config. It computes a plan (Allocate + BuildTranches), persists the
+	// ladder_run and ladder_tranches rows with status=planned, and stops. No
+	// purchases, no emails, no reshapes, no approval tokens are issued in this
+	// plan-only phase (PR-2). Execution arrives in a later PR.
+	TaskLadderRun ScheduledTaskType = "ladder_run"
 )
 
 // scheduledEventActions maps a raw scheduled-event action string to its
@@ -70,6 +76,7 @@ var scheduledEventActions = map[string]ScheduledTaskType{
 	"reap_stuck_purchases":        TaskReapStuckPurchases,
 	"fire_scheduled_purchases":    TaskFireScheduledPurchases,
 	"finalize_revocations":        TaskFinalizeRevocations,
+	"ladder_run":                  TaskLadderRun,
 }
 
 // HandleScheduledTask processes a scheduled task by type.
@@ -114,6 +121,7 @@ func (app *Application) dispatchTask(ctx context.Context, taskType ScheduledTask
 		TaskReapStuckPurchases:        func(c context.Context) (any, error) { return app.handleReapStuckPurchases(c) },
 		TaskFireScheduledPurchases:    func(c context.Context) (any, error) { return app.handleFireScheduledPurchases(c) },
 		TaskFinalizeRevocations:       func(c context.Context) (any, error) { return app.handleFinalizeRevocations(c) },
+		TaskLadderRun:                 func(c context.Context) (any, error) { return app.handleLadderRun(c) },
 	}
 	handler, ok := handlers[taskType]
 	if !ok {

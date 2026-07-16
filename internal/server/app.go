@@ -29,7 +29,9 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/LeanerCloud/CUDly/internal/secrets"
 	"github.com/LeanerCloud/CUDly/internal/server/scheduledauth"
+	pkgladder "github.com/LeanerCloud/CUDly/pkg/ladder"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
+	awsladder "github.com/LeanerCloud/CUDly/providers/aws/ladder"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -53,6 +55,20 @@ type Application struct {
 	Version            string
 	DB                 *database.Connection // PostgreSQL database connection
 	TaskLocker         TaskLocker           // Advisory lock for scheduled tasks (defaults to DB)
+
+	// LadderCapabilityFactory constructs a LadderCapability for the given region
+	// and accountID. It is called once per ladder_run task invocation.
+	// Defaults to awsladder.NewFromAWSConfig in production; tests replace it
+	// with a fake factory that returns a hermetic LadderCapability.
+	LadderCapabilityFactory func(ctx context.Context, region, accountID string) (pkgladder.LadderCapability, error)
+
+	// LadderAccountResolver resolves the Lambda's own AWS account ID and region
+	// for the single-account ladder gate (Q1). It MUST fail loud when the
+	// account cannot be determined: the account ID gates which configs run, so a
+	// transient STS failure must abort the whole ladder_run rather than silently
+	// skip every config as multi-account. Nil in production -> the default
+	// STS-backed resolver (defaultLadderAccountResolver); tests inject a stub.
+	LadderAccountResolver func(ctx context.Context) (accountID, region string, err error)
 
 	// Static file serving directory (from STATIC_DIR env var)
 	staticDir string
@@ -564,7 +580,12 @@ func NewApplication(ctx context.Context, version string) (*Application, error) {
 		STSClient:      stsClient,
 	}
 
-	return NewApplicationFromDeps(ctx, cfg, deps)
+	app, err := NewApplicationFromDeps(ctx, cfg, deps)
+	if err != nil {
+		return nil, err
+	}
+	app.LadderCapabilityFactory = awsladder.NewFromAWSConfig
+	return app, nil
 }
 
 // ensureDB ensures the database connection is established (lazy initialization).

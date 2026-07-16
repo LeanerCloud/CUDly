@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/pkg/ladder"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/mock"
 )
@@ -1364,6 +1365,101 @@ func (m *MockConfigStore) UpsertLadderConfig(ctx context.Context, cfg *config.La
 	v, ok := args.Get(0).(*config.LadderConfigDB)
 	if !ok {
 		panic(fmt.Sprintf("mock: expected *config.LadderConfigDB, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
+// SaveLadderRun mocks the SaveLadderRun operation.
+// Returns (nil, nil) when no expectation is registered.
+func (m *MockConfigStore) SaveLadderRun(ctx context.Context, run *config.LadderRunDB) (*config.LadderRunDB, error) {
+	if !isExpected(&m.Mock, "SaveLadderRun") {
+		return nil, nil
+	}
+	args := m.Called(ctx, run)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(*config.LadderRunDB)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *config.LadderRunDB, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
+// SaveLadderRunWithTranches mocks the SaveLadderRunWithTranches operation.
+// Returns the run unchanged (transaction succeeds) when no expectation is
+// registered, so tests that only care about other calls stay green.
+func (m *MockConfigStore) SaveLadderRunWithTranches(ctx context.Context, run *config.LadderRunDB, tranches []config.LadderTrancheDB) (*config.LadderRunDB, error) {
+	if !isExpected(&m.Mock, "SaveLadderRunWithTranches") {
+		return run, nil
+	}
+	args := m.Called(ctx, run, tranches)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(*config.LadderRunDB)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *config.LadderRunDB, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
+// GetLadderRun mocks the GetLadderRun operation.
+// Returns (nil, nil) when no expectation is registered.
+func (m *MockConfigStore) GetLadderRun(ctx context.Context, id string) (*config.LadderRunDB, error) {
+	if !isExpected(&m.Mock, "GetLadderRun") {
+		return nil, nil
+	}
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(*config.LadderRunDB)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *config.LadderRunDB, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
+// SaveLadderTranches mocks the SaveLadderTranches operation.
+// Returns nil (no-op) when no expectation is registered.
+func (m *MockConfigStore) SaveLadderTranches(ctx context.Context, tranches []config.LadderTrancheDB) error {
+	if !isExpected(&m.Mock, "SaveLadderTranches") {
+		return nil
+	}
+	return m.Called(ctx, tranches).Error(0)
+}
+
+// LatestLadderRunStartedAt mocks the LatestLadderRunStartedAt operation.
+// Returns (nil, nil) when no expectation is registered.
+func (m *MockConfigStore) LatestLadderRunStartedAt(ctx context.Context, configID string) (*time.Time, error) {
+	if !isExpected(&m.Mock, "LatestLadderRunStartedAt") {
+		return nil, nil
+	}
+	args := m.Called(ctx, configID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(*time.Time)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *time.Time, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
+// TransitionLadderRunStatus mocks the TransitionLadderRunStatus operation.
+// Returns (nil, nil) when no expectation is registered (CAS race-lost path).
+func (m *MockConfigStore) TransitionLadderRunStatus(ctx context.Context, id string, fromStatuses []ladder.RunStatus, toStatus ladder.RunStatus) (*config.LadderRunDB, error) {
+	if !isExpected(&m.Mock, "TransitionLadderRunStatus") {
+		return nil, nil
+	}
+	args := m.Called(ctx, id, fromStatuses, toStatus)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(*config.LadderRunDB)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *config.LadderRunDB, got %T", args.Get(0)))
 	}
 	return v, args.Error(1)
 }

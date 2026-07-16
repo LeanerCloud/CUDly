@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/pkg/ladder"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -746,6 +747,24 @@ func (m *mockConfigStore) GetLadderConfig(_ context.Context, _, _ string) (*conf
 }
 func (m *mockConfigStore) UpsertLadderConfig(_ context.Context, cfg *config.LadderConfigDB) (*config.LadderConfigDB, error) {
 	return cfg, nil
+}
+func (m *mockConfigStore) SaveLadderRun(_ context.Context, run *config.LadderRunDB) (*config.LadderRunDB, error) {
+	return run, nil
+}
+func (m *mockConfigStore) SaveLadderRunWithTranches(_ context.Context, run *config.LadderRunDB, _ []config.LadderTrancheDB) (*config.LadderRunDB, error) {
+	return run, nil
+}
+func (m *mockConfigStore) GetLadderRun(_ context.Context, _ string) (*config.LadderRunDB, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) SaveLadderTranches(_ context.Context, _ []config.LadderTrancheDB) error {
+	return nil
+}
+func (m *mockConfigStore) LatestLadderRunStartedAt(_ context.Context, _ string) (*time.Time, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) TransitionLadderRunStatus(_ context.Context, _ string, _ []ladder.RunStatus, _ ladder.RunStatus) (*config.LadderRunDB, error) {
+	return nil, nil
 }
 func (m *mockConfigStore) UpdateGlobalConfigAtomic(_ context.Context, apply func(*config.GlobalConfig) error) (*config.GlobalConfig, error) {
 	cfg := &config.GlobalConfig{}
