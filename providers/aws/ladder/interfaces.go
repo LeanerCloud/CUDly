@@ -77,16 +77,28 @@ type riCoverageSource interface {
 	GetRICoverageMap(ctx context.Context, lookbackDays int, regions []string) (recommendations.PoolCoverageMap, error)
 }
 
+// DailyPoint is a single calendar-day entry in the on-demand cost series.
+// Date is the UTC calendar day (time-of-day component is irrelevant; callers
+// should truncate to midnight UTC for consistent comparisons).
+// USDPerHour is the average on-demand-equivalent spend in USD per hour for
+// that calendar day (total daily spend / 24).
+type DailyPoint struct {
+	// Date is the UTC calendar day this data point covers.
+	Date time.Time
+	// USDPerHour is the on-demand-equivalent spend averaged over the day.
+	USDPerHour float64
+}
+
 // onDemandSeriesSource is the narrow interface for the daily on-demand spend
 // series consumed by GetUsageBaseline. GetOnDemandSeries returns a slice of
-// len(lookbackDays) daily on-demand-equivalent USD/hour values for the given
-// region, ordered oldest-to-newest. Each element is the average on-demand
-// spend in USD per hour for that calendar day. The real implementation sources
-// this from CE GetCostAndUsage with Granularity=Daily filtered to on-demand
-// usage types; wiring happens when the cost-and-usage collector PR lands.
-// Tests pass a hermetic fake.
+// DailyPoints for the given region and lookback window, ordered oldest-to-newest.
+// Each element covers one calendar day; the Date field allows GetUsageBaseline
+// to enforce freshness (the most-recent point must be within maxSeriesAgeDays).
+// The real implementation sources this from CE GetCostAndUsage with
+// Granularity=Daily filtered to on-demand usage types; wiring happens when the
+// cost-and-usage collector PR (L2) lands. Tests pass a hermetic fake.
 type onDemandSeriesSource interface {
-	GetOnDemandSeries(ctx context.Context, region string, lookbackDays int) ([]float64, error)
+	GetOnDemandSeries(ctx context.Context, region string, lookbackDays int) ([]DailyPoint, error)
 }
 
 // utilizationSource is the narrow interface for RI utilization data.

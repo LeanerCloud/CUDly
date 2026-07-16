@@ -88,7 +88,7 @@ func (noopRICoverageSource) GetRICoverageMap(_ context.Context, _ int, _ []strin
 // Real wiring (Cost Explorer adapter) arrives in PR-4.
 type noopOnDemandSeriesSource struct{}
 
-func (noopOnDemandSeriesSource) GetOnDemandSeries(_ context.Context, _ string, _ int) ([]float64, error) {
+func (noopOnDemandSeriesSource) GetOnDemandSeries(_ context.Context, _ string, _ int) ([]DailyPoint, error) {
 	return nil, fmt.Errorf("on-demand series source not yet wired: the Cost Explorer adapter is connected in PR-4; until then plan runs will be recorded as failed")
 }
 

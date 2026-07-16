@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"time"
 
 	"github.com/LeanerCloud/CUDly/pkg/ladder"
 )
@@ -14,6 +15,24 @@ import (
 // low-water-mark; GetUsageBaseline returns an error when the series is shorter.
 // The caller (engine) should configure LookbackDays >= minBaselineSeriesDays.
 const minBaselineSeriesDays = 7
+
+// maxMissingDays is the maximum number of calendar days that may be absent
+// from the series within the configured lookback window and still yield a
+// trustworthy baseline. CE data typically lags 24-48 hours, so a 30-day
+// window may return 28-29 points; one extra day of tolerance is provided.
+// A series with more than maxMissingDays absent days returns a coverage error.
+// Distinct from minBaselineSeriesDays: this is a window-relative completeness
+// check, not an absolute floor.
+const maxMissingDays = 3
+
+// maxSeriesAgeDays is the maximum age in calendar days of the most-recent data
+// point in the on-demand series before the series is considered stale.
+// CE cost data lags 24-48 hours, so yesterday's data (1 day old) is normal;
+// a point older than maxSeriesAgeDays indicates the CE feed has stalled, the
+// date-range parameter is wrong, or CE has temporarily stopped ingesting data
+// for the account. GetUsageBaseline fails loud rather than computing a baseline
+// from stale data that the utilization clamp would then trust.
+const maxSeriesAgeDays = 3
 
 // GetUsageBaseline computes a statistical low-water-mark from a daily
 // on-demand-equivalent USD/hour series returned by the injected onDemandSeriesSource.
@@ -44,6 +63,11 @@ const minBaselineSeriesDays = 7
 //   - Series empty: hard error (no data from the coverage source).
 //   - Series shorter than minBaselineSeriesDays: hard error (insufficient
 //     history for a reliable percentile estimate).
+//   - Too few points INSIDE the lookback window (more than maxMissingDays
+//     missing days): hard error (coverage check; total count is not enough,
+//     the points must actually fall within [today-lookbackDays, today]).
+//   - Most-recent point older than maxSeriesAgeDays days: hard error (stale
+//     series; GetUsageBaseline fails loud rather than trusting stale data).
 //   - Series containing a non-finite (NaN/Inf) or negative element: hard error
 //     naming the offending index (a cost series must be finite and >= 0).
 //   - percentile not in (0, 100]: hard error (out-of-range).
@@ -55,19 +79,37 @@ func (a *AWSLadder) GetUsageBaseline(ctx context.Context, scope ladder.Scope, lo
 		return ladder.UsageBaseline{}, err
 	}
 
-	series, err := a.onDemand.GetOnDemandSeries(ctx, a.cfg.Region, lookbackDays)
+	points, err := a.onDemand.GetOnDemandSeries(ctx, a.cfg.Region, lookbackDays)
 	if err != nil {
 		return ladder.UsageBaseline{}, fmt.Errorf("GetUsageBaseline: on-demand series fetch failed: %w", err)
 	}
-	if len(series) == 0 {
+	if len(points) == 0 {
 		return ladder.UsageBaseline{}, fmt.Errorf("GetUsageBaseline: on-demand series is empty for region %s (series source returned no data)", a.cfg.Region)
 	}
-	if len(series) < minBaselineSeriesDays {
+	if len(points) < minBaselineSeriesDays {
 		return ladder.UsageBaseline{}, fmt.Errorf(
 			"GetUsageBaseline: series length %d is below minimum %d days; extend the lookback window or check the on-demand series source",
-			len(series), minBaselineSeriesDays,
+			len(points), minBaselineSeriesDays,
 		)
 	}
+	// today is normalized once to midnight UTC and shared by both the coverage
+	// window and the freshness check so all date math uses the same calendar-day
+	// reference (see utcDay).
+	today := utcDay(time.Now())
+	// Coverage check: enough points must fall INSIDE the requested lookback
+	// window. CE typically lags 24-48h, so up to maxMissingDays absent days is
+	// acceptable; more indicates truncated date ranges or feed gaps.
+	if cErr := validateInWindowCoverage(points, lookbackDays, today); cErr != nil {
+		return ladder.UsageBaseline{}, fmt.Errorf("GetUsageBaseline: %w", cErr)
+	}
+	// Freshness check: the most-recent point must be within maxSeriesAgeDays.
+	// A stale tail means the CE feed has stopped or the date range is wrong;
+	// computing a baseline from stale data would yield a confidently wrong clamp.
+	if fErr := validateSeriesFreshness(points, today); fErr != nil {
+		return ladder.UsageBaseline{}, fmt.Errorf("GetUsageBaseline: %w", fErr)
+	}
+
+	series := extractValues(points)
 	if vErr := validateSeries(series); vErr != nil {
 		return ladder.UsageBaseline{}, fmt.Errorf("GetUsageBaseline: %w", vErr)
 	}
@@ -89,6 +131,103 @@ func (a *AWSLadder) GetUsageBaseline(ctx context.Context, scope ladder.Scope, lo
 		LookbackDays:       lookbackDays,
 		Percentile:         percentile,
 	}, nil
+}
+
+// utcDay normalizes t to the start of its UTC calendar day (midnight UTC).
+// All freshness and lookback-window math compares dates as whole UTC calendar
+// days; funneling every date through utcDay keeps those comparisons
+// deterministic and independent of the current time-of-day.
+func utcDay(t time.Time) time.Time {
+	return t.UTC().Truncate(24 * time.Hour)
+}
+
+// validateInWindowCoverage rejects a series that does not have enough points
+// falling INSIDE the lookback window [today-lookbackDays, today]. Counting the
+// total number of points is insufficient: N points smeared across more than N
+// days (e.g. 27 points spread over 53 days) would pass a naive count check
+// while leaving the recent window sparsely covered, so the percentile would be
+// computed over data that does not represent the requested window. Every date
+// is normalized to its UTC calendar day (utcDay) before comparison.
+//
+// today must already be normalized via utcDay by the caller.
+func validateInWindowCoverage(points []DailyPoint, lookbackDays int, today time.Time) error {
+	windowStart := today.AddDate(0, 0, -lookbackDays)
+	inWindow := 0
+	for _, p := range points {
+		d := utcDay(p.Date)
+		if !d.Before(windowStart) && !d.After(today) {
+			inWindow++
+		}
+	}
+	if minRequired := lookbackDays - maxMissingDays; inWindow < minRequired {
+		return fmt.Errorf(
+			"on-demand series has %d points inside the %d-day lookback window (minimum %d = %d - maxMissingDays %d); the series source may have gaps or a truncated/misaligned date range",
+			inWindow, lookbackDays, minRequired, lookbackDays, maxMissingDays,
+		)
+	}
+	return nil
+}
+
+// validateSeriesFreshness returns an error when the series is not in strictly
+// increasing calendar-day order or when its most-recent DailyPoint is older
+// than maxSeriesAgeDays calendar days. It is called after the series has been
+// confirmed non-empty and above minBaselineSeriesDays by GetUsageBaseline, so
+// len(points) > 0 is guaranteed.
+//
+// The chronology check comes first and fails loud on any non-monotonic or
+// duplicate calendar date: the freshness check trusts the last element to be
+// the newest point, so an unsorted or duplicate-date series (e.g. from a future
+// CE adapter that returns pages out of order) could otherwise make a stale tail
+// pass or a fresh series falsely error. It also catches duplicate-date rows the
+// count-based coverage check cannot see (N points spanning fewer than N days).
+//
+// Age is the difference in whole UTC calendar days between today and the
+// most-recent point (both normalized via utcDay), so the result is
+// time-of-day independent. today must already be normalized by the caller.
+func validateSeriesFreshness(points []DailyPoint, today time.Time) error {
+	if err := validateSeriesChronology(points); err != nil {
+		return err
+	}
+	latestDay := utcDay(points[len(points)-1].Date)
+	ageDays := int(today.Sub(latestDay).Hours() / 24)
+	if ageDays > maxSeriesAgeDays {
+		return fmt.Errorf(
+			"on-demand series is stale: most recent data point is %s (%d days old, maximum %d); check that the CE data feed is active or that the lookback date range ends near today",
+			latestDay.Format("2006-01-02"), ageDays, maxSeriesAgeDays,
+		)
+	}
+	return nil
+}
+
+// validateSeriesChronology verifies the series is in strictly increasing
+// calendar-day order (oldest-to-newest, no duplicate days). Dates are compared
+// after truncation to the UTC day so that a same-day pair with differing
+// time-of-day components is still rejected as a duplicate. The error names the
+// offending index and both dates so a data-source ordering bug is traceable.
+func validateSeriesChronology(points []DailyPoint) error {
+	for i := 1; i < len(points); i++ {
+		prev := points[i-1].Date.UTC().Truncate(24 * time.Hour)
+		cur := points[i].Date.UTC().Truncate(24 * time.Hour)
+		if !cur.After(prev) {
+			return fmt.Errorf(
+				"on-demand series is not in strictly increasing date order: point %d (%s) does not come after point %d (%s); the series source must return one entry per day, oldest-to-newest",
+				i, points[i].Date.Format("2006-01-02"), i-1, points[i-1].Date.Format("2006-01-02"),
+			)
+		}
+	}
+	return nil
+}
+
+// extractValues returns the USDPerHour field of each DailyPoint as a plain
+// []float64, ordered oldest-to-newest, for use by validateSeries and
+// nearestRankPercentile. The Date fields are consumed by validateSeriesFreshness
+// and not needed downstream.
+func extractValues(points []DailyPoint) []float64 {
+	out := make([]float64, len(points))
+	for i, p := range points {
+		out[i] = p.USDPerHour
+	}
+	return out
 }
 
 // validateSeries rejects series containing non-finite (NaN/Inf) or negative
