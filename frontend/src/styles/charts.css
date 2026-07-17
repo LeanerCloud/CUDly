@@ -75,3 +75,20 @@
     color: var(--cudly-text-muted);
     margin-top: 0.25rem;
 }
+
+/* Issue #1417 / #239: per-row usage-history sparkline in Opportunities table.
+   The SVG uses stroke="currentColor" and fill="currentColor" so an explicit
+   color ensures the sparkline is always visible regardless of ancestor color
+   overrides. display:block removes the inline descent gap so the 20px SVG
+   sits flush within the table cell. */
+.usage-sparkline-cell {
+    text-align: center;
+    white-space: nowrap;
+    min-width: 4rem;
+}
+
+.usage-sparkline {
+    display: block;
+    margin: auto;
+    color: var(--cudly-primary, #2563eb);
+}
