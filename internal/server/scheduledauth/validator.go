@@ -266,7 +266,7 @@ func (v *Validator) Warmup(ctx context.Context) {
 		log.Printf("scheduledauth: WARN — JWKS warmup request build failed: %v", err)
 		return
 	}
-	resp, err := v.httpClient.Do(req)
+	resp, err := v.httpClient.Do(req) // #nosec G704 -- jwksURL is operator-supplied config (SCHEDULED_TASK_OIDC_JWKS_URL), not request-tainted user input; v.httpClient is the hardened client from pkg/httpclient that blocks IMDS/link-local endpoints and enforces dial/TLS/overall timeouts
 	if err != nil {
 		log.Printf("scheduledauth: WARN — JWKS warmup fetch failed for %s: %v "+
 			"(validator will retry on first request)", v.jwksURL, err)
