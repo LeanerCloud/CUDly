@@ -303,6 +303,34 @@ describe('History Module', () => {
       expect(html).toContain('class="muted"');
     });
 
+    test('Issue #1416: explicit null monthly_cost renders as dash, not "$0"', async () => {
+      (api.getHistory as jest.Mock).mockResolvedValue({
+        summary: {},
+        purchases: [
+          {
+            timestamp: '2024-02-01T00:00:00Z',
+            provider: 'aws',
+            service: 'ec2',
+            resource_type: 't3.medium',
+            region: 'us-east-1',
+            count: 1,
+            term: 1,
+            upfront_cost: 500,
+            monthly_cost: null,
+            estimated_savings: 20,
+          },
+        ]
+      });
+
+      await loadHistory();
+
+      const list = document.getElementById('history-list');
+      const html = list?.innerHTML || '';
+      // Explicit null must render the muted dash, never "$0".
+      expect(html).toContain('class="muted"');
+      expect(html).not.toContain('$0');
+    });
+
     test('shows empty message when no purchases', async () => {
       (api.getHistory as jest.Mock).mockResolvedValue({
         summary: {},
