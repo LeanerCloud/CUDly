@@ -186,16 +186,29 @@ func (s *Service) HasAPIKeyPermissionForConstraintsAPI(ctx context.Context, keyI
 	if key == nil {
 		return false, fmt.Errorf("API key not found")
 	}
+	// lookupAPIKeyUser also verifies that the user is still active.
 	user, err := s.lookupAPIKeyUser(ctx, userID)
 	if err != nil {
 		return false, err
 	}
-	perms, err := s.ComputeEffectivePermissions(ctx, key, user)
+	// Fetch the owner's auth context once; it is used for two purposes:
+	//   1. Computing the key's effective permissions (key ∩ owner at action/resource level)
+	//   2. Independently enforcing the owner's group constraint limits.
+	// This prevents a key whose MaxPurchaseAmount (or other constraint) exceeds the owner's
+	// group limit from authorizing more than the owner's group allows (CR finding).
+	ownerAuthCtx, err := s.GetAuthContext(ctx, user.ID)
 	if err != nil {
-		return false, fmt.Errorf("computing effective API key permissions: %w", err)
+		return false, fmt.Errorf("failed to get owner auth context for constraint check: %w", err)
 	}
+	perms := computeEffectivePermissionsFromAuthCtx(key, ownerAuthCtx)
+	// Each constraint set must independently pass both gates:
+	//   - The key's effective permissions (key's constraint limits, e.g. MaxPurchaseAmount).
+	//   - The owner's group permissions (owner's constraint limits).
 	for i := range constraintSets {
 		if !s.permissionsAllow(perms, action, resource, &constraintSets[i]) {
+			return false, nil
+		}
+		if !s.permissionsAllow(ownerAuthCtx.Permissions, action, resource, &constraintSets[i]) {
 			return false, nil
 		}
 	}

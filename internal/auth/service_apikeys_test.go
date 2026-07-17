@@ -928,6 +928,64 @@ func TestService_HasAPIKeyPermissionAPI(t *testing.T) {
 	})
 }
 
+// TestService_HasAPIKeyPermissionForConstraintsAPI_OwnerCapEnforced is a
+// regression guard for adversarial-review finding C2 (CR finding on #1454):
+// a key whose MaxPurchaseAmount exceeds the owner's group limit must NOT be
+// allowed to spend more than the owner's group allows.
+func TestService_HasAPIKeyPermissionForConstraintsAPI_OwnerCapEnforced(t *testing.T) {
+	ctx := context.Background()
+	grpID := "buyer-group"
+	keyID := "key-99"
+	userID := "user-88"
+
+	// Owner's group is capped at $100.
+	ownerGroup := &Group{
+		ID: grpID,
+		Permissions: []Permission{
+			{Action: ActionExecute, Resource: ResourcePurchases, Constraints: &PermissionConstraints{MaxPurchaseAmount: 100}},
+		},
+	}
+	owner := &User{ID: userID, Email: "buyer@example.com", Active: true, GroupIDs: []string{grpID}}
+	// Key is scoped to execute:purchases but with a much higher cap of $1000.
+	key := &UserAPIKey{
+		ID:     keyID,
+		UserID: userID,
+		Permissions: []Permission{
+			{Action: ActionExecute, Resource: ResourcePurchases, Constraints: &PermissionConstraints{MaxPurchaseAmount: 1000}},
+		},
+		IsActive: true,
+	}
+
+	buildStore := func(t *testing.T) *MockStore {
+		t.Helper()
+		mockStore := new(MockStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+		mockStore.On("GetAPIKeyByID", ctx, keyID).Return(key, nil)
+		// lookupAPIKeyUser + GetAuthContext both call GetUserByID.
+		mockStore.On("GetUserByID", ctx, userID).Return(owner, nil)
+		mockStore.On("GetGroup", ctx, grpID).Return(ownerGroup, nil)
+		return mockStore
+	}
+
+	t.Run("key cap $1000 cannot exceed owner cap $100 (regression C2)", func(t *testing.T) {
+		service := &Service{store: buildStore(t)}
+		// Request amount $500: within key cap but over owner cap.
+		constraintSets := []PermissionConstraints{{MaxPurchaseAmount: 500}}
+		ok, err := service.HasAPIKeyPermissionForConstraintsAPI(ctx, keyID, userID, ActionExecute, ResourcePurchases, constraintSets)
+		require.NoError(t, err)
+		assert.False(t, ok, "request exceeding owner group cap must be denied even when within key cap")
+	})
+
+	t.Run("request within both key and owner cap is allowed", func(t *testing.T) {
+		service := &Service{store: buildStore(t)}
+		// Request amount $50: within both key cap ($1000) and owner cap ($100).
+		constraintSets := []PermissionConstraints{{MaxPurchaseAmount: 50}}
+		ok, err := service.HasAPIKeyPermissionForConstraintsAPI(ctx, keyID, userID, ActionExecute, ResourcePurchases, constraintSets)
+		require.NoError(t, err)
+		assert.True(t, ok, "request within both caps must be allowed")
+	})
+}
+
 func TestService_validateAPIKeyPermissions(t *testing.T) {
 	ctx := context.Background()
 

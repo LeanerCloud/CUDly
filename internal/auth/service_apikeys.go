@@ -310,7 +310,26 @@ func (s *Service) UpdateLastUsed(ctx context.Context, keyID string) error {
 	return s.store.UpdateAPIKeyLastUsed(ctx, keyID)
 }
 
-// ComputeEffectivePermissions computes the intersection of API key permissions and user permissions
+// computeEffectivePermissionsFromAuthCtx returns the subset of key permissions
+// that the owner's authCtx also grants at the action/resource level, keeping
+// the key's own constraint limits. If the key has no specific permissions the
+// owner's full permission set is returned (key inherits owner). The result
+// carries the key's constraints, not the owner's; callers that need both
+// sources must check ownerAuthCtx.Permissions independently.
+func computeEffectivePermissionsFromAuthCtx(key *UserAPIKey, authCtx *AuthContext) []Permission {
+	if len(key.Permissions) == 0 {
+		return authCtx.Permissions
+	}
+	effectivePerms := make([]Permission, 0, len(key.Permissions))
+	for _, keyPerm := range key.Permissions {
+		if authCtx.HasPermission(keyPerm.Action, keyPerm.Resource) {
+			effectivePerms = append(effectivePerms, keyPerm)
+		}
+	}
+	return effectivePerms
+}
+
+// ComputeEffectivePermissions computes the intersection of API key permissions and user permissions.
 // This ensures an API key cannot grant more permissions than the user has.
 //
 // Administrators-group members carry {admin, *}: with no key-specific
@@ -319,24 +338,9 @@ func (s *Service) UpdateLastUsed(ctx context.Context, keyID string) error {
 // group-derived path preserves the previous role == admin behavior without a
 // special case.
 func (s *Service) ComputeEffectivePermissions(ctx context.Context, apiKey *UserAPIKey, user *User) ([]Permission, error) {
-	// Get user's auth context
 	authCtx, err := s.GetAuthContext(ctx, user.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user auth context: %w", err)
 	}
-
-	// If API key has no specific permissions, use user's permissions
-	if len(apiKey.Permissions) == 0 {
-		return authCtx.Permissions, nil
-	}
-
-	// Compute intersection: only permissions the user has AND the key has
-	effectivePerms := []Permission{}
-	for _, keyPerm := range apiKey.Permissions {
-		if authCtx.HasPermission(keyPerm.Action, keyPerm.Resource) {
-			effectivePerms = append(effectivePerms, keyPerm)
-		}
-	}
-
-	return effectivePerms, nil
+	return computeEffectivePermissionsFromAuthCtx(apiKey, authCtx), nil
 }
