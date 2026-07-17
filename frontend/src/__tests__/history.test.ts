@@ -44,6 +44,14 @@ jest.mock('../state', () => ({
   getAmortizeUpfront: jest.fn().mockReturnValue(false),
   setAmortizeUpfront: jest.fn(),
   subscribeAmortizeUpfront: jest.fn().mockReturnValue(() => {}),
+  // History per-column filter accessors (issue #166): tests only exercise
+  // empty filter state, so each getter returns {} and each setter is a no-op.
+  getPurchaseHistoryColumnFilters: jest.fn().mockReturnValue({}),
+  setPurchaseHistoryColumnFilter: jest.fn(),
+  clearAllPurchaseHistoryColumnFilters: jest.fn(),
+  getApprovalQueueColumnFilters: jest.fn().mockReturnValue({}),
+  setApprovalQueueColumnFilter: jest.fn(),
+  clearAllApprovalQueueColumnFilters: jest.fn(),
 }));
 
 import * as api from '../api';
