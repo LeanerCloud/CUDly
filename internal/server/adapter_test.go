@@ -360,13 +360,27 @@ func TestAuthServiceAdapter_UpdateGroupAPI(t *testing.T) {
 func TestAuthServiceAdapter_CreateAPIKeyAPI(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
 	ctx := context.Background()
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
+	// CreateAPIKey calls GetUserByID then validateAPIKeyPermissions (GetGroup)
+	// then CreateAPIKey. All three stores must be mocked for the happy path.
+	mockStore.On("GetUserByID", ctx, "user-1").Return(&auth.User{
+		ID:       "user-1",
+		Email:    "test@example.com",
+		Active:   true,
+		GroupIDs: []string{auth.DefaultAdminGroupID},
+	}, nil)
+	mockStore.On("GetGroup", ctx, auth.DefaultAdminGroupID).Return(&auth.Group{
+		ID:          auth.DefaultAdminGroupID,
+		Permissions: []auth.Permission{{Action: auth.ActionAdmin, Resource: auth.ResourceAll}},
+	}, nil)
 	mockStore.On("CreateAPIKey", ctx, mock.AnythingOfType("*auth.UserAPIKey")).Return(nil)
 
-	_, err := adapter.CreateAPIKeyAPI(ctx, "user-1", map[string]interface{}{
-		"name": "my-key",
+	result, err := adapter.CreateAPIKeyAPI(ctx, "user-1", auth.APICreateAPIKeyRequest{
+		Name: "my-key",
 	})
-	_ = err
+	require.NoError(t, err)
+	require.NotNil(t, result)
 }
 
 func TestAuthServiceAdapter_ListUserAPIKeysAPI(t *testing.T) {

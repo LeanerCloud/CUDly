@@ -114,6 +114,57 @@ func TestService_CreateAPIKeyAPI(t *testing.T) {
 	})
 }
 
+// TestService_CreateAPIKeyAPI_CrossPackageType is the regression test for
+// issue #1440. The HTTP handler (internal/api) unmarshals the request body
+// into api.CreateAPIKeyRequest - a struct in a different package that has
+// the same json tags as APICreateAPIKeyRequest but is a distinct Go type.
+// The former type-assertion implementation always returned "invalid request
+// type", causing a 500. The fix uses JSON re-encoding so any struct with
+// compatible json fields is accepted.
+func TestService_CreateAPIKeyAPI_CrossPackageType(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	service := &Service{store: mockStore}
+
+	user := &User{
+		ID:       "user-123",
+		Email:    "test@example.com",
+		Active:   true,
+		GroupIDs: []string{DefaultAdminGroupID},
+	}
+	mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+	mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(&Group{
+		ID:          DefaultAdminGroupID,
+		Permissions: []Permission{{Action: ActionAdmin, Resource: ResourceAll}},
+	}, nil)
+	mockStore.On("CreateAPIKey", ctx, mock.AnythingOfType("*auth.UserAPIKey")).Return(nil)
+
+	// Simulate what the api.Handler does: an anonymous struct with the same
+	// json field names but a different Go type than APICreateAPIKeyRequest.
+	// This is exactly the value passed by the handler in production (issue #1440).
+	crossPkgReq := struct {
+		Name        string     `json:"name"`
+		ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+		Permissions []struct {
+			Action   string `json:"action"`
+			Resource string `json:"resource"`
+		} `json:"permissions,omitempty"`
+	}{
+		Name: "My API Key",
+	}
+
+	result, err := service.CreateAPIKeyAPI(ctx, "user-123", crossPkgReq)
+
+	// Before the fix this returned "invalid request type" (500); now it must succeed.
+	require.NoError(t, err, "CreateAPIKeyAPI must accept cross-package types with compatible JSON fields (issue #1440)")
+	require.NotNil(t, result)
+	resp, ok := result.(*APICreateAPIKeyResponse)
+	require.True(t, ok)
+	assert.NotEmpty(t, resp.APIKey)
+	assert.Equal(t, "My API Key", resp.Info.Name)
+}
+
 func TestService_ListUserAPIKeysAPI(t *testing.T) {
 	ctx := context.Background()
 

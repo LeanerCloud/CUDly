@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -41,11 +42,30 @@ type APIListAPIKeysResponse struct {
 }
 
 // CreateAPIKeyAPI creates a new API key and returns API-friendly response.
+//
+// req may be any struct whose JSON representation is compatible with
+// APICreateAPIKeyRequest (name, expires_at, permissions). The handler lives
+// in a different package (api) and passes api.CreateAPIKeyRequest, which
+// carries the same JSON fields but is a distinct Go type. A direct type
+// assertion would always fail and return a 500; JSON re-encoding handles any
+// caller-package type transparently (issue #1440).
 func (s *Service) CreateAPIKeyAPI(ctx context.Context, userID string, req any) (any, error) {
-	// Type assert the request
-	createReq, ok := req.(APICreateAPIKeyRequest)
-	if !ok {
-		return nil, fmt.Errorf("invalid request type")
+	var createReq APICreateAPIKeyRequest
+	switch r := req.(type) {
+	case APICreateAPIKeyRequest:
+		// Fast path: caller already supplies our concrete type (service tests,
+		// future callers that import this package directly).
+		createReq = r
+	default:
+		// Cross-package path: re-encode to JSON and back so any struct with
+		// compatible json tags (e.g. api.CreateAPIKeyRequest) is accepted.
+		b, err := json.Marshal(r)
+		if err != nil {
+			return nil, fmt.Errorf("invalid request: %w", err)
+		}
+		if err := json.Unmarshal(b, &createReq); err != nil {
+			return nil, fmt.Errorf("invalid request: %w", err)
+		}
 	}
 
 	// Create the API key
