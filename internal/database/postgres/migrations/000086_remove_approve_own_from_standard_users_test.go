@@ -59,8 +59,11 @@ func TestMigration_RemoveApproveOwnFromStandardUsers(t *testing.T) {
 		require.True(t, standardUsersHasPurchaseVerb(t, ctx, pool, "retry-own"),
 			"precondition: Standard Users must hold retry-own:purchases at v83")
 
-		// Apply the remaining chain, which includes 000086.
-		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
+		// Pin at exactly 000086 (the migration under test). Using RunMigrations
+		// (migrate to HEAD) would also run any migrations added on later branches
+		// (e.g. 000087, 000088) whose permission side-effects could mask a regression
+		// in 000086 or cause spurious failures here if they alter the same group.
+		require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 86))
 
 		// Four-eyes (issue #1407): approve-own must be gone.
 		assert.False(t, standardUsersHasPurchaseVerb(t, ctx, pool, "approve-own"),
@@ -79,10 +82,14 @@ func TestMigration_RemoveApproveOwnFromStandardUsers(t *testing.T) {
 		defer container.Cleanup(ctx)
 		pool := container.DB.Pool()
 
-		// Full head has 000086 applied, so approve-own is removed.
-		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
+		// Pin at exactly 000086 before rolling back. RunMigrations would migrate
+		// to HEAD (which varies by branch), so RollbackMigrations(1) would roll
+		// back whatever the LATEST migration is (000087, 000088, ...) rather than
+		// 000086.down -- leaving approve-own absent and causing a spurious failure.
+		// Pinning to 86 guarantees RollbackMigrations(1) always exercises 000086.down.
+		require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 86))
 		require.False(t, standardUsersHasPurchaseVerb(t, ctx, pool, "approve-own"),
-			"head state: approve-own must be absent after 000086")
+			"post-086 state: approve-own must be absent at version 86")
 
 		// Roll back one step (000086.down) and confirm approve-own is restored.
 		require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, 1))
