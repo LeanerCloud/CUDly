@@ -558,6 +558,24 @@ type SavingsPlanDetails struct {
 	PlanType         string  `json:"plan_type"` // Compute, EC2Instance, SageMaker
 	HourlyCommitment float64 `json:"hourly_commitment"`
 	Coverage         string  `json:"coverage,omitempty"`
+	// InstanceFamily is the EC2 instance family recommended by Cost Explorer
+	// (e.g. "m5"). Only populated for EC2Instance Savings Plans; empty for
+	// Compute, SageMaker and Database plans which are family-agnostic. Used at
+	// purchase time to add an instanceFamily filter to DescribeSavingsPlansOfferings
+	// so the offering resolves to the correct family rather than the
+	// lexicographically-smallest across all families in the region.
+	InstanceFamily string `json:"instance_family,omitempty"`
+	// Region is the AWS region recommended by Cost Explorer for this EC2Instance
+	// Savings Plan (e.g. "us-east-1"). Only populated for EC2Instance plans;
+	// Compute, SageMaker and Database plans are global and carry no region.
+	// Used at purchase time as the region filter for DescribeSavingsPlansOfferings
+	// instead of the client's configured region, which may differ.
+	Region string `json:"region,omitempty"`
+	// OfferingID is the exact Savings Plans offering ID returned by Cost Explorer
+	// in SavingsPlansDetails.OfferingId. When non-empty the purchase path uses it
+	// directly and skips DescribeSavingsPlansOfferings entirely, which is the
+	// safest possible resolution. Only populated when CE provides it.
+	OfferingID string `json:"offering_id,omitempty"`
 }
 
 func (d SavingsPlanDetails) GetServiceType() ServiceType {

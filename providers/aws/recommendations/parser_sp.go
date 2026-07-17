@@ -194,6 +194,30 @@ func parseOptionalFloat(field string, s *string) float64 {
 // hoursPerMonth is the standard AWS billing constant for monthly cost calculations.
 const hoursPerMonth = 730.0
 
+// ec2SPFields holds the Cost Explorer SavingsPlansDetails fields that are
+// specific to EC2Instance Savings Plans. Extracted from parseSavingsPlanDetail
+// to keep that function's cyclomatic complexity under the gocyclo-10 threshold.
+type ec2SPFields struct {
+	instanceFamily string
+	region         string
+	offeringID     string
+}
+
+// extractEC2SPFields reads InstanceFamily, Region, and OfferingId from the
+// CE SavingsPlansDetails nested struct for EC2Instance plan recommendations.
+// Returns a zero-value struct (all empty strings) for non-EC2Instance plan
+// types and when SavingsPlansDetails is nil, so callers do not need a nil guard.
+func extractEC2SPFields(planType types.SupportedSavingsPlansType, detail *types.SavingsPlansPurchaseRecommendationDetail) ec2SPFields {
+	if planType != types.SupportedSavingsPlansTypeEc2InstanceSp || detail.SavingsPlansDetails == nil {
+		return ec2SPFields{}
+	}
+	return ec2SPFields{
+		instanceFamily: aws.ToString(detail.SavingsPlansDetails.InstanceFamily),
+		region:         aws.ToString(detail.SavingsPlansDetails.Region),
+		offeringID:     aws.ToString(detail.SavingsPlansDetails.OfferingId),
+	}
+}
+
 func (c *Client) parseSavingsPlanDetail(
 	detail *types.SavingsPlansPurchaseRecommendationDetail,
 	params common.RecommendationParams,
@@ -244,6 +268,10 @@ func (c *Client) parseSavingsPlanDetail(
 		accountID = aws.ToString(detail.AccountId)
 	}
 
+	// Extract EC2Instance-specific routing data from CE's SavingsPlansDetails.
+	// See extractEC2SPFields for the extraction logic and field semantics.
+	ec2Fields := extractEC2SPFields(planType, detail)
+
 	// RecurringMonthlyCost is the portion of the SP commitment that appears
 	// on monthly bills (i.e. excludes upfront payments).
 	//
@@ -286,6 +314,9 @@ func (c *Client) parseSavingsPlanDetail(
 			PlanType:         planTypeStr,
 			HourlyCommitment: hourlyCommitment,
 			Coverage:         fmt.Sprintf("%.1f%%", savingsPercent),
+			InstanceFamily:   ec2Fields.instanceFamily,
+			Region:           ec2Fields.region,
+			OfferingID:       ec2Fields.offeringID,
 		},
 	}
 }

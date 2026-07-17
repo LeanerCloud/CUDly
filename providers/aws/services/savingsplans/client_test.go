@@ -1302,3 +1302,199 @@ func TestLookupOfferingID_DeterministicSortAcrossPages(t *testing.T) {
 	assert.Equal(t, "offering-aaa", id,
 		"findOfferingID must sort across pages before selecting")
 }
+
+// --- C1 adversarial-review regression tests ---
+// These tests pin the fix for the wrong-family purchase defect: an EC2Instance
+// SP recommendation carries InstanceFamily and Region from Cost Explorer, and
+// the purchase path must (a) filter DescribeSavingsPlansOfferings by both, and
+// (b) fail loud when the result set is ambiguous (multiple families or regions).
+//
+// Pre-fix state: buildSPOfferingsInput applied only a region filter (from the
+// client's configured region, not the rec's region), no instanceFamily filter,
+// so lookupOfferingID silently picked the lexicographically-smallest offering
+// across all families in the region — potentially buying the wrong workload on
+// a 1-3 year commitment.
+
+// ec2Rec constructs an EC2Instance SP recommendation for m5/us-east-1 as CE
+// would return it, including the InstanceFamily and Region fields that were
+// dropped by the pre-fix parser.
+func ec2Rec() common.Recommendation {
+	return common.Recommendation{
+		ResourceType:  "EC2Instance",
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+		Details: &common.SavingsPlanDetails{
+			PlanType:         "EC2Instance",
+			HourlyCommitment: 0.5,
+			InstanceFamily:   "m5",
+			Region:           "us-east-1",
+		},
+	}
+}
+
+// spOfferingWithProps constructs a SavingsPlanOffering with the given
+// instanceFamily and region in its Properties slice, matching the shape the
+// DescribeSavingsPlansOfferings API returns.
+func spOfferingWithProps(id, family, region string) types.SavingsPlanOffering {
+	return types.SavingsPlanOffering{
+		OfferingId: aws.String(id),
+		Properties: []types.SavingsPlanOfferingProperty{
+			{
+				Name:  types.SavingsPlanOfferingPropertyKeyInstanceFamily,
+				Value: aws.String(family),
+			},
+			{
+				Name:  types.SavingsPlanOfferingPropertyKeyRegion,
+				Value: aws.String(region),
+			},
+		},
+	}
+}
+
+// TestEC2InstanceSP_ResolvesCorrectFamilyAndRegion is the primary C1 regression
+// test. The mock is configured to only return the correct m5/us-east-1 offering
+// when the request includes BOTH the instanceFamily and region filters. Pre-fix:
+// findOfferingID sent no instanceFamily filter, so mock.MatchedBy wouldn't
+// match and the call would be unregistered — the test would fail. Post-fix: the
+// new buildSPOfferingsInput adds both filters, the mock matches, and the m5
+// offering is returned.
+func TestEC2InstanceSP_ResolvesCorrectFamilyAndRegion(t *testing.T) {
+	mockSP := &MockSavingsPlansClient{}
+	t.Cleanup(func() { mockSP.AssertExpectations(t) })
+	client := &Client{
+		client:   mockSP,
+		region:   "us-west-2", // client region differs from rec region to confirm rec region wins
+		planType: types.SavingsPlanTypeEc2Instance,
+	}
+
+	// The mock only matches when the request carries both the instanceFamily
+	// filter for "m5" and the region filter for "us-east-1". A request without
+	// the instanceFamily filter (the pre-fix path) would not match and the mock
+	// framework would report an unexpected call.
+	mockSP.On("DescribeSavingsPlansOfferings", mock.Anything,
+		mock.MatchedBy(func(in *savingsplans.DescribeSavingsPlansOfferingsInput) bool {
+			var hasFamily, hasRegion bool
+			for _, f := range in.Filters {
+				if f.Name == types.SavingsPlanOfferingFilterAttributeInstanceFamily {
+					for _, v := range f.Values {
+						if v == "m5" {
+							hasFamily = true
+						}
+					}
+				}
+				if f.Name == types.SavingsPlanOfferingFilterAttributeRegion {
+					for _, v := range f.Values {
+						if v == "us-east-1" {
+							hasRegion = true
+						}
+					}
+				}
+			}
+			return hasFamily && hasRegion
+		})).
+		Return(&savingsplans.DescribeSavingsPlansOfferingsOutput{
+			SearchResults: []types.SavingsPlanOffering{
+				spOfferingWithProps("m5-offering-us-east-1", "m5", "us-east-1"),
+			},
+		}, nil)
+
+	id, err := client.findOfferingID(context.Background(), ec2Rec(), "test-exec")
+	require.NoError(t, err)
+	assert.Equal(t, "m5-offering-us-east-1", id,
+		"EC2Instance SP must resolve to the m5/us-east-1 offering, not a different family")
+}
+
+// TestEC2InstanceSP_MultiFamilyResponseFailsLoud pins the fail-loud behaviour
+// when DescribeSavingsPlansOfferings returns offerings spanning more than one
+// instance family. Pre-fix: lookupOfferingID silently picked "c6g-offering-..."
+// (lexicographically smallest), committing money to the wrong workload. Post-fix:
+// lookupEC2OfferingIDStrict detects the ambiguity and returns an explicit error.
+func TestEC2InstanceSP_MultiFamilyResponseFailsLoud(t *testing.T) {
+	mockSP := &MockSavingsPlansClient{}
+	t.Cleanup(func() { mockSP.AssertExpectations(t) })
+	client := &Client{
+		client:   mockSP,
+		region:   "us-east-1",
+		planType: types.SavingsPlanTypeEc2Instance,
+	}
+
+	// Return two offerings with different instance families. This simulates an
+	// API response where the server-side filter did not narrow down to one family
+	// (e.g., because InstanceFamily was absent from the rec and no filter was
+	// applied). Pre-fix: returns "c6g-offering-..." silently. Post-fix: error.
+	mockSP.On("DescribeSavingsPlansOfferings", mock.Anything, mock.Anything).
+		Return(&savingsplans.DescribeSavingsPlansOfferingsOutput{
+			SearchResults: []types.SavingsPlanOffering{
+				spOfferingWithProps("c6g-offering-us-east-1", "c6g", "us-east-1"),
+				spOfferingWithProps("m5-offering-us-east-1", "m5", "us-east-1"),
+			},
+		}, nil)
+
+	_, err := client.findOfferingID(context.Background(), ec2Rec(), "test-exec")
+	require.Error(t, err, "must error when offerings span multiple instance families")
+	assert.Contains(t, err.Error(), "distinct instance families",
+		"error message must name the ambiguity so operators can diagnose it")
+}
+
+// TestEC2InstanceSP_MultiRegionResponseFailsLoud is analogous to the
+// multi-family test but for a response spanning multiple regions. Ensures that
+// region ambiguity is also caught and surfaced explicitly.
+func TestEC2InstanceSP_MultiRegionResponseFailsLoud(t *testing.T) {
+	mockSP := &MockSavingsPlansClient{}
+	t.Cleanup(func() { mockSP.AssertExpectations(t) })
+	client := &Client{
+		client:   mockSP,
+		region:   "us-east-1",
+		planType: types.SavingsPlanTypeEc2Instance,
+	}
+
+	mockSP.On("DescribeSavingsPlansOfferings", mock.Anything, mock.Anything).
+		Return(&savingsplans.DescribeSavingsPlansOfferingsOutput{
+			SearchResults: []types.SavingsPlanOffering{
+				spOfferingWithProps("m5-offering-us-east-1", "m5", "us-east-1"),
+				spOfferingWithProps("m5-offering-eu-west-1", "m5", "eu-west-1"),
+			},
+		}, nil)
+
+	_, err := client.findOfferingID(context.Background(), ec2Rec(), "test-exec")
+	require.Error(t, err, "must error when offerings span multiple regions")
+	assert.Contains(t, err.Error(), "distinct regions",
+		"error message must identify region ambiguity")
+}
+
+// TestEC2InstanceSP_CEProvidedOfferingIDUsedDirectly asserts that when Cost
+// Explorer supplies an OfferingId in SavingsPlansDetails, findOfferingID uses
+// it directly without calling DescribeSavingsPlansOfferings. Pre-fix: the field
+// did not exist on common.SavingsPlanDetails; the lookup always went through
+// DescribeSavingsPlansOfferings. Post-fix: the direct path is taken, the API
+// is not called.
+func TestEC2InstanceSP_CEProvidedOfferingIDUsedDirectly(t *testing.T) {
+	mockSP := &MockSavingsPlansClient{}
+	t.Cleanup(func() { mockSP.AssertExpectations(t) })
+	client := &Client{
+		client:   mockSP,
+		region:   "us-east-1",
+		planType: types.SavingsPlanTypeEc2Instance,
+	}
+
+	rec := common.Recommendation{
+		ResourceType:  "EC2Instance",
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+		Details: &common.SavingsPlanDetails{
+			PlanType:         "EC2Instance",
+			HourlyCommitment: 0.5,
+			InstanceFamily:   "m5",
+			Region:           "us-east-1",
+			OfferingID:       "ce-provided-offering-id-abc123",
+		},
+	}
+
+	// DescribeSavingsPlansOfferings must NOT be called when CE supplies the ID.
+	mockSP.AssertNotCalled(t, "DescribeSavingsPlansOfferings")
+
+	id, err := client.findOfferingID(context.Background(), rec, "test-exec")
+	require.NoError(t, err)
+	assert.Equal(t, "ce-provided-offering-id-abc123", id,
+		"CE-provided OfferingID must be used directly, skipping DescribeSavingsPlansOfferings")
+}

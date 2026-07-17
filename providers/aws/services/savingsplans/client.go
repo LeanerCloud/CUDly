@@ -285,9 +285,16 @@ func (c *Client) resolveSPPlanType(spPlanType string) (types.SavingsPlanType, er
 	return c.planType, nil
 }
 
-// buildSPOfferingsInput constructs the DescribeSavingsPlansOfferings request,
-// adding a region filter for EC2Instance plans when the client region is known.
-func (c *Client) buildSPOfferingsInput(planType types.SavingsPlanType, termSeconds int64, paymentOption types.SavingsPlanPaymentOption, tag string) *savingsplans.DescribeSavingsPlansOfferingsInput {
+// buildSPOfferingsInput constructs the DescribeSavingsPlansOfferings request.
+// For EC2Instance plans it adds region and instanceFamily filters using the
+// recommendation's own region/family (from CE SavingsPlansDetails). recRegion
+// and instanceFamily are ignored for Compute, SageMaker, and Database plans
+// which are global and carry no region or family property.
+//
+// Supported filter attributes for DescribeSavingsPlansOfferings:
+//   - SavingsPlanOfferingFilterAttributeRegion       ("region")
+//   - SavingsPlanOfferingFilterAttributeInstanceFamily ("instanceFamily")
+func (c *Client) buildSPOfferingsInput(planType types.SavingsPlanType, termSeconds int64, paymentOption types.SavingsPlanPaymentOption, instanceFamily, recRegion, tag string) *savingsplans.DescribeSavingsPlansOfferingsInput {
 	input := &savingsplans.DescribeSavingsPlansOfferingsInput{
 		PlanTypes:      []types.SavingsPlanType{planType},
 		Durations:      []int64{termSeconds},
@@ -295,22 +302,107 @@ func (c *Client) buildSPOfferingsInput(planType types.SavingsPlanType, termSecon
 		// Pin to USD so non-USD currency offerings are excluded server-side.
 		Currencies: []types.CurrencyCode{types.CurrencyCodeUsd},
 	}
-	// EC2Instance SPs are region-scoped; add a region filter so only the
-	// offering for the client's region is returned. Compute, SageMaker, and
-	// Database SPs are global and do not carry a region property.
+	// EC2Instance SPs are region-scoped and family-scoped. Apply both filters
+	// using the recommendation's own values from CE (recRegion, instanceFamily)
+	// rather than the client's configured region, which may differ from the
+	// region CE recommended. Compute, SageMaker, and Database SPs are global
+	// and do not carry region or family properties.
 	if planType == types.SavingsPlanTypeEc2Instance {
-		if c.region == "" {
-			log.Printf("purchase[%s]: SavingsPlans findOfferingID: client region is empty; skipping region filter", tag)
-		} else {
-			input.Filters = []types.SavingsPlanOfferingFilterElement{
-				{
-					Name:   types.SavingsPlanOfferingFilterAttributeRegion,
-					Values: []string{c.region},
-				},
+		filterRegion := recRegion
+		if filterRegion == "" {
+			// Fall back to the client's region if CE did not supply one. Log so
+			// operators can detect when the recommendation is missing the field.
+			filterRegion = c.region
+			if filterRegion != "" {
+				log.Printf("purchase[%s]: SavingsPlans buildSPOfferingsInput: rec has no region; falling back to client region %s", tag, filterRegion)
 			}
+		}
+
+		var filters []types.SavingsPlanOfferingFilterElement
+		if filterRegion != "" {
+			filters = append(filters, types.SavingsPlanOfferingFilterElement{
+				Name:   types.SavingsPlanOfferingFilterAttributeRegion,
+				Values: []string{filterRegion},
+			})
+		} else {
+			log.Printf("purchase[%s]: SavingsPlans buildSPOfferingsInput: EC2Instance SP has no region in rec and client has no region; skipping region filter", tag)
+		}
+		if instanceFamily != "" {
+			filters = append(filters, types.SavingsPlanOfferingFilterElement{
+				Name:   types.SavingsPlanOfferingFilterAttributeInstanceFamily,
+				Values: []string{instanceFamily},
+			})
+		}
+		if len(filters) > 0 {
+			input.Filters = filters
 		}
 	}
 	return input
+}
+
+// spOffering holds the offering ID and the Properties-extracted instance family
+// and region for a single DescribeSavingsPlansOfferings result. Used by the
+// EC2Instance strict lookup to validate that the surviving offerings are
+// unambiguous before committing to one.
+type spOffering struct {
+	id             string
+	instanceFamily string
+	region         string
+}
+
+// decodeOfferingProps converts a DescribeSavingsPlansOfferings result entry
+// into an spOffering by extracting the OfferingId and reading the Properties
+// slice for the instance-family and region values. Extracted to keep
+// collectSPOfferings under the gocyclo-10 threshold.
+func decodeOfferingProps(o types.SavingsPlanOffering) (spOffering, bool) {
+	if o.OfferingId == nil {
+		return spOffering{}, false
+	}
+	off := spOffering{id: *o.OfferingId}
+	for _, p := range o.Properties {
+		switch p.Name {
+		case types.SavingsPlanOfferingPropertyKeyInstanceFamily:
+			off.instanceFamily = aws.ToString(p.Value)
+		case types.SavingsPlanOfferingPropertyKeyRegion:
+			off.region = aws.ToString(p.Value)
+		}
+	}
+	return off, true
+}
+
+// collectSPOfferings paginates DescribeSavingsPlansOfferings and returns every
+// result as an spOffering (with Properties decoded). The caller validates the
+// result set's consistency and picks the appropriate offering ID.
+func (c *Client) collectSPOfferings(ctx context.Context, input *savingsplans.DescribeSavingsPlansOfferingsInput) ([]spOffering, error) {
+	t0 := time.Now()
+	page := 0
+	var offerings []spOffering
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		page++
+		if page > maxOfferingPages {
+			return nil, fmt.Errorf("pagination cap reached after %d pages for Savings Plans offering lookup (issue #688)", maxOfferingPages)
+		}
+		result, err := c.client.DescribeSavingsPlansOfferings(ctx, input)
+		if err != nil {
+			log.Printf("purchase[SavingsPlans]: DescribeSavingsPlansOfferings page %d failed after %s: %v", page, time.Since(t0), err)
+			return nil, fmt.Errorf("failed to describe Savings Plans offerings: %w", err)
+		}
+		log.Printf("purchase[SavingsPlans]: DescribeSavingsPlansOfferings page %d returned %d results in %s",
+			page, len(result.SearchResults), time.Since(t0))
+		for _, o := range result.SearchResults {
+			if off, ok := decodeOfferingProps(o); ok {
+				offerings = append(offerings, off)
+			}
+		}
+		if result.NextToken == nil || aws.ToString(result.NextToken) == "" {
+			break
+		}
+		input.NextToken = result.NextToken
+	}
+	return offerings, nil
 }
 
 // findOfferingID finds the appropriate Savings Plans offering ID.
@@ -320,6 +412,19 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 	spDetails, ok := rec.Details.(*common.SavingsPlanDetails)
 	if !ok {
 		return "", fmt.Errorf("invalid service details for Savings Plans")
+	}
+
+	tag := execID
+	if tag == "" {
+		tag = "no-exec"
+	}
+
+	// If CE supplied an exact offering ID, use it directly — this is the
+	// safest path because it bypasses DescribeSavingsPlansOfferings filtering
+	// entirely and always resolves to exactly the workload CE recommended.
+	if spDetails.OfferingID != "" {
+		log.Printf("purchase[%s]: SavingsPlans findOfferingID: using CE-provided OfferingID %s (skipping DescribeSavingsPlansOfferings)", tag, spDetails.OfferingID)
+		return spDetails.OfferingID, nil
 	}
 
 	planType, err := c.resolveSPPlanType(spDetails.PlanType)
@@ -335,23 +440,78 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 		return "", err
 	}
 
-	tag := execID
-	if tag == "" {
-		tag = "no-exec"
-	}
-
 	t0 := time.Now()
 	log.Printf("purchase[%s]: SavingsPlans findOfferingID starting (planType=%s term=%s payment=%s)",
 		tag, planType, rec.Term, rec.PaymentOption)
 
-	input := c.buildSPOfferingsInput(planType, termSeconds, paymentOption, tag)
-	offeringID, err := c.lookupOfferingID(ctx, input)
+	input := c.buildSPOfferingsInput(planType, termSeconds, paymentOption, spDetails.InstanceFamily, spDetails.Region, tag)
+
+	var offeringID string
+	if planType == types.SavingsPlanTypeEc2Instance {
+		offeringID, err = c.lookupEC2OfferingIDStrict(ctx, input, spDetails.InstanceFamily, spDetails.Region)
+	} else {
+		offeringID, err = c.lookupOfferingID(ctx, input)
+	}
 	if err != nil {
 		log.Printf("purchase[%s]: SavingsPlans findOfferingID failed after %s: %v", tag, time.Since(t0), err)
 	} else {
 		log.Printf("purchase[%s]: SavingsPlans findOfferingID found offering in %s", tag, time.Since(t0))
 	}
 	return offeringID, err
+}
+
+// lookupEC2OfferingIDStrict resolves the offering ID for an EC2Instance Savings
+// Plan and validates that the surviving offerings are unambiguous: all must
+// belong to the same instance family and the same region. If the result set
+// spans multiple families or multiple regions, or is empty, the function
+// returns an error rather than silently committing to the wrong workload.
+//
+// expectedFamily and expectedRegion are the values from the CE recommendation;
+// they are included in the error message when the result set is ambiguous so
+// operators can diagnose mismatches quickly.
+func (c *Client) lookupEC2OfferingIDStrict(ctx context.Context, input *savingsplans.DescribeSavingsPlansOfferingsInput, expectedFamily, expectedRegion string) (string, error) {
+	offerings, err := c.collectSPOfferings(ctx, input)
+	if err != nil {
+		return "", err
+	}
+	if len(offerings) == 0 {
+		return "", fmt.Errorf("no EC2Instance Savings Plans offerings found (expected family=%q region=%q) — cannot purchase", expectedFamily, expectedRegion)
+	}
+
+	// Validate that all surviving offerings share a single instance family and
+	// a single region. Multiple distinct values mean the filters did not narrow
+	// the result set enough to identify the correct workload unambiguously.
+	families := make(map[string]struct{})
+	regions := make(map[string]struct{})
+	for _, o := range offerings {
+		if o.instanceFamily != "" {
+			families[o.instanceFamily] = struct{}{}
+		}
+		if o.region != "" {
+			regions[o.region] = struct{}{}
+		}
+	}
+
+	if len(families) > 1 {
+		return "", fmt.Errorf(
+			"EC2Instance SP offering lookup returned %d distinct instance families %v (expected %q region=%q): ambiguous — refusing to purchase to avoid committing to the wrong workload",
+			len(families), mapKeys(families), expectedFamily, expectedRegion,
+		)
+	}
+	if len(regions) > 1 {
+		return "", fmt.Errorf(
+			"EC2Instance SP offering lookup returned %d distinct regions %v (expected family=%q region=%q): ambiguous — refusing to purchase",
+			len(regions), mapKeys(regions), expectedFamily, expectedRegion,
+		)
+	}
+
+	// Sort IDs for a stable, deterministic result.
+	ids := make([]string, 0, len(offerings))
+	for _, o := range offerings {
+		ids = append(ids, o.id)
+	}
+	sort.Strings(ids)
+	return ids[0], nil
 }
 
 // convertPlanType converts a plan type string to AWS SDK type
@@ -414,56 +574,27 @@ const maxOfferingPages = 5
 // truncation warning for the commitment path).
 const maxCommitmentPages = 100
 
-// lookupOfferingID performs the API call(s) to find the offering ID.
-// DescribeSavingsPlansOfferings accepts PlanTypes/Durations/PaymentOptions/
-// Currencies/Filters that narrow the result set to at most a handful of
-// results. All pages are accumulated so the caller receives a stable,
-// lexicographically-sorted first offering rather than a result that depends
-// on AWS response ordering (finding 08-L1).
+// lookupOfferingID resolves the offering ID for non-EC2Instance Savings Plans
+// (Compute, SageMaker, Database). These plan types are global and family-agnostic
+// so no family/region ambiguity check is needed; a stable sort provides a
+// deterministic tie-break when multiple offerings survive the server-side filters.
+// EC2Instance SPs use lookupEC2OfferingIDStrict instead.
 func (c *Client) lookupOfferingID(ctx context.Context, input *savingsplans.DescribeSavingsPlansOfferingsInput) (string, error) {
-	t0 := time.Now()
-	page := 0
-	var offeringIDs []string
-	for {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-
-		page++
-		if page > maxOfferingPages {
-			return "", fmt.Errorf("pagination cap reached after %d pages for Savings Plans offering lookup (issue #688)",
-				maxOfferingPages)
-		}
-
-		result, err := c.client.DescribeSavingsPlansOfferings(ctx, input)
-		if err != nil {
-			log.Printf("purchase[SavingsPlans]: DescribeSavingsPlansOfferings page %d failed after %s: %v",
-				page, time.Since(t0), err)
-			return "", fmt.Errorf("failed to describe Savings Plans offerings: %w", err)
-		}
-		log.Printf("purchase[SavingsPlans]: DescribeSavingsPlansOfferings page %d returned %d results in %s",
-			page, len(result.SearchResults), time.Since(t0))
-
-		for _, offering := range result.SearchResults {
-			if offering.OfferingId == nil {
-				continue
-			}
-			offeringIDs = append(offeringIDs, *offering.OfferingId)
-		}
-
-		if result.NextToken == nil || aws.ToString(result.NextToken) == "" {
-			break
-		}
-		input.NextToken = result.NextToken
+	offerings, err := c.collectSPOfferings(ctx, input)
+	if err != nil {
+		return "", err
 	}
-
-	if len(offeringIDs) == 0 {
-		return "", fmt.Errorf("no Savings Plans offerings found after %d page(s) (issue #688)", page)
+	if len(offerings) == 0 {
+		return "", fmt.Errorf("no Savings Plans offerings found (issue #688)")
+	}
+	ids := make([]string, 0, len(offerings))
+	for _, o := range offerings {
+		ids = append(ids, o.id)
 	}
 	// Sort for a stable, deterministic tie-break when multiple offerings
 	// survive the server-side filters. The first ID after sorting is returned.
-	sort.Strings(offeringIDs)
-	return offeringIDs[0], nil
+	sort.Strings(ids)
+	return ids[0], nil
 }
 
 // ValidateOffering checks if a Savings Plans offering exists
@@ -558,6 +689,17 @@ func (c *Client) GetValidResourceTypes(ctx context.Context) ([]string, error) {
 		"SageMaker",
 		"Database",
 	}, nil
+}
+
+// mapKeys extracts the keys from a string set (map[string]struct{}) as a
+// sorted slice for deterministic error messages.
+func mapKeys(m map[string]struct{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // buildSavingsPlanTags returns the tag map to stamp onto a newly-created
