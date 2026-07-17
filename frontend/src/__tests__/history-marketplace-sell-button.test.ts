@@ -69,6 +69,7 @@ jest.mock('../state', () => ({
 
 import * as api from '../api';
 import { getCurrentUser } from '../state';
+import { confirmDialog } from '../confirmDialog';
 
 // Administrators group GUID -- mirrors ADMINISTRATORS_GROUP_ID in
 // frontend/src/permissions.ts. Without this, isAdmin() returns false and
@@ -125,7 +126,9 @@ function makeRow(overrides: Record<string, unknown>) {
     resource_type: 't3.large',
     region: 'us-east-1',
     count: 1,
-    term: 36,
+    // term is stored in YEARS (1 or 3) in purchase_history; canSellOnMarketplace
+    // and the pricing modal multiply by 12 to get months.
+    term: 3,
     upfront_cost: 1200,
     estimated_savings: 300,
     plan_name: '',
@@ -230,5 +233,68 @@ describe('History inline Sell on Marketplace button (issue #292)', () => {
     await loadHistory();
 
     expect(sellIds()).toEqual([]);
+  });
+});
+
+// Regression for the #808 follow-up years-as-months bug in the consent modal.
+// purchase_history.term is stored in YEARS; the Sell gate and the pricing modal
+// must multiply by 12 before computing remaining term / residual. Parallels the
+// backend TestMarketplaceList_TermYearsConvertedToMonths.
+describe('Marketplace consent modal residual proration (issue #808 follow-up)', () => {
+  // ~6 months ago (6 * 30.4375 days) so a 3-year (36-month) RI has ~30 months left.
+  const SIX_MONTHS_AGO = new Date(Date.now() - 6 * 30.4375 * 24 * 60 * 60 * 1000).toISOString();
+
+  beforeEach(() => {
+    setupDOM();
+    jest.clearAllMocks();
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+    // Resolve false so the click handler stops after showing the pricing modal
+    // (we only assert on the modal body, not the createMarketplaceListing call).
+    (confirmDialog as jest.Mock).mockResolvedValue(false);
+  });
+
+  test('shows the correctly-prorated residual for a 3yr RI ~6 months in', async () => {
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({
+          purchase_id: 'ri-3yr',
+          offering_class: 'standard',
+          term: 3, // 3 years
+          timestamp: SIX_MONTHS_AGO,
+          upfront_cost: 3600,
+          monthly_cost: 0,
+        }),
+      ],
+    });
+
+    await loadHistory();
+
+    // The gate itself only passes after the years->months fix: pre-fix a 3-year
+    // RI was treated as 3 months, so 3 - 6 elapsed < 1 hid the button entirely.
+    const sellBtn = document
+      .getElementById('history-list')!
+      .querySelector<HTMLButtonElement>('.history-marketplace-sell-btn[data-marketplace-sell-id="ri-3yr"]');
+    expect(sellBtn).not.toBeNull();
+
+    sellBtn!.click();
+    // Flush the async click handler up to the awaited confirmDialog call.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(confirmDialog as jest.Mock).toHaveBeenCalledTimes(1);
+    const arg = (confirmDialog as jest.Mock).mock.calls[0][0] as { body: HTMLElement };
+    const text = arg.body.textContent || '';
+
+    // termMonths = 3 * 12 = 36; remaining = round(36 - 6) = 30.
+    expect(text).toContain('30 months');
+    // Residual = 3600 * (30/36) = 3000; list price = 3000 * 0.95 = 2850.
+    // formatCurrency is mocked as `$${val || 0}`, so 2850 -> "$2850".
+    expect(text).toContain('Default list price');
+    expect(text).toContain('$2850');
+    // Pre-fix (had the button rendered) remaining=0 => residual=0 => "$0",
+    // and pre-gate-fix the button would not render at all. Guard against a
+    // regression back to the $0 / ~1/3 value.
+    expect(text).not.toContain('$0');
   });
 });
