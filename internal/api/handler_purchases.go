@@ -466,7 +466,12 @@ func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID stri
 		return canceled, nil
 	}
 	if !errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
-		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be canceled: %v", executionID, err))
+		// Not a CAS conflict: a real server-side failure (DB error, transient
+		// fault). Surface it as a plain wrapped error so the router logs the
+		// raw detail and returns a generic 500 -- a 409 here would misclassify
+		// a retriable backend failure as the caller's fault and leak backend
+		// text (feedback_http_status_classification; same class as PR #1276).
+		return nil, fmt.Errorf("cancel execution %s: %w", executionID, err)
 	}
 	existing, getErr := h.config.GetExecutionByID(ctx, executionID)
 	if errors.Is(getErr, config.ErrNotFound) {
@@ -1033,13 +1038,33 @@ func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunction
 	return h.cancelPurchaseViaSession(ctx, req, execution)
 }
 
+// guardCancelableViaSession returns a ClientError if execution is not eligible
+// for cancellation on the session path (pending|notified only):
+//   - "scheduled" executions are cancelable (IsCancelable returns true) but must
+//     go through the /revoke endpoint; routing them through the pending/notified
+//     CAS would fail with a misleading "concurrent operation" 409 (CodeRabbit
+//     finding #6, PR #1277).
+//   - all other non-IsCancelable statuses (approved, completed, etc.) are rejected
+//     with a generic "cannot be canceled" 409.
+func guardCancelableViaSession(execution *config.PurchaseExecution) error {
+	if execution.Status == "scheduled" {
+		return NewClientError(409, fmt.Sprintf(
+			"execution %s is scheduled; use the revoke endpoint to cancel it before it fires",
+			execution.ExecutionID))
+	}
+	if !execution.IsCancelable() {
+		return NewClientError(409, fmt.Sprintf("execution %s cannot be canceled (status=%s)", execution.ExecutionID, execution.Status))
+	}
+	return nil
+}
+
 // cancelPurchaseViaSession is the session-authed branch of cancelPurchase.
 // Enforces the cancel-any/cancel-own RBAC matrix, validates the execution
-// is in a cancellable state (pending|notified), atomically flips the row
+// is in a cancelable state (pending|notified), atomically flips the row
 // to "canceled" AND drops its purchase_suppressions in the same
-// transaction, and stamps session.Email onto CancelledBy. The History
-// UI's annotateCancelled() helper renders CancelledBy as
-// "canceled by <email>" at read time — see handler_history.go.
+// transaction, and stamps session.Email onto CanceledBy. The History
+// UI's annotateCanceled() helper renders CanceledBy as
+// "canceled by <email>" at read time -- see handler_history.go.
 //
 // The atomic suppression cleanup mirrors purchase.Manager.CancelExecution
 // on the email-token path: an executePurchase upfront writes
@@ -1060,8 +1085,8 @@ func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.Lamb
 		return nil, err
 	}
 
-	if !execution.IsCancelable() {
-		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be canceled (status=%s)", execution.ExecutionID, execution.Status))
+	if err := guardCancelableViaSession(execution); err != nil {
+		return nil, err
 	}
 
 	if err := h.authorizeSessionCancel(ctx, session, execution); err != nil {
@@ -1074,16 +1099,16 @@ func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.Lamb
 	// that has already transitioned the row to 'approved' causes zero rows
 	// to be affected and we return a 409 with the current status rather
 	// than silently overwriting an approved purchase.
-	var cancelledBy *string
+	var canceledBy *string
 	if session.Email != "" {
 		e := session.Email
-		cancelledBy = &e
+		canceledBy = &e
 	}
 	var canceled bool
 	var currentStatus string
 	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
 		var err error
-		canceled, currentStatus, err = h.config.CancelExecutionAtomic(ctx, tx, execution.ExecutionID, cancelledBy)
+		canceled, currentStatus, err = h.config.CancelExecutionAtomic(ctx, tx, execution.ExecutionID, canceledBy)
 		if err != nil {
 			return err
 		}

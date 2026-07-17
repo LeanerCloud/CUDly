@@ -376,7 +376,6 @@ const StatusCanceled = "canceled"
 // which every reference to this constant can be deleted.
 const LegacyStatusCanceled = "cancel" + "led"
 
-
 // IsCancelable reports whether an execution may still be canceled. Only the
 // pre-purchase states ("pending"/"notified"/"scheduled") qualify: once a row
 // reaches "approved" or "running" the AWS commitment is being or has been
