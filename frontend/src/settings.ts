@@ -3202,6 +3202,16 @@ export async function loadGlobalSettings(): Promise<void> {
       populateGraceInput('setting-grace-azure', gpMap['azure']);
       populateGraceInput('setting-grace-gcp', gpMap['gcp']);
 
+      // EC2 RI offering class. Absent/null from the API means "convertible"
+      // (backend default). Only "convertible" and "standard" are valid; any
+      // other value from a future API version falls back to "convertible" so
+      // the dropdown always has a valid selection.
+      const offeringClassSelect = byId<HTMLSelectElement>('setting-ec2-offering-class');
+      if (offeringClassSelect) {
+        const oc = data.global.offering_class;
+        offeringClassSelect.value = (oc === 'standard') ? 'standard' : 'convertible';
+      }
+
       // Recommendations cycle params
       const staleHoursInput = byId<HTMLInputElement>('setting-recs-stale-hours');
       if (staleHoursInput) {
@@ -3476,6 +3486,9 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     return;
   }
 
+  const rawOfferingClass = byId<HTMLSelectElement>('setting-ec2-offering-class')?.value ?? 'convertible';
+  const offeringClass: 'convertible' | 'standard' = (rawOfferingClass === 'standard') ? 'standard' : 'convertible';
+
   const settings: api.Config = {
     enabled_providers: enabledProviders,
     notification_email: byId<HTMLInputElement>('setting-notification-email')?.value || '',
@@ -3488,6 +3501,7 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     grace_period_days: gracePeriodDays,
     recommendations_cache_stale_hours: rawStaleHours,
     recommendations_lookback_days: parseInt(byId<HTMLSelectElement>('setting-recs-lookback-days')?.value || '7', 10),
+    offering_class: offeringClass,
   };
 
   // Include laddering_enabled in the payload when the Purchasing panel's
@@ -3624,6 +3638,9 @@ export async function resetSettings(): Promise<void> {
   populateGraceInput('setting-grace-aws', 7);
   populateGraceInput('setting-grace-azure', 7);
   populateGraceInput('setting-grace-gcp', 7);
+
+  const offeringClassSelect = byId<HTMLSelectElement>('setting-ec2-offering-class');
+  if (offeringClassSelect) offeringClassSelect.value = 'convertible';
 
   const staleHoursInput = byId<HTMLInputElement>('setting-recs-stale-hours');
   if (staleHoursInput) staleHoursInput.value = '24';

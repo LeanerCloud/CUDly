@@ -38,6 +38,19 @@ func (m *MockEC2Client) DescribeReservedInstancesOfferings(ctx context.Context, 
 	return args.Get(0).(*ec2.DescribeReservedInstancesOfferingsOutput), args.Error(1)
 }
 
+// lastDescribeOfferingsInput captures the most recent
+// DescribeReservedInstancesOfferings params for assertion in integration tests.
+// Only used in tests that set this field explicitly; nil means uncaptured.
+type capturingMockEC2Client struct {
+	MockEC2Client
+	LastDescribeOfferingsInput *ec2.DescribeReservedInstancesOfferingsInput
+}
+
+func (m *capturingMockEC2Client) DescribeReservedInstancesOfferings(ctx context.Context, params *ec2.DescribeReservedInstancesOfferingsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeReservedInstancesOfferingsOutput, error) {
+	m.LastDescribeOfferingsInput = params
+	return m.MockEC2Client.DescribeReservedInstancesOfferings(ctx, params, optFns...)
+}
+
 func (m *MockEC2Client) DescribeReservedInstances(ctx context.Context, params *ec2.DescribeReservedInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeReservedInstancesOutput, error) {
 	args := m.Called(ctx, params)
 	if args.Get(0) == nil {
@@ -610,7 +623,7 @@ func TestFindOfferingID_PaginationCapFires(t *testing.T) {
 			}, nil).Once()
 	}
 
-	_, err := client.findOfferingID(context.Background(), rec, "")
+	_, err := client.findOfferingID(context.Background(), rec, "", "")
 
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "pagination cap reached")
@@ -653,7 +666,7 @@ func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
 			},
 		}, nil).Once()
 
-	_, err := client.findOfferingID(context.Background(), rec, "")
+	_, err := client.findOfferingID(context.Background(), rec, "", "")
 
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "no offerings found")
@@ -691,7 +704,7 @@ func TestFindOfferingID_HappyPath(t *testing.T) {
 			},
 		}, nil).Once()
 
-	id, err := client.findOfferingID(context.Background(), rec, "")
+	id, err := client.findOfferingID(context.Background(), rec, "", "")
 
 	assert.NoError(t, err)
 	assert.Equal(t, "offering-ok", id)
@@ -1071,4 +1084,144 @@ func TestClient_CancelMarketplaceListing_APIError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "CancelReservedInstancesListing failed")
 	mockEC2.AssertExpectations(t)
+}
+
+func TestResolveOfferingClassType(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		input   string
+		want    types.OfferingClassType
+		wantErr bool
+	}{
+		{"convertible", types.OfferingClassTypeConvertible, false},
+		{"", types.OfferingClassTypeConvertible, false}, // empty = default = convertible
+		{"standard", types.OfferingClassTypeStandard, false},
+		{"STANDARD", "", true},    // case-sensitive
+		{"unknown", "", true},     // unknown value must error
+		{"Convertible", "", true}, // wrong case must error
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.input, func(t *testing.T) {
+			t.Parallel()
+			got, err := resolveOfferingClassType(tc.input)
+			if tc.wantErr {
+				assert.Error(t, err, "expected error for input %q", tc.input)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tc.want, got)
+			}
+		})
+	}
+}
+
+func TestDescribeInputFromQuery_OfferingClass(t *testing.T) {
+	t.Parallel()
+	base := ec2OfferingQuery{
+		instanceType:     types.InstanceTypeT3Micro,
+		productDesc:      types.RIProductDescriptionLinuxUnix,
+		tenancy:          types.TenancyDefault,
+		scope:            string(types.ScopeRegional),
+		duration:         94608000,
+		wantOfferingType: types.OfferingTypeValuesNoUpfront,
+	}
+
+	t.Run("convertible by default (empty field)", func(t *testing.T) {
+		t.Parallel()
+		q := base
+		q.offeringClass = ""
+		inp := describeInputFromQuery(q, nil)
+		assert.Equal(t, types.OfferingClassTypeConvertible, inp.OfferingClass)
+	})
+
+	t.Run("convertible explicit", func(t *testing.T) {
+		t.Parallel()
+		q := base
+		q.offeringClass = types.OfferingClassTypeConvertible
+		inp := describeInputFromQuery(q, nil)
+		assert.Equal(t, types.OfferingClassTypeConvertible, inp.OfferingClass)
+	})
+
+	t.Run("standard explicit", func(t *testing.T) {
+		t.Parallel()
+		q := base
+		q.offeringClass = types.OfferingClassTypeStandard
+		inp := describeInputFromQuery(q, nil)
+		assert.Equal(t, types.OfferingClassTypeStandard, inp.OfferingClass)
+	})
+}
+
+// TestFindOfferingID_OfferingClassReachesSDKCall is the integration test for
+// issue #694: it verifies that the offeringClassStr argument passed to
+// findOfferingID is wired all the way through to the OfferingClass field on
+// the outbound DescribeReservedInstancesOfferings SDK call. The test fails if
+// the wiring regresses (e.g. the field is dropped or hardcoded).
+func TestFindOfferingID_OfferingClassReachesSDKCall(t *testing.T) {
+	t.Parallel()
+
+	rec := common.Recommendation{
+		ResourceType:  "m5.large",
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Details: &common.ComputeDetails{
+			Platform: "Linux/UNIX",
+			Tenancy:  "default",
+			Scope:    "Region",
+		},
+	}
+
+	offeringOutput := &ec2.DescribeReservedInstancesOfferingsOutput{
+		ReservedInstancesOfferings: []types.ReservedInstancesOffering{
+			{
+				ReservedInstancesOfferingId: aws.String("offering-std-123"),
+				InstanceType:                types.InstanceTypeM5Large,
+				OfferingType:                types.OfferingTypeValuesAllUpfront,
+			},
+		},
+	}
+
+	tests := []struct {
+		name              string
+		offeringClassStr  string
+		wantOfferingClass types.OfferingClassType
+	}{
+		{
+			name:              "empty string defaults to convertible",
+			offeringClassStr:  "",
+			wantOfferingClass: types.OfferingClassTypeConvertible,
+		},
+		{
+			name:              "convertible explicit reaches SDK as convertible",
+			offeringClassStr:  "convertible",
+			wantOfferingClass: types.OfferingClassTypeConvertible,
+		},
+		{
+			name:              "standard reaches SDK as standard",
+			offeringClassStr:  "standard",
+			wantOfferingClass: types.OfferingClassTypeStandard,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cap := &capturingMockEC2Client{}
+			cap.On("DescribeReservedInstancesOfferings", mock.Anything, mock.Anything).
+				Return(offeringOutput, nil).Once()
+
+			client := &Client{client: cap, region: "us-east-1"}
+
+			id, err := client.findOfferingID(context.Background(), rec, "", tc.offeringClassStr)
+			assert.NoError(t, err)
+			assert.Equal(t, "offering-std-123", id)
+
+			if assert.NotNil(t, cap.LastDescribeOfferingsInput, "DescribeReservedInstancesOfferings must have been called") {
+				assert.Equal(t, tc.wantOfferingClass, cap.LastDescribeOfferingsInput.OfferingClass,
+					"OfferingClass on the SDK call must match the configured value")
+			}
+			cap.AssertExpectations(t)
+		})
+	}
 }

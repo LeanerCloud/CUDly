@@ -81,7 +81,8 @@ func getGlobalConfigFrom(ctx context.Context, q globalConfigExecutor) (*GlobalCo
 		       recommendations_cache_stale_hours, recommendations_lookback_days,
 		       COALESCE(purchase_delay_hours, 0),
 		       COALESCE(laddering_enabled, false),
-		       COALESCE(ladder_execution_enabled, false)
+		       COALESCE(ladder_execution_enabled, false),
+		       offering_class
 		FROM global_config
 		WHERE id = 1
 	`
@@ -113,6 +114,7 @@ func getGlobalConfigFrom(ctx context.Context, q globalConfigExecutor) (*GlobalCo
 		&config.PurchaseDelayHours,
 		&config.LadderingEnabled,
 		&config.LadderExecutionEnabled,
+		&config.OfferingClass,
 	)
 
 	if err != nil {
@@ -135,6 +137,7 @@ func getGlobalConfigFrom(ctx context.Context, q globalConfigExecutor) (*GlobalCo
 				RecommendationsCacheStaleHours: DefaultRecommendationsCacheStaleHours,
 				RecommendationsLookbackDays:    DefaultRecommendationsLookbackDays,
 				PurchaseDelayHours:             DefaultPurchaseDelayHours,
+				OfferingClass:                  "convertible",
 			}, nil
 		}
 		return nil, fmt.Errorf("failed to get global config: %w", err)
@@ -211,8 +214,8 @@ func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *G
 			auto_collect, collection_schedule, notification_days_before,
 			grace_period_days,
 			recommendations_cache_stale_hours, recommendations_lookback_days,
-			purchase_delay_hours, laddering_enabled, ladder_execution_enabled
-		) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+			purchase_delay_hours, laddering_enabled, ladder_execution_enabled, offering_class
+		) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
 		ON CONFLICT (id) DO UPDATE SET
 			enabled_providers = $1,
 			notification_email = $2,
@@ -236,6 +239,7 @@ func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *G
 			purchase_delay_hours = $20,
 			laddering_enabled = $21,
 			ladder_execution_enabled = $22,
+			offering_class = $23,
 			updated_at = NOW()
 	`
 
@@ -259,7 +263,7 @@ func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *G
 		riExchangeUtilizationThreshold = 95.0
 	}
 
-	// Marshal GracePeriodDays → JSON text column. Empty map encodes as
+	// Marshal GracePeriodDays -> JSON text column. Empty map encodes as
 	// "{}" so the DB column is never NULL and GetGlobalConfig can
 	// treat "{}" and "" uniformly as "no explicit entries".
 	gracePeriodJSON := "{}"
@@ -269,6 +273,14 @@ func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *G
 			return fmt.Errorf("failed to encode grace_period_days JSON: %w", err)
 		}
 		gracePeriodJSON = string(gpBytes)
+	}
+
+	// Default offering_class to "convertible" when unset so the DB column
+	// never stores an empty string (the NOT NULL DEFAULT 'convertible'
+	// column handles inserts, but upserts overwrite with whatever we pass).
+	offeringClass := config.OfferingClass
+	if offeringClass == "" {
+		offeringClass = "convertible"
 	}
 
 	_, err := q.Exec(ctx, query,
@@ -294,6 +306,7 @@ func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *G
 		config.PurchaseDelayHours,
 		config.LadderingEnabled,
 		config.LadderExecutionEnabled,
+		offeringClass,
 	)
 
 	if err != nil {

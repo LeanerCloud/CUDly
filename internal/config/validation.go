@@ -166,6 +166,11 @@ func crossProviderPaymentAlias(provider, raw string) (string, bool) {
 	return "", false
 }
 
+// ValidOfferingClasses lists the accepted EC2 RI offering class values for
+// GlobalConfig. The empty string is also accepted (maps to "convertible" at
+// purchase time to preserve pre-694 behavior).
+var ValidOfferingClasses = []string{"convertible", "standard"}
+
 // ValidRampScheduleTypes lists all supported ramp schedule types.
 var ValidRampScheduleTypes = []string{"immediate", "weekly", "monthly", "custom"}
 
@@ -189,16 +194,26 @@ func (c *GlobalConfig) Validate() error {
 	if err := validateCoverage(c.DefaultCoverage); err != nil {
 		return err
 	}
+	if err := c.validateScheduleAndNotifications(); err != nil {
+		return err
+	}
+	if err := validateOfferingClass(c.OfferingClass); err != nil {
+		return err
+	}
+	return c.validateRecommendationsFields()
+}
+
+// validateScheduleAndNotifications validates collection_schedule and
+// notification_days_before. Extracted to keep Validate's cyclomatic
+// complexity under the project limit.
+func (c *GlobalConfig) validateScheduleAndNotifications() error {
 	if !isValidCollectionSchedule(c.CollectionSchedule) {
 		return fmt.Errorf("invalid collection_schedule: %q (valid: hourly, daily, weekly)", c.CollectionSchedule)
 	}
 	if c.NotificationDaysBefore < 0 || c.NotificationDaysBefore > MaxNotificationDaysBefore {
 		return fmt.Errorf("notification_days_before must be between 0 and %d, got: %d", MaxNotificationDaysBefore, c.NotificationDaysBefore)
 	}
-	if err := c.validateGracePeriodDays(); err != nil {
-		return err
-	}
-	return c.validateRecommendationsFields()
+	return c.validateGracePeriodDays()
 }
 
 // validateRecommendationsFields validates the recommendation-cycle parameters
@@ -657,4 +672,21 @@ func (c *LadderConfigDB) validateLadderRampSchedule() error {
 		return fmt.Errorf("ramp_schedule: %w", err)
 	}
 	return nil
+}
+
+// validateOfferingClass validates the EC2 RI offering class value.
+// The empty string is accepted (maps to "convertible" at purchase time).
+// Only lowercase "convertible" and "standard" are valid non-empty values;
+// the check is case-sensitive to match how resolveOfferingClassType parses
+// the field in providers/aws/services/ec2/client.go.
+func validateOfferingClass(oc string) error {
+	if oc == "" {
+		return nil
+	}
+	for _, valid := range ValidOfferingClasses {
+		if oc == valid {
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid offering_class: %q (valid: %s)", oc, strings.Join(ValidOfferingClasses, ", "))
 }

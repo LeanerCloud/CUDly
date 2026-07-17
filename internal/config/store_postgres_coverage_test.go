@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // These tests exercise the real PostgresStore methods to gain code coverage.
@@ -534,4 +536,76 @@ func TestPostgresStore_GetAllPurchaseHistory_NilDB(t *testing.T) {
 	})
 
 	assert.True(t, panicked, "expected panic with nil db connection")
+}
+
+// TestSaveGlobalConfig_OfferingClassBindsAt23 is the HOLE 2 regression guard
+// (issue #694): the real PostgresStore.SaveGlobalConfig must bind offering_class
+// as the 23rd positional argument ($23), with laddering_enabled at $21 and
+// ladder_execution_enabled at $22.
+// The testablePostgresStore in store_postgres_mock_test.go is a hand-maintained
+// copy that omits the field entirely, so no fast test guarded the placeholder
+// count until now.
+//
+// Using pgxmock directly against the real PostgresStore (not the hand-maintained
+// testablePostgresStore wrapper) ensures the live query is tested, not a stale copy.
+func TestSaveGlobalConfig_OfferingClassBindsAt23(t *testing.T) {
+	ctx := context.Background()
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	// Wire the pgxmock pool directly into the real PostgresStore via the
+	// unexported db field (test is in package config so this is allowed).
+	store := &PostgresStore{db: mock}
+
+	email := "ops@example.com"
+	cfg := &GlobalConfig{
+		EnabledProviders:    []string{"aws"},
+		NotificationEmail:   &email,
+		ApprovalRequired:    true,
+		DefaultTerm:         12,
+		DefaultPayment:      "all-upfront",
+		DefaultCoverage:     80.0,
+		DefaultRampSchedule: "immediate",
+		OfferingClass:       "standard",
+	}
+
+	// Expect exactly 23 args; pgxmock validates arg count and types.
+	// The 21st arg is laddering_enabled; the 22nd is ladder_execution_enabled;
+	// the 23rd arg must be "standard" (offering_class).
+	// If the real query regresses to a different arg count, pgxmock
+	// will return an unexpected-call error and the test will fail.
+	mock.ExpectExec(`INSERT INTO global_config`).
+		WithArgs(
+			pgxmock.AnyArg(), // $1  enabled_providers
+			pgxmock.AnyArg(), // $2  notification_email
+			pgxmock.AnyArg(), // $3  approval_required
+			pgxmock.AnyArg(), // $4  default_term
+			pgxmock.AnyArg(), // $5  default_payment
+			pgxmock.AnyArg(), // $6  default_coverage
+			pgxmock.AnyArg(), // $7  default_ramp_schedule
+			pgxmock.AnyArg(), // $8  ri_exchange_enabled
+			pgxmock.AnyArg(), // $9  ri_exchange_mode
+			pgxmock.AnyArg(), // $10 ri_exchange_utilization_threshold
+			pgxmock.AnyArg(), // $11 ri_exchange_max_per_exchange_usd
+			pgxmock.AnyArg(), // $12 ri_exchange_max_daily_usd
+			pgxmock.AnyArg(), // $13 ri_exchange_lookback_days
+			pgxmock.AnyArg(), // $14 auto_collect
+			pgxmock.AnyArg(), // $15 collection_schedule
+			pgxmock.AnyArg(), // $16 notification_days_before
+			pgxmock.AnyArg(), // $17 grace_period_days
+			pgxmock.AnyArg(), // $18 recommendations_cache_stale_hours
+			pgxmock.AnyArg(), // $19 recommendations_lookback_days
+			pgxmock.AnyArg(), // $20 purchase_delay_hours
+			pgxmock.AnyArg(), // $21 laddering_enabled
+			pgxmock.AnyArg(), // $22 ladder_execution_enabled
+			"standard",       // $23 offering_class -- the field this test guards
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+	err = store.SaveGlobalConfig(ctx, cfg)
+	require.NoError(t, err, "SaveGlobalConfig must succeed when the DB accepts all 23 args")
+
+	require.NoError(t, mock.ExpectationsWereMet(),
+		"offering_class must be bound as the 23rd argument to SaveGlobalConfig")
 }
