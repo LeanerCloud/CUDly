@@ -199,6 +199,11 @@
     font-size: 0.85em;
 }
 
+/* Issue #1402: Term select wide enough for "1 Year" / "3 Years" labels. */
+.purchase-row-term {
+    min-width: 5.5rem;
+}
+
 /* -----------------------------------------------------------------------
  * Archera Insurance CTA: unobtrusive small-text link shown in the
  * Purchase modal and Plan-creation modal.
