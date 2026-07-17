@@ -15,7 +15,7 @@ ARG TARGETOS=linux
 # To refresh: `docker buildx imagetools inspect golang:1.26.5-alpine3.24`
 # (or use the Docker Hub API tags endpoint) and update the digest below.
 # A Renovate / Dependabot config can automate this if desired.
-FROM golang:1.26.5-alpine3.24@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine3.24@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
 
 # Re-declare args for use in this stage
 ARG TARGETARCH
@@ -42,11 +42,11 @@ SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 # Install golang-migrate for database migrations (architecture-aware, checksum-verified)
 RUN MIGRATE_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "amd64") && \
     if [ "$MIGRATE_ARCH" = "arm64" ]; then \
-      MIGRATE_SHA256="9c95441cc430ffdac89276d14de5e2f18bfafca00796c2895490d62e3776d104"; \
+      MIGRATE_SHA256="2fea2455c0f3f07cc3f4b98471c951ad1a716059574b20b6416bd1e9058751c5"; \
     else \
-      MIGRATE_SHA256="26c53c9162c9c4aaa84c47cd12455d4a9ac725befbe82850a5937b5ec1e7b8e6"; \
+      MIGRATE_SHA256="2ac648fbd1b127b69ab5a7b33cf96212178f71e22379fc50573630c6f4c7ce18"; \
     fi && \
-    curl -Lo migrate.tar.gz "https://github.com/golang-migrate/migrate/releases/download/v4.17.0/migrate.linux-${MIGRATE_ARCH}.tar.gz" && \
+    curl -Lo migrate.tar.gz "https://github.com/golang-migrate/migrate/releases/download/v4.19.1/migrate.linux-${MIGRATE_ARCH}.tar.gz" && \
     echo "${MIGRATE_SHA256}  migrate.tar.gz" | sha256sum -c - && \
     tar xzf migrate.tar.gz && \
     mv migrate /usr/local/bin/migrate && \
