@@ -499,7 +499,7 @@ export async function loadRecommendations(): Promise<void> {
 
     const [data, accounts, cfgResponse] = await Promise.all([
       api.getRecommendations(filters) as unknown as RecommendationsResponse,
-      api.listAccounts().catch(() => []),
+      api.listAccountsMinimal().catch(() => []),
       // issue #223: fetch GlobalConfig so per-cell variant selection and
       // bulk-toolbar defaults reflect the operator's configured preference.
       // Failure is siloed — a missing/unreachable config endpoint must not
