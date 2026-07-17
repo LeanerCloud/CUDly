@@ -1845,3 +1845,125 @@ func TestSummarizePurchaseHistory_CancelPendingDoesNotChangeKPIs(t *testing.T) {
 	assert.Equal(t, before.TotalCompleted, after.TotalCompleted,
 		"canceling a pending purchase must not change TotalCompleted (issues #625, #736)")
 }
+
+// TestHandler_getHistory_ExpireIfStale_LambdaGuard covers the Lambda guard on
+// the stale-approval expiry sweep (issue #1170, COR-06). On Lambda the
+// execution environment freezes as soon as the response is returned, so the
+// sweep must complete synchronously before getHistory returns; on long-running
+// servers it must stay asynchronous so the read response is never blocked on
+// the transitions. Detection reuses runtime.IsLambda (AWS_LAMBDA_RUNTIME_API),
+// the same helper the SWR cache goroutine gate uses, so the sub-tests flip
+// that env var via t.Setenv.
+func TestHandler_getHistory_ExpireIfStale_LambdaGuard(t *testing.T) {
+	approverEmail := "ops@example.com"
+	staleID := "stale-exec-lambda-guard"
+	staleExec := func() config.PurchaseExecution {
+		return config.PurchaseExecution{
+			ExecutionID:      staleID,
+			Status:           "pending",
+			ScheduledDate:    time.Now().Add(-8 * 24 * time.Hour),
+			TotalUpfrontCost: 200.0,
+			EstimatedSavings: 20.0,
+			Recommendations: []config.RecommendationRecord{
+				{Provider: "aws", Service: "rds", Region: "us-east-1"},
+			},
+		}
+	}
+
+	t.Run("Lambda: sweep completes synchronously before the handler returns", func(t *testing.T) {
+		// Any non-empty value marks the process as running on Lambda
+		// (runtime.IsLambda checks presence, not content).
+		t.Setenv("AWS_LAMBDA_RUNTIME_API", "127.0.0.1:9001")
+
+		ctx := context.Background()
+		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+		expired := staleExec()
+		expired.Status = "expired"
+
+		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
+			Return([]config.PurchaseExecution{staleExec()}, nil)
+		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
+		mockStore.On("TransitionExecutionStatus", mock.Anything, staleID, []string{"pending", "notified"}, "expired",
+			(*string)(nil),
+		).Return(&expired, nil).Once()
+
+		mockAuth, req := adminHistoryReq(ctx)
+		handler := &Handler{auth: mockAuth, config: mockStore}
+
+		result, err := handler.getHistory(ctx, req, map[string]string{})
+		require.NoError(t, err)
+
+		// No channel wait: on Lambda the transition must already have fired
+		// by the time getHistory returns. Pre-fix this fails because the
+		// sweep ran in a goroutine the frozen sandbox never resumes.
+		mockStore.AssertNumberOfCalls(t, "TransitionExecutionStatus", 1)
+
+		historyResp := result.(HistoryResponse)
+		require.Len(t, historyResp.Purchases, 1)
+		assert.Equal(t, "pending", historyResp.Purchases[0].Status,
+			"GET stays a pure read on Lambda too: response carries the pre-transition status")
+	})
+
+	t.Run("non-Lambda: sweep stays asynchronous and never blocks the response", func(t *testing.T) {
+		// Explicitly clear the marker so the test is deterministic even if
+		// the outer environment sets it; t.Setenv restores it afterwards.
+		t.Setenv("AWS_LAMBDA_RUNTIME_API", "")
+
+		ctx := context.Background()
+		mockStore := new(MockConfigStore)
+		expired := staleExec()
+		expired.Status = "expired"
+
+		// The transition blocks until released. If the sweep ran
+		// synchronously off-Lambda (a regression of issue #1032's pure-read
+		// guarantee), getHistory would block on it and the watchdog below
+		// would fire.
+		release := make(chan struct{})
+		swept := make(chan struct{})
+		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
+			Return([]config.PurchaseExecution{staleExec()}, nil)
+		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
+		mockStore.On("TransitionExecutionStatus", mock.Anything, staleID, []string{"pending", "notified"}, "expired",
+			(*string)(nil),
+		).Run(func(_ mock.Arguments) {
+			<-release
+			close(swept)
+		}).Return(&expired, nil).Once()
+
+		mockAuth, req := adminHistoryReq(ctx)
+		handler := &Handler{auth: mockAuth, config: mockStore}
+
+		done := make(chan struct{})
+		var result any
+		var err error
+		go func() {
+			result, err = handler.getHistory(ctx, req, map[string]string{})
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// getHistory returned while the transition was still blocked:
+			// the sweep is asynchronous, as required off-Lambda.
+		case <-time.After(5 * time.Second):
+			t.Fatal("getHistory blocked on the expiry sweep off-Lambda - sweep must stay asynchronous")
+		}
+
+		close(release)
+		select {
+		case <-swept:
+		case <-time.After(5 * time.Second):
+			t.Fatal("background expiry sweep did not complete within 5s")
+		}
+
+		require.NoError(t, err)
+		mockStore.AssertNumberOfCalls(t, "TransitionExecutionStatus", 1)
+		mockStore.AssertExpectations(t)
+		historyResp := result.(HistoryResponse)
+		require.Len(t, historyResp.Purchases, 1)
+		assert.Equal(t, "pending", historyResp.Purchases[0].Status)
+	})
+}
