@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -174,15 +175,14 @@ func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *S
 	}
 
 	nameByID := h.resolveAccountNamesByID(ctx)
-	filtered := recs[:0]
+	filtered := make([]config.RecommendationRecord, 0, len(recs))
 	for _rvc := range recs {
-		rec := recs[_rvc]
-		if rec.CloudAccountID == nil {
+		if recs[_rvc].CloudAccountID == nil {
 			continue
 		}
-		id := *rec.CloudAccountID
+		id := *recs[_rvc].CloudAccountID
 		if auth.MatchesAccount(allowed, id, nameByID[id]) {
-			filtered = append(filtered, rec)
+			filtered = append(filtered, recs[_rvc])
 		}
 	}
 	return filtered, nil
@@ -221,6 +221,12 @@ func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *S
 // therefore correct: it projects "how much would I save if I only bought
 // RIs to cover X% of my instances" against the 100%-coverage baseline
 // that every provider gives us. Verified by TestSummarizeRecommendationsWithCoverage_100PctContract.
+//
+// Note: CurrentSavings is NOT set here. It represents committed/realized
+// savings from active purchase history, populated separately in
+// getDashboardSummary via aggregateActiveCommitmentsPerService. A service
+// with recommendations but no active purchases correctly ships
+// current_savings: 0 (issue #1031).
 func summarizeRecommendationsWithCoverage( //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	recs []config.RecommendationRecord,
 	coverageByKey map[string]float64,
@@ -245,17 +251,6 @@ func summarizeRecommendationsWithCoverage( //nolint:gocritic // unnamedResult: r
 		total += scaled
 		svc := byService[rep.rec.Service]
 		svc.PotentialSavings += scaled
-		// CurrentSavings is the committed/realized monthly savings for the
-		// service: the full 100%-coverage potential (rec.Savings) projected
-		// down to the operator-configured coverage %. scaledSavings already
-		// computes exactly that (rec.Savings * min(coverage,100)/100), so we
-		// reuse it rather than re-deriving the coverage lookup. When no
-		// coverage override exists the rec falls through to full savings, so
-		// CurrentSavings == PotentialSavings (nothing committed-away yet); a
-		// configured coverage < 100 pulls CurrentSavings below the potential.
-		// Issue #908: this field was previously never set, so the Home
-		// chart's current-savings underlay always rendered as $0.
-		svc.CurrentSavings += scaled
 		byService[rep.rec.Service] = svc
 	}
 	return total, byService
@@ -457,26 +452,37 @@ func (h *Handler) getUpcomingPurchases(ctx context.Context, req *events.LambdaFu
 	return &UpcomingPurchaseResponse{Purchases: upcoming}, nil
 }
 
+// firstServiceConfig returns the ServiceConfig for the lexicographically first
+// key in plan.Services, giving a deterministic result regardless of map
+// iteration order. Returns the zero value when the map is empty (both callers
+// tolerate empty provider/service strings — they fall back to blank display
+// fields rather than panicking).
+func firstServiceConfig(plan *config.PurchasePlan) config.ServiceConfig {
+	if len(plan.Services) == 0 {
+		return config.ServiceConfig{}
+	}
+	keys := make([]string, 0, len(plan.Services))
+	for k := range plan.Services {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return plan.Services[keys[0]]
+}
+
 // upcomingFromExecution projects a (plan, execution) pair onto the
 // UpcomingPurchase response. Uses the first service entry from the plan as
 // representative — the response shape doesn't support multi-service plans.
 // Step number comes from the execution row directly (already stamped by the
 // scheduler at instance-create time).
 func upcomingFromExecution(plan *config.PurchasePlan, exec *config.PurchaseExecution) UpcomingPurchase {
-	var provider, service string
-	for _rvc := range plan.Services {
-		svcCfg := plan.Services[_rvc]
-		provider = svcCfg.Provider
-		service = svcCfg.Service
-		break
-	}
+	svc := firstServiceConfig(plan)
 	return UpcomingPurchase{
 		ExecutionID:      exec.ExecutionID,
 		PlanID:           plan.ID,
 		PlanName:         plan.Name,
 		ScheduledDate:    exec.ScheduledDate.Format("2006-01-02"),
-		Provider:         provider,
-		Service:          service,
+		Provider:         svc.Provider,
+		Service:          svc.Service,
 		StepNumber:       exec.StepNumber,
 		TotalSteps:       plan.RampSchedule.TotalSteps,
 		EstimatedSavings: exec.EstimatedSavings,
@@ -614,7 +620,7 @@ func (h *Handler) fetchCommitmentPurchases(ctx context.Context, asOf time.Time, 
 
 	purchases, err := h.config.GetActivePurchaseHistory(ctx, asOf, accountUUIDs, accountExternalIDsByProvider)
 	if err != nil {
-		// Log error but don't fail the dashboard request.
+		logging.Errorf("dashboard: failed to fetch commitment purchases; KPIs will be zeroed: %v", err)
 		return nil, false
 	}
 	return purchases, true
@@ -663,18 +669,35 @@ func (h *Handler) calculateCommitmentMetrics(ctx context.Context, accountUUIDs [
 		// above (same gate), so it is intentionally NOT summed here to avoid
 		// double-counting. EstimatedSavings is in monthly units (see doc above).
 		//
-		// YTD savings: count from year start or from purchase date, whichever
-		// is later, using a 30-day month approximation (same as original).
-		if p.Timestamp.Before(yearStart) {
-			monthsSinceYearStart := int(currentTime.Sub(yearStart).Hours() / (24 * 30))
-			ytdSavings += p.EstimatedSavings * float64(monthsSinceYearStart)
-		} else {
-			monthsSincePurchase := int(currentTime.Sub(p.Timestamp).Hours() / (24 * 30))
-			ytdSavings += p.EstimatedSavings * float64(monthsSincePurchase)
+		// YTD savings: count whole calendar months from year start or from the
+		// purchase date, whichever is later. Use AddDate-stepping rather than
+		// dividing by a 30-day constant so January (31 days) and February (28/29
+		// days) are handled correctly and the result never truncates a partial
+		// month that spans a 29-30-31-day boundary.
+		countFrom := yearStart
+		if p.Timestamp.After(yearStart) {
+			countFrom = p.Timestamp
 		}
+		ytdSavings += p.EstimatedSavings * float64(elapsedWholeMonths(countFrom, currentTime))
 	}
 
 	return activeCommitments, committedMonthly, ytdSavings, savingsByService
+}
+
+// elapsedWholeMonths returns the number of complete calendar months between
+// from and to, counted by AddDate-stepping rather than dividing by a fixed
+// 30-day constant. This avoids truncation errors for months of varying length
+// (e.g. a 28-day gap in February scores 0 under the 30-day divisor, 1 here).
+// Returns 0 when to is before or equal to from.
+func elapsedWholeMonths(from, to time.Time) int {
+	if !to.After(from) {
+		return 0
+	}
+	months := 0
+	for from.AddDate(0, months+1, 0).Before(to) || from.AddDate(0, months+1, 0).Equal(to) {
+		months++
+	}
+	return months
 }
 
 // calculateCurrentCoverage calculates the current coverage percentage.
