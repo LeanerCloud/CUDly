@@ -341,22 +341,35 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
   // on click. Defense in depth, backend still enforces.
   const canExchange = canAccess('admin', '*');
 
+  // Apply per-column filters (issue #1414). Mirrors the pattern in
+  // renderRecommendations; broken numeric expressions are skipped so
+  // the popover can surface the inline error without forcing a clear.
+  const filters = state.getActiveRiColumnFilters();
+  const visibleRIs = applyActiveRiColumnFilters(currentRIs, currentUtilization, filters);
+
+  const filterBtn = (column: state.ActiveRiColumnId): string => {
+    const active = filters[column] ? ' active' : '';
+    const lbl = activeRiLabelFor(column);
+    const label = filters[column] ? `Filter ${lbl} — currently active` : `Filter ${lbl}`;
+    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">&#x26DB;</button>`;
+  };
+
   container.innerHTML = `
     <table>
       <thead>
         <tr>
           <th>RI ID</th>
-          <th>Instance Type</th>
-          <th>AZ</th>
-          <th>Count</th>
-          <th>Offering</th>
+          <th>Instance Type${filterBtn('instance_type')}</th>
+          <th>AZ${filterBtn('availability_zone')}</th>
+          <th>Count${filterBtn('instance_count')}</th>
+          <th>Offering${filterBtn('offering_type')}</th>
           <th>Expiry</th>
-          <th>Utilization</th>
+          <th>Utilization${filterBtn('utilization_pct')}</th>
           ${canExchange ? '<th>Actions</th>' : ''}
         </tr>
       </thead>
       <tbody>
-        ${currentRIs.map(ri => {
+        ${visibleRIs.map(ri => {
           const util = currentUtilization.get(ri.reserved_instance_id);
           const utilPct = util ? util.utilization_percent : null;
           const utilClass = utilPct === null ? '' : utilPct >= 95 ? 'util-green' : utilPct >= 70 ? 'util-yellow' : 'util-red';
@@ -376,6 +389,18 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
       </tbody>
     </table>
   `;
+
+  // Wire per-column filter buttons (same pattern as renderRecommendations).
+  // e.stopPropagation prevents the surrounding <th> from also handling
+  // the click so future sort handlers won't conflict.
+  container.querySelectorAll<HTMLButtonElement>('.column-filter-btn').forEach((btn) => {
+    const column = btn.dataset['column'] as state.ActiveRiColumnId | undefined;
+    if (!column) return;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      activeRiOpenPopoverFor(column, btn);
+    });
+  });
 
   // Attach "Exchange" handlers for individual RIs
   container.querySelectorAll<HTMLButtonElement>('[data-action="quote-ri"]').forEach(btn => {
@@ -636,7 +661,352 @@ export function applyRiExchangeColumnFilters(
   });
 }
 
-// ── Popover ───────────────────────────────────
+// ── Active Convertible RIs column filters (issue #1414) ──────────────────
+
+interface ActiveRiColumnDef {
+  key: state.ActiveRiColumnId;
+  label: string;
+  kind: 'numeric' | 'categorical';
+}
+
+const ACTIVE_RI_COLUMN_DEFS: readonly ActiveRiColumnDef[] = [
+  { key: 'instance_type',     label: 'Instance Type', kind: 'categorical' },
+  { key: 'availability_zone', label: 'AZ',            kind: 'categorical' },
+  { key: 'offering_type',     label: 'Offering',      kind: 'categorical' },
+  { key: 'instance_count',    label: 'Count',         kind: 'numeric'     },
+  { key: 'utilization_pct',   label: 'Utilization %', kind: 'numeric'     },
+];
+
+const ACTIVE_RI_NUMERIC_COLUMNS: ReadonlySet<state.ActiveRiColumnId> = new Set(
+  ACTIVE_RI_COLUMN_DEFS.filter((c) => c.kind === 'numeric').map((c) => c.key),
+);
+
+function activeRiLabelFor(col: state.ActiveRiColumnId): string {
+  return ACTIVE_RI_COLUMN_DEFS.find((c) => c.key === col)?.label ?? col;
+}
+
+function activeRiCategoricalCellValue(ri: ConvertibleRI, col: state.ActiveRiColumnId): string {
+  switch (col) {
+    case 'instance_type':     return ri.instance_type ?? '';
+    case 'availability_zone': return ri.availability_zone ?? '';
+    case 'offering_type':     return ri.offering_type ?? '';
+    case 'instance_count':
+    case 'utilization_pct':   return '';
+  }
+}
+
+function activeRiNumericCellValue(
+  ri: ConvertibleRI,
+  util: Map<string, RIUtilization>,
+  col: state.ActiveRiColumnId,
+): number {
+  switch (col) {
+    case 'instance_count':  return ri.instance_count ?? 0;
+    case 'utilization_pct': {
+      const u = util.get(ri.reserved_instance_id);
+      return u !== undefined ? u.utilization_percent : Number.NaN;
+    }
+    case 'instance_type':
+    case 'availability_zone':
+    case 'offering_type':   return Number.NaN;
+  }
+}
+
+function activeRiDisplayPrecision(col: state.ActiveRiColumnId): number {
+  switch (col) {
+    case 'instance_count':  return 0;
+    case 'utilization_pct': return 1;
+    case 'instance_type':
+    case 'availability_zone':
+    case 'offering_type':   return 0;
+  }
+}
+
+/**
+ * Pure filter function for the Active Convertible RIs table. Exported so
+ * unit tests can exercise the filter pipeline without DOM setup. Mirrors
+ * applyRiExchangeColumnFilters.
+ */
+export function applyActiveRiColumnFilters(
+  ris: readonly ConvertibleRI[],
+  util: Map<string, RIUtilization>,
+  filters: state.ActiveRiColumnFilters,
+): ConvertibleRI[] {
+  return applyColumnFiltersLib<ConvertibleRI, state.ActiveRiColumnId>(ris, filters, {
+    categorical: activeRiCategoricalCellValue,
+    numeric: (ri, col) => {
+      const raw = activeRiNumericCellValue(ri, util, col);
+      if (!Number.isFinite(raw)) return raw;
+      return Number(raw.toFixed(activeRiDisplayPrecision(col)));
+    },
+  });
+}
+
+// ── Active RI popover ─────────────────────────────────────────────────────
+
+interface ActiveRiPopoverState {
+  column: state.ActiveRiColumnId;
+  el: HTMLDivElement;
+  checkboxes: Map<string, HTMLInputElement>;
+  input: HTMLInputElement | null;
+  errorEl: HTMLElement | null;
+}
+
+let activeRiOpenPopover: ActiveRiPopoverState | null = null;
+let activeRiOutsideHandler: ((e: MouseEvent) => void) | null = null;
+let activeRiEscHandler: ((e: KeyboardEvent) => void) | null = null;
+
+function activeRiDistinctValues(col: state.ActiveRiColumnId): string[] {
+  const seen = new Set<string>();
+  for (const ri of currentRIs) seen.add(activeRiCategoricalCellValue(ri, col));
+  return Array.from(seen).sort((a, b) => {
+    if (a === '' && b !== '') return -1;
+    if (a !== '' && b === '') return 1;
+    return a.localeCompare(b);
+  });
+}
+
+function activeRiPositionPopover(popover: HTMLElement, anchor: HTMLElement): void {
+  const rect = anchor.getBoundingClientRect();
+  popover.style.display = 'block';
+  const popRect = popover.getBoundingClientRect();
+  const margin = 8;
+  let top = rect.bottom + 4;
+  if (top + popRect.height > window.innerHeight - margin) {
+    top = Math.max(margin, rect.top - popRect.height - 4);
+  }
+  let left = rect.left;
+  if (left + popRect.width > window.innerWidth - margin) {
+    left = Math.max(margin, window.innerWidth - margin - popRect.width);
+  }
+  popover.style.position = 'absolute';
+  popover.style.top = `${top + window.scrollY}px`;
+  popover.style.left = `${left + window.scrollX}px`;
+}
+
+function rerenderRIs(): void {
+  const container = document.getElementById('ri-exchange-instances-list');
+  if (container) renderRIsTable(container, currentRIAccountID);
+}
+
+function activeRiCloseOpenPopover(): void {
+  if (!activeRiOpenPopover) return;
+  const { column, el } = activeRiOpenPopover;
+  el.remove();
+  activeRiOpenPopover = null;
+  if (activeRiOutsideHandler) {
+    document.removeEventListener('mousedown', activeRiOutsideHandler);
+    activeRiOutsideHandler = null;
+  }
+  if (activeRiEscHandler) {
+    document.removeEventListener('keydown', activeRiEscHandler);
+    activeRiEscHandler = null;
+  }
+  const trigger = document.querySelector<HTMLButtonElement>(
+    `#ri-exchange-instances-list .column-filter-btn[data-column="${column}"]`,
+  );
+  if (trigger) trigger.setAttribute('aria-expanded', 'false');
+}
+
+function activeRiBuildPopover(column: state.ActiveRiColumnId): ActiveRiPopoverState {
+  const popover = document.createElement('div');
+  popover.className = 'column-filter-popover';
+  popover.setAttribute('role', 'dialog');
+  popover.setAttribute('aria-modal', 'false');
+
+  const headingId = `active-ri-filter-heading-${column}`;
+  popover.setAttribute('aria-labelledby', headingId);
+
+  const heading = document.createElement('h3');
+  heading.id = headingId;
+  heading.className = 'column-filter-heading';
+  heading.textContent = `Filter ${activeRiLabelFor(column)}`;
+  popover.appendChild(heading);
+
+  const checkboxes = new Map<string, HTMLInputElement>();
+  let input: HTMLInputElement | null = null;
+  let errorEl: HTMLElement | null = null;
+  let commitAllRef: ((target: boolean) => void) | null = null;
+
+  if (ACTIVE_RI_NUMERIC_COLUMNS.has(column)) {
+    // Numeric column: free-text expression input
+    const label = document.createElement('label');
+    label.className = 'column-filter-numeric-label';
+    label.textContent = 'Expression';
+    input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'column-filter-numeric-input';
+    input.placeholder = 'e.g. >50, 10..20, 4';
+    input.setAttribute('aria-describedby', `active-ri-filter-error-${column}`);
+    const current = state.getActiveRiColumnFilters()[column];
+    if (current && current.kind === 'expr') input.value = current.expr;
+    label.appendChild(input);
+    popover.appendChild(label);
+
+    errorEl = document.createElement('div');
+    errorEl.id = `active-ri-filter-error-${column}`;
+    errorEl.className = 'column-filter-error';
+    errorEl.setAttribute('role', 'status');
+    popover.appendChild(errorEl);
+
+    const inputEl = input;
+    const errorElRef = errorEl;
+    const commit = (): void => {
+      const expr = inputEl.value.trim();
+      if (expr === '') {
+        state.setActiveRiColumnFilter(column, null);
+        errorElRef.textContent = '';
+        rerenderRIs();
+        return;
+      }
+      const parsed = parseNumericFilter(expr);
+      if (!parsed.ok) {
+        errorElRef.textContent = parsed.error;
+        return;
+      }
+      errorElRef.textContent = '';
+      state.setActiveRiColumnFilter(column, { kind: 'expr', expr });
+      rerenderRIs();
+    };
+    inputEl.addEventListener('blur', commit);
+    inputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    });
+  } else {
+    // Categorical column: checkbox list of distinct values
+    const distinct = activeRiDistinctValues(column);
+    const current = state.getActiveRiColumnFilters()[column];
+    const activeSet: ReadonlySet<string> | null =
+      current && current.kind === 'set' ? new Set(current.values) : null;
+
+    const allLabel = document.createElement('label');
+    allLabel.className = 'column-filter-all';
+    const allBox = document.createElement('input');
+    allBox.type = 'checkbox';
+    allBox.dataset['role'] = 'all';
+    allLabel.appendChild(allBox);
+    const allText = document.createElement('span');
+    allText.textContent = '(All)';
+    allLabel.appendChild(allText);
+    popover.appendChild(allLabel);
+
+    const list = document.createElement('div');
+    list.className = 'column-filter-list';
+    for (const value of distinct) {
+      const itemLabel = document.createElement('label');
+      itemLabel.className = 'column-filter-item';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.dataset['value'] = value;
+      cb.checked = activeSet === null ? true : activeSet.has(value);
+      itemLabel.appendChild(cb);
+      const text = document.createElement('span');
+      text.textContent = value === '' ? '(empty)' : value;
+      itemLabel.appendChild(text);
+      list.appendChild(itemLabel);
+      checkboxes.set(value, cb);
+    }
+    popover.appendChild(list);
+
+    const updateAllTriState = (): void => {
+      let checked = 0;
+      checkboxes.forEach((cb) => { if (cb.checked) checked++; });
+      const total = checkboxes.size;
+      allBox.indeterminate = checked > 0 && checked < total;
+      allBox.checked = total > 0 && checked === total;
+    };
+    updateAllTriState();
+
+    const commit = (): void => {
+      const selected: string[] = [];
+      checkboxes.forEach((cb, value) => { if (cb.checked) selected.push(value); });
+      if (selected.length === checkboxes.size) {
+        state.setActiveRiColumnFilter(column, null);
+      } else {
+        state.setActiveRiColumnFilter(column, { kind: 'set', values: selected });
+      }
+      updateAllTriState();
+      rerenderRIs();
+    };
+
+    const commitAll = (target: boolean): void => {
+      checkboxes.forEach((cb) => { cb.checked = target; });
+      if (target) {
+        state.setActiveRiColumnFilter(column, null);
+      } else {
+        state.setActiveRiColumnFilter(column, { kind: 'set', values: [] });
+      }
+      updateAllTriState();
+      rerenderRIs();
+    };
+    commitAllRef = commitAll;
+
+    checkboxes.forEach((cb) => { cb.addEventListener('change', commit); });
+    allBox.addEventListener('change', () => { commitAll(allBox.checked); });
+  }
+
+  const footer = document.createElement('div');
+  footer.className = 'column-filter-footer';
+  const clearBtn = document.createElement('button');
+  clearBtn.type = 'button';
+  clearBtn.className = 'column-filter-clear';
+  clearBtn.textContent = 'Clear';
+  clearBtn.addEventListener('click', () => {
+    if (input) {
+      state.setActiveRiColumnFilter(column, null);
+      input.value = '';
+      if (errorEl) errorEl.textContent = '';
+      rerenderRIs();
+    } else {
+      commitAllRef?.(false);
+    }
+  });
+  footer.appendChild(clearBtn);
+  popover.appendChild(footer);
+
+  return { column, el: popover, checkboxes, input, errorEl };
+}
+
+function activeRiOpenPopoverFor(column: state.ActiveRiColumnId, anchor: HTMLElement): void {
+  if (activeRiOpenPopover && !activeRiOpenPopover.el.isConnected) {
+    activeRiCloseOpenPopover();
+  }
+  if (activeRiOpenPopover && activeRiOpenPopover.column === column) {
+    activeRiCloseOpenPopover();
+    return;
+  }
+  if (activeRiOpenPopover) activeRiCloseOpenPopover();
+
+  const built = activeRiBuildPopover(column);
+  document.body.appendChild(built.el);
+  activeRiOpenPopover = built;
+  activeRiPositionPopover(built.el, anchor);
+  anchor.setAttribute('aria-expanded', 'true');
+
+  if (!activeRiOutsideHandler) {
+    activeRiOutsideHandler = (e: MouseEvent): void => {
+      if (!activeRiOpenPopover) return;
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (activeRiOpenPopover.el.contains(target)) return;
+      if (target instanceof Element && target.closest('.column-filter-btn')) return;
+      activeRiCloseOpenPopover();
+    };
+    document.addEventListener('mousedown', activeRiOutsideHandler);
+  }
+  if (!activeRiEscHandler) {
+    activeRiEscHandler = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') activeRiCloseOpenPopover();
+    };
+    document.addEventListener('keydown', activeRiEscHandler);
+  }
+
+  const firstFocusable = built.input
+    ?? built.el.querySelector<HTMLInputElement>('input[type="checkbox"]');
+  firstFocusable?.focus();
+}
+
+// ── Reshape recommendations popover ──────────────────────────────────────
 
 interface RiexPopoverState {
   column: state.RiExchangeColumnId;

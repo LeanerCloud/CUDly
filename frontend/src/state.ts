@@ -294,6 +294,47 @@ export function clearAllRiExchangeColumnFilters(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Active Convertible RIs per-column filters (issue #1414).
+//
+// Mirrors the reshape-recommendations filter slice above but scoped to the
+// Active Convertible RIs table (ri-exchange-instances-list). Column IDs map
+// directly to ConvertibleRI / RIUtilization API fields.
+// ---------------------------------------------------------------------------
+
+export type ActiveRiColumnId =
+  | 'instance_type' | 'availability_zone' | 'offering_type'
+  | 'instance_count' | 'utilization_pct';
+
+export type ActiveRiColumnFilter =
+  | { kind: 'set'; values: string[] }
+  | { kind: 'expr'; expr: string };
+
+export type ActiveRiColumnFilters = Partial<Record<ActiveRiColumnId, ActiveRiColumnFilter>>;
+
+let activeRiColumnFilters: ActiveRiColumnFilters = {};
+
+export function getActiveRiColumnFilters(): ActiveRiColumnFilters {
+  return { ...activeRiColumnFilters };
+}
+
+export function setActiveRiColumnFilter(
+  column: ActiveRiColumnId,
+  filter: ActiveRiColumnFilter | null,
+): void {
+  if (filter === null) {
+    const next = { ...activeRiColumnFilters };
+    delete next[column];
+    activeRiColumnFilters = next;
+    return;
+  }
+  activeRiColumnFilters = { ...activeRiColumnFilters, [column]: filter };
+}
+
+export function clearAllActiveRiColumnFilters(): void {
+  activeRiColumnFilters = {};
+}
+
+// ---------------------------------------------------------------------------
 // Per-column visibility state (issue #318).
 // A column id in this set is HIDDEN; an absent id is visible (default visible).
 // In-memory only; the localStorage layer lives in recommendations.ts alongside

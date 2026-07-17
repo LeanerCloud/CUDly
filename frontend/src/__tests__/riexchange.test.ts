@@ -52,6 +52,10 @@ jest.mock('../state', () => ({
   getRiExchangeColumnFilters: jest.fn(() => ({})),
   setRiExchangeColumnFilter: jest.fn(),
   clearAllRiExchangeColumnFilters: jest.fn(),
+  // Active Convertible RIs column-filter slice (issue #1414).
+  getActiveRiColumnFilters: jest.fn(() => ({})),
+  setActiveRiColumnFilter: jest.fn(),
+  clearAllActiveRiColumnFilters: jest.fn(),
 }));
 
 import {
@@ -447,13 +451,15 @@ describe('reshape recommendations table', () => {
     tableContainer = document.createElement('div');
     tableContainer.id = 'ri-exchange-recommendations-list';
     document.body.appendChild(tableContainer);
-    // Re-apply the column-filter mock impl after a prior test's
-    // jest.resetAllMocks(); without this the renderer blows up on
+    // Re-apply the column-filter mock impls after a prior test's
+    // jest.resetAllMocks(); without this the renderers blow up on
     // Object.entries(undefined) when reading filter state.
     const stateMod = jest.requireMock('../state') as {
       getRiExchangeColumnFilters: jest.Mock;
+      getActiveRiColumnFilters: jest.Mock;
     };
     stateMod.getRiExchangeColumnFilters.mockReturnValue({});
+    stateMod.getActiveRiColumnFilters.mockReturnValue({});
   });
 
   afterEach(() => {
@@ -559,13 +565,19 @@ describe('reshape recommendations empty state', () => {
     (api.getReshapeRecommendations as jest.Mock).mockResolvedValue({ recommendations: [], recs_staleness: '', recs_collected_at: null });
     // resetAllMocks() in afterEach wipes the state mock implementations;
     // loadRIExchange reads the chips to scope the request (issue #871), so
-    // restore the AWS/all-accounts default here.
+    // restore the AWS/all-accounts default here. Also restore the column-
+    // filter slices so renderRIsTable / renderRecommendations don't crash
+    // on Object.entries(undefined) for non-empty tables.
     const stateMod = jest.requireMock('../state') as {
       getCurrentProvider: jest.Mock;
       getCurrentAccountIDs: jest.Mock;
+      getRiExchangeColumnFilters: jest.Mock;
+      getActiveRiColumnFilters: jest.Mock;
     };
     stateMod.getCurrentProvider.mockReturnValue('aws');
     stateMod.getCurrentAccountIDs.mockReturnValue([]);
+    stateMod.getRiExchangeColumnFilters.mockReturnValue({});
+    stateMod.getActiveRiColumnFilters.mockReturnValue({});
   });
 
   afterEach(() => {
@@ -807,6 +819,10 @@ describe('RI Exchange global filter scoping (issue #871)', () => {
     s.subscribeAccount.mockImplementation((cb: () => void) => { _accountListeners.push(cb); return () => undefined; });
     s.getCurrentProvider.mockReturnValue('aws');
     s.getCurrentAccountIDs.mockReturnValue([]);
+    // Restore column-filter slices wiped by a prior resetAllMocks() so
+    // renderRIsTable / renderRecommendations don't throw on non-empty data.
+    (s as unknown as { getActiveRiColumnFilters: jest.Mock }).getActiveRiColumnFilters?.mockReturnValue({});
+    (s as unknown as { getRiExchangeColumnFilters: jest.Mock }).getRiExchangeColumnFilters?.mockReturnValue({});
   });
 
   afterEach(() => {
