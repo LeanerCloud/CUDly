@@ -84,16 +84,30 @@ const legacyPurchase = { ...ownedPurchase, created_by_user_id: undefined as stri
 // A user holding the plan-management verbs + update:purchases (so the #365
 // verb gate passes), optionally update-any:purchases. id identifies the
 // session user for the ownership comparison.
-const setUser = (id: string, opts: { updateAny?: boolean } = {}) => {
-  const effectivePermissions = [
+const setUser = (
+  id: string,
+  opts: { updateAny?: boolean; cancelOwn?: boolean; cancelAny?: boolean; deletePurchases?: boolean } = {},
+) => {
+  const effectivePermissions: Array<{ action: string; resource: string }> = [
     { action: 'update', resource: 'plans' },
     { action: 'delete', resource: 'plans' },
     { action: 'execute', resource: 'purchases' },
     { action: 'update', resource: 'purchases' },
-    { action: 'delete', resource: 'purchases' },
   ];
+  // deletePurchases defaults to true to preserve existing test behaviour
+  // (original setUser always included delete:purchases); callers that
+  // represent Standard users (cancel-own only) must pass deletePurchases: false.
+  if (opts.deletePurchases !== false) {
+    effectivePermissions.push({ action: 'delete', resource: 'purchases' });
+  }
   if (opts.updateAny) {
     effectivePermissions.push({ action: 'update-any', resource: 'purchases' });
+  }
+  if (opts.cancelOwn) {
+    effectivePermissions.push({ action: 'cancel-own', resource: 'purchases' });
+  }
+  if (opts.cancelAny) {
+    effectivePermissions.push({ action: 'cancel-any', resource: 'purchases' });
   }
   (state.getCurrentUser as jest.Mock).mockReturnValue({
     id,
@@ -165,5 +179,62 @@ describe('Scheduled-purchase ownership gating (issue #950)', () => {
     await loadPlans();
     const html = ppHtml();
     ACTIONS.forEach((act) => expect(html).not.toContain(`data-action="${act}"`));
+  });
+});
+
+describe('Plans-page Disable-button cancel-own gating (issue #1442)', () => {
+  // Standard users hold cancel-own:purchases (not delete:purchases) in
+  // DefaultUserPermissions. Before this fix, the canDisablePlan gate required
+  // delete:purchases so the Disable button was hidden even for the creator of
+  // the scheduled purchase. The fix accepts cancel-own:purchases and
+  // cancel-any:purchases in addition to delete:purchases, mirroring the backend
+  // requireDeleteOrCancelPurchasePermission gate introduced by PR #1421.
+  beforeEach(() => {
+    jest.clearAllMocks();
+    setupDom();
+    (api.getPlans as jest.Mock).mockResolvedValue({ plans: [samplePlan] });
+  });
+
+  test('Standard user (cancel-own, no delete:purchases) sees Disable on their own purchase', async () => {
+    // Represents: Plan Author / Standard User role with cancel-own:purchases
+    // but NOT delete:purchases. Creator must see the Disable button.
+    setUser(CREATOR_ID, { deletePurchases: false, cancelOwn: true });
+    (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [ownedPurchase] });
+    await loadPlans();
+    expect(ppHtml()).toContain('data-action="disable"');
+  });
+
+  test('Standard user (cancel-own) does NOT see Disable on another user\'s purchase', async () => {
+    // Ownership gate (canManageScheduledPurchase) must block cancel-own users
+    // from managing rows they did not create.
+    setUser(OTHER_ID, { deletePurchases: false, cancelOwn: true });
+    (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [ownedPurchase] });
+    await loadPlans();
+    const html = ppHtml();
+    expect(html).not.toContain('data-action="disable"');
+    // The row still renders; only the action button is suppressed.
+    expect(html).toContain('Sample Plan');
+  });
+
+  test('Standard user (cancel-own) sees NO Disable on a legacy NULL-creator row', async () => {
+    // NULL created_by_user_id means ownership cannot be determined.
+    // The button must stay hidden (matches backend: NULL-creator rows are
+    // out of reach for non-full-scope users).
+    setUser(CREATOR_ID, { deletePurchases: false, cancelOwn: true });
+    (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [legacyPurchase] });
+    await loadPlans();
+    expect(ppHtml()).not.toContain('data-action="disable"');
+  });
+
+  test('cancel-any holder sees Disable on their own row (full-scope via canManagePurchase)', async () => {
+    // cancel-any:purchases grants operator-scope cancel on the backend.
+    // The UX gate shows Disable when the user is the creator AND holds
+    // cancel-any (canManagePurchase true via creator-match, canDisablePlan
+    // true via cancel-any verb). Full-scope visibility for non-creators
+    // requires update-any, tracked separately.
+    setUser(CREATOR_ID, { deletePurchases: false, cancelAny: true });
+    (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [ownedPurchase] });
+    await loadPlans();
+    expect(ppHtml()).toContain('data-action="disable"');
   });
 });
