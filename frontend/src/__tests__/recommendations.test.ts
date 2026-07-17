@@ -9,6 +9,7 @@ jest.mock('../api', () => ({
   getRecommendations: jest.fn(),
   refreshRecommendations: jest.fn(),
   listAccounts: jest.fn().mockResolvedValue([]),
+  listAccountsMinimal: jest.fn().mockResolvedValue([]),
   // issue #223: getConfig is fetched on page load to resolve GlobalConfig
   // defaults (DefaultTerm + DefaultPayment). Default-empty global config so
   // pre-#223 tests retain their hardcoded-fallback behavior without extra setup.
@@ -7934,5 +7935,97 @@ describe('Issue #135: SP group parent row rendered in table', () => {
     expect(groupSavings).not.toBeNull();
     // Should reflect sum: 100 + 200 = 300
     expect(groupSavings!.textContent).toContain('$300');
+  });
+});
+
+// ============================================================================
+// Issue #1419: account display name shown for non-admin users
+// ============================================================================
+// loadRecommendations must call listAccountsMinimal() (which hits
+// /api/accounts/list, accessible to all users with view:recommendations)
+// rather than listAccounts() (which hits /api/accounts, admin-only).
+// Non-admin users previously saw the raw UUID because listAccounts()
+// returned 403, .catch(() => []) silenced it, and the empty cache caused
+// the ID to fall through as the display value.
+describe('Issue #1419: Opportunities Account column shows display name via listAccountsMinimal', () => {
+  beforeEach(() => {
+    document.body.innerHTML = `
+      <div id="opportunities-tab" class="tab-content active">
+        <div id="recommendations-summary"></div>
+        <div id="recommendations-list"></div>
+      </div>
+      <div id="purchase-modal" class="hidden">
+        <div id="purchase-details"></div>
+        <div class="modal-buttons">
+          <button type="button" id="close-purchase-modal-btn">Cancel</button>
+          <button type="button" id="execute-purchase-btn" class="primary">Send for Approval</button>
+        </div>
+      </div>
+    `;
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    (state.getHiddenColumns as jest.Mock).mockReturnValue(new Set());
+    (state.getRecommendationsSort as jest.Mock).mockReturnValue({ column: 'savings', direction: 'desc' });
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    (state.getCurrentUser as jest.Mock).mockReturnValue({ id: 'u-viewer', email: 'viewer@example.com', groups: [] });
+    (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+      last_collected_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      last_collection_error: null,
+    });
+    (recsApi.refreshRecommendations as jest.Mock).mockResolvedValue({});
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  test('listAccountsMinimal() is called (not listAccounts) so non-admin users get account names', async () => {
+    // Simulate listAccountsMinimal succeeding for a non-admin user.
+    (api.listAccountsMinimal as jest.Mock).mockResolvedValue([
+      { id: 'acct-uuid-1234', name: 'Production AWS', external_id: '123456789', provider: 'aws' },
+    ]);
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [{
+        id: 'rec-acct', provider: 'aws', cloud_account_id: 'acct-uuid-1234',
+        service: 'ec2', resource_type: 't3.medium', region: 'us-east-1',
+        count: 1, term: 1, payment: 'all-upfront', savings: 50, upfront_cost: 200,
+      }],
+      regions: [],
+    });
+
+    await loadRecommendations();
+
+    // listAccountsMinimal must have been called (not the admin-only listAccounts).
+    expect(api.listAccountsMinimal).toHaveBeenCalled();
+    expect(api.listAccounts).not.toHaveBeenCalled();
+
+    const list = document.getElementById('recommendations-list');
+    const html = list?.innerHTML ?? '';
+    // The display name must appear in the rendered row.
+    expect(html).toContain('Production AWS');
+    // The raw UUID must NOT appear as the cell value.
+    expect(html).not.toContain('acct-uuid-1234');
+  });
+
+  test('falls back to account ID when listAccountsMinimal returns no matching entry', async () => {
+    (api.listAccountsMinimal as jest.Mock).mockResolvedValue([
+      { id: 'acct-other', name: 'Other Account', external_id: '999', provider: 'aws' },
+    ]);
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [{
+        id: 'rec-fallback', provider: 'aws', cloud_account_id: 'acct-uuid-no-match',
+        service: 'ec2', resource_type: 't3.medium', region: 'us-east-1',
+        count: 1, term: 1, payment: 'all-upfront', savings: 50, upfront_cost: 200,
+      }],
+      regions: [],
+    });
+
+    await loadRecommendations();
+
+    const list = document.getElementById('recommendations-list');
+    const html = list?.innerHTML ?? '';
+    // No matching entry: falls back to the raw ID.
+    expect(html).toContain('acct-uuid-no-match');
   });
 });

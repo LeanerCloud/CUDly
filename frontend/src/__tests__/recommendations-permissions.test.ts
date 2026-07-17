@@ -25,6 +25,7 @@ jest.mock('../api', () => ({
   refreshRecommendations: jest.fn(),
   getConfig: jest.fn().mockResolvedValue({ global: {} }),
   listAccounts: jest.fn().mockResolvedValue([]),
+  listAccountsMinimal: jest.fn().mockResolvedValue([]),
   listAccountServiceOverrides: jest.fn().mockResolvedValue([]),
 }));
 
