@@ -397,11 +397,17 @@ func TestExpandPaymentVariants_ZeroOnDemand_NonZeroCommitment(t *testing.T) {
 }
 
 func TestExpandPaymentVariants_ZeroCommitmentCost(t *testing.T) {
-	// Zero reservation total: both variants still emitted; no-upfront monthly = 0.
+	// M1 regression: when CommitmentCost is 0 (absent from provider response),
+	// both variants must carry nil RecurringMonthlyCost so the frontend renders
+	// "-" (data absent) rather than "$0" (known-zero). The pre-fix code
+	// unconditionally set RecurringMonthlyCost = &0.0 for both variants,
+	// fabricating a non-nil pointer even when no cost data was available.
 	variants := ExpandPaymentVariants(baseRec(common.ServiceCompute, "1yr", 50, 0))
 	require.Len(t, variants, 2)
-	require.NotNil(t, variants[1].RecurringMonthlyCost)
-	assert.InDelta(t, 0.0, *variants[1].RecurringMonthlyCost, 1e-9)
+	assert.Nil(t, variants[0].RecurringMonthlyCost,
+		"all-upfront variant: RecurringMonthlyCost must be nil when CommitmentCost is absent")
+	assert.Nil(t, variants[1].RecurringMonthlyCost,
+		"no-upfront variant: RecurringMonthlyCost must be nil when CommitmentCost is absent")
 }
 
 func TestExpandPaymentVariants_SharedFieldsCarriedThrough(t *testing.T) {

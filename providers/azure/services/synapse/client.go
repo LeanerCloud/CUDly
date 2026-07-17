@@ -26,6 +26,13 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
 
+// reservationResourceTypeSynapse is the canonical resourceType value for Azure
+// Synapse Analytics (Dedicated SQL Pool) in the Consumption API $filter.
+// Source: Azure REST API spec for Microsoft.Consumption/reservationRecommendations
+// (2021-10-01 stable). The previous hand-written value "SQLDatabaseDTU" is not
+// a valid enum member and caused the API to return no recommendations.
+const reservationResourceTypeSynapse = "SqlDataWarehouse"
+
 // HTTPClient interface for HTTP operations (enables mocking).
 type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
@@ -128,7 +135,7 @@ func (c *SynapseClient) GetRecommendations(ctx context.Context, params common.Re
 			return nil, fmt.Errorf("failed to create consumption client: %w", err)
 		}
 		scope := fmt.Sprintf("/subscriptions/%s", c.subscriptionID)
-		filter := "properties/scope eq 'Shared' and properties/resourceType eq 'SQLDatabaseDTU'"
+		filter := "properties/scope eq 'Shared' and properties/resourceType eq '" + reservationResourceTypeSynapse + "'"
 		pager = client.NewListPager(scope, &armconsumption.ReservationRecommendationsClientListOptions{Filter: &filter})
 	}
 

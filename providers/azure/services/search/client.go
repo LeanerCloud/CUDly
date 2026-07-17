@@ -129,48 +129,19 @@ type AzureRetailPrice struct {
 	Count        int    `json:"Count"`
 }
 
-// GetRecommendations gets Azure Search reservation recommendations from Azure Consumption API
-func (c *SearchClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
-	recommendations := make([]common.Recommendation, 0)
-
-	// Use injected pager if available (for testing)
-	var pager RecommendationsPager
-	if c.recommendationsPager != nil {
-		pager = c.recommendationsPager
-	} else {
-		client, err := armconsumption.NewReservationRecommendationsClient(c.cred, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create consumption client: %w", err)
-		}
-		// NewListPager's first argument is the billing scope, NOT the
-		// filter — see the parallel comment in compute/client.go for the
-		// failure mode that the wrong shape produced.
-		scope := fmt.Sprintf("/subscriptions/%s", c.subscriptionID)
-		filter := "properties/scope eq 'Shared'"
-		pager = client.NewListPager(scope, &armconsumption.ReservationRecommendationsClientListOptions{Filter: &filter})
-	}
-
-	for pageIdx := 0; pager.More(); pageIdx++ {
-		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
-		}
-		if pageIdx >= maxRecsPages {
-			return nil, fmt.Errorf("search: GetRecommendations pagination cap (%d pages) reached", maxRecsPages)
-		}
-		page, err := pager.NextPage(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get Search recommendations: %w", err)
-		}
-
-		for _, rec := range page.Value {
-			converted := c.convertAzureSearchRecommendation(ctx, rec)
-			if converted != nil {
-				recommendations = append(recommendations, azrecs.ExpandPaymentVariants(*converted)...)
-			}
-		}
-	}
-
-	return recommendations, nil
+// GetRecommendations returns empty for Azure Search because the Azure Consumption
+// ReservationRecommendations API has no Search-specific resourceType. The
+// valid resourceType values are: VirtualMachines, SQLDatabases, PostgreSQL,
+// ManagedDisk, MySQL, RedHat, MariaDB, RedisCache, CosmosDB, SqlDataWarehouse,
+// SUSELinux, AppService, BlockBlob, AzureDataExplorer, VMwareCloudSimple.
+//
+// Querying without a resourceType filter (or with an invalid value) causes the
+// API to default to VirtualMachines and return VM reservation recommendations,
+// which would be mislabelled as Search recommendations. Returning empty is the
+// correct behaviour until Azure exposes a Search reservation recommendation
+// stream via this API.
+func (c *SearchClient) GetRecommendations(_ context.Context, _ common.RecommendationParams) ([]common.Recommendation, error) {
+	return []common.Recommendation{}, nil
 }
 
 // GetExistingCommitments retrieves existing Search reserved capacity

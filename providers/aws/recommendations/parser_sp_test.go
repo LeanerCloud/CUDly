@@ -194,7 +194,9 @@ func TestParseSavingsPlanDetail_RecommendedUtilization(t *testing.T) {
 				HourlyCommitmentToPurchase:  aws.String("1.0"),
 				EstimatedAverageUtilization: tt.utilizationStr,
 			}
-			rec := client.parseSavingsPlanDetail(detail, &params, types.SupportedSavingsPlansTypeComputeSp)
+			rec, err := client.parseSavingsPlanDetail(detail, &params, types.SupportedSavingsPlansTypeComputeSp)
+			require.NoError(t, err,
+				"EstimatedAverageUtilization is a non-money field; parse failures must not propagate as errors")
 			require.NotNil(t, rec)
 			assert.Equal(t, tt.wantUtilization, rec.RecommendedUtilization,
 				"SP utilization should be parsed into rec.RecommendedUtilization")
@@ -293,7 +295,8 @@ func TestParseSavingsPlanDetail_EC2InstanceFieldsCaptured(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := client.parseSavingsPlanDetail(tt.detail, params, tt.planType)
+			rec, err := client.parseSavingsPlanDetail(tt.detail, &params, tt.planType)
+			require.NoError(t, err)
 			require.NotNil(t, rec)
 
 			spDetails, ok := rec.Details.(*common.SavingsPlanDetails)
@@ -305,6 +308,57 @@ func TestParseSavingsPlanDetail_EC2InstanceFieldsCaptured(t *testing.T) {
 				"Region must be captured from CE SavingsPlansDetails for EC2Instance SPs")
 			assert.Equal(t, tt.wantOfferingID, spDetails.OfferingID,
 				"OfferingID must be captured from CE SavingsPlansDetails when present")
+		})
+	}
+}
+
+// TestParseSavingsPlanDetail_MoneyFieldUnparseable is the M2 regression test:
+// a present-but-unparseable money field (HourlyCommitmentToPurchase,
+// EstimatedMonthlySavingsAmount, UpfrontCost) must return an error, NOT a
+// silently-fabricated $0. Pre-fix, parseOptionalFloat swallowed parse errors
+// for all fields and substituted 0; the fix errors on money fields and
+// uses warn+0 only for non-money fields (percentages/averages).
+func TestParseSavingsPlanDetail_MoneyFieldUnparseable(t *testing.T) {
+	client := &Client{}
+	params := common.RecommendationParams{
+		Service:       common.ServiceSavingsPlansCompute,
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+	}
+
+	tests := []struct {
+		name   string
+		detail *types.SavingsPlansPurchaseRecommendationDetail
+	}{
+		{
+			name: "unparseable HourlyCommitmentToPurchase",
+			detail: &types.SavingsPlansPurchaseRecommendationDetail{
+				HourlyCommitmentToPurchase: aws.String("not-a-number"),
+			},
+		},
+		{
+			name: "unparseable EstimatedMonthlySavingsAmount",
+			detail: &types.SavingsPlansPurchaseRecommendationDetail{
+				HourlyCommitmentToPurchase:    aws.String("1.0"),
+				EstimatedMonthlySavingsAmount: aws.String("bad-value"),
+			},
+		},
+		{
+			name: "unparseable UpfrontCost",
+			detail: &types.SavingsPlansPurchaseRecommendationDetail{
+				HourlyCommitmentToPurchase: aws.String("1.0"),
+				UpfrontCost:                aws.String("not-a-float"),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec, err := client.parseSavingsPlanDetail(tt.detail, &params, types.SupportedSavingsPlansTypeComputeSp)
+			require.Error(t, err,
+				"present-but-unparseable money field must return an error, not a silently-fabricated $0")
+			assert.Nil(t, rec,
+				"rec must be nil when a money field is unparseable")
 		})
 	}
 }

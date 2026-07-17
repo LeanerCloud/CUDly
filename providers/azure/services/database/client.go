@@ -26,6 +26,13 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
 
+// reservationResourceTypeSQLDB is the canonical resourceType value for Azure
+// SQL Databases in the Consumption API $filter.
+// Source: Azure REST API spec for Microsoft.Consumption/reservationRecommendations
+// (2021-10-01 stable). The previous hand-written value "SqlDatabase" is not a
+// valid enum member; the correct case is "SQLDatabases".
+const reservationResourceTypeSQLDB = "SQLDatabases"
+
 // maxRecsPages caps Consumption API recommendation pagination.
 const maxRecsPages = 10
 
@@ -171,7 +178,7 @@ func (c *DatabaseClient) GetRecommendations(ctx context.Context, params common.R
 		// filter — see the parallel comment in compute/client.go for the
 		// failure mode that the wrong shape produced.
 		scope := fmt.Sprintf("/subscriptions/%s", c.subscriptionID)
-		filter := "properties/scope eq 'Shared' and properties/resourceType eq 'SqlDatabase'"
+		filter := "properties/scope eq 'Shared' and properties/resourceType eq '" + reservationResourceTypeSQLDB + "'"
 		pager = client.NewListPager(scope, &armconsumption.ReservationRecommendationsClientListOptions{Filter: &filter})
 	}
 

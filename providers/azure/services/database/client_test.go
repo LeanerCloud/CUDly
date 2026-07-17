@@ -1298,3 +1298,15 @@ func TestDatabaseClient_PurchaseCommitment_CanonicalReservedResourceType(t *test
 		"reservedResourceType %q must be a member of armreservations.PossibleReservedResourceTypeValues()", capturedRRT)
 	mockHTTP.AssertExpectations(t)
 }
+
+// TestReservationResourceTypeSQLDB_IsCanonical is the H2b regression test.
+//
+// The Consumption ReservationRecommendations API $filter for Azure SQL Databases
+// requires exactly "SQLDatabases" (uppercase SQL, plural). The pre-fix code used
+// the hand-written string "SqlDatabase" (lowercase SQL, singular) which is not a
+// valid resourceType enum member, causing the API to return no recommendations.
+func TestReservationResourceTypeSQLDB_IsCanonical(t *testing.T) {
+	assert.Equal(t, "SQLDatabases", reservationResourceTypeSQLDB,
+		"SQL Database filter value must be the Azure REST API canonical enum \"SQLDatabases\"; "+
+			"\"SqlDatabase\" (pre-fix) is not a valid resourceType")
+}

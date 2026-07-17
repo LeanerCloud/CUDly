@@ -445,6 +445,49 @@ func TestSearchClient_GetRecommendations_WithMockPager(t *testing.T) {
 	assert.Empty(t, recs)
 }
 
+// TestSearchClient_GetRecommendations_AlwaysEmpty is the H1 regression test.
+//
+// "AzureSearch" is not a valid resourceType in the Consumption
+// ReservationRecommendations API (valid list: VirtualMachines, SQLDatabases,
+// CosmosDB, SqlDataWarehouse, etc.). The pre-fix code queried with only a
+// scope filter, causing Azure to return VirtualMachine recommendations that
+// were then mislabeled as Search recommendations.
+//
+// Post-fix, GetRecommendations returns an empty slice immediately regardless
+// of what the pager contains. This test injects a non-empty pager (mimicking
+// the VM recs Azure would return) and asserts the result is empty.
+func TestSearchClient_GetRecommendations_AlwaysEmpty(t *testing.T) {
+	ctx := context.Background()
+	client := NewClient(nil, "test-subscription", "eastus")
+
+	// Simulate what the Azure Consumption API returns when queried without a
+	// resourceType filter: a VirtualMachines recommendation that must NOT be
+	// forwarded as a Search recommendation.
+	vmRec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithRegion("eastus"),
+		mocks.WithTerm("P1Y"),
+		mocks.WithQuantity(1),
+		mocks.WithNormalizedSize("Standard_D2s_v3"),
+		mocks.WithCosts(100, 70, 30),
+	)
+	pagerWithVMRecs := &MockRecommendationsPager{
+		pages: []armconsumption.ReservationRecommendationsClientListResponse{
+			{
+				ReservationRecommendationsListResult: armconsumption.ReservationRecommendationsListResult{
+					Value: []armconsumption.ReservationRecommendationClassification{vmRec},
+				},
+			},
+		},
+	}
+	client.SetRecommendationsPager(pagerWithVMRecs)
+
+	recs, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	require.NoError(t, err)
+	assert.Empty(t, recs,
+		"Azure Search has no Consumption API reservation stream; GetRecommendations "+
+			"must always return empty regardless of what the injected pager contains")
+}
+
 func TestSearchClient_GetExistingCommitments_WithMockPager(t *testing.T) {
 	ctx := context.Background()
 	client := NewClient(nil, "test-subscription", "eastus")
