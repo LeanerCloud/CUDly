@@ -172,9 +172,26 @@ resource "aws_iam_role_policy" "task_secrets" {
   })
 }
 
-# SES email sending access — scoped to the verified From domain plus
+# SES email sending access, scoped to the verified From domain plus
 # stack-specific configuration sets when email_from_domain is set; otherwise
-# no SES policy is attached at all. Matches the Lambda module's shape.
+# no SES policy is attached at all. Mirrors the Lambda module exactly.
+#
+# Resource = "*" on the send actions: the narrower identity/${domain}
+# patterns we tried earlier don't cover the real case we hit in production:
+# a From address on an unverified subdomain (e.g. noreply@cudly.leanercloud.com)
+# where SES walks up the identity hierarchy and evaluates IAM against the
+# verified parent's ARN (identity/leanercloud.com). Enumerating every
+# ancestor the operator might verify would work on paper but drifts every
+# time the SES identity tree is reorganised.
+#
+# To still narrow the blast radius (a compromised task must not be able to
+# spoof emails from arbitrary verified identities in the same account),
+# the SendEmail/SendRawEmail actions are gated by a `ses:FromAddress`
+# condition restricting the From header to *@${var.email_from_domain}.
+# SES enforces FromAddress on the wire, so this prevents phishing from
+# unrelated identities even though the resource ARN remains broad.
+# Configuration-set access stays scoped to ${stack_name}* so a compromised
+# task can't touch unrelated stacks' config sets either.
 resource "aws_iam_role_policy" "ses_access" {
   count = var.email_from_domain != "" ? 1 : 0
 
@@ -183,20 +200,27 @@ resource "aws_iam_role_policy" "ses_access" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    # See the Lambda module's comment for the full rationale behind Resource
-    # = "*" on the send actions: SES's identity hierarchy forces the policy
-    # to grant access to parent domains the operator verifies, and
-    # enumerating them is fragile. `*` defers the real authorisation to
-    # SES itself (which still rejects sends from unverified identities at
-    # the service layer); configuration-set access stays stack-scoped so
-    # a compromised task can't touch unrelated stacks' config sets.
     Statement = [
       {
-        Sid    = "SendFromAnyVerifiedIdentity"
+        Sid    = "SendFromCUDlyDomain"
         Effect = "Allow"
         Action = [
           "ses:SendEmail",
           "ses:SendRawEmail",
+        ]
+        Resource = "*"
+        Condition = {
+          StringLike = {
+            "ses:FromAddress" = "*@${var.email_from_domain}"
+          }
+        }
+      },
+      {
+        # Read-only SES status checks for healthchecks and quota
+        # introspection. No spoofing risk -- these don't send mail.
+        Sid    = "SESReadOnly"
+        Effect = "Allow"
+        Action = [
           "ses:GetAccount",
           "ses:GetEmailIdentity",
         ]
