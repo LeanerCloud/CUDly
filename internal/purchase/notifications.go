@@ -2,6 +2,7 @@ package purchase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -108,15 +109,18 @@ func (m *Manager) sendPlanNotification(ctx context.Context, plan *config.Purchas
 
 // getOrCreateExecution gets existing execution or creates new one.
 func (m *Manager) getOrCreateExecution(ctx context.Context, plan *config.PurchasePlan) (*config.PurchaseExecution, error) {
-	// Check for existing execution for this date to prevent duplicates
+	// Check for existing execution for this date to prevent duplicates.
+	// GetExecutionByPlanAndDate wraps ErrNotFound on zero rows; any other
+	// error is a real store failure and must propagate.
 	existing, err := m.config.GetExecutionByPlanAndDate(ctx, plan.ID, *plan.NextExecutionDate)
-	if err != nil {
-		return nil, fmt.Errorf("failed to check for existing execution: %w", err)
-	}
-	if existing != nil {
+	switch {
+	case err == nil && existing != nil:
 		logging.Debugf("Found existing execution %s for plan %s on %s", existing.ExecutionID, plan.ID, plan.NextExecutionDate)
 		return existing, nil
+	case err != nil && !errors.Is(err, config.ErrNotFound):
+		return nil, fmt.Errorf("failed to check for existing execution: %w", err)
 	}
+	// ErrNotFound (or nil error with nil row): no existing execution for this plan+date; create a new one.
 
 	approvalToken, err := common.GenerateApprovalToken()
 	if err != nil {

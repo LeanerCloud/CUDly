@@ -1391,7 +1391,7 @@ func (s *PostgresStore) GetExecutionByPlanAndDate(ctx context.Context, planID st
 	}
 
 	if len(executions) == 0 {
-		return nil, fmt.Errorf("execution not found for plan %s at %v", planID, scheduledDate)
+		return nil, fmt.Errorf("%w: plan %s at %v", ErrNotFound, planID, scheduledDate)
 	}
 
 	return &executions[0], nil

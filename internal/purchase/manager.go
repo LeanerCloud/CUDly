@@ -489,6 +489,84 @@ func (m *Manager) RecoverStrandedApprovals(ctx context.Context) (int, error) {
 	return recovered, nil
 }
 
+// executableByScheduler reports whether a pending or notified execution may be
+// auto-executed by the cron sweep or an SQS execute_purchase message, without
+// an explicit human approval action (fail closed on money paths).
+//
+// Rules:
+//   - source="web" rows must wait for the token-link approval path; the
+//     scheduler and SQS paths must never bypass that gate.
+//   - All other pending/notified rows require the owning plan to have
+//     AutoPurchase=true. A plan-fetch error is propagated so the caller can
+//     fail closed rather than defaulting to "execute".
+//
+// "approved" rows are handled by the session/token approval paths and
+// RecoverStrandedApprovals; this helper is only called for pending/notified.
+func (m *Manager) executableByScheduler(ctx context.Context, exec *config.PurchaseExecution) (bool, error) {
+	if exec.Source == "web" {
+		return false, nil
+	}
+	plan, err := m.config.GetPurchasePlan(ctx, exec.PlanID)
+	if err != nil {
+		return false, fmt.Errorf("failed to fetch plan %s for AutoPurchase gate: %w", exec.PlanID, err)
+	}
+	return plan.AutoPurchase, nil
+}
+
+// processOneExecution runs the full gate+claim+execute pipeline for a single
+// due pending/notified execution. It updates the Processed/Executed/Failed
+// counters and Errors slice on the supplied ProcessResult in place.
+// Extracted from ProcessScheduledPurchases to keep that function under the
+// gocyclo:10 threshold.
+func (m *Manager) processOneExecution(ctx context.Context, exec config.PurchaseExecution, result *ProcessResult) {
+	// AutoPurchase gate: pending/notified rows are only eligible for
+	// automatic execution when the owning plan has AutoPurchase=true AND
+	// the row was not web-submitted (those must go through the token-link
+	// path). Fail closed: a plan-fetch error counts as a failure rather
+	// than defaulting to "execute" (no silent money action on error).
+	eligible, gateErr := m.executableByScheduler(ctx, &exec)
+	if gateErr != nil {
+		result.Failed++
+		result.Errors = append(result.Errors, fmt.Sprintf("%s: AutoPurchase gate check failed: %v", exec.ExecutionID, gateErr))
+		return
+	}
+	if !eligible {
+		logging.Infof("Skipping execution %s (AutoPurchase=false or source=web; requires explicit approval)", exec.ExecutionID)
+		return
+	}
+
+	result.Processed++
+	logging.Infof("Executing scheduled purchase: %s", exec.ExecutionID)
+
+	// Atomically claim the row before executing (issue #1013). Overlapping
+	// cron ticks (a tick that runs longer than the interval, EventBridge
+	// duplicate/overlapping deliveries, or cron racing the SQS path) would
+	// otherwise both execute the same due row. claimAndExecute CASes the row
+	// to "running" and only the winner runs; a lost claim is skipped without
+	// re-executing.
+	claimed, execErr := m.claimAndExecute(ctx, &exec)
+	if !claimed {
+		// execErr != nil here is a real DB error during the claim (count as
+		// failed); execErr == nil is a benign CAS race-loss (skip silently).
+		if execErr != nil {
+			result.Failed++
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: claim failed: %v", exec.ExecutionID, execErr))
+		}
+		return
+	}
+
+	// A multi-account run where at least one account committed is a success
+	// for ack purposes (issue #1014): the per-account rows own the truth and
+	// re-running would double-buy. Only a genuine failure (nothing
+	// committed) is counted/surfaced.
+	if isMultiAccountAckable(execErr) {
+		result.Executed++
+		return
+	}
+	result.Failed++
+	result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", exec.ExecutionID, execErr))
+}
+
 // ProcessScheduledPurchases checks for and executes scheduled purchases.
 func (m *Manager) ProcessScheduledPurchases(ctx context.Context) (*ProcessResult, error) {
 	logging.Info("Processing scheduled purchases...")
@@ -509,10 +587,7 @@ func (m *Manager) ProcessScheduledPurchases(ctx context.Context) (*ProcessResult
 	}
 
 	now := time.Now()
-	processed := 0
-	executed := 0
-	failed := 0
-	var errs []string
+	result := &ProcessResult{Recovered: recovered}
 
 	for i := range executions {
 		exec := executions[i]
@@ -531,44 +606,8 @@ func (m *Manager) ProcessScheduledPurchases(ctx context.Context) (*ProcessResult
 			continue
 		}
 
-		processed++
-
-		logging.Infof("Executing scheduled purchase: %s", exec.ExecutionID)
-
-		// Atomically claim the row before executing (issue #1013). Overlapping
-		// cron ticks (a tick that runs longer than the interval, EventBridge
-		// duplicate/overlapping deliveries, or cron racing the SQS path) would
-		// otherwise both execute the same due row. claimAndExecute CASes the row
-		// to "running" and only the winner runs; a lost claim is skipped without
-		// re-executing.
-		claimed, execErr := m.claimAndExecute(ctx, &exec)
-		if !claimed {
-			// execErr != nil here is a real DB error during the claim (count as
-			// failed); execErr == nil is a benign CAS race-loss (skip silently).
-			if execErr != nil {
-				failed++
-				errs = append(errs, fmt.Sprintf("%s: claim failed: %v", exec.ExecutionID, execErr))
-			}
-			continue
-		}
-
-		// A multi-account run where at least one account committed is a success
-		// for ack purposes (issue #1014): the per-account rows own the truth and
-		// re-running would double-buy. Only a genuine failure (nothing
-		// committed) is counted/surfaced.
-		if isMultiAccountAckable(execErr) {
-			executed++
-			continue
-		}
-		failed++
-		errs = append(errs, fmt.Sprintf("%s: %v", exec.ExecutionID, execErr))
+		m.processOneExecution(ctx, exec, result)
 	}
 
-	return &ProcessResult{
-		Processed: processed,
-		Executed:  executed,
-		Failed:    failed,
-		Recovered: recovered,
-		Errors:    errs,
-	}, nil
+	return result, nil
 }

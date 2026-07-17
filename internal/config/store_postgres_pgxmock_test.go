@@ -2476,3 +2476,40 @@ func TestPGXMock_TransitionExecutionStatus_ProbeHardErrorNotMappedToNotFound(t *
 	assert.ErrorIs(t, err, dbErr)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// ─── F2 regression: GetExecutionByPlanAndDate zero-rows wraps ErrNotFound ────
+
+// TestPGXMock_GetExecutionByPlanAndDate_NotFoundWrapsErrNotFound is the
+// regression test for F2: a zero-row result from GetExecutionByPlanAndDate must
+// return an error wrapping config.ErrNotFound so that getOrCreateExecution can
+// distinguish "no existing execution" from a real store failure and create a new
+// one. Before the fix the function returned a plain fmt.Errorf, which caused
+// getOrCreateExecution to treat the not-found case as a fatal error, making the
+// create-execution branch unreachable against the real store.
+func TestPGXMock_GetExecutionByPlanAndDate_NotFoundWrapsErrNotFound(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	scheduledDate := time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)
+
+	// Return an empty row set — simulates the "no existing execution" case.
+	cols := []string{
+		"plan_id", "execution_id", "status", "step_number", "scheduled_date",
+		"notification_sent", "approval_token", "recommendations",
+		"total_upfront_cost", "estimated_savings", "completed_at", "error", "expires_at",
+		"cloud_account_id", "source", "approved_by", "cancelled_by", "capacity_percent",
+		"created_by_user_id", "retry_execution_id", "retry_attempt_n",
+		"approval_token_expires_at",
+		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
+		"idempotency_key", "scheduled_execution_at",
+	}
+	emptyRows := pgxmock.NewRows(cols)
+	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(emptyRows)
+
+	_, err := store.GetExecutionByPlanAndDate(ctx, "plan-missing", scheduledDate)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrNotFound),
+		"zero-row GetExecutionByPlanAndDate must wrap ErrNotFound so getOrCreateExecution can create a new execution; got: %v", err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

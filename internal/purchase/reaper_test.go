@@ -23,10 +23,9 @@ func newReaperManager(store *MockConfigStore) *Manager {
 	}
 }
 
-// stuckExec builds a representative stuck-approved execution. Tests
-// override Status / ExecutionID as needed. The age claim (`updated_at`
-// being old) is implicit — the SELECT in ListStuckExecutions is what
-// enforces it, and the test mocks return whatever the test wants.
+// stuckExec builds a representative stuck execution with no recommendations.
+// allRecsSafeToRedrive returns false for empty recs, so no "safe to retry"
+// is appended to the reaper's canonical error message.
 func stuckExec(id, status string) config.PurchaseExecution {
 	return config.PurchaseExecution{
 		PlanID:        "plan-1",
@@ -37,12 +36,25 @@ func stuckExec(id, status string) config.PurchaseExecution {
 	}
 }
 
+// stuckExecWithAWSRecs builds a stuck execution with a single AWS EC2 rec.
+// allRecsSafeToRedrive returns true for pure-AWS recs, so the reaper's
+// canonical error includes "safe to retry" (F4 fix).
+func stuckExecWithAWSRecs(id, status string) config.PurchaseExecution {
+	e := stuckExec(id, status)
+	e.Recommendations = []config.RecommendationRecord{
+		{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Count: 1},
+	}
+	return e
+}
+
 func TestReapStuckExecutions_StaleApprovedFlippedToFailed(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
 	reapAfter := 10 * time.Minute
 
-	row := stuckExec("exec-A", "approved")
+	// AWS recs are idempotent (ClientToken / tag-guard), so "safe to retry"
+	// must appear in the canonical error for operator guidance (F4 fix).
+	row := stuckExecWithAWSRecs("exec-A", "approved")
 	transitioned := row
 	transitioned.Status = failedStatus
 
@@ -388,4 +400,71 @@ func TestParseReapAfterFromEnv_NonStandardButValidGoDuration(t *testing.T) {
 	t.Setenv(reapAfterEnvVar, "2h30m")
 	got := ParseReapAfterFromEnv()
 	assert.Equal(t, 2*time.Hour+30*time.Minute, got)
+}
+
+// ─── F4 regression: safe-to-retry gate (adversarial review follow-up) ────────
+
+// TestReapStuckExecutions_AzureSPNotSafeToRetry is the regression test for F4:
+// a stranded Azure savings-plans execution must NOT receive "safe to retry" in
+// its canonical error message. Azure SP purchases use a timestamp-based alias
+// name with no server-side idempotency key, so an operator retry would create
+// a duplicate savings plan.
+func TestReapStuckExecutions_AzureSPNotSafeToRetry(t *testing.T) {
+	ctx := context.Background()
+	store := new(MockConfigStore)
+	reapAfter := 10 * time.Minute
+
+	row := stuckExec("exec-azsp", "approved")
+	row.Recommendations = []config.RecommendationRecord{
+		{Provider: "azure", Service: "savingsplans", Count: 1},
+	}
+	transitioned := row
+	transitioned.Status = failedStatus
+
+	store.On("ListStuckExecutions", ctx, stuckStatuses, reapAfter).
+		Return([]config.PurchaseExecution{row}, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-azsp", stuckStatuses, failedStatus, (*string)(nil)).
+		Return(&transitioned, nil)
+	store.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
+		// "safe to retry" MUST NOT appear — Azure SP is not idempotent.
+		return e.ExecutionID == "exec-azsp" &&
+			e.Status == failedStatus &&
+			strings.Contains(e.Error, "reaped after") &&
+			!strings.Contains(e.Error, "safe to retry")
+	})).Return(nil)
+
+	mgr := newReaperManager(store)
+	result, err := mgr.ReapStuckExecutions(ctx, reapAfter)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Reaped)
+	store.AssertExpectations(t)
+}
+
+// TestReapStuckExecutions_EmptyRecsNotSafeToRetry verifies that executions
+// with no recommendations are not stamped "safe to retry": an empty rec-set
+// means allRecsSafeToRedrive returns false (unknown purchase state).
+func TestReapStuckExecutions_EmptyRecsNotSafeToRetry(t *testing.T) {
+	ctx := context.Background()
+	store := new(MockConfigStore)
+	reapAfter := 10 * time.Minute
+
+	row := stuckExec("exec-empty", "running") // stuckExec has no recs
+	transitioned := row
+	transitioned.Status = failedStatus
+
+	store.On("ListStuckExecutions", ctx, stuckStatuses, reapAfter).
+		Return([]config.PurchaseExecution{row}, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-empty", stuckStatuses, failedStatus, (*string)(nil)).
+		Return(&transitioned, nil)
+	store.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
+		return e.ExecutionID == "exec-empty" &&
+			e.Status == failedStatus &&
+			!strings.Contains(e.Error, "safe to retry")
+	})).Return(nil)
+
+	mgr := newReaperManager(store)
+	result, err := mgr.ReapStuckExecutions(ctx, reapAfter)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Reaped)
+	store.AssertExpectations(t)
 }

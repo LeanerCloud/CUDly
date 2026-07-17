@@ -247,7 +247,7 @@ func TestSQSRedeliveryDoesNotDoubleExecute(t *testing.T) {
 	mockStore.SavePurchaseExecutionFn = func(_ context.Context, _ *config.PurchaseExecution) error { return nil }
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
-	mockStore.On("GetPurchasePlan", ctx, mock.Anything).Return(&config.PurchasePlan{Name: "p"}, nil).Maybe()
+	mockStore.On("GetPurchasePlan", ctx, mock.Anything).Return(&config.PurchasePlan{Name: "p", AutoPurchase: true}, nil).Maybe()
 
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)
 	mockProviderInst.On("GetServiceClient", mock.Anything, common.ServiceEC2, mock.Anything).Return(mockServiceClient, nil)
@@ -303,14 +303,14 @@ func TestMultiAccountPartialSuccessIsAcked(t *testing.T) {
 			{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, UpfrontCost: 300, Selected: true},
 		},
 	}
-	plan := &config.PurchasePlan{ID: "plan-x", Name: "Plan X"}
+	plan := &config.PurchasePlan{ID: "plan-x", Name: "Plan X", AutoPurchase: true}
 
 	mockStore.On("GetExecutionByID", ctx, "root-partial").Return(exec, nil)
 	running := *exec
 	running.Status = "running"
 	mockStore.On("TransitionExecutionStatus", ctx, "root-partial",
 		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).Return(&running, nil)
-	mockStore.On("GetPurchasePlan", ctx, "plan-x").Return(plan, nil)
+	mockStore.On("GetPurchasePlan", ctx, "plan-x").Return(plan, nil).Maybe()
 	// GetPlanAccounts is served by the Fn hook, not a testify expectation.
 	mockStore.GetPlanAccountsFn = func(_ context.Context, _ string) ([]config.CloudAccount, error) {
 		return accounts, nil

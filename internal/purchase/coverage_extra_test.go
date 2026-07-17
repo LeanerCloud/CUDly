@@ -265,8 +265,9 @@ func TestHandleExecutePurchase_SaveError(t *testing.T) {
 	mockSTS := new(MockSTSClient)
 
 	plan := &config.PurchasePlan{
-		ID:   "plan-save-err",
-		Name: "Plan",
+		ID:           "plan-save-err",
+		Name:         "Plan",
+		AutoPurchase: true,
 	}
 
 	rec := config.RecommendationRecord{
