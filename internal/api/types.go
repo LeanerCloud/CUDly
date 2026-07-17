@@ -867,7 +867,7 @@ type HistorySummary struct {
 	TotalExpired    int `json:"total_expired"`
 	// TotalRevoked counts commitments that have been revoked/refunded via
 	// MarkPurchaseRevoked. They are excluded from TotalCompleted and all dollar
-	// totals because the provider has cancelled the commitment.
+	// totals because the provider has canceled the commitment.
 	TotalRevoked        int     `json:"total_revoked"`
 	TotalUpfront        float64 `json:"total_upfront"`
 	TotalMonthlySavings float64 `json:"total_monthly_savings"`
