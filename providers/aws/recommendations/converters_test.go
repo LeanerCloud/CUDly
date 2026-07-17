@@ -86,10 +86,12 @@ func TestGetServiceStringForCostExplorer(t *testing.T) {
 }
 
 func TestConvertPaymentOption(t *testing.T) {
-	// convertPaymentOption is the legacy wrapper that silently defaults to NoUpfront
-	// for unknown values (used by client.go RI path, owned by #865/#1075).
-	// This test documents that silent-default behaviour; new callers should use
-	// convertPaymentOptionE which returns an error on unrecognised values.
+	// convertPaymentOption is the legacy wrapper used by client.go (RI path,
+	// owned by #865/#1075); it silently returns the empty ("") PaymentOption
+	// for unrecognized values, which Cost Explorer then rejects with a
+	// validation error. This test covers the valid cases only; the fail-loud
+	// path is tested by TestConvertPaymentOptionE_FailLoud. New callers must
+	// use convertPaymentOptionE and propagate the error.
 	tests := []struct {
 		name     string
 		option   string
@@ -122,10 +124,11 @@ func TestConvertPaymentOption(t *testing.T) {
 
 // TestConvertPaymentOptionE_FailLoud is the regression test for H3:
 // convertPaymentOptionE must return an error on any unrecognised payment option
-// instead of silently substituting NoUpfront (the old behaviour of the
-// convertPaymentOption default branch). Callers on the SP recommendation path
-// use this erroring variant so a typo or new/renamed option is caught
-// before the wrong recs are queried.
+// instead of silently substituting the empty ("") PaymentOption (the old
+// behaviour of the convertPaymentOption default branch, which surfaced to CE
+// as a confusing validation error). Callers on the SP recommendation path use
+// this erroring variant so a typo or new/renamed option is caught before the
+// wrong recs are queried.
 func TestConvertPaymentOptionE_FailLoud(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -136,7 +139,7 @@ func TestConvertPaymentOptionE_FailLoud(t *testing.T) {
 		{"All upfront", "all-upfront", types.PaymentOptionAllUpfront, false},
 		{"Partial upfront", "partial-upfront", types.PaymentOptionPartialUpfront, false},
 		{"No upfront", "no-upfront", types.PaymentOptionNoUpfront, false},
-		// These must error, not default to NoUpfront (H3 regression guard):
+		// These must error, not return the empty PaymentOption (H3 regression guard):
 		{"Unknown option errors", "unknown", "", true},
 		{"Empty string errors", "", "", true},
 		{"Mixed case errors", "All-Upfront", "", true},
@@ -158,7 +161,7 @@ func TestConvertPaymentOptionE_FailLoud(t *testing.T) {
 
 // TestConvertTermInYearsE_FailLoud is the regression test for L1:
 // convertTermInYearsE must error on unrecognised terms rather than silently
-// defaulting to OneYear.
+// returning the empty ("") TermInYears (which CE then rejects).
 func TestConvertTermInYearsE_FailLoud(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -170,7 +173,7 @@ func TestConvertTermInYearsE_FailLoud(t *testing.T) {
 		{"1 numeric", "1", types.TermInYearsOneYear, false},
 		{"3yr", "3yr", types.TermInYearsThreeYears, false},
 		{"3 numeric", "3", types.TermInYearsThreeYears, false},
-		// These must error, not default to OneYear (L1 regression guard):
+		// These must error, not return the empty TermInYears (L1 regression guard):
 		{"Unknown term errors", "unknown", "", true},
 		{"Empty string errors", "", "", true},
 		{"2yr errors", "2yr", "", true},
@@ -192,7 +195,7 @@ func TestConvertTermInYearsE_FailLoud(t *testing.T) {
 
 // TestConvertLookbackPeriodE_FailLoud is the regression test for L2:
 // convertLookbackPeriodE must error on unrecognised periods rather than
-// silently defaulting to SevenDays.
+// silently returning the empty ("") LookbackPeriodInDays (which CE then rejects).
 func TestConvertLookbackPeriodE_FailLoud(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -206,7 +209,7 @@ func TestConvertLookbackPeriodE_FailLoud(t *testing.T) {
 		{"30 numeric", "30", types.LookbackPeriodInDaysThirtyDays, false},
 		{"60d", "60d", types.LookbackPeriodInDaysSixtyDays, false},
 		{"60 numeric", "60", types.LookbackPeriodInDaysSixtyDays, false},
-		// These must error, not default to SevenDays (L2 regression guard):
+		// These must error, not return the empty LookbackPeriodInDays (L2 regression guard):
 		{"Unknown period errors", "unknown", "", true},
 		{"Empty string errors", "", "", true},
 		{"90d errors", "90d", "", true},
@@ -228,8 +231,10 @@ func TestConvertLookbackPeriodE_FailLoud(t *testing.T) {
 
 func TestConvertTermInYears(t *testing.T) {
 	// convertTermInYears is the legacy wrapper used by client.go (RI path);
-	// it silently returns OneYear for unrecognised values. This test covers the
-	// valid cases only; the fail-loud path is tested by TestConvertTermInYearsE_FailLoud.
+	// it silently returns the empty ("") TermInYears for unrecognised values,
+	// which Cost Explorer then rejects with a validation error. This test
+	// covers the valid cases only; the fail-loud path is tested by
+	// TestConvertTermInYearsE_FailLoud.
 	tests := []struct {
 		name     string
 		term     string
@@ -267,8 +272,10 @@ func TestConvertTermInYears(t *testing.T) {
 
 func TestConvertLookbackPeriod(t *testing.T) {
 	// convertLookbackPeriod is the legacy wrapper used by client.go (RI path);
-	// it silently returns SevenDays for unrecognised values. This test covers valid
-	// cases only; the fail-loud path is tested by TestConvertLookbackPeriodE_FailLoud.
+	// it silently returns the empty ("") LookbackPeriodInDays for unrecognised
+	// values, which Cost Explorer then rejects with a validation error. This
+	// test covers valid cases only; the fail-loud path is tested by
+	// TestConvertLookbackPeriodE_FailLoud.
 	tests := []struct {
 		name     string
 		period   string
