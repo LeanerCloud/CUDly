@@ -176,13 +176,13 @@ func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *S
 
 	nameByID := h.resolveAccountNamesByID(ctx)
 	filtered := make([]config.RecommendationRecord, 0, len(recs))
-	for _, rec := range recs {
-		if rec.CloudAccountID == nil {
+	for _rvc := range recs {
+		if recs[_rvc].CloudAccountID == nil {
 			continue
 		}
-		id := *rec.CloudAccountID
+		id := *recs[_rvc].CloudAccountID
 		if auth.MatchesAccount(allowed, id, nameByID[id]) {
-			filtered = append(filtered, rec)
+			filtered = append(filtered, recs[_rvc])
 		}
 	}
 	return filtered, nil
@@ -226,7 +226,7 @@ func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *S
 // savings from active purchase history, populated separately in
 // getDashboardSummary via aggregateActiveCommitmentsPerService. A service
 // with recommendations but no active purchases correctly ships
-// current_savings: 0. (Issue #1031)
+// current_savings: 0 (issue #1031).
 func summarizeRecommendationsWithCoverage( //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	recs []config.RecommendationRecord,
 	coverageByKey map[string]float64,
@@ -700,7 +700,7 @@ func elapsedWholeMonths(from, to time.Time) int {
 	return months
 }
 
-// calculateCurrentCoverage calculates the current coverage percentage
+// calculateCurrentCoverage calculates the current coverage percentage.
 func (h *Handler) calculateCurrentCoverage(potentialSavings, committedMonthly float64) float64 {
 	if potentialSavings == 0 {
 		return 100.0 // No recommendations means 100% coverage
