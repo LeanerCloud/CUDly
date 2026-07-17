@@ -790,7 +790,12 @@ async function handlePlannedPurchaseAction(action: string, purchaseId: string, p
           console.warn('edit action ignored: missing plan id');
           return;
         }
-        await editPlan(planId);
+        // If the plan can't be loaded (deleted or no longer accessible while
+        // the row was on screen), reconcile the list so the orphaned row is
+        // dropped instead of leaving a dead Edit button (issue #1403).
+        if (!(await editPlan(planId))) {
+          await loadPlannedPurchases();
+        }
         return;
       case 'disable': {
         // Use styled async dialog (11-L2) instead of blocking browser confirm().
@@ -1105,7 +1110,11 @@ async function togglePlan(planId: string, enabled: boolean): Promise<void> {
   }
 }
 
-async function editPlan(planId: string): Promise<void> {
+// editPlan loads the plan and opens the edit modal pre-filled. Returns true
+// when the modal opened, false when the plan could not be loaded (e.g. it was
+// deleted or is no longer accessible). Callers that render the plan in a list
+// use the false result to reconcile a now-stale row (issue #1403).
+async function editPlan(planId: string): Promise<boolean> {
   try {
     const backendPlan = await api.getPlan(planId) as unknown as BackendPlan;
 
@@ -1184,9 +1193,21 @@ async function editPlan(planId: string): Promise<void> {
     wirePlanRangeInputs();
     const planModal = document.getElementById('plan-modal');
     if (planModal) openModal(planModal);
+    return true;
   } catch (error) {
     console.error('Failed to load plan:', error);
-    showToast({ message: 'Failed to load plan details', kind: 'error' });
+    // A missing/inaccessible plan comes back as 404 (issue #1403): the
+    // scheduled-purchase row outlived its plan (deleted, or the caller's
+    // account scope changed). Surface an actionable message instead of the
+    // generic "Failed to load plan details", and signal failure so the
+    // caller can reconcile the stale row. Other errors keep the generic
+    // message (network blip, transient 5xx) since the plan may still exist.
+    const status = (error as { status?: number }).status;
+    const message = status === 404
+      ? 'This plan is no longer available. It may have been deleted.'
+      : 'Failed to load plan details';
+    showToast({ message, kind: 'error' });
+    return false;
   }
 }
 
