@@ -190,12 +190,6 @@ resource "aws_iam_policy" "data" {
         Resource = "arn:aws:secretsmanager:*:*:secret:cudly-*"
       },
       {
-        Sid      = "SecretsManagerDescribe"
-        Effect   = "Allow"
-        Action   = ["secretsmanager:ListSecrets"]
-        Resource = "*"
-      },
-      {
         Sid    = "S3TerraformState"
         Effect = "Allow"
         Action = [
