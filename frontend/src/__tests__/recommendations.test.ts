@@ -2357,7 +2357,7 @@ describe('Bundle B: column header filter triggers', () => {
     expect(document.querySelector('.column-filter-popover')).toBeNull();
   });
 
-  test('categorical popover lists distinct values from the unfiltered rec set', async () => {
+  test('categorical popover lists distinct values from the rec set (no other active filters)', async () => {
     await loadRecommendations();
     const providerBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="provider"]');
     providerBtn?.click();
@@ -2817,6 +2817,121 @@ describe('Bundle B: column header filter triggers', () => {
       expect(values).toContain('savings-plans-compute');
       // ec2 remains in the selection.
       expect(values).toContain('ec2');
+    });
+  });
+
+  // Issue #164: cross-column-aware (cascading) distinct values.
+  // Each column popover must show only values from rows that pass all
+  // OTHER active filters -- values that produce non-empty results when
+  // combined with the existing selection.
+  describe('Issue #164: cross-column-aware categorical filter distinct values', () => {
+    const multiProviderRecs = [
+      { id: 'r-aws-ec2',  provider: 'aws',   cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
+      { id: 'r-aws-rds',  provider: 'aws',   cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',    region: 'us-east-1', count: 1, term: 1, savings: 80,  upfront_cost: 400 },
+      { id: 'r-az-vm',   provider: 'azure',  cloud_account_id: 'a2', service: 'vm',  resource_type: 'D2s',      region: 'eastus',    count: 2, term: 3, savings: 200, upfront_cost: 800 },
+    ];
+
+    beforeEach(() => {
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: {},
+        recommendations: multiProviderRecs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(multiProviderRecs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(multiProviderRecs);
+    });
+
+    test('service popover shows only AWS services when provider=aws filter is active', async () => {
+      // Provider=aws is set; opening the service popover must list only
+      // services from aws rows (ec2, rds), not the azure service (vm).
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        provider: { kind: 'set', values: ['aws'] },
+      });
+      await loadRecommendations();
+      const serviceBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="service"]');
+      serviceBtn?.click();
+      const values = Array.from(
+        document.querySelectorAll<HTMLInputElement>('.column-filter-popover .column-filter-item input[type="checkbox"]'),
+      ).map((cb) => cb.dataset['value']).sort();
+      expect(values).toEqual(['ec2', 'rds']);
+      expect(values).not.toContain('vm');
+    });
+
+    test('provider popover shows all providers when opening the provider column (own filter excluded)', async () => {
+      // Provider=aws is active, but opening the provider popover must still
+      // show all 3 providers because the column's own filter is excluded from
+      // the cross-filter narrowing -- allowing the user to switch providers.
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        provider: { kind: 'set', values: ['aws'] },
+      });
+      await loadRecommendations();
+      const providerBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="provider"]');
+      providerBtn?.click();
+      const values = Array.from(
+        document.querySelectorAll<HTMLInputElement>('.column-filter-popover .column-filter-item input[type="checkbox"]'),
+      ).map((cb) => cb.dataset['value']).sort();
+      // All providers must be visible so the user can switch from aws to azure.
+      expect(values).toEqual(['aws', 'azure']);
+    });
+
+    test('service popover pins active-filter values even when cross-filtering would omit them (alwaysInclude)', async () => {
+      // Contradictory filter state: provider=azure (only has vm) + service=ec2 (no azure rows).
+      // Opening the service popover: cross-filtering by provider=azure yields only vm.
+      // But ec2 is in the service column's own active filter, so alwaysInclude must keep it
+      // visible so the user can deselect it without first clearing the provider filter.
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        provider: { kind: 'set', values: ['azure'] },
+        service:  { kind: 'set', values: ['ec2'] },
+      });
+      await loadRecommendations();
+      const serviceBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="service"]');
+      serviceBtn?.click();
+      const values = Array.from(
+        document.querySelectorAll<HTMLInputElement>('.column-filter-popover .column-filter-item input[type="checkbox"]'),
+      ).map((cb) => cb.dataset['value']).sort();
+      // vm is visible because provider=azure cross-filter leaves only that azure row.
+      expect(values).toContain('vm');
+      // ec2 must also be visible even though no azure row has service=ec2:
+      // the alwaysInclude set pins values from the column's own active filter.
+      expect(values).toContain('ec2');
+    });
+
+    test('hostile payload in service value is not interpreted as HTML in the popover (XSS guard)', async () => {
+      // A recommendation whose `service` field contains an HTML injection string
+      // must not be parsed as markup in the filter popover -- the value goes through
+      // textContent and dataset, never innerHTML.
+      const hostileService = '<script>alert(1)</script>';
+      const recsWithHostile = [
+        { id: 'r-aws-ec2', provider: 'aws', cloud_account_id: 'a1', service: hostileService, resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
+        { id: 'r-aws-rds', provider: 'aws', cloud_account_id: 'a1', service: 'rds',           resource_type: 'db.t3',    region: 'us-east-1', count: 1, term: 1, savings: 80,  upfront_cost: 400 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: {},
+        recommendations: recsWithHostile,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recsWithHostile);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recsWithHostile);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      await loadRecommendations();
+      const serviceBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="service"]');
+      serviceBtn?.click();
+
+      // The popover must not contain a parsed <script> element.
+      const popover = document.querySelector('.column-filter-popover');
+      expect(popover).not.toBeNull();
+      expect(popover!.querySelector('script')).toBeNull();
+
+      // The raw payload must appear as a literal data-value attribute, not interpreted HTML.
+      const hostileCb = Array.from(
+        document.querySelectorAll<HTMLInputElement>('.column-filter-popover .column-filter-item input[type="checkbox"]'),
+      ).find((cb) => cb.dataset['value'] === hostileService);
+      expect(hostileCb).not.toBeUndefined();
+
+      // The label span renders the payload as literal text, not HTML.
+      const labelSpan = hostileCb!.closest('label')?.querySelector('span');
+      expect(labelSpan?.textContent).toBe(hostileService);
+      expect(labelSpan?.innerHTML).not.toContain('<script>');
     });
   });
 });
