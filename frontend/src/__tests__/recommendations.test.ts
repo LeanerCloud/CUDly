@@ -3637,6 +3637,24 @@ describe('Issue #111 (iii): per-row Payment seed in openPurchaseModal', () => {
     // the integration of that mapping is exercised by app.ts'
     // existing handleExecutePurchase tests.
   });
+
+  test('(f) Issue #1402: Term select options display full labels "1 Year" / "3 Years", not abbreviated "1yr" / "3yr"', async () => {
+    const rec = {
+      id: 'rec-6', provider: 'aws' as const, cloud_account_id: 'test-account-a',
+      service: 'ec2', resource_type: 't3.medium', region: 'us-east-1',
+      count: 2, term: 1, payment: 'all-upfront', savings: 50, upfront_cost: 200,
+    };
+
+    await openPurchaseModal([rec]);
+
+    const termSelect = document.querySelector<HTMLSelectElement>('.purchase-row-term');
+    expect(termSelect).not.toBeNull();
+    const labels = Array.from(termSelect!.options).map((o) => o.text);
+    expect(labels).toContain('1 Year');
+    expect(labels).toContain('3 Years');
+    expect(labels).not.toContain('1yr');
+    expect(labels).not.toContain('3yr');
+  });
 });
 
 // Issue #132: pre-PR-#123 a 'savings-plans' Compute SP rec and a

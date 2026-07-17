@@ -5306,7 +5306,7 @@ function renderPurchaseModalRow(idx: number, paymentSource: 'override' | 'rec' |
   for (const t of [1, 3]) {
     const opt = document.createElement('option');
     opt.value = String(t);
-    opt.textContent = `${t}yr`;
+    opt.textContent = formatTerm(t);
     if (t === rec.term) opt.selected = true;
     termSelect.appendChild(opt);
   }
