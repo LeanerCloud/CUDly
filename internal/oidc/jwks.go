@@ -2,22 +2,25 @@ package oidc
 
 import (
 	"context"
-	"crypto/rsa"
+	"crypto"
+	"crypto/ecdsa"
 	"encoding/base64"
 	"fmt"
 )
 
-// JWK is a minimal RFC 7517 JSON Web Key for a public RSA signing key.
+// JWK is a minimal RFC 7517 JSON Web Key for a public EC signing key.
 // Only the fields needed by Azure AD federated credential validation
-// are serialized.
+// are serialized. RSA fields (N, E) are omitted; EC fields (Crv, X, Y)
+// carry the P-256 public point per RFC 7518 §6.2.
 type JWK struct {
-	Kty string   `json:"kty"` // always "RSA"
-	Use string   `json:"use"` // always "sig"
-	Alg string   `json:"alg"` // always "RS256"
-	Kid string   `json:"kid"` // stable key id
-	N   string   `json:"n"`   // base64url modulus
-	E   string   `json:"e"`   // base64url exponent
-	X5c []string `json:"x5c,omitempty"`
+	Kty string   `json:"kty"`           // "EC" for ECDSA keys
+	Use string   `json:"use"`           // always "sig"
+	Alg string   `json:"alg"`           // always "ES256"
+	Kid string   `json:"kid"`           // stable key id
+	Crv string   `json:"crv"`           // "P-256"
+	X   string   `json:"x"`             // base64url x-coordinate
+	Y   string   `json:"y"`             // base64url y-coordinate
+	X5c []string `json:"x5c,omitempty"` // certificate chain (unused)
 }
 
 // JWKS is the container returned by /.well-known/jwks.json.
@@ -25,22 +28,38 @@ type JWKS struct {
 	Keys []JWK `json:"keys"`
 }
 
-// PublicJWK derives a JWK from an RSA public key and a kid.
-func PublicJWK(pub *rsa.PublicKey, kid string) (JWK, error) {
-	if pub == nil || pub.N == nil {
-		return JWK{}, fmt.Errorf("oidc: nil rsa public key")
-	}
+// PublicJWK derives a JWK from an ECDSA public key and a kid.
+// Only P-256 keys (matching ES256) are accepted.
+func PublicJWK(pub crypto.PublicKey, kid string) (JWK, error) {
 	if kid == "" {
 		return JWK{}, fmt.Errorf("oidc: empty kid")
 	}
-	eBytes := bigEndianExponent(pub.E)
+	ecPub, ok := pub.(*ecdsa.PublicKey)
+	if !ok || ecPub == nil {
+		return JWK{}, fmt.Errorf("oidc: PublicJWK requires *ecdsa.PublicKey, got %T", pub)
+	}
+	byteLen := (ecPub.Curve.Params().BitSize + 7) / 8
+	// Derive the fixed-width, already left-padded coordinates from the
+	// uncompressed SEC 1 point (0x04 || X || Y) via crypto/ecdh, matching
+	// ComputeKeyID and avoiding the deprecated ecdsa.PublicKey.X/Y fields.
+	ecdhKey, err := ecPub.ECDH()
+	if err != nil {
+		return JWK{}, fmt.Errorf("oidc: convert ecdsa public key to ecdh: %w", err)
+	}
+	uncompressed := ecdhKey.Bytes()
+	if len(uncompressed) != 1+2*byteLen {
+		return JWK{}, fmt.Errorf("oidc: unexpected uncompressed point length %d, want %d", len(uncompressed), 1+2*byteLen)
+	}
+	xPadded := uncompressed[1 : 1+byteLen]
+	yPadded := uncompressed[1+byteLen:]
 	return JWK{
-		Kty: "RSA",
+		Kty: "EC",
 		Use: "sig",
 		Alg: Algorithm,
 		Kid: kid,
-		N:   base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
-		E:   base64.RawURLEncoding.EncodeToString(eBytes),
+		Crv: "P-256",
+		X:   base64.RawURLEncoding.EncodeToString(xPadded),
+		Y:   base64.RawURLEncoding.EncodeToString(yPadded),
 	}, nil
 }
 
@@ -61,21 +80,4 @@ func BuildJWKS(ctx context.Context, signer Signer) (JWKS, error) {
 		return JWKS{}, err
 	}
 	return JWKS{Keys: []JWK{jwk}}, nil
-}
-
-// bigEndianExponent returns the RSA exponent as the minimal big-endian
-// byte slice. RFC 7518 §6.3.1 requires the byte representation with
-// leading zero bytes stripped; e=65537 → 0x01 0x00 0x01.
-func bigEndianExponent(e int) []byte {
-	buf := make([]byte, 0, 4)
-	for shift := 24; shift >= 0; shift -= 8 {
-		b := byte(e >> shift) // #nosec G115 -- intentional byte extraction: RSA exponent fits in 3 bytes; byte(e>>shift) extracts each octet per RFC 7518 §6.3.1
-		if b != 0 || len(buf) > 0 {
-			buf = append(buf, b)
-		}
-	}
-	if len(buf) == 0 {
-		buf = []byte{0}
-	}
-	return buf
 }

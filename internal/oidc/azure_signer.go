@@ -2,10 +2,10 @@ package oidc
 
 import (
 	"context"
-	"crypto/rsa"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"fmt"
-	"math"
-	"math/big"
 	"sync"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
@@ -19,12 +19,12 @@ type AzureKeyVaultClient interface {
 	GetKey(ctx context.Context, name, version string, options *azkeys.GetKeyOptions) (azkeys.GetKeyResponse, error)
 }
 
-// AzureKeyVaultSigner signs JWTs via an Azure Key Vault RSA key. The
+// AzureKeyVaultSigner signs JWTs via an Azure Key Vault EC key (P-256). The
 // private half never leaves the vault.
 type AzureKeyVaultSigner struct {
 	client     AzureKeyVaultClient
 	err        error
-	pubKey     *rsa.PublicKey
+	pubKey     *ecdsa.PublicKey
 	keyName    string
 	keyVersion string
 	kid        string
@@ -34,7 +34,7 @@ type AzureKeyVaultSigner struct {
 // NewAzureKeyVaultSigner constructs a signer against a Key Vault using
 // the standard azidentity default credential chain. vaultURL is the
 // full vault URL (e.g. https://cudly-vault.vault.azure.net/); keyName
-// is the name of the RSA key in that vault.
+// is the name of the EC (P-256) key in that vault.
 func NewAzureKeyVaultSigner(ctx context.Context, vaultURL, keyName string) (*AzureKeyVaultSigner, error) {
 	if vaultURL == "" || keyName == "" {
 		return nil, fmt.Errorf("oidc: azure key vault signer requires vaultURL + keyName")
@@ -57,10 +57,13 @@ func NewAzureKeyVaultSignerFromClient(client AzureKeyVaultClient, keyName, keyVe
 	return &AzureKeyVaultSigner{client: client, keyName: keyName, keyVersion: keyVersion}
 }
 
-// Sign calls Key Vault's Sign operation with RS256, passing the raw
-// SHA-256 digest. Key Vault returns the raw RSA signature bytes.
+// Sign calls Key Vault's Sign operation with ES256, passing the raw
+// SHA-256 digest. Unlike AWS KMS and GCP Cloud KMS (which return DER),
+// Azure Key Vault's ES256 already returns the IEEE P1363 / RFC 7518
+// raw R || S signature (64 bytes for P-256), so it satisfies the
+// Signer.Sign contract directly and must NOT be DER-converted.
 func (s *AzureKeyVaultSigner) Sign(ctx context.Context, digest []byte) ([]byte, error) {
-	alg := azkeys.SignatureAlgorithmRS256
+	alg := azkeys.SignatureAlgorithmES256
 	resp, err := s.client.Sign(ctx, s.keyName, s.keyVersion, azkeys.SignParameters{
 		Algorithm: &alg,
 		Value:     digest,
@@ -73,12 +76,12 @@ func (s *AzureKeyVaultSigner) Sign(ctx context.Context, digest []byte) ([]byte, 
 
 // PublicKey fetches the public half of the Key Vault key once and
 // caches it.
-func (s *AzureKeyVaultSigner) PublicKey(ctx context.Context) (*rsa.PublicKey, error) {
+func (s *AzureKeyVaultSigner) PublicKey(ctx context.Context) (crypto.PublicKey, error) {
 	s.resolveOnce(ctx)
 	return s.pubKey, s.err
 }
 
-// KeyID returns a stable kid derived from the public key modulus.
+// KeyID returns a stable kid derived from the public key point.
 func (s *AzureKeyVaultSigner) KeyID(ctx context.Context) (string, error) {
 	s.resolveOnce(ctx)
 	return s.kid, s.err
@@ -91,25 +94,30 @@ func (s *AzureKeyVaultSigner) resolveOnce(ctx context.Context) {
 			s.err = fmt.Errorf("oidc: azure keyvault GetKey: %w", err)
 			return
 		}
-		if resp.Key == nil || resp.Key.N == nil || resp.Key.E == nil {
-			s.err = fmt.Errorf("oidc: azure keyvault returned incomplete key")
+		if resp.Key == nil || resp.Key.X == nil || resp.Key.Y == nil {
+			s.err = fmt.Errorf("oidc: azure keyvault returned incomplete EC key (missing X or Y)")
 			return
 		}
-		e := new(big.Int).SetBytes(resp.Key.E)
-		if !e.IsInt64() || e.Int64() <= 0 || e.Int64() > math.MaxInt32 {
-			s.err = fmt.Errorf("oidc: azure keyvault returned unexpected RSA exponent %s", e)
+		// JWK coordinates may omit leading zeros; right-align each into 32 bytes.
+		if len(resp.Key.X) > 32 || len(resp.Key.Y) > 32 {
+			s.err = fmt.Errorf("oidc: azure keyvault EC key coordinate exceeds 32 bytes")
 			return
 		}
-		rsaPub := &rsa.PublicKey{
-			N: new(big.Int).SetBytes(resp.Key.N),
-			E: int(e.Int64()),
+		var uncompressed [65]byte
+		uncompressed[0] = 0x04
+		copy(uncompressed[1+32-len(resp.Key.X):33], resp.Key.X)
+		copy(uncompressed[33+32-len(resp.Key.Y):65], resp.Key.Y)
+		ecPub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), uncompressed[:])
+		if err != nil {
+			s.err = fmt.Errorf("oidc: azure keyvault parse EC public key: %w", err)
+			return
 		}
-		kid, err := ComputeKeyID(rsaPub)
+		kid, err := ComputeKeyID(ecPub)
 		if err != nil {
 			s.err = err
 			return
 		}
-		s.pubKey = rsaPub
+		s.pubKey = ecPub
 		s.kid = kid
 	})
 }
