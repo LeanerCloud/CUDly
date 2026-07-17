@@ -704,13 +704,25 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
   // Issue #950: AND in creator-scope ownership. A non-creator who lacks
   // update-any:purchases (a standard user looking at someone else's row)
   // sees NO action buttons, mirroring the backend ownership gate. This is
-  // a UX gate; the backend authorizeExecutionManagement is the real
+  // a UX gate; the backend authorizePlannedPurchaseCancel is the real
   // boundary.
+  //
+  // Issue #1442: the Disable button (cancel) must be shown to the creator
+  // when they hold cancel-own:purchases or cancel-any:purchases, not only
+  // when they hold delete:purchases. This mirrors the cancel-verb logic in
+  // canCancelUpcomingPurchase (dashboard.ts) and the backend
+  // requireDeleteOrCancelPurchasePermission gate introduced by PR #1421.
+  // canManagePurchase already enforces the ownership check, so accepting
+  // cancel-own here only widens the Disable button for the creator's own row.
   const canManagePurchase = canManageScheduledPurchase(purchase);
   const canRunPurchase = canManagePurchase && canAccess('execute', 'purchases') && canRun;
   const canPauseOrResumePurchase = canManagePurchase && canAccess('update', 'purchases');
   const canEditPlan = canManagePurchase && canAccess('update', 'plans');
-  const canDisablePlan = canManagePurchase && canAccess('delete', 'purchases');
+  const canDisablePlan = canManagePurchase && (
+    canAccess('delete', 'purchases') ||
+    canAccess('cancel-any', 'purchases') ||
+    canAccess('cancel-own', 'purchases')
+  );
 
   return `
     <tr class="planned-purchase-row ${statusClass}">
