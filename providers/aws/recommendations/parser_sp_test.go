@@ -203,3 +203,108 @@ func TestParseSavingsPlanDetail_RecommendedUtilization(t *testing.T) {
 		})
 	}
 }
+
+// TestParseSavingsPlanDetail_EC2InstanceFieldsCaptured is the C1 parser
+// regression test. It asserts that parseSavingsPlanDetail persists InstanceFamily,
+// Region, and OfferingID from CE's SavingsPlansDetails onto the recommendation so
+// the purchase path can use them. Pre-fix: the field was ignored; assertions on
+// InstanceFamily/Region/OfferingID would fail. Post-fix: the fields are captured.
+func TestParseSavingsPlanDetail_EC2InstanceFieldsCaptured(t *testing.T) {
+	client := &Client{}
+	params := common.RecommendationParams{
+		Service:       common.ServiceSavingsPlansEC2Instance,
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+	}
+
+	tests := []struct {
+		name           string
+		detail         *types.SavingsPlansPurchaseRecommendationDetail
+		planType       types.SupportedSavingsPlansType
+		wantFamily     string
+		wantRegion     string
+		wantOfferingID string
+	}{
+		{
+			name: "EC2Instance SP with all CE fields populated",
+			detail: &types.SavingsPlansPurchaseRecommendationDetail{
+				HourlyCommitmentToPurchase:    aws.String("0.50"),
+				EstimatedMonthlySavingsAmount: aws.String("30.00"),
+				EstimatedSavingsPercentage:    aws.String("20.0"),
+				SavingsPlansDetails: &types.SavingsPlansDetails{
+					InstanceFamily: aws.String("m5"),
+					Region:         aws.String("us-east-1"),
+					OfferingId:     aws.String("ce-offering-abc123"),
+				},
+			},
+			planType:       types.SupportedSavingsPlansTypeEc2InstanceSp,
+			wantFamily:     "m5",
+			wantRegion:     "us-east-1",
+			wantOfferingID: "ce-offering-abc123",
+		},
+		{
+			name: "EC2Instance SP with partial CE fields (OfferingId absent)",
+			detail: &types.SavingsPlansPurchaseRecommendationDetail{
+				HourlyCommitmentToPurchase:    aws.String("1.00"),
+				EstimatedMonthlySavingsAmount: aws.String("50.00"),
+				EstimatedSavingsPercentage:    aws.String("15.0"),
+				SavingsPlansDetails: &types.SavingsPlansDetails{
+					InstanceFamily: aws.String("c5"),
+					Region:         aws.String("eu-west-1"),
+				},
+			},
+			planType:       types.SupportedSavingsPlansTypeEc2InstanceSp,
+			wantFamily:     "c5",
+			wantRegion:     "eu-west-1",
+			wantOfferingID: "",
+		},
+		{
+			name: "EC2Instance SP with nil SavingsPlansDetails (defensive case)",
+			detail: &types.SavingsPlansPurchaseRecommendationDetail{
+				HourlyCommitmentToPurchase:    aws.String("0.75"),
+				EstimatedMonthlySavingsAmount: aws.String("20.00"),
+				EstimatedSavingsPercentage:    aws.String("10.0"),
+				SavingsPlansDetails:           nil,
+			},
+			planType:       types.SupportedSavingsPlansTypeEc2InstanceSp,
+			wantFamily:     "",
+			wantRegion:     "",
+			wantOfferingID: "",
+		},
+		{
+			name: "Compute SP: SavingsPlansDetails ignored — no family/region populated",
+			detail: &types.SavingsPlansPurchaseRecommendationDetail{
+				HourlyCommitmentToPurchase:    aws.String("2.00"),
+				EstimatedMonthlySavingsAmount: aws.String("100.00"),
+				EstimatedSavingsPercentage:    aws.String("25.0"),
+				SavingsPlansDetails: &types.SavingsPlansDetails{
+					// CE may return these for Compute SPs but we must not use them
+					// to avoid imposing a family/region constraint on a global plan.
+					InstanceFamily: aws.String("m5"),
+					Region:         aws.String("us-east-1"),
+				},
+			},
+			planType:       types.SupportedSavingsPlansTypeComputeSp,
+			wantFamily:     "", // Compute is family-agnostic; must stay empty
+			wantRegion:     "", // Compute is global; must stay empty
+			wantOfferingID: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := client.parseSavingsPlanDetail(tt.detail, params, tt.planType)
+			require.NotNil(t, rec)
+
+			spDetails, ok := rec.Details.(*common.SavingsPlanDetails)
+			require.True(t, ok, "Details must be *common.SavingsPlanDetails")
+
+			assert.Equal(t, tt.wantFamily, spDetails.InstanceFamily,
+				"InstanceFamily must be captured from CE SavingsPlansDetails for EC2Instance SPs")
+			assert.Equal(t, tt.wantRegion, spDetails.Region,
+				"Region must be captured from CE SavingsPlansDetails for EC2Instance SPs")
+			assert.Equal(t, tt.wantOfferingID, spDetails.OfferingID,
+				"OfferingID must be captured from CE SavingsPlansDetails when present")
+		})
+	}
+}
