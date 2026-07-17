@@ -672,20 +672,23 @@ func TestRequirePermission_UserAPIKey(t *testing.T) {
 		mockAuth := new(MockAuthService)
 		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		mockAuth.On("HasAPIKeyPermissionAPI", ctx, "cudly-user-key", "view", "recommendations").
-			Return("user-123", true, nil)
+			Return("user-123", "key-abc", true, nil)
 
 		handler := &Handler{auth: mockAuth}
 		session, err := handler.requirePermission(ctx, newReq(), "view", "recommendations")
 		require.NoError(t, err)
 		require.NotNil(t, session)
 		assert.Equal(t, "user-123", session.UserID)
+		// Key ID must be threaded so requirePermissionConstraints can evaluate
+		// key-scoped caps (adversarial-review F2).
+		assert.Equal(t, "key-abc", session.UserAPIKeyID)
 	})
 
 	t.Run("regression #1142: scoped key is denied an out-of-scope permission with 403", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
 		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		mockAuth.On("HasAPIKeyPermissionAPI", ctx, "cudly-user-key", "execute", "purchases").
-			Return("user-123", false, nil)
+			Return("user-123", "", false, nil)
 
 		handler := &Handler{auth: mockAuth}
 		session, err := handler.requirePermission(ctx, newReq(), "execute", "purchases")
@@ -701,7 +704,7 @@ func TestRequirePermission_UserAPIKey(t *testing.T) {
 		mockAuth := new(MockAuthService)
 		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		mockAuth.On("HasAPIKeyPermissionAPI", ctx, "cudly-user-key", "view", "recommendations").
-			Return("", false, errors.New("invalid API key"))
+			Return("", "", false, errors.New("invalid API key"))
 
 		handler := &Handler{auth: mockAuth}
 		session, err := handler.requirePermission(ctx, newReq(), "view", "recommendations")
@@ -716,7 +719,7 @@ func TestRequirePermission_UserAPIKey(t *testing.T) {
 		mockAuth := new(MockAuthService)
 		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		mockAuth.On("HasAPIKeyPermissionAPI", ctx, "stale-key", "view", "recommendations").
-			Return("", false, errors.New("invalid API key"))
+			Return("", "", false, errors.New("invalid API key"))
 		mockAuth.On("ValidateSession", ctx, "session-token").
 			Return(&Session{UserID: "user-456"}, nil)
 		mockAuth.On("HasPermissionAPI", ctx, "user-456", "view", "recommendations").
@@ -761,7 +764,7 @@ func TestGetRecommendations_UserAPIKey(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("HasAPIKeyPermissionAPI", ctx, "cudly-user-key", "view", "recommendations").
-		Return("user-123", true, nil)
+		Return("user-123", "key-abc", true, nil)
 	// Account scoping resolves against the key's owning user.
 	mockAuth.On("GetAllowedAccountsAPI", ctx, "user-123").
 		Return([]string(nil), nil)

@@ -237,12 +237,15 @@ func (h *Handler) requirePermission(ctx context.Context, req *events.LambdaFunct
 	// resolveAuthenticatedUserID, so a stale x-api-key header cannot lock
 	// out a caller that also presents a valid session.
 	if apiKey != "" {
-		userID, has, err := h.auth.HasAPIKeyPermissionAPI(ctx, apiKey, action, resource)
+		userID, keyID, has, err := h.auth.HasAPIKeyPermissionAPI(ctx, apiKey, action, resource)
 		if err == nil {
 			if !has {
 				return nil, NewClientError(403, fmt.Sprintf("permission denied: requires %s on %s", action, resource))
 			}
-			return &Session{UserID: userID}, nil
+			// Thread the key's database ID so requirePermissionConstraints can
+			// evaluate constraints against the key's effective permissions (not
+			// just the owning user's group permissions).
+			return &Session{UserID: userID, UserAPIKeyID: keyID}, nil
 		}
 		logging.Debugf("User API key permission check failed: %v", err)
 	}
@@ -291,6 +294,13 @@ const unattributedAccountConstraint = "unattributed"
 // infrastructure credential with no user row, so it bypasses the check just
 // like it bypasses requirePermission's per-user lookup. Fails closed on a
 // missing auth service or a lookup error.
+//
+// For user-API-key sessions (session.UserAPIKeyID != ""), constraints are
+// evaluated against the KEY's effective permissions (the intersection of the
+// key's own constraints and the owning user's group permissions). This
+// prevents a CI key with MaxPurchaseAmount=$100 from spending up to the
+// owning user's full group limit by inheriting the broader group permissions
+// (adversarial-review F2).
 func (h *Handler) requirePermissionConstraints(ctx context.Context, session *Session, action, resource string, constraintSets []auth.PermissionConstraints) error {
 	if session == nil {
 		return fmt.Errorf("internal error: nil session passed to requirePermissionConstraints")
@@ -300,6 +310,18 @@ func (h *Handler) requirePermissionConstraints(ctx context.Context, session *Ses
 	}
 	if h.auth == nil {
 		return fmt.Errorf("authentication service not configured")
+	}
+	// User API key: evaluate constraints against the key's effective permissions,
+	// not the owning user's full group permissions.
+	if session.UserAPIKeyID != "" {
+		has, err := h.auth.HasAPIKeyPermissionForConstraintsAPI(ctx, session.UserAPIKeyID, session.UserID, action, resource, constraintSets)
+		if err != nil {
+			return fmt.Errorf("permission constraint check failed: %w", err)
+		}
+		if !has {
+			return NewClientError(403, fmt.Sprintf("permission denied: this request exceeds the constraints configured on your %s permission for %s", action, resource))
+		}
+		return nil
 	}
 	has, err := h.auth.HasPermissionForConstraintsAPI(ctx, session.UserID, action, resource, constraintSets)
 	if err != nil {

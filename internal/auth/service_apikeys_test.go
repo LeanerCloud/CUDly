@@ -871,12 +871,15 @@ func TestService_HasAPIKeyPermissionAPI(t *testing.T) {
 		return service
 	}
 
-	t.Run("scoped key grants its in-scope permission", func(t *testing.T) {
+	t.Run("scoped key grants its in-scope permission and returns key ID", func(t *testing.T) {
 		service := setup(t, []Permission{{Action: ActionView, Resource: ResourceRecommendations}})
 
-		userID, has, err := service.HasAPIKeyPermissionAPI(ctx, rawKey, ActionView, ResourceRecommendations)
+		userID, keyID, has, err := service.HasAPIKeyPermissionAPI(ctx, rawKey, ActionView, ResourceRecommendations)
 		require.NoError(t, err)
 		assert.Equal(t, "user-123", userID)
+		// Key ID is returned so callers can pass it to
+		// HasAPIKeyPermissionForConstraintsAPI without a redundant DB lookup.
+		assert.NotEmpty(t, keyID, "key ID must be non-empty so constraint checks can use it")
 		assert.True(t, has)
 	})
 
@@ -885,7 +888,7 @@ func TestService_HasAPIKeyPermissionAPI(t *testing.T) {
 		// group also grants create:plans. The key must NOT inherit it.
 		service := setup(t, []Permission{{Action: ActionView, Resource: ResourceRecommendations}})
 
-		userID, has, err := service.HasAPIKeyPermissionAPI(ctx, rawKey, ActionCreate, ResourcePlans)
+		userID, _, has, err := service.HasAPIKeyPermissionAPI(ctx, rawKey, ActionCreate, ResourcePlans)
 		require.NoError(t, err)
 		assert.Equal(t, "user-123", userID)
 		assert.False(t, has, "scoped key must not grant permissions outside its scope")
@@ -895,7 +898,7 @@ func TestService_HasAPIKeyPermissionAPI(t *testing.T) {
 		// The key claims admin:users but the user's group never granted it.
 		service := setup(t, []Permission{{Action: ActionAdmin, Resource: ResourceUsers}})
 
-		userID, has, err := service.HasAPIKeyPermissionAPI(ctx, rawKey, ActionAdmin, ResourceUsers)
+		userID, _, has, err := service.HasAPIKeyPermissionAPI(ctx, rawKey, ActionAdmin, ResourceUsers)
 		require.NoError(t, err)
 		assert.Equal(t, "user-123", userID)
 		assert.False(t, has, "key must not grant permissions the owning user does not hold")
@@ -904,7 +907,7 @@ func TestService_HasAPIKeyPermissionAPI(t *testing.T) {
 	t.Run("unscoped key inherits the owner's group permissions", func(t *testing.T) {
 		service := setup(t, nil)
 
-		userID, has, err := service.HasAPIKeyPermissionAPI(ctx, rawKey, ActionCreate, ResourcePlans)
+		userID, _, has, err := service.HasAPIKeyPermissionAPI(ctx, rawKey, ActionCreate, ResourcePlans)
 		require.NoError(t, err)
 		assert.Equal(t, "user-123", userID)
 		assert.True(t, has)
@@ -917,9 +920,10 @@ func TestService_HasAPIKeyPermissionAPI(t *testing.T) {
 
 		mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(nil, nil)
 
-		userID, has, err := service.HasAPIKeyPermissionAPI(ctx, rawKey, ActionView, ResourceRecommendations)
+		userID, keyID, has, err := service.HasAPIKeyPermissionAPI(ctx, rawKey, ActionView, ResourceRecommendations)
 		assert.Error(t, err)
 		assert.Empty(t, userID)
+		assert.Empty(t, keyID)
 		assert.False(t, has)
 	})
 }

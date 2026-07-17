@@ -139,25 +139,65 @@ func (s *Service) ValidateUserAPIKeyAPI(ctx context.Context, apiKey string) (*Us
 // of the key's scoped permissions with the owning user's group-derived
 // permissions (ComputeEffectivePermissions). A key created without explicit
 // permissions inherits the owner's full permission set. Returns the owning
-// user's ID and whether the permission is held.
+// user's ID, the key's database ID, and whether the permission is held.
+// The key ID is threaded to callers so they can pass it to
+// HasAPIKeyPermissionForConstraintsAPI without a redundant DB lookup.
 //
 // Fail closed: any validation failure (unknown, revoked, or expired key,
 // inactive owner) or permission-lookup error returns a non-nil error and
 // callers must deny access.
-func (s *Service) HasAPIKeyPermissionAPI(ctx context.Context, apiKey, action, resource string) (userID string, allowed bool, err error) {
+func (s *Service) HasAPIKeyPermissionAPI(ctx context.Context, apiKey, action, resource string) (userID, keyID string, allowed bool, err error) {
 	key, user, err := s.ValidateUserAPIKey(ctx, apiKey)
 	if err != nil {
-		return "", false, err
+		return "", "", false, err
 	}
 
 	perms, err := s.ComputeEffectivePermissions(ctx, key, user)
 	if err != nil {
-		return "", false, fmt.Errorf("computing effective API key permissions: %w", err)
+		return "", "", false, fmt.Errorf("computing effective API key permissions: %w", err)
 	}
 
 	// AuthContext.HasPermission applies the same matching semantics as
 	// session-based checks, including the admin:* wildcard with its
 	// money-spending carve-outs (issue #923).
 	effective := &AuthContext{User: user, Permissions: perms}
-	return user.ID, effective.HasPermission(action, resource), nil
+	return user.ID, key.ID, effective.HasPermission(action, resource), nil
+}
+
+// HasAPIKeyPermissionForConstraintsAPI checks request-derived permission
+// constraint sets against a user API key's effective permissions (the
+// intersection of the key's own permissions with the owning user's
+// group-derived permissions). Callers must have already confirmed the key
+// grants action/resource via HasAPIKeyPermissionAPI; this enforces the
+// Constraints dimension (MaxPurchaseAmount, Providers, Services, Regions,
+// AccountIDs) at execution time for user-API-key sessions (adversarial-review
+// F2, issue #1141 extension).
+//
+// Fail closed: an empty constraintSets slice is a caller bug; any DB lookup
+// failure returns an error and callers must deny.
+func (s *Service) HasAPIKeyPermissionForConstraintsAPI(ctx context.Context, keyID, userID, action, resource string, constraintSets []PermissionConstraints) (bool, error) {
+	if len(constraintSets) == 0 {
+		return false, fmt.Errorf("no permission constraint sets provided for %s on %s", action, resource)
+	}
+	key, err := s.store.GetAPIKeyByID(ctx, keyID)
+	if err != nil {
+		return false, fmt.Errorf("failed to load API key for constraint check: %w", err)
+	}
+	if key == nil {
+		return false, fmt.Errorf("API key not found")
+	}
+	user, err := s.lookupAPIKeyUser(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	perms, err := s.ComputeEffectivePermissions(ctx, key, user)
+	if err != nil {
+		return false, fmt.Errorf("computing effective API key permissions: %w", err)
+	}
+	for i := range constraintSets {
+		if !s.permissionsAllow(perms, action, resource, &constraintSets[i]) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
