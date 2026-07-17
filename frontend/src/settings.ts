@@ -260,7 +260,17 @@ function wireInlineRangeValidation(
     // while the value is still in flux (WCAG SCR32). CodeRabbit on #471.
     errorEl.setAttribute('role', 'status');
     errorEl.setAttribute('aria-live', 'polite');
-    input.insertAdjacentElement('afterend', errorEl);
+    // Insert the error element outside the nearest flex container so it
+    // renders below the input row rather than as a flex item to its right.
+    // Priority: after the .setting-input wrapper (settings form rows) ->
+    // after the enclosing <label> (SP-coverage cards) -> directly after the
+    // input as a final fallback (test DOM / modal forms without that wrapper).
+    // Issue #1411.
+    const insertionTarget =
+      input.closest('.setting-input') ??
+      (input.closest('label') as HTMLLabelElement | null) ??
+      input;
+    insertionTarget.insertAdjacentElement('afterend', errorEl);
     // Append (don't overwrite) any pre-existing aria-describedby so the
     // input's existing help text (e.g. unit hints) stays announced.
     const existingDescribedBy = input.getAttribute('aria-describedby');
@@ -2649,6 +2659,17 @@ export function setupSettingsHandlers(signal?: AbortSignal): void {
   wireInlineRangeValidation('setting-grace-aws', { signal, requireInteger: true });
   wireInlineRangeValidation('setting-grace-azure', { signal, requireInteger: true });
   wireInlineRangeValidation('setting-grace-gcp', { signal, requireInteger: true });
+  // Per-SP-plan coverage percentage inputs — must carry the same inline
+  // validation as the global default-coverage field so users see range errors
+  // on the service cards without waiting for Save. Issue #1411 row 7.13.
+  SERVICE_FIELDS
+    .filter(f => 'coverageId' in f)
+    .forEach(f =>
+      wireInlineRangeValidation(
+        (f as { coverageId: string }).coverageId,
+        { signal, requireInteger: true },
+      )
+    );
 
   // Set up dirty-field tracking
   setupDirtyTracking(signal);

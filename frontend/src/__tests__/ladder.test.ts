@@ -62,6 +62,41 @@ describe('ladder.ts', () => {
     mockShowToast.mockReset();
   });
 
+  describe('renderLadderingSection: toggle label accessibility (issue #1412 row 3.1)', () => {
+    // Regression guard: the Enable Commitment Laddering label text must NOT be
+    // a <label for="setting-laddering-enabled"> because that makes the entire
+    // text string clickable (toggling the checkbox on click). Pattern matches
+    // the Auto-collect row fix from issue #464: use a <span> + aria-labelledby
+    // instead.
+    test('enable-laddering label is a span, not a <label for> element', async () => {
+      await renderSection();
+      // A <label for="setting-laddering-enabled"> would make the text clickable.
+      const badLabel = document.querySelector('label[for="setting-laddering-enabled"]');
+      expect(badLabel).toBeNull();
+    });
+
+    test('enable-laddering input carries aria-labelledby referencing the span', async () => {
+      await renderSection();
+      const input = document.getElementById('setting-laddering-enabled') as HTMLInputElement | null;
+      expect(input).not.toBeNull();
+      const labelledById = input!.getAttribute('aria-labelledby');
+      expect(labelledById).toBe('setting-laddering-enabled-label');
+      // The referenced element must exist and contain the label text.
+      const labelSpan = document.getElementById('setting-laddering-enabled-label');
+      expect(labelSpan).not.toBeNull();
+      expect(labelSpan!.textContent).toMatch(/Enable Commitment Laddering/);
+    });
+
+    test('enable-laddering checkbox is wrapped in a .toggle-label element', async () => {
+      await renderSection();
+      const input = document.getElementById('setting-laddering-enabled') as HTMLInputElement | null;
+      expect(input).not.toBeNull();
+      // The input must be inside a .toggle-label so the toggle switch is the
+      // only click target (not the surrounding descriptive text).
+      expect(input!.closest('.toggle-label')).not.toBeNull();
+    });
+  });
+
   describe('renderConfigTable XSS escaping', () => {
     test('renders a malicious cloud_account_id/provider as inert text, not markup', async () => {
       await renderSection();

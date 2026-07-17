@@ -90,12 +90,21 @@ function renderLadderingSection(globalEnabled: boolean): string {
 
   <div class="setting-row">
     <div class="setting-info">
-      <label for="setting-laddering-enabled">Enable Commitment Laddering</label>
+      <!-- Plain span (not <label for=>) so clicking the descriptive text
+           does not flip the toggle. The toggle's .toggle-label wraps the input
+           and provides the click target. aria-labelledby on the input keeps the
+           descriptive text as the toggle's accessible name. Same pattern as the
+           Auto-collect row (issue #464 / #1412). -->
+      <span class="label-like" id="setting-laddering-enabled-label">Enable Commitment Laddering</span>
       <span class="setting-hint">Global kill-switch. Must be on before any per-account config can fire.</span>
     </div>
     <div class="setting-input">
-      <input type="checkbox" id="setting-laddering-enabled"
-             ${globalEnabled ? 'checked' : ''}${disabledAttr}>
+      <label class="toggle-label">
+        <input type="checkbox" id="setting-laddering-enabled"
+               aria-labelledby="setting-laddering-enabled-label"
+               ${globalEnabled ? 'checked' : ''}${disabledAttr}>
+        <span class="slider"></span>
+      </label>
     </div>
   </div>
 

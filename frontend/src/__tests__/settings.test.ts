@@ -19,7 +19,8 @@ jest.mock('../api', () => ({
   updateAccount: jest.fn(),
   deleteAccount: jest.fn(),
   testAccountCredentials: jest.fn(),
-  saveAccountCredentials: jest.fn()
+  saveAccountCredentials: jest.fn(),
+  getLadderConfigs: jest.fn().mockResolvedValue([]),
 }));
 
 // Mock federation module — loadGlobalSettings fires initFederationPanel void-style,
@@ -73,9 +74,9 @@ describe('Settings Module', () => {
           <option value="partial-upfront">Partial Upfront</option>
           <option value="all-upfront">All Upfront</option>
         </select>
-        <input type="number" id="setting-default-coverage">
-        <input type="number" id="setting-notification-days">
-        <input type="number" id="setting-recs-stale-hours" value="24">
+        <input type="number" id="setting-default-coverage" min="0" max="100">
+        <input type="number" id="setting-notification-days" min="1" max="30">
+        <input type="number" id="setting-recs-stale-hours" value="24" min="0" max="8760">
         <select id="setting-recs-lookback-days">
           <option value="7" selected>7 days</option>
           <option value="30">30 days</option>
@@ -1232,6 +1233,206 @@ describe('Settings Module', () => {
       expect(ec2Payment.value).toBe('no-upfront');
       // RDS 3yr rejects no-upfront, so it clamps back to the first valid option.
       expect(rdsPayment.value).not.toBe('no-upfront');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Inline range validation — top-level numeric settings (issue #1411)
+  // -----------------------------------------------------------------------
+  // These inputs have min/max in the test DOM (added alongside the fix) so
+  // wireInlineRangeValidation creates the error element and wires the
+  // 'input'/'blur' events. Tests confirm the regression is gone: inline
+  // error appears immediately as the user types, not only after Save.
+  describe('inline range validation on top-level numeric settings (#1411)', () => {
+    function fire(el: HTMLInputElement, type: 'input' | 'blur'): void {
+      el.dispatchEvent(new Event(type));
+    }
+
+    beforeEach(() => {
+      setupSettingsHandlers();
+    });
+
+    it.each([
+      ['setting-notification-days', '0',     'Must be a whole number between 1 and 30'],
+      ['setting-notification-days', '31',    'Must be a whole number between 1 and 30'],
+      ['setting-recs-stale-hours',  '-1',    'Must be a whole number between 0 and 8760'],
+      ['setting-default-coverage',  '101',   'Must be a whole number between 0 and 100'],
+    ])('typing %s=%s shows inline error with message %s', (id, val, msg) => {
+      const input = document.getElementById(id) as HTMLInputElement;
+      input.value = val;
+      fire(input, 'input');
+
+      expect(input.getAttribute('aria-invalid')).toBe('true');
+      const errEl = document.getElementById(`${id}-range-error`);
+      expect(errEl).not.toBeNull();
+      expect(errEl!.classList.contains('hidden')).toBe(false);
+      expect(errEl!.textContent).toBe(msg);
+    });
+
+    it('typing a fractional value into notification-days is rejected inline', () => {
+      const input = document.getElementById('setting-notification-days') as HTMLInputElement;
+      input.value = '1.5';
+      fire(input, 'input');
+
+      expect(input.getAttribute('aria-invalid')).toBe('true');
+      const errEl = document.getElementById('setting-notification-days-range-error');
+      expect(errEl!.classList.contains('hidden')).toBe(false);
+    });
+
+    it('restoring a valid value clears the inline error', () => {
+      const input = document.getElementById('setting-notification-days') as HTMLInputElement;
+      input.value = '0';
+      fire(input, 'input');
+      expect(input.getAttribute('aria-invalid')).toBe('true');
+
+      input.value = '5';
+      fire(input, 'input');
+      expect(input.getAttribute('aria-invalid')).toBeNull();
+      const errEl = document.getElementById('setting-notification-days-range-error');
+      expect(errEl!.classList.contains('hidden')).toBe(true);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Inline range validation — SP coverage inputs (issue #1411 row 7.13)
+  // -----------------------------------------------------------------------
+  describe('inline range validation wired for SP coverage inputs (#1411 row 7.13)', () => {
+    function fire(el: HTMLInputElement, type: 'input' | 'blur'): void {
+      el.dispatchEvent(new Event(type));
+    }
+
+    beforeEach(() => {
+      setupSettingsHandlers();
+    });
+
+    it.each([
+      'aws-savings-plans-compute-coverage',
+      'aws-savings-plans-ec2instance-coverage',
+      'aws-savings-plans-sagemaker-coverage',
+      'aws-savings-plans-database-coverage',
+    ])('typing 101 into %s shows inline error', (id) => {
+      const input = document.getElementById(id) as HTMLInputElement;
+      input.value = '101';
+      fire(input, 'input');
+
+      expect(input.getAttribute('aria-invalid')).toBe('true');
+      const errEl = document.getElementById(`${id}-range-error`);
+      expect(errEl).not.toBeNull();
+      expect(errEl!.classList.contains('hidden')).toBe(false);
+      expect(errEl!.textContent).toBe('Must be a whole number between 0 and 100');
+    });
+
+    it('valid SP coverage value clears any prior error', () => {
+      const id = 'aws-savings-plans-compute-coverage';
+      const input = document.getElementById(id) as HTMLInputElement;
+      input.value = '200';
+      fire(input, 'input');
+      expect(input.getAttribute('aria-invalid')).toBe('true');
+
+      input.value = '80';
+      fire(input, 'input');
+      expect(input.getAttribute('aria-invalid')).toBeNull();
+      const errEl = document.getElementById(`${id}-range-error`);
+      expect(errEl!.classList.contains('hidden')).toBe(true);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Cancel on Global Defaults clears dirty state (issue #1412 rows 7.4/7.9)
+  // -----------------------------------------------------------------------
+  // These tests use loadGlobalSettings() to establish a proper dirty-tracking
+  // snapshot (identical to the real app flow where settings are loaded before
+  // the user interacts). Without the snapshot every field looks dirty regardless
+  // of its value, so the test cannot distinguish "cancel cleared the marker"
+  // from "marker was never set".
+  describe('cancel on Global Defaults propagation clears dirty state (#1412 7.4/7.9)', () => {
+    // Minimal getConfig response that satisfies loadGlobalSettings without errors.
+    const baseConfigResponse = {
+      global: {
+        enabled_providers: ['aws'] as string[],
+        notification_email: '',
+        auto_collect: true,
+        default_term: 3,
+        default_payment: 'all-upfront',
+        default_coverage: 80,
+        notification_days_before: 3,
+        recommendations_cache_stale_hours: 24,
+        recommendations_lookback_days: 7,
+        grace_period_days: { aws: 7, azure: 7, gcp: 7 },
+        laddering_enabled: false,
+      },
+      services: [],
+      credentials: {},
+    };
+
+    test('cancelling term cascade clears has-unsaved and dirty markers', async () => {
+      // loadGlobalSettings populates the form AND calls snapshotAllFields() so
+      // dirty tracking has a clean baseline (term=3 in the snapshot).
+      (api.getConfig as jest.Mock).mockResolvedValue(baseConfigResponse);
+      await loadGlobalSettings();
+      setupSettingsHandlers();
+      mockConfirmDialog.mockResolvedValueOnce(false);
+
+      // Change term to 1 (differs from snapshot=3) -> confirm appears -> cancel.
+      const defaultTerm = document.getElementById('setting-default-term') as HTMLSelectElement;
+      defaultTerm.value = '1';
+      defaultTerm.dispatchEvent(new Event('change'));
+      await new Promise((r) => setTimeout(r, 0));
+
+      // Cancel must restore the previous value.
+      expect(defaultTerm.value).toBe('3');
+
+      // With snapshot=3 and restored=3 the diff is clean, so markers must clear.
+      const tabBtn = document.getElementById('admin-tab-btn');
+      const saveBar = document.querySelector('.settings-buttons');
+      expect(tabBtn?.classList.contains('has-unsaved')).toBe(false);
+      expect(saveBar?.classList.contains('dirty')).toBe(false);
+    });
+
+    test('cancelling payment cascade clears has-unsaved and dirty markers', async () => {
+      (api.getConfig as jest.Mock).mockResolvedValue(baseConfigResponse);
+      await loadGlobalSettings();
+      setupSettingsHandlers();
+      mockConfirmDialog.mockResolvedValueOnce(false);
+
+      const defaultPayment = document.getElementById('setting-default-payment') as HTMLSelectElement;
+      defaultPayment.value = 'no-upfront';
+      defaultPayment.dispatchEvent(new Event('change'));
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(defaultPayment.value).toBe('all-upfront');
+
+      const tabBtn = document.getElementById('admin-tab-btn');
+      const saveBar = document.querySelector('.settings-buttons');
+      expect(tabBtn?.classList.contains('has-unsaved')).toBe(false);
+      expect(saveBar?.classList.contains('dirty')).toBe(false);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Global Defaults popup uses display names (issue #1412 rows 7.3/7.8)
+  // -----------------------------------------------------------------------
+  describe('Global Defaults popup shows display names not backend IDs (#1412 7.3/7.8)', () => {
+    test('confirmAndPropagateTerm passes display names to confirmDialog', async () => {
+      setupSettingsHandlers();
+      mockConfirmDialog.mockResolvedValueOnce(false);
+
+      const defaultTerm = document.getElementById('setting-default-term') as HTMLSelectElement;
+      defaultTerm.dataset['previous'] = '3';
+      // Set one service to a different value so the diff is non-empty.
+      (document.getElementById('aws-ec2-term') as HTMLSelectElement).value = '3';
+      defaultTerm.value = '1';
+      defaultTerm.dispatchEvent(new Event('change'));
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(mockConfirmDialog).toHaveBeenCalledTimes(1);
+      const callArg = mockConfirmDialog.mock.calls[0]![0] as { body: Node };
+      // body is the HTMLDivElement from buildAffectedList; serialize to check text.
+      const bodyText = (callArg.body as HTMLElement).textContent ?? '';
+      // Must include display name, not raw backend ID.
+      expect(bodyText).toMatch(/EC2 Reserved Instances/);
+      expect(bodyText).not.toMatch(/^aws$/m);
     });
   });
 });
