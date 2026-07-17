@@ -256,7 +256,7 @@ export interface PurchaseHistory {
   term: number;
   payment: string;
   upfront_cost: number;
-  monthly_cost: number;
+  monthly_cost: number | null;
   estimated_savings: number;
   plan_id?: string;
   plan_name?: string;
