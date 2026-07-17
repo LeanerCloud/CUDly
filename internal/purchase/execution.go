@@ -201,6 +201,15 @@ func (m *Manager) executeMultiAccount(ctx context.Context, baseExec *config.Purc
 	return fmt.Errorf("%w: %s", errAllAccountsFailed, strings.Join(errs, "; "))
 }
 
+// saveExecutionStatusBestEffort saves the execution record and logs any error.
+// Used in error paths where we need to persist the failure status but cannot
+// propagate the save error (the original error is already being returned).
+func (m *Manager) saveExecutionStatusBestEffort(ctx context.Context, exec *config.PurchaseExecution) {
+	if err := m.config.SavePurchaseExecution(ctx, exec); err != nil {
+		logging.Warnf("execution: failed to persist error status for account %v: %v", exec.CloudAccountID, err)
+	}
+}
+
 // executeForAccount runs a single plan execution for one cloud account.
 // It creates a new PurchaseExecution record tagged with cloud_account_id, resolves
 // per-account credentials, executes purchases, and saves the result.
