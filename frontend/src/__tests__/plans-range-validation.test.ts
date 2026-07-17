@@ -615,3 +615,64 @@ describe('Add Purchases modal: inline range validation (#771)', () => {
     expect(require('../api').createPlannedPurchases).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Add Purchases modal: start-date picker min attribute (QA 5.6)
+// ---------------------------------------------------------------------------
+
+/**
+ * The start-date input must have its `min` attribute set to today's ISO date
+ * so the browser date-picker blocks past dates while still allowing today.
+ * The default value stays tomorrow (to encourage scheduling ahead), but min
+ * is today so a same-day purchase remains possible.
+ */
+describe('Add Purchases modal: start-date picker enforces future-only dates (QA 5.6)', () => {
+  // Local-calendar ISO YYYY-MM-DD. Mirrors plans.ts toLocalDateInputValue.
+  // The production code must derive both `value` and `min` from local-time
+  // components (not toISOString, which is UTC) so a user west of UTC at
+  // 6pm local doesn't see "today" greyed out in the picker.
+  function toLocalDateInputValue(d: Date): string {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    const plansList = document.createElement('div');
+    plansList.id = 'plans-list';
+    const ppList = document.createElement('div');
+    ppList.id = 'planned-purchases-list';
+    document.body.replaceChildren(plansList, ppList);
+
+    await openAddPurchasesModal('plan-xyz', 'My Test Plan');
+  });
+
+  it('sets min to today on the start-date input after the modal opens', () => {
+    const input = document.getElementById('add-purchases-start-date') as HTMLInputElement;
+    expect(input).not.toBeNull();
+
+    expect(input.min).toBe(toLocalDateInputValue(new Date()));
+  });
+
+  it('keeps the default value set to tomorrow, not today', () => {
+    const input = document.getElementById('add-purchases-start-date') as HTMLInputElement;
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    expect(input.value).toBe(toLocalDateInputValue(tomorrow));
+  });
+
+  it('uses the local calendar day, not UTC, so users west of UTC can still pick today', () => {
+    // Regression check for the UTC-vs-local bug: at 23:00 in (e.g.) Los
+    // Angeles on Dec 31, `new Date().toISOString().split('T')[0]` returns
+    // Jan 1 (UTC), which would make today.min = Jan 1 and reject Dec 31 —
+    // contradicting "today remains selectable". Assert min uses the same
+    // calendar day Date() reports via local getters (the values diverge
+    // only in non-UTC timezones, but the bug shape is the function call).
+    const input = document.getElementById('add-purchases-start-date') as HTMLInputElement;
+    const now = new Date();
+    const localDay = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    expect(input.min).toBe(localDay);
+  });
+});
