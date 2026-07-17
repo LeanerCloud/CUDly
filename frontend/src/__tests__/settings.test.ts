@@ -6,7 +6,8 @@ import {
   saveGlobalSettings,
   resetSettings,
   setupSettingsHandlers,
-  copyToClipboard
+  copyToClipboard,
+  isUnsavedChanges,
 } from '../settings';
 
 // Mock the api module
@@ -1433,6 +1434,79 @@ describe('Settings Module', () => {
       // Must include display name, not raw backend ID.
       expect(bodyText).toMatch(/EC2 Reserved Instances/);
       expect(bodyText).not.toMatch(/^aws$/m);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // isUnsavedChanges -- no false prompt on pristine load or before load
+  // (issue #1441)
+  // -----------------------------------------------------------------------
+  // The navigation guard in navigation.ts calls isUnsavedChanges() whenever
+  // the user leaves the Admin tab. Before the fix, savedSnapshot started as
+  // an empty object ({}), so comparing any live DOM value against undefined
+  // always returned true -- causing the "You have unsaved settings changes.
+  // Leave without saving?" modal to fire even without any edits.
+  describe('isUnsavedChanges -- navigation guard (issue #1441)', () => {
+    const baseConfigResponse = {
+      global: {
+        enabled_providers: ['aws'] as string[],
+        notification_email: '',
+        auto_collect: true,
+        default_term: 3,
+        default_payment: 'all-upfront',
+        default_coverage: 80,
+        notification_days_before: 3,
+        recommendations_cache_stale_hours: 24,
+        recommendations_lookback_days: 7,
+        grace_period_days: { aws: 7, azure: 7, gcp: 7 },
+        laddering_enabled: false,
+      },
+      services: [],
+      credentials: {},
+    };
+
+    test('returns false before settings have been loaded (empty snapshot -- regression for #1441)', () => {
+      // Use a fresh module instance so savedSnapshot starts as the empty object
+      // {} that it is at module initialisation, before any loadGlobalSettings()
+      // call has run snapshotAllFields(). This is the exact state that caused
+      // the bug: the navigation guard fired on every first Admin-tab visit
+      // because `getFieldValue(id) !== undefined` was always true.
+      //
+      // Pre-fix: TRACKED_FIELDS.some(id => getFieldValue(id) !== savedSnapshot[id])
+      //   = TRACKED_FIELDS.some(id => '' !== undefined) = true -> prompt shown (BUG)
+      // Post-fix: Object.keys(savedSnapshot).length === 0 -> return false (CORRECT)
+      let freshIsUnsavedChanges!: () => boolean;
+      jest.isolateModules(() => {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const s = require('../settings') as { isUnsavedChanges: () => boolean };
+        freshIsUnsavedChanges = s.isUnsavedChanges;
+      });
+      expect(freshIsUnsavedChanges()).toBe(false);
+    });
+
+    test('returns false immediately after settings load without any user edits', async () => {
+      // loadGlobalSettings() populates all tracked fields from the API response
+      // and then calls snapshotAllFields() to establish the clean baseline.
+      // A user who navigates away right after load (no edits) must see no prompt.
+      (api.getConfig as jest.Mock).mockResolvedValue(baseConfigResponse);
+      await loadGlobalSettings();
+
+      expect(isUnsavedChanges()).toBe(false);
+    });
+
+    test('returns true after a tracked field is edited post-load', async () => {
+      // After a clean load + snapshot, mutating a tracked field must be detected
+      // so the navigation guard can show the prompt for real unsaved changes.
+      // Verifies the fix does not suppress legitimate dirty-state detection.
+      (api.getConfig as jest.Mock).mockResolvedValue(baseConfigResponse);
+      await loadGlobalSettings();
+
+      // Simulate the user changing the notification email -- a tracked field.
+      const emailInput = document.getElementById('setting-notification-email') as HTMLInputElement;
+      emailInput.value = 'edited@example.com';
+      emailInput.dispatchEvent(new Event('input'));
+
+      expect(isUnsavedChanges()).toBe(true);
     });
   });
 });
