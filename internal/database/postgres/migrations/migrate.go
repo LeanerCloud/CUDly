@@ -332,43 +332,48 @@ func maybeForceMigrationVersion(m *migrate.Migrate) error {
 	return nil
 }
 
-// maybeAutoHealDirty self-recovers a dirty schema_migrations row: when the DB
-// is dirty it calls m.Force(currentRecordedVersion) to clear the dirty flag at
-// the version golang-migrate last recorded, and the caller's subsequent m.Up()
-// re-applies only the still-pending migrations. This runs ONCE per boot, so a
-// cold start that finds a dirty DB self-heals instead of staying broken until
-// an operator manually forces a version (the multi-hour outage this addresses).
+// maybeAutoHealDirty detects a dirty schema_migrations row and, when
+// CUDLY_MIGRATION_AUTOHEAL is enabled (the default), returns a loud error with
+// recovery instructions rather than silently clearing the dirty flag.
 //
-// DEFAULT-ON (not opt-in). The whole outage was "the app started but stayed
-// broken for hours needing a manual force", and TestMigrations_FullStackIdempotent
-// proves re-running migrations is safe, so auto-heal runs by default. Set the
-// escape hatch CUDLY_MIGRATION_AUTOHEAL=false (any strconv.ParseBool falsey
-// value) to disable it in an environment whose migrations are not idempotent.
-// When disabled, a dirty DB is left untouched here and surfaces as the usual
-// "database is in dirty state" error after Up(); the caller (app.go ensureDB)
-// still FAIL-OPENS on that error so the app always starts -- a broken schema
-// surfaces via /health + the CloudWatch alarm, never via a crash-loop.
+// WHY NOT AUTO-CLEAR: golang-migrate records version=N, dirty=true BEFORE
+// running N's SQL. Every migration in this repository is transactional
+// (TestMigrationsAreTransactional). When a migration is interrupted (Lambda
+// timeout, connection drop, context cancellation), the SQL transaction is
+// rolled back completely -- N's effects are ABSENT from the schema -- but the
+// dirty flag persists. The previous Force(N)+Up() auto-heal treated such a
+// rolled-back migration as fully applied and silently continued at N+1,
+// permanently losing N's DDL while schema_migrations reported success (the
+// 000074 divergence class: columns reported as present by the version record
+// but absent from the actual schema, causing 42703 errors at runtime).
 //
-// CRITICAL -- Force to the CURRENT recorded version, NEVER a lower one. Up()
-// then applies only the pending tail. Forcing BELOW already-applied migrations
-// would re-run seed/data migrations, and some RAISE on a second run (e.g.
-// 000059 errors with "a group named Purchaser already exists with a different
-// id" because 000064 already relocated it). Force(current)+Up() is the only
-// safe shape; Force(lower) would turn a recoverable dirty state into a hard
-// failure. (Proven live during the incident.)
+// The "genuine narrow race" (N's SQL committed successfully but the subsequent
+// dirty=false update failed, e.g. due to a Lambda timeout between those two
+// steps) also results in dirty=true at N, but in that case N's effects ARE
+// present. Without per-migration effect probes the two scenarios are
+// indistinguishable from schema_migrations alone, so we take the conservative
+// path: fail loud so the migration-failed alarm fires and an operator can
+// inspect the actual schema before choosing the correct recovery target.
 //
-// IDEMPOTENCY INVARIANT: Force(version) clears the dirty marker WITHOUT rolling
-// back the partial effects of the interrupted migration, so when Up() re-runs
-// the pending tail those migrations must tolerate already-applied state
-// (CREATE ... IF NOT EXISTS, DROP ... IF EXISTS, DO-blocks that no-op when the
-// target already exists). The full-stack idempotency test guards this for the
-// whole directory as migrations are added.
+// RECOVERY (via CUDLY_FORCE_MIGRATION_VERSION -- see maybeForceMigrationVersion):
+//   - If migration N's SQL effects ARE confirmed present in the schema: set
+//     CUDLY_FORCE_MIGRATION_VERSION=N. Force(N) clears the dirty flag and
+//     the subsequent Up() continues at N+1.
+//   - If migration N's SQL effects are NOT present (rolled back): set
+//     CUDLY_FORCE_MIGRATION_VERSION=N-1. Force(N-1) resets state to N-1 and
+//     the subsequent Up() re-applies N then continues.
 //
-// CUDLY_FORCE_MIGRATION_VERSION still takes precedence: it runs earlier and
-// leaves the row clean, so this is a no-op when both are set. If auto-heal
-// itself fails (e.g. Force errors, or the re-applied Up() still fails), the
-// error propagates to ensureDB, which fail-opens AND records the failure so
-// the migration-failed alarm fires -- the app still starts.
+// FAIL-OPEN: the app still starts on this error. ensureDB (app.go) swallows
+// migration failures and the broken schema surfaces via /health + the
+// CloudWatch alarm, never via a crash-loop.
+//
+// Set CUDLY_MIGRATION_AUTOHEAL=false to bypass this check entirely; the dirty
+// state then surfaces as the generic "failed to run migrations: migration: N is
+// dirty" error from the post-Up() check in RunMigrations, without recovery
+// guidance.
+//
+// CUDLY_FORCE_MIGRATION_VERSION takes precedence: it runs before this function
+// and leaves the row clean, so this function is a no-op when both are set.
 //
 // The ParseBool gate is duplicated from internal/server.getEnvBool rather than
 // imported because the migrations package must not depend on internal/server,
@@ -390,14 +395,29 @@ func maybeAutoHealDirty(m *migrate.Migrate) error {
 		return nil
 	}
 
-	// Force the CURRENT recorded version (never lower -- see the doc comment),
-	// then let the caller's Up() re-apply only the pending tail.
-	log.Printf("Database is DIRTY at version %d: auto-heal forcing the current version %d to clear the dirty flag, then re-applying pending migrations (set CUDLY_MIGRATION_AUTOHEAL=false to disable)", version, version)
-	if err := m.Force(int(version)); err != nil { //nolint:gosec // G115: uint->int for migration version number; migration versions are always small positive integers
-		return fmt.Errorf("auto-heal: failed to force version %d to clear dirty flag: %w", version, err)
-	}
-	log.Printf("Auto-heal cleared dirty flag at version %d; proceeding to re-apply pending migrations", version)
-	return nil
+	// Cannot safely determine whether migration N's SQL effects landed:
+	//   - Common case (interrupted/rolled back): effects ABSENT; clearing the
+	//     dirty flag would silently record the never-applied migration as
+	//     complete, hiding the missing DDL from schema_migrations forever.
+	//   - Rare race (N committed, dirty=false update failed): effects PRESENT;
+	//     clearing dirty would be safe -- but we cannot detect this case
+	//     without per-migration effect probes.
+	// Conservative choice: fail loud so the alarm fires and an operator
+	// inspects the actual schema before choosing the recovery target.
+	log.Printf("Database is DIRTY at version %d: auto-heal cannot safely clear the dirty flag without "+
+		"knowing whether migration %d's SQL effects were applied. Inspect the schema and redeploy "+
+		"with CUDLY_FORCE_MIGRATION_VERSION to recover. Set CUDLY_MIGRATION_AUTOHEAL=false to suppress this check.",
+		version, version)
+	return fmt.Errorf(
+		"auto-heal: migration %d is dirty; cannot verify whether its SQL effects were applied -- "+
+			"clearing the dirty flag risks recording a never-applied migration as complete "+
+			"(silent schema divergence). Inspect the actual schema, then redeploy with: "+
+			"CUDLY_FORCE_MIGRATION_VERSION=%d if migration %d's effects are confirmed present "+
+			"(Force clears dirty, Up() continues at %d), or "+
+			"CUDLY_FORCE_MIGRATION_VERSION=%d if the migration was NOT applied and must be re-run "+
+			"(Force resets to %d, Up() re-applies %d); "+
+			"set CUDLY_MIGRATION_AUTOHEAL=false to suppress this check and surface the raw dirty error",
+		version, version, version, version+1, version-1, version-1, version)
 }
 
 // autoHealEnabled reports whether dirty auto-heal should run. DEFAULT-ON: it
