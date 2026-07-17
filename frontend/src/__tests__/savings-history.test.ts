@@ -373,7 +373,6 @@ describe('Savings History Module', () => {
         expect.objectContaining({
           type: 'line',
           data: expect.objectContaining({
-            labels: expect.any(Array),
             datasets: expect.arrayContaining([
               expect.objectContaining({
                 label: 'Period Savings'
@@ -628,7 +627,7 @@ describe('Savings History Module', () => {
   });
 
   describe('chart formatting', () => {
-    test('uses date labels for daily/weekly/monthly interval', async () => {
+    test('uses linear x-axis type for daily/weekly/monthly interval (QA 2.2)', async () => {
       const mockData = {
         data_points: [
           { timestamp: '2024-01-15T00:00:00Z', total_savings: 10, cumulative_savings: 10, total_upfront: 100, purchase_count: 1 }
@@ -642,12 +641,17 @@ describe('Savings History Module', () => {
       await loadSavingsHistory();
 
       const chartCall = (Chart as unknown as jest.Mock).mock.calls[0];
-      const labels = chartCall[1].data.labels;
-      // Should format as short date (e.g., "Jan 15")
-      expect(labels[0]).toMatch(/Jan \d+/);
+      const xAxis = chartCall[1].options.scales.x;
+      // x-axis must be linear (not category) so leftmost tick is the period start
+      expect(xAxis.type).toBe('linear');
+      expect(typeof xAxis.min).toBe('number');
+      expect(typeof xAxis.max).toBe('number');
+      // Data points should be {x, y} objects, not scalars
+      const dataset0 = chartCall[1].data.datasets[0];
+      expect(dataset0.data[0]).toMatchObject({ x: expect.any(Number), y: expect.any(Number) });
     });
 
-    test('uses datetime labels for hourly interval', async () => {
+    test('uses linear x-axis with date+time tick format for hourly interval (QA 2.2)', async () => {
       const mockData = {
         data_points: [
           { timestamp: '2024-01-15T14:00:00Z', total_savings: 10, cumulative_savings: 10, total_upfront: 100, purchase_count: 1 }
@@ -661,9 +665,12 @@ describe('Savings History Module', () => {
       await loadSavingsHistory();
 
       const chartCall = (Chart as unknown as jest.Mock).mock.calls[0];
-      const labels = chartCall[1].data.labels;
-      // Should include hour (e.g., "Jan 15, 2 PM")
-      expect(labels[0]).toMatch(/Jan \d+, \d+ [AP]M/);
+      const xAxis = chartCall[1].options.scales.x;
+      expect(xAxis.type).toBe('linear');
+      // Tick callback should format timestamps as date strings (not raw ms numbers)
+      const tickResult = xAxis.ticks.callback(new Date('2024-01-15T14:00:00Z').getTime());
+      expect(typeof tickResult).toBe('string');
+      expect(tickResult.length).toBeGreaterThan(0);
     });
 
     test('configures point radius based on data point count', async () => {
@@ -820,13 +827,13 @@ describe('Savings History Module', () => {
       const chartCall = (Chart as unknown as jest.Mock).mock.calls[0];
       const tooltipLabelCallback = chartCall[1].options.plugins.tooltip.callbacks.label;
 
-      // Test period savings (datasetIndex 0)
+      // Test period savings (datasetIndex 0) -- must be 2 decimal places (QA 2.3)
       const periodContext = {
         raw: 25.5678,
         datasetIndex: 0,
         dataset: { label: 'Period Savings' }
       };
-      expect(tooltipLabelCallback(periodContext)).toBe('Period Savings: $25.5678/mo');
+      expect(tooltipLabelCallback(periodContext)).toBe('Period Savings: $25.57/mo');
     });
 
     test('tooltip label callback formats cumulative savings without unit suffix', async () => {
@@ -864,13 +871,13 @@ describe('Savings History Module', () => {
       const chartCall = (Chart as unknown as jest.Mock).mock.calls[0];
       const tooltipLabelCallback = chartCall[1].options.plugins.tooltip.callbacks.label;
 
-      // Test with null/undefined raw value
+      // Test with null/undefined raw value -- 2 decimal places for period savings (QA 2.3)
       const nullContext = {
         raw: null,
         datasetIndex: 0,
         dataset: { label: 'Period Savings' }
       };
-      expect(tooltipLabelCallback(nullContext)).toBe('Period Savings: $0.0000/mo');
+      expect(tooltipLabelCallback(nullContext)).toBe('Period Savings: $0.00/mo');
 
       const undefinedContext = {
         raw: undefined,
@@ -878,6 +885,115 @@ describe('Savings History Module', () => {
         dataset: { label: 'Cumulative Savings' }
       };
       expect(tooltipLabelCallback(undefinedContext)).toBe('Cumulative Savings: $0.00');
+    });
+
+    // Regression tests for QA 2.2 / 2.3 / 2.4 (do not remove)
+
+    test('QA 2.3: Period Savings tooltip has exactly 2 decimal places matching Cumulative', async () => {
+      const mockData = {
+        data_points: [
+          { timestamp: '2024-01-01T00:00:00Z', total_savings: 10, cumulative_savings: 10, total_upfront: 100, purchase_count: 1 }
+        ]
+      };
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
+
+      await loadSavingsHistory();
+
+      const chartCall = (Chart as unknown as jest.Mock).mock.calls[0];
+      const tooltipCb = chartCall[1].options.plugins.tooltip.callbacks.label;
+
+      // Period Savings: 2 decimal places, not 4
+      const periodCtx = { raw: 12.3456, datasetIndex: 0, dataset: { label: 'Period Savings' } };
+      const periodLabel = tooltipCb(periodCtx) as string;
+      // Must render with exactly 2 decimal places, matching Cumulative and the KPI (QA 2.3)
+      expect(periodLabel).toMatch(/\$\d+\.\d{2}(?!\d)/);
+      expect(periodLabel).not.toMatch(/\$\d+\.\d{3}/);
+
+      // Cumulative: also 2 decimal places
+      const cumulCtx = { raw: 99.9876, datasetIndex: 1, dataset: { label: 'Cumulative Savings' } };
+      const cumulLabel = tooltipCb(cumulCtx) as string;
+      expect(cumulLabel).toMatch(/\$\d+\.\d{2}(?!\d)/);
+      expect(cumulLabel).not.toMatch(/\$\d+\.\d{3}/);
+    });
+
+    test('QA 2.2: x-axis is type:linear with numeric min equal to period start', async () => {
+      const mockData = {
+        data_points: [
+          { timestamp: '2024-03-15T10:00:00Z', total_savings: 50, cumulative_savings: 50, total_upfront: 100, purchase_count: 1 }
+        ]
+      };
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
+
+      const periodSelect = document.getElementById('savings-period') as HTMLSelectElement;
+      periodSelect.value = '30d';
+
+      const before = Date.now();
+      await loadSavingsHistory();
+      const after = Date.now();
+
+      const chartCall = (Chart as unknown as jest.Mock).mock.calls[0];
+      const xAxis = chartCall[1].options.scales.x;
+
+      // Must be linear, not category
+      expect(xAxis.type).toBe('linear');
+
+      // min must be a number (the period start timestamp)
+      expect(typeof xAxis.min).toBe('number');
+      // 30d ago: the min should be roughly 30 days before 'after'
+      const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+      expect(xAxis.min).toBeGreaterThanOrEqual(before - thirtyDaysMs - 1000);
+      expect(xAxis.min).toBeLessThanOrEqual(after - thirtyDaysMs + 1000);
+
+      // max should be close to now
+      expect(xAxis.max).toBeGreaterThanOrEqual(before);
+      expect(xAxis.max).toBeLessThanOrEqual(after + 1000);
+
+      // No top-level labels array (data is in {x,y} format)
+      expect(chartCall[1].data.labels).toBeUndefined();
+    });
+
+    test('QA 2.4: y and y1 axes both have maxTicksLimit to prevent tick instability', async () => {
+      const mockData = {
+        data_points: [
+          { timestamp: '2024-01-01T00:00:00Z', total_savings: 10, cumulative_savings: 10, total_upfront: 100, purchase_count: 1 }
+        ]
+      };
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
+
+      await loadSavingsHistory();
+
+      const chartCall = (Chart as unknown as jest.Mock).mock.calls[0];
+      const yTicks = chartCall[1].options.scales.y.ticks;
+      const y1Ticks = chartCall[1].options.scales.y1.ticks;
+
+      expect(typeof yTicks.maxTicksLimit).toBe('number');
+      expect(yTicks.maxTicksLimit).toBeGreaterThan(0);
+      expect(typeof y1Ticks.maxTicksLimit).toBe('number');
+      expect(y1Ticks.maxTicksLimit).toBeGreaterThan(0);
+    });
+
+    test('QA 2.5: y1-axis formatter does not collapse distinct floats to the same integer label', async () => {
+      const mockData = {
+        data_points: [
+          { timestamp: '2024-01-01T00:00:00Z', total_savings: 10, cumulative_savings: 10, total_upfront: 100, purchase_count: 1 }
+        ]
+      };
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
+
+      await loadSavingsHistory();
+
+      const chartCall = (Chart as unknown as jest.Mock).mock.calls[0];
+      const y1Cb = chartCall[1].options.scales.y1.ticks.callback;
+
+      // Two floats that differ in decimal but share the same integer part must
+      // produce distinct labels (QA 2.5).
+      const label1 = y1Cb(0.1) as string;
+      const label2 = y1Cb(0.2) as string;
+      expect(label1).not.toBe(label2);
+
+      // True integers should not carry trailing decimals
+      expect(y1Cb(5)).toBe('$5');
+      expect(y1Cb(0)).toBe('$0');
     });
   });
 
