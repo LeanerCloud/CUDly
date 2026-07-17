@@ -142,16 +142,25 @@ func (h *Handler) marketplaceList(ctx context.Context, req *events.LambdaFunctio
 		return nil, err
 	}
 
+	// purchase_history.term is stored in years (1 or 3); both
+	// computeRemainingMonths and resolveMarketplacePriceSchedule operate in
+	// months. Reject a zero or negative term rather than silently computing
+	// garbage on this money path (no-silent-fallbacks policy).
+	if row.Term <= 0 {
+		return nil, fmt.Errorf("purchase has invalid term %d (expected 1 or 3 years); cannot compute marketplace pricing", row.Term)
+	}
+	termMonths := row.Term * 12
+
 	// Compute actual remaining months from the purchase timestamp and total
 	// term so the default price schedule reflects real remaining value
 	// rather than the full contract term (which overprices older RIs).
-	remainingMonths := computeRemainingMonths(row.Timestamp, row.Term)
+	remainingMonths := computeRemainingMonths(row.Timestamp, termMonths)
 
 	// Validate and normalise the price schedule. Row-total UpfrontCost and the
 	// instance Count are passed so pricing is computed per instance; recurring
 	// (monthly) cost is deliberately excluded because the Marketplace buyer
 	// assumes recurring charges post-transfer (issue #292 money-path review).
-	schedule, err := resolveMarketplacePriceSchedule(body.PriceSchedule, remainingMonths, row.Term, row.Count, row.UpfrontCost)
+	schedule, err := resolveMarketplacePriceSchedule(body.PriceSchedule, remainingMonths, termMonths, row.Count, row.UpfrontCost)
 	if err != nil {
 		return nil, NewClientError(400, err.Error())
 	}
