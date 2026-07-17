@@ -1288,7 +1288,8 @@ func TestHandler_getDashboardSummary_CurrentSavingsZeroWhenNoCommitments(t *test
 			{Service: "RDS", Savings: 300.0},
 		}, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
-	mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return(
+	// No account filter: the all-accounts active fetch path runs.
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return(
 		[]config.PurchaseHistoryRecord{}, nil)
 
 	mockAuth, req := adminDashboardReq(ctx)
