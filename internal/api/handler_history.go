@@ -1018,6 +1018,17 @@ func summarizePurchaseHistory(purchases []config.PurchaseHistoryRecord) HistoryS
 	summary := HistorySummary{TotalPurchases: len(purchases)}
 	for _rvc := range purchases {
 		p := purchases[_rvc]
+		// Revoked commitments are excluded from dollar KPIs regardless of their
+		// status: the provider has cancelled the commitment, so UpfrontCost and
+		// EstimatedSavings no longer represent active spend or realized savings.
+		// They count toward TotalPurchases (for auditability) and TotalRevoked
+		// (so the UI can surface the count), but not TotalCompleted.
+		// GetActivePurchaseHistory already excludes revoked rows via SQL; this
+		// guard handles the GetPurchaseHistoryFiltered path used by History.
+		if p.RevokedAt != nil {
+			summary.TotalRevoked++
+			continue
+		}
 		// Non-completed rows count toward TotalPurchases and their specific
 		// bucket (pending / in-progress / failed / expired / canceled) but
 		// are excluded from the dollar totals — the money hasn't been committed

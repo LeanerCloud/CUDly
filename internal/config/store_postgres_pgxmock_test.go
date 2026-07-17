@@ -1036,6 +1036,8 @@ func TestPGXMock_GetPurchaseHistoryFiltered_NoFilters(t *testing.T) {
 // the full 21-column SELECT including the issue-#290 revocation columns:
 // before this fix the query selected only 17 columns while
 // queryPurchaseHistory scans 21 destinations, so every call failed at Scan.
+// The `revoked_at IS NULL` clause (defect #2 fix) ensures revoked commitments
+// are never returned by this path.
 func TestPGXMock_GetActivePurchaseHistory_Unscoped(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
@@ -1044,7 +1046,7 @@ func TestPGXMock_GetActivePurchaseHistory_Unscoped(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	rows := pgxmock.NewRows(purchaseHistoryCols).AddRow(purchaseHistoryRow(now, "aws", "acct-1")...)
 	mock.ExpectQuery(
-		`SELECT account_id, purchase_id, .*revocation_window_closes_at, revoked_at, revoked_via, support_case_id FROM purchase_history WHERE term > 0 AND timestamp \+ make_interval\(hours => term \* 8760\) >= \$1 ORDER BY timestamp DESC$`,
+		`SELECT account_id, purchase_id, .*revocation_window_closes_at, revoked_at, revoked_via, support_case_id FROM purchase_history WHERE term > 0 AND timestamp \+ make_interval\(hours => term \* 8760\) >= \$1 AND revoked_at IS NULL ORDER BY timestamp DESC$`,
 	).WithArgs(now).WillReturnRows(rows)
 
 	records, err := store.GetActivePurchaseHistory(ctx, now, nil, nil)
@@ -1057,7 +1059,9 @@ func TestPGXMock_GetActivePurchaseHistory_Unscoped(t *testing.T) {
 // account predicate (same shape as GetPurchaseHistoryFiltered, issues
 // #701/#498/#866) composes with the active filter, again with no LIMIT, so the
 // dashboard KPI path and the inventory endpoints get the complete active set
-// for the selected account scope (issue #1140).
+// for the selected account scope (issue #1140). The `revoked_at IS NULL` clause
+// (defect #2 fix) is also present so revoked commitments never appear even for
+// account-scoped queries.
 func TestPGXMock_GetActivePurchaseHistory_AccountScoped(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
@@ -1066,7 +1070,7 @@ func TestPGXMock_GetActivePurchaseHistory_AccountScoped(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	rows := pgxmock.NewRows(purchaseHistoryCols).AddRow(purchaseHistoryRow(now, "aws", "111122223333")...)
 	mock.ExpectQuery(
-		`FROM purchase_history WHERE term > 0 AND timestamp \+ make_interval\(hours => term \* 8760\) >= \$1 AND \(cloud_account_id = ANY\(\$2\) OR \(provider = \$3 AND account_id = ANY\(\$4\)\)\) ORDER BY timestamp DESC$`,
+		`FROM purchase_history WHERE term > 0 AND timestamp \+ make_interval\(hours => term \* 8760\) >= \$1 AND revoked_at IS NULL AND \(cloud_account_id = ANY\(\$2\) OR \(provider = \$3 AND account_id = ANY\(\$4\)\)\) ORDER BY timestamp DESC$`,
 	).WithArgs(now, []string{"acct-uuid-1"}, "aws", []string{"111122223333"}).WillReturnRows(rows)
 
 	records, err := store.GetActivePurchaseHistory(ctx, now,

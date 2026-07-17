@@ -67,12 +67,13 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 
 	totalSavings, byService := summarizeRecommendationsWithCoverage(recommendations, coverageByKey)
 	targetCoverage := h.resolveTargetCoverage(ctx)
-	activeCommitments, committedMonthly, ytdSavings, currentSavingsByService := h.calculateCommitmentMetrics(ctx, accountUUIDs, accountExternalIDsByProvider)
+	activeCommitments, committedMonthly, ytdSavings, currentSavingsByService := h.calculateCommitmentMetrics(ctx, params["provider"], accountUUIDs, accountExternalIDsByProvider)
 
-	// Populate CurrentSavings on each per-service bucket so the Home page
-	// chart can render the green "Current Savings" bars with real data.
-	// Before this fix, CurrentSavings was always zero because the aggregation
-	// in summarizeRecommendationsWithCoverage only filled PotentialSavings.
+	// Populate CurrentSavings on each per-service bucket from actual
+	// purchase_history commitments. Services with recommendations but no
+	// active commitments correctly keep CurrentSavings=0 (absent from
+	// currentSavingsByService). summarizeRecommendationsWithCoverage only
+	// sets PotentialSavings; CurrentSavings is exclusively owned here.
 	for svc, monthlySavings := range currentSavingsByService {
 		entry := byService[svc]
 		entry.CurrentSavings = monthlySavings
@@ -251,6 +252,13 @@ func summarizeRecommendationsWithCoverage( //nolint:gocritic // unnamedResult: r
 		total += scaled
 		svc := byService[rep.rec.Service]
 		svc.PotentialSavings += scaled
+		// CurrentSavings is populated by getDashboardSummary from actual
+		// purchase_history commitments (calculateCommitmentMetrics). It is NOT
+		// derived from recommendations here: doing so would fabricate
+		// CurrentSavings == PotentialSavings for services with no active
+		// commitments (i.e. recommend-but-never-purchased). Services absent
+		// from currentSavingsByService correctly default to 0 per the
+		// dashboard.ts contract.
 		byService[rep.rec.Service] = svc
 	}
 	return total, byService
@@ -559,16 +567,23 @@ func commitmentExpiry(p config.PurchaseHistoryRecord) time.Time {
 }
 
 // isActiveCommitment reports whether the purchase is active: its term has not
-// yet expired as of `now` AND its status is one of the successful terminal
-// states ("" for DB-backed rows where the column is unpersisted, or
-// "completed"). Rows synthesized from failed/canceled/expired executions
-// carry a non-empty status other than "completed" and are excluded so they
-// do not inflate the committed_monthly KPI. The boundary is strict (After):
-// a commitment is active right up to the instant its term ends.
+// yet expired as of `now`, its status is one of the successful terminal states
+// ("" for DB-backed rows where the column is unpersisted, or "completed"), and
+// it has not been revoked. Rows synthesized from failed/canceled/expired
+// executions carry a non-empty status other than "completed" and are excluded
+// so they do not inflate the committed_monthly KPI. The boundary is strict
+// (After): a commitment is active right up to the instant its term ends.
 //
 // Same predicate shared by the dashboard aggregate and the per-commitment
 // inventory endpoint. Status values: see PurchaseHistoryRecord.Status doc.
 func isActiveCommitment(p config.PurchaseHistoryRecord, now time.Time) bool {
+	// Revoked commitments are never active regardless of status or term.
+	// GetActivePurchaseHistory already excludes them in SQL; this is a
+	// defense-in-depth guard for any caller that passes rows from a different
+	// query (e.g. GetPurchaseHistoryFiltered).
+	if p.RevokedAt != nil {
+		return false
+	}
 	// Status is unpersisted (dynamodbav:"-"); DB rows always read back as "".
 	// Synthesized rows set it to "failed", "expired", "canceled", "pending",
 	// "notified", "approved", "running", or "paused". Only "" and "completed"
@@ -598,10 +613,10 @@ func aggregateActiveCommitmentsPerService(purchases []config.PurchaseHistoryReco
 
 // fetchCommitmentPurchases loads the active purchase_history rows that
 // calculateCommitmentMetrics aggregates, applying the pre-resolved account
-// scope. Extracted to keep the parent under the cyclomatic limit (mirrors the
-// appendAccountPredicate / accountMatchesFilters pattern). Returns ok=false on
-// a store error or an explicit zero-account scope so the caller emits zeroed
-// KPIs without querying.
+// scope and an optional provider filter. Extracted to keep the parent under the
+// cyclomatic limit (mirrors the appendAccountPredicate / accountMatchesFilters
+// pattern). Returns ok=false on a store error or an explicit zero-account scope
+// so the caller emits zeroed KPIs without querying.
 //
 //   - non-nil but empty accountUUIDs (no external groups): explicit "scoped to
 //     zero accounts" sentinel (a restricted session whose allowed_accounts match
@@ -613,7 +628,10 @@ func aggregateActiveCommitmentsPerService(purchases []config.PurchaseHistoryReco
 //     row cap, so older-but-still-active 1y/3y commitments cannot be silently
 //     dropped the way a newest-first LIMIT 1000 page dropped them (issue #1140);
 //     the result is bounded by the number of live commitments.
-func (h *Handler) fetchCommitmentPurchases(ctx context.Context, asOf time.Time, accountUUIDs []string, accountExternalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, bool) {
+//   - provider: when non-empty, only purchases for that provider are returned,
+//     mirroring fetchCommitmentRecords' in-memory provider filter so KPIs match
+//     the provider chip selection.
+func (h *Handler) fetchCommitmentPurchases(ctx context.Context, asOf time.Time, provider string, accountUUIDs []string, accountExternalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, bool) {
 	if accountUUIDs != nil && len(accountUUIDs) == 0 && len(accountExternalIDsByProvider) == 0 {
 		return nil, false
 	}
@@ -623,6 +641,17 @@ func (h *Handler) fetchCommitmentPurchases(ctx context.Context, asOf time.Time, 
 		logging.Errorf("dashboard: failed to fetch commitment purchases; KPIs will be zeroed: %v", err)
 		return nil, false
 	}
+
+	if provider != "" {
+		filtered := purchases[:0]
+		for _rvc := range purchases {
+			if purchases[_rvc].Provider == provider {
+				filtered = append(filtered, purchases[_rvc])
+			}
+		}
+		purchases = filtered
+	}
+
 	return purchases, true
 }
 
@@ -631,6 +660,11 @@ func (h *Handler) fetchCommitmentPurchases(ctx context.Context, asOf time.Time, 
 // dual-column filter inputs (see resolveDashboardAccountScope); the
 // scope-to-query mapping (including the zero-account short-circuit for issue
 // #956) lives in fetchCommitmentPurchases.
+//
+// provider, when non-empty, restricts the result set to purchases for that
+// cloud provider so the KPIs match the provider chip selection. This mirrors
+// the recommendations half which passes the same provider param to
+// ListRecommendations.
 //
 // EstimatedSavings on purchase_history rows is always written in monthly units
 // (populated from PurchaseExecution.EstimatedSavings which derives from
@@ -641,9 +675,9 @@ func (h *Handler) fetchCommitmentPurchases(ctx context.Context, asOf time.Time, 
 // EstimatedSavings, derived from aggregateActiveCommitmentsPerService so both
 // this KPI path (committedMonthly) and the per-service chart use exactly the
 // same gate.
-func (h *Handler) calculateCommitmentMetrics(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string) (activeCommitments int, committedMonthly, ytdSavings float64, savingsByService map[string]float64) {
+func (h *Handler) calculateCommitmentMetrics(ctx context.Context, provider string, accountUUIDs []string, accountExternalIDsByProvider map[string][]string) (activeCommitments int, committedMonthly, ytdSavings float64, savingsByService map[string]float64) {
 	currentTime := time.Now()
-	purchases, ok := h.fetchCommitmentPurchases(ctx, currentTime, accountUUIDs, accountExternalIDsByProvider)
+	purchases, ok := h.fetchCommitmentPurchases(ctx, currentTime, provider, accountUUIDs, accountExternalIDsByProvider)
 	if !ok {
 		return 0, 0, 0, nil
 	}

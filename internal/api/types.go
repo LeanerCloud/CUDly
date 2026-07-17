@@ -850,9 +850,9 @@ type HistoryResponse struct {
 // HistorySummary provides aggregate statistics for purchase history.
 // TotalPurchases is the total count of rows (completed + all non-completed
 // states); the per-state counters break it down so the UI can render
-// meaningful totals. Dollar totals count completed rows only: pending,
-// in-progress, failed, expired, and canceled rows are all excluded because
-// no money was committed for any of those states.
+// meaningful totals. Dollar totals count completed, non-revoked rows only:
+// pending, in-progress, failed, expired, canceled, and revoked rows are all
+// excluded because no money is being actively committed for those states.
 type HistorySummary struct {
 	TotalPurchases int `json:"total_purchases"`
 	TotalCompleted int `json:"total_completed"`
@@ -862,9 +862,13 @@ type HistorySummary struct {
 	// Tracked separately from pending and excluded from the dollar totals so an
 	// interrupted approval (issue #621) stays visible without inflating
 	// committed spend/savings.
-	TotalInProgress     int     `json:"total_in_progress"`
-	TotalFailed         int     `json:"total_failed"`
-	TotalExpired        int     `json:"total_expired"`
+	TotalInProgress int `json:"total_in_progress"`
+	TotalFailed     int `json:"total_failed"`
+	TotalExpired    int `json:"total_expired"`
+	// TotalRevoked counts commitments that have been revoked/refunded via
+	// MarkPurchaseRevoked. They are excluded from TotalCompleted and all dollar
+	// totals because the provider has cancelled the commitment.
+	TotalRevoked        int     `json:"total_revoked"`
 	TotalUpfront        float64 `json:"total_upfront"`
 	TotalMonthlySavings float64 `json:"total_monthly_savings"`
 	TotalAnnualSavings  float64 `json:"total_annual_savings"`
