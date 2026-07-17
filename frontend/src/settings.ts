@@ -1257,34 +1257,45 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
         };
         try {
           await api.deleteAccountServiceOverride(accountId, o.provider, o.service);
-          await loadOverridesPanel(accountId, panel, provider);
-          await refreshRecommendationsAfterOverrideChange();
-          // Show a 5-second undo toast. The action closure captures `snapshot`
-          // and re-PUT it if the user clicks Undo before the toast expires.
-          // Each Reset click replaces any prior toast handle so a rapid
-          // double-click cannot stack multiple Undo buttons.
-          showToast({
-            message: `Override for ${o.provider}/${o.service} deleted.`,
-            kind: 'info',
-            timeout: 5_000,
-            actions: [{
-              label: 'Undo',
-              onClick: () => {
-                void (async () => {
-                  try {
-                    await api.saveAccountServiceOverride(accountId, o.provider, o.service, snapshot);
-                    await loadOverridesPanel(accountId, panel, provider);
-                    await refreshRecommendationsAfterOverrideChange();
-                  } catch (undoErr) {
-                    showToast({ message: `Failed to restore override: ${(undoErr as Error).message}`, kind: 'error' });
-                  }
-                })();
-              },
-            }],
-          });
         } catch (err) {
           showToast({ message: `Failed to delete override: ${(err as Error).message}`, kind: 'error' });
+          return;
         }
+        // The server has confirmed the delete. Show the 5-second undo toast
+        // IMMEDIATELY, before the panel reload + recommendations refresh below.
+        // Previously the toast was awaited behind both of those calls, so a
+        // slow recommendations refresh (a full page-worth of API calls) delayed
+        // the Undo affordance long enough that users reported seeing no toast
+        // at all (issue #1415). The snapshot-restore Undo is valid regardless
+        // of the UI refresh, so it must not be gated behind it. Keeping the
+        // failed-delete branch above also stops a refresh error from being
+        // misreported as "Failed to delete override" when the delete succeeded.
+        //
+        // The action closure captures `snapshot` and re-PUTs it if the user
+        // clicks Undo before the toast expires. Each Delete click replaces any
+        // prior toast handle so a rapid double-click cannot stack multiple
+        // Undo buttons.
+        showToast({
+          message: `Override for ${o.provider}/${o.service} deleted.`,
+          kind: 'info',
+          timeout: 5_000,
+          actions: [{
+            label: 'Undo',
+            onClick: () => {
+              void (async () => {
+                try {
+                  await api.saveAccountServiceOverride(accountId, o.provider, o.service, snapshot);
+                  await loadOverridesPanel(accountId, panel, provider);
+                  await refreshRecommendationsAfterOverrideChange();
+                } catch (undoErr) {
+                  showToast({ message: `Failed to restore override: ${(undoErr as Error).message}`, kind: 'error' });
+                }
+              })();
+            },
+          }],
+        });
+        await loadOverridesPanel(accountId, panel, provider);
+        await refreshRecommendationsAfterOverrideChange();
       });
       actionTd.appendChild(resetBtn);
     });

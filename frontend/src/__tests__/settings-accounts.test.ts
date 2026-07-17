@@ -1432,6 +1432,80 @@ describe('Account overrides modal', () => {
       );
     });
 
+    test('Undo toast appears immediately, not gated behind a slow recommendations refresh (issue #1415)', async () => {
+      (api.listAccountServiceOverrides as jest.Mock)
+        .mockResolvedValueOnce([overrideFixture])  // initial render
+        .mockResolvedValue([]);                     // reload after delete
+      (api.deleteAccountServiceOverride as jest.Mock).mockResolvedValue(undefined);
+      mockConfirmDialog.mockResolvedValue(true);
+
+      // Simulate a slow recommendations refresh that has not resolved by the
+      // time we assert. Pre-fix, showToast was awaited behind this call, so a
+      // slow refresh meant the Undo toast never appeared for the user; post-fix
+      // the toast fires right after the delete resolves, independent of it.
+      let resolveRefresh: () => void = () => {};
+      const refreshGate = new Promise<void>(res => { resolveRefresh = res; });
+      mockLoadRecommendations.mockImplementationOnce(() => refreshGate);
+
+      const panel = document.createElement('div');
+      document.body.appendChild(panel);
+      await loadOverridesPanel('acc-1', panel, 'aws');
+
+      const deleteBtn = Array.from(panel.querySelectorAll('button'))
+        .find(b => b.textContent === 'Delete') as HTMLButtonElement;
+      deleteBtn.click();
+
+      // Flush the confirm + delete + panel-reload chain. The recommendations
+      // refresh is still pending (resolveRefresh has NOT been called).
+      for (let i = 0; i < 5; i++) { await new Promise(r => setTimeout(r, 0)); }
+
+      // The Undo toast must already be visible even though the refresh is
+      // still in flight.
+      const undoToast = (mockShowToast.mock.calls.map(c => c[0]) as Array<{
+        kind?: string;
+        message?: string;
+        actions?: Array<{ label: string }>;
+        timeout?: number | null;
+      }>).find(t => t.kind === 'info' && t.message?.includes('aws/rds'));
+      expect(undoToast).toBeDefined();
+      expect(undoToast!.actions?.[0]?.label).toBe('Undo');
+      expect(undoToast!.timeout).toBe(5_000);
+
+      // Let the pending refresh resolve so the async chain completes cleanly.
+      resolveRefresh();
+      for (let i = 0; i < 3; i++) { await new Promise(r => setTimeout(r, 0)); }
+    });
+
+    test('a delete API failure shows an error toast and no Undo (issue #1415)', async () => {
+      (api.listAccountServiceOverrides as jest.Mock)
+        .mockResolvedValueOnce([overrideFixture])
+        .mockResolvedValue([]);
+      (api.deleteAccountServiceOverride as jest.Mock)
+        .mockRejectedValue(new Error('boom'));
+      mockConfirmDialog.mockResolvedValue(true);
+
+      const panel = document.createElement('div');
+      document.body.appendChild(panel);
+      await loadOverridesPanel('acc-1', panel, 'aws');
+
+      const deleteBtn = Array.from(panel.querySelectorAll('button'))
+        .find(b => b.textContent === 'Delete') as HTMLButtonElement;
+      deleteBtn.click();
+      for (let i = 0; i < 5; i++) { await new Promise(r => setTimeout(r, 0)); }
+
+      const toastCalls = mockShowToast.mock.calls.map(c => c[0]) as Array<{
+        kind?: string;
+        message?: string;
+        actions?: unknown[];
+      }>;
+      // The failure surfaces as an error toast with the delete-failure copy.
+      expect(toastCalls.some(t => t.kind === 'error' && t.message?.includes('Failed to delete override'))).toBe(true);
+      // No info/Undo toast — nothing was deleted, so there is nothing to undo.
+      expect(toastCalls.some(t => t.kind === 'info' && !!t.actions)).toBe(false);
+      // A failed delete must not trigger the recommendations refresh.
+      expect(mockLoadRecommendations).not.toHaveBeenCalled();
+    });
+
     test('let-it-expire path: override is permanently gone after toast timeout', async () => {
       (api.listAccountServiceOverrides as jest.Mock)
         .mockResolvedValueOnce([overrideFixture])

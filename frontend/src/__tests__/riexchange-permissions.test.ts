@@ -30,6 +30,10 @@ jest.mock('../state', () => ({
   getRiExchangeColumnFilters: jest.fn(() => ({})),
   setRiExchangeColumnFilter: jest.fn(),
   clearAllRiExchangeColumnFilters: jest.fn(),
+  // Active Convertible RIs column-filter slice (issue #1414).
+  getActiveRiColumnFilters: jest.fn(() => ({})),
+  setActiveRiColumnFilter: jest.fn(),
+  clearAllActiveRiColumnFilters: jest.fn(),
 }));
 
 import * as api from '../api';
