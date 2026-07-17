@@ -340,10 +340,16 @@ describe('Recommendations checkbox + row-click gating for viewer role (issue #86
     // Header must have a leading th.checkbox-col (empty for viewers, aligns the chevron column).
     const headerCheckboxCols = table!.querySelectorAll('thead tr th.checkbox-col');
     expect(headerCheckboxCols.length).toBe(1);
+    // The leading checkbox-col must be the FIRST header cell (position check).
+    const firstHeaderTh = table!.querySelector('thead tr th:first-child');
+    expect(firstHeaderTh?.classList.contains('checkbox-col')).toBe(true);
 
     // Summary row must have a td.checkbox-col at the far-left containing the chevron button.
     const summaryCheckboxCols = summaryRow!.querySelectorAll('td.checkbox-col');
     expect(summaryCheckboxCols.length).toBe(1);
+    // The leading checkbox-col must be the FIRST summary cell (position check).
+    const firstSummaryTd = summaryRow!.querySelector('td:first-child');
+    expect(firstSummaryTd?.classList.contains('checkbox-col')).toBe(true);
 
     // The chevron button lives inside the leading td.checkbox-col, not inline in the content.
     const chevron = summaryCheckboxCols[0]!.querySelector<HTMLButtonElement>('.rec-cell-chevron');
@@ -522,6 +528,10 @@ describe('Recommendations SP-group child-row checkbox gating (issue #135 + #869)
     // checkbox input or action buttons appear for readonly sessions.
     for (const row of Array.from(childRows)) {
       expect(row.querySelectorAll('td.checkbox-col').length).toBe(1);
+      // The checkbox-col must be the FIRST cell and contain no text (position + empty-content check).
+      const firstTd = row.querySelector('td:first-child');
+      expect(firstTd?.classList.contains('checkbox-col')).toBe(true);
+      expect(firstTd?.textContent?.trim()).toBe('');
       expect(row.querySelectorAll('input[data-rec-id]').length).toBe(0);
     }
   });
