@@ -6,7 +6,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"fmt"
-	"math/big"
 	"sync"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
@@ -99,10 +98,19 @@ func (s *AzureKeyVaultSigner) resolveOnce(ctx context.Context) {
 			s.err = fmt.Errorf("oidc: azure keyvault returned incomplete EC key (missing X or Y)")
 			return
 		}
-		ecPub := &ecdsa.PublicKey{
-			Curve: elliptic.P256(),
-			X:     new(big.Int).SetBytes(resp.Key.X),
-			Y:     new(big.Int).SetBytes(resp.Key.Y),
+		// JWK coordinates may omit leading zeros; right-align each into 32 bytes.
+		if len(resp.Key.X) > 32 || len(resp.Key.Y) > 32 {
+			s.err = fmt.Errorf("oidc: azure keyvault EC key coordinate exceeds 32 bytes")
+			return
+		}
+		var uncompressed [65]byte
+		uncompressed[0] = 0x04
+		copy(uncompressed[1+32-len(resp.Key.X):33], resp.Key.X)
+		copy(uncompressed[33+32-len(resp.Key.Y):65], resp.Key.Y)
+		ecPub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), uncompressed[:])
+		if err != nil {
+			s.err = fmt.Errorf("oidc: azure keyvault parse EC public key: %w", err)
+			return
 		}
 		kid, err := ComputeKeyID(ecPub)
 		if err != nil {

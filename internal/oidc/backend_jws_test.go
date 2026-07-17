@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"testing"
 
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
@@ -93,13 +94,19 @@ func (f *fakeAzureKVClient) Sign(_ context.Context, _, _ string, params azkeys.S
 }
 
 func (f *fakeAzureKVClient) GetKey(_ context.Context, _, _ string, _ *azkeys.GetKeyOptions) (azkeys.GetKeyResponse, error) {
+	// Use ECDH() to get the uncompressed point bytes (avoids deprecated X/Y fields).
+	ecdhPub, err := f.key.PublicKey.ECDH()
+	if err != nil {
+		return azkeys.GetKeyResponse{}, fmt.Errorf("fake azure client: ECDH: %w", err)
+	}
+	raw := ecdhPub.Bytes() // 0x04 || X (32 bytes) || Y (32 bytes) for P-256
 	crv := azkeys.CurveNameP256
 	kty := azkeys.KeyTypeEC
 	jwk := &azkeys.JSONWebKey{
 		Kty: &kty,
 		Crv: &crv,
-		X:   f.key.X.Bytes(),
-		Y:   f.key.Y.Bytes(),
+		X:   raw[1:33],
+		Y:   raw[33:65],
 	}
 	return azkeys.GetKeyResponse{KeyBundle: azkeys.KeyBundle{Key: jwk}}, nil
 }
