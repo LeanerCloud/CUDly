@@ -32,7 +32,7 @@ const maxRecommendationPages = 20
 // from before --rec-lookback-period existed.
 const DefaultRecLookbackPeriod = "7d"
 
-// CostExplorerAPI defines the interface for Cost Explorer operations
+// CostExplorerAPI defines the interface for Cost Explorer operations.
 type CostExplorerAPI interface {
 	GetReservationPurchaseRecommendation(ctx context.Context, params *costexplorer.GetReservationPurchaseRecommendationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationPurchaseRecommendationOutput, error)
 	GetSavingsPlansPurchaseRecommendation(ctx context.Context, params *costexplorer.GetSavingsPlansPurchaseRecommendationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetSavingsPlansPurchaseRecommendationOutput, error)
@@ -46,11 +46,14 @@ type CostExplorerAPI interface {
 	GetCostAndUsage(ctx context.Context, params *costexplorer.GetCostAndUsageInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetCostAndUsageOutput, error)
 }
 
-// Client wraps the AWS Cost Explorer client for RI recommendations
+// Client wraps the AWS Cost Explorer client for RI recommendations.
 type Client struct {
 	costExplorerClient CostExplorerAPI
 	region             string
-	rateLimiter        *RateLimiter
+
+	// newRateLimiter is called once per API call (not shared across goroutines).
+	// Tests can replace it with a factory returning a faster limiter.
+	newRateLimiter func() *RateLimiter
 
 	// ec2API is the EC2 client used to build the DescribeInstanceTypes paginator.
 	// Populated by NewClient from aws.Config; nil when created via NewClientWithAPI.
@@ -61,7 +64,7 @@ type Client struct {
 	// for hermetic tests. When nil, instanceTypeLookup returns (0,0).
 	instanceTypePagerFactory func() InstanceTypePager
 
-	// skuCatalog caches the per-instance-type vCPU/memory catalogue, fetched
+	// skuCatalog caches the per-instance-type vCPU/memory catalog, fetched
 	// lazily once per Client lifetime via sync.Once (one DescribeInstanceTypes
 	// fan-out per scheduler tick).
 	skuCatalog skuCatalog
@@ -71,18 +74,18 @@ type Client struct {
 	recLookbackPeriod string
 }
 
-// NewClient creates a new recommendations client
-func NewClient(cfg aws.Config) *Client {
+// NewClient creates a new recommendations client.
+func NewClient(cfg *aws.Config) *Client {
 	// Force Cost Explorer to use us-east-1 with explicit endpoint
 	ceConfig := cfg.Copy()
 	ceConfig.Region = "us-east-1"
 	ceConfig.BaseEndpoint = aws.String("https://ce.us-east-1.amazonaws.com")
 
-	ec2Client := awsec2.NewFromConfig(cfg)
+	ec2Client := awsec2.NewFromConfig(*cfg)
 	return &Client{
 		costExplorerClient: costexplorer.NewFromConfig(ceConfig),
 		region:             cfg.Region,
-		rateLimiter:        NewRateLimiter(),
+		newRateLimiter:     NewRateLimiter,
 		ec2API:             ec2Client,
 		// Factory wraps the EC2 client so the paginator is created lazily
 		// on the first EC2 recommendation parse (not at construction time).
@@ -92,19 +95,19 @@ func NewClient(cfg aws.Config) *Client {
 	}
 }
 
-// NewClientWithAPI creates a new recommendations client with a custom Cost Explorer API (for testing)
+// NewClientWithAPI creates a new recommendations client with a custom Cost Explorer API (for testing).
 func NewClientWithAPI(api CostExplorerAPI, region string) *Client {
 	return &Client{
 		costExplorerClient: api,
 		region:             region,
-		rateLimiter:        NewRateLimiter(),
+		newRateLimiter:     NewRateLimiter,
 		// ec2API left nil: instanceTypeLookup falls back to VCPU=0/MemoryGB=0
 		// unless the caller sets instanceTypePagerFactory.
 	}
 }
 
 // SetInstanceTypePagerFactory injects a pager factory for the instance-type
-// SKU catalogue. Must be called before the first GetRecommendations call.
+// SKU catalog. Must be called before the first GetRecommendations call.
 // Intended for tests that need to verify the one-fetch-per-lifetime invariant
 // without hitting AWS.
 func (c *Client) SetInstanceTypePagerFactory(f func() InstanceTypePager) {
@@ -112,9 +115,9 @@ func (c *Client) SetInstanceTypePagerFactory(f func() InstanceTypePager) {
 }
 
 // instanceTypeLookup returns the cached SKU entry for instanceType.
-// On the first call the catalogue is built by calling the pager factory.
-// ok=false when no factory is configured, the catalogue fetch failed, or
-// the instance type was not in the catalogue -- the caller falls back to
+// On the first call the catalog is built by calling the pager factory.
+// ok=false when no factory is configured, the catalog fetch failed, or
+// the instance type was not in the catalog - the caller falls back to
 // VCPU=0/MemoryGB=0 (graceful-degradation contract from Azure PR #810).
 func (c *Client) instanceTypeLookup(ctx context.Context, instanceType string) (instanceTypeSKUEntry, bool) {
 	if c.instanceTypePagerFactory == nil {
@@ -130,7 +133,7 @@ func (c *Client) SetRecLookbackPeriod(period string) {
 	c.recLookbackPeriod = period
 }
 
-// GetRecommendations fetches Reserved Instance recommendations for any service
+// GetRecommendations fetches Reserved Instance recommendations for any service.
 func (c *Client) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
 	// Handle Savings Plans separately — they use a different Cost Explorer API
 	// (GetSavingsPlansPurchaseRecommendation, not GetReservationPurchaseRecommendation).
@@ -138,7 +141,7 @@ func (c *Client) GetRecommendations(ctx context.Context, params common.Recommend
 	// via the IsSavingsPlan family predicate so the dispatch keeps working as
 	// callers migrate.
 	if common.IsSavingsPlan(params.Service) {
-		return c.getSavingsPlansRecommendations(ctx, params)
+		return c.getSavingsPlansRecommendations(ctx, &params)
 	}
 
 	input := &costexplorer.GetReservationPurchaseRecommendationInput{
@@ -204,12 +207,12 @@ func (c *Client) fetchRIPageWithRetry(
 	ctx context.Context,
 	input *costexplorer.GetReservationPurchaseRecommendationInput,
 ) (*costexplorer.GetReservationPurchaseRecommendationOutput, error) {
-	c.rateLimiter.Reset()
+	rl := c.newRateLimiter()
 	var result *costexplorer.GetReservationPurchaseRecommendationOutput
 	var err error
 
 	for {
-		if waitErr := c.rateLimiter.Wait(ctx); waitErr != nil {
+		if waitErr := rl.Wait(ctx); waitErr != nil {
 			return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
 		}
 
@@ -218,13 +221,13 @@ func (c *Client) fetchRIPageWithRetry(
 		}
 		result, err = c.costExplorerClient.GetReservationPurchaseRecommendation(ctx, input)
 		concurrency.Release(ctx)
-		if !c.rateLimiter.ShouldRetry(err) {
+		if !rl.ShouldRetry(err) {
 			break
 		}
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to get RI recommendations after %d retries: %w", c.rateLimiter.GetRetryCount(), err)
+		return nil, fmt.Errorf("failed to get RI recommendations after %d retries: %w", rl.GetRetryCount(), err)
 	}
 
 	return result, nil
@@ -345,7 +348,7 @@ func (c *Client) GetRecommendationsForService(ctx context.Context, service commo
 // the canonical order EC2 → RDS → ElastiCache → OpenSearch → Redshift after
 // all goroutines finish so order-sensitive consumers stay stable.
 //
-// Behaviour change vs the previous sequential loop: per-service errors are
+// Behavior change vs the previous sequential loop: per-service errors are
 // now logged at WARN via mergeServiceResults — the previous loop swallowed
 // them silently with a bare `continue`, leaving operators no signal when a
 // single service was misbehaving. Mirrors the Azure parallelisation in
@@ -401,7 +404,12 @@ func (c *Client) GetAllRecommendations(ctx context.Context) ([]common.Recommenda
 	// Wait, propagate ctx cancellation so callers can distinguish "all six
 	// services completed (with possibly per-service errors)" from "the
 	// parent ctx was canceled mid-fan-out".
-	_ = g.Wait()
+	if waitErr := g.Wait(); waitErr != nil {
+		// This branch is unreachable: every goroutine above returns nil.
+		// The panic makes the invariant explicit and visible to the race
+		// detector rather than silently discarding an unexpected error.
+		panic("errgroup returned non-nil despite all goroutines returning nil: " + waitErr.Error())
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

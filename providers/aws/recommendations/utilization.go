@@ -102,9 +102,9 @@ func buildUtilizations(agg map[string]*riAccumulator) []RIUtilization {
 // across the outbound SDK call, matching fetchRIPageWithRetry, so callers
 // running under a semaphore-carrying context stay inside the global IO cap.
 func (c *Client) fetchUtilizationPage(ctx context.Context, input *costexplorer.GetReservationUtilizationInput) (*costexplorer.GetReservationUtilizationOutput, error) {
-	c.rateLimiter.Reset()
+	rl := c.newRateLimiter()
 	for {
-		if waitErr := c.rateLimiter.Wait(ctx); waitErr != nil {
+		if waitErr := rl.Wait(ctx); waitErr != nil {
 			return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
 		}
 
@@ -113,7 +113,7 @@ func (c *Client) fetchUtilizationPage(ctx context.Context, input *costexplorer.G
 		}
 		result, err := c.costExplorerClient.GetReservationUtilization(ctx, input)
 		concurrency.Release(ctx)
-		if !c.rateLimiter.ShouldRetry(err) {
+		if !rl.ShouldRetry(err) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to get reservation utilization: %w", err)
 			}

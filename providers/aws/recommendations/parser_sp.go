@@ -27,7 +27,7 @@ import (
 //  2. Otherwise, fall back to the legacy IncludeSPTypes/ExcludeSPTypes
 //     filter mechanism (for callers passing the umbrella ServiceSavingsPlans
 //     slug or for direct CLI invocations that haven't been migrated yet).
-func (c *Client) getSavingsPlansRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *Client) getSavingsPlansRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	planTypes := planTypesForParams(params)
 
 	if len(planTypes) == 0 {
@@ -85,7 +85,7 @@ func (c *Client) getSavingsPlansRecommendations(ctx context.Context, params comm
 func (c *Client) fetchSPAllPages(
 	ctx context.Context,
 	input *costexplorer.GetSavingsPlansPurchaseRecommendationInput,
-	params common.RecommendationParams,
+	params *common.RecommendationParams,
 	planType types.SupportedSavingsPlansType,
 ) ([]common.Recommendation, error) {
 	var allRecs []common.Recommendation
@@ -132,12 +132,12 @@ func (c *Client) fetchSPPageWithRetry(
 	ctx context.Context,
 	input *costexplorer.GetSavingsPlansPurchaseRecommendationInput,
 ) (*costexplorer.GetSavingsPlansPurchaseRecommendationOutput, error) {
-	c.rateLimiter.Reset()
+	rl := c.newRateLimiter()
 	var result *costexplorer.GetSavingsPlansPurchaseRecommendationOutput
 	var err error
 
 	for {
-		if waitErr := c.rateLimiter.Wait(ctx); waitErr != nil {
+		if waitErr := rl.Wait(ctx); waitErr != nil {
 			return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
 		}
 
@@ -146,7 +146,7 @@ func (c *Client) fetchSPPageWithRetry(
 		}
 		result, err = c.costExplorerClient.GetSavingsPlansPurchaseRecommendation(ctx, input)
 		concurrency.Release(ctx)
-		if !c.rateLimiter.ShouldRetry(err) {
+		if !rl.ShouldRetry(err) {
 			break
 		}
 	}
@@ -158,10 +158,10 @@ func (c *Client) fetchSPPageWithRetry(
 	return result, nil
 }
 
-// parseSavingsPlansRecommendations converts Savings Plans recommendations
+// parseSavingsPlansRecommendations converts Savings Plans recommendations.
 func (c *Client) parseSavingsPlansRecommendations(
 	spRec *types.SavingsPlansPurchaseRecommendation,
-	params common.RecommendationParams,
+	params *common.RecommendationParams,
 	planType types.SupportedSavingsPlansType,
 ) []common.Recommendation {
 	var recommendations []common.Recommendation
@@ -220,7 +220,7 @@ func extractEC2SPFields(planType types.SupportedSavingsPlansType, detail *types.
 
 func (c *Client) parseSavingsPlanDetail(
 	detail *types.SavingsPlansPurchaseRecommendationDetail,
-	params common.RecommendationParams,
+	params *common.RecommendationParams,
 	planType types.SupportedSavingsPlansType,
 ) *common.Recommendation {
 	hourlyCommitment := parseOptionalFloat("HourlyCommitmentToPurchase", detail.HourlyCommitmentToPurchase)
@@ -280,7 +280,7 @@ func (c *Client) parseSavingsPlanDetail(
 	//     frontend can distinguish "known-zero" from "data not provided".
 	//   - partial-upfront / no-upfront: recurring ≈ HourlyCommitmentToPurchase
 	//     × 730. For partial-upfront this slightly over-counts (it includes the
-	//     amortised upfront portion), but AWS CE does not expose the recurring-
+	//     amortized upfront portion), but AWS CE does not expose the recurring-
 	//     only hourly rate directly, so this is the best available approximation.
 	//   - nil: HourlyCommitmentToPurchase was absent from the API response
 	//     (should not happen for well-formed CE responses, but handled defensively).
@@ -327,7 +327,7 @@ func (c *Client) parseSavingsPlanDetail(
 // otherwise it falls back to the legacy IncludeSPTypes/ExcludeSPTypes filter.
 // See the getSavingsPlansRecommendations docstring for the full resolution
 // order.
-func planTypesForParams(params common.RecommendationParams) []types.SupportedSavingsPlansType {
+func planTypesForParams(params *common.RecommendationParams) []types.SupportedSavingsPlansType {
 	if pt, ok := planTypeForServiceSlug(params.Service); ok {
 		return []types.SupportedSavingsPlansType{pt}
 	}
@@ -370,10 +370,21 @@ func serviceSlugForPlanType(pt types.SupportedSavingsPlansType) common.ServiceTy
 	return common.ServiceSavingsPlans
 }
 
+// normalizeFilterSet lowercases each entry in filters and returns them as a
+// set (map[string]bool). Extracted from getFilteredPlanTypes so the function
+// literal does not capture outer variables (gocritic unlambda).
+func normalizeFilterSet(filters []string) map[string]bool {
+	result := make(map[string]bool, len(filters))
+	for _, f := range filters {
+		result[strings.ToLower(f)] = true
+	}
+	return result
+}
+
 // getFilteredPlanTypes returns the list of Savings Plan types to query based
 // on include/exclude filters. Iterates a fixed-order slice rather than a map
 // so the returned order is deterministic — downstream "first plan type wins"
-// behaviour and test assertions can rely on it.
+// behavior and test assertions can rely on it.
 func getFilteredPlanTypes(includeSPTypes, excludeSPTypes []string) []types.SupportedSavingsPlansType {
 	allPlanTypes := []struct {
 		name string
@@ -385,21 +396,12 @@ func getFilteredPlanTypes(includeSPTypes, excludeSPTypes []string) []types.Suppo
 		{"database", types.SupportedSavingsPlansTypeDatabaseSp},
 	}
 
-	// Normalize filter values to lowercase
-	normalizeFilters := func(filters []string) map[string]bool {
-		result := make(map[string]bool)
-		for _, f := range filters {
-			result[strings.ToLower(f)] = true
-		}
-		return result
-	}
-
-	includeMap := normalizeFilters(includeSPTypes)
-	excludeMap := normalizeFilters(excludeSPTypes)
+	includeMap := normalizeFilterSet(includeSPTypes)
+	excludeMap := normalizeFilterSet(excludeSPTypes)
 
 	var result []types.SupportedSavingsPlansType
 
-	// If include list is specified, only include those types
+	// If include list is specified, only include those types.
 	if len(includeMap) > 0 {
 		for _, item := range allPlanTypes {
 			if includeMap[item.name] && !excludeMap[item.name] {
@@ -407,7 +409,7 @@ func getFilteredPlanTypes(includeSPTypes, excludeSPTypes []string) []types.Suppo
 			}
 		}
 	} else {
-		// Include all types except those in the exclude list
+		// Include all types except those in the exclude list.
 		for _, item := range allPlanTypes {
 			if !excludeMap[item.name] {
 				result = append(result, item.typ)

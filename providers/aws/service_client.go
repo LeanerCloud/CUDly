@@ -66,7 +66,7 @@ type RecommendationsClientAdapter struct {
 // NewRecommendationsClient creates a new recommendations client
 func NewRecommendationsClient(cfg aws.Config) provider.RecommendationsClient {
 	return &RecommendationsClientAdapter{
-		client: recommendations.NewClient(cfg),
+		client: recommendations.NewClient(&cfg),
 	}
 }
 
@@ -184,7 +184,7 @@ func (r *RecommendationsClientAdapter) SetRecLookbackPeriod(period string) {
 // (needed for GetRIUtilization which is not part of the generic provider interface).
 func NewRecommendationsClientDirect(cfg aws.Config) *RecommendationsClientAdapter {
 	return &RecommendationsClientAdapter{
-		client: recommendations.NewClient(cfg),
+		client: recommendations.NewClient(&cfg),
 	}
 }
 
