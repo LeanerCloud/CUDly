@@ -172,9 +172,11 @@ type StoreInterface interface {
 	// across providers (aws/123 vs azure/123) from leaking the wrong rows.
 	GetPurchaseHistoryFiltered(ctx context.Context, filter PurchaseHistoryFilter) ([]PurchaseHistoryRecord, error)
 	// GetPurchaseHistoryByPurchaseID returns the single purchase_history row
-	// whose purchase_id matches. Returns (nil, nil) when no row is found.
-	// Used by the revoke endpoint to load the record before calling the
-	// provider cancel API (issue #290).
+	// whose purchase_id matches (AWS ReservedInstancesId / Azure reservation
+	// ID). Returns (nil, nil) when no row is found. Used by the revoke
+	// endpoint to load the record before calling the provider cancel API
+	// (issue #290) and by the marketplace-list handler to validate
+	// offering_class and look up the cloud account (issue #292).
 	GetPurchaseHistoryByPurchaseID(ctx context.Context, purchaseID string) (*PurchaseHistoryRecord, error)
 	// MarkPurchaseRevoked stamps revoked_at, revoked_via, and optionally
 	// support_case_id on a purchase_history row identified by purchase_id.
@@ -208,6 +210,32 @@ type StoreInterface interface {
 	// the Azure Return call succeeded but MarkPurchaseRevoked failed; the
 	// finalize_revocations scheduled sweep calls this to retry the DB write.
 	GetPurchaseHistoryInFlight(ctx context.Context) ([]*PurchaseHistoryRecord, error)
+
+	// UpdatePurchaseHistoryListing stamps the AWS marketplace listing_id and
+	// listing_state onto a purchase_history row. Called after
+	// CreateReservedInstancesListing succeeds (listing_state="active") and
+	// on subsequent poll/cancel transitions (issue #292).
+	UpdatePurchaseHistoryListing(ctx context.Context, purchaseID, listingID, listingState string) error
+
+	// StampOfferingClass writes the offering_class value to a purchase_history
+	// row identified by purchase_id. Called by the marketplace-list handler
+	// when offering_class is absent in the DB (pre-migration 000087 rows and
+	// externally-created Standard RIs): after fetching the class from AWS
+	// DescribeReservedInstances it is persisted so subsequent requests do not
+	// incur an extra AWS API call.
+	StampOfferingClass(ctx context.Context, purchaseID, offeringClass string) error
+
+	// ClaimMarketplaceListingSlot atomically reserves the marketplace-listing
+	// slot for a purchase_history row so two concurrent marketplace-list
+	// requests cannot both proceed to create a duplicate AWS listing (issue
+	// #292). It transitions listing_state to ListingStatePending only when the
+	// row is not already listed or mid-listing, and reports whether this call
+	// won the claim: (true, nil) means the caller reserved the slot and must
+	// then persist the real listing on success or release the slot back to its
+	// prior state on failure; (false, nil) means another request already holds
+	// an active or pending listing (the caller maps this to a 409). Modeled on
+	// FlipPurchaseRevocationInFlight.
+	ClaimMarketplaceListingSlot(ctx context.Context, purchaseID string) (bool, error)
 
 	// RI Exchange history
 	SaveRIExchangeRecord(ctx context.Context, record *RIExchangeRecord) error

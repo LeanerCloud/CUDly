@@ -141,9 +141,11 @@ export {
   runPlannedPurchase,
   deletePlannedPurchase,
   createPlannedPurchases,
-  revokePurchase
+  revokePurchase,
+  createMarketplaceListing,
+  cancelMarketplaceListing
 } from './purchases';
-export type { RetryPurchaseResult, RevokePurchaseResult } from './purchases';
+export type { RetryPurchaseResult, RevokePurchaseResult, MarketplacePriceTier, MarketplaceListResult } from './purchases';
 
 // Re-export users functions
 export {

@@ -21,8 +21,9 @@ func TestDefaultPermissions(t *testing.T) {
 		// + cancel-own:purchases (issue #46)
 		// + retry-own:purchases (issue #47)
 		// + revoke-own:purchases (issue #290)
-		// NOTE: approve-own was removed (issue #1407, four-eyes) = 11.
-		assert.Len(t, perms, 11)
+		// + sell-own:purchases (issue #292)
+		// NOTE: approve-own was removed (issue #1407, four-eyes) = 12.
+		assert.Len(t, perms, 12)
 
 		actions := make(map[string]bool)
 		for _, p := range perms {
@@ -44,6 +45,8 @@ func TestDefaultPermissions(t *testing.T) {
 		// user permission. Self-approval requires an explicit custom-group grant.
 		assert.False(t, actions[ActionApproveOwn+":"+ResourcePurchases],
 			"approve-own must not be in DefaultUserPermissions (four-eyes, issue #1407)")
+		// sell-own:purchases must be a default user permission (issue #292).
+		assert.True(t, actions[ActionSellOwn+":"+ResourcePurchases])
 	})
 
 	t.Run("DefaultReadOnlyPermissions returns readonly access", func(t *testing.T) {

@@ -188,6 +188,12 @@ func (r *Router) registerRoutes() {
 		// expected_refund_amount in the POST /revoke body.
 		{PathPrefix: "/api/purchases/", PathSuffix: "/revoke/calculate", Method: "GET", Handler: r.calculateRevokeHandler, Auth: AuthUser},
 
+		// RI Marketplace listing (issue #292). Session-authed only; the
+		// handler enforces the sell-any/sell-own RBAC matrix and checks
+		// that the purchase_history row has offering_class='standard'.
+		{PathPrefix: "/api/purchases/", PathSuffix: "/marketplace-list", Method: "POST", Handler: r.marketplaceListHandler, Auth: AuthUser},
+		{PathPrefix: "/api/purchases/", PathSuffix: "/marketplace-cancel", Method: "POST", Handler: r.marketplaceCancelHandler, Auth: AuthUser},
+
 		// Planned purchases endpoints (must come before generic /api/purchases/{id}).
 		// All now AuthUser (PR-A of #660): handler-level requirePermission
 		// is the actual gate for pause/resume/run/delete.
@@ -593,6 +599,14 @@ func (r *Router) revokePurchaseHandler(ctx context.Context, req *events.LambdaFu
 
 func (r *Router) calculateRevokeHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.calculateAzureRevoke(ctx, req, params["id"])
+}
+
+func (r *Router) marketplaceListHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.marketplaceList(ctx, req, params["id"])
+}
+
+func (r *Router) marketplaceCancelHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.marketplaceCancel(ctx, req, params["id"])
 }
 
 func (r *Router) getPlannedPurchasesHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
