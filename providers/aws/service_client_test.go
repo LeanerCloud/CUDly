@@ -48,7 +48,6 @@ func (m *mockCostExplorerClient) GetCostAndUsage(_ context.Context, _ *costexplo
 	return &costexplorer.GetCostAndUsageOutput{}, nil
 }
 
-
 // newTestRecommendationsClient creates a recommendations client with a mock CE client
 func newTestRecommendationsClient(ce *mockCostExplorerClient) *recommendations.Client {
 	return recommendations.NewClientWithAPI(ce, "us-east-1")
