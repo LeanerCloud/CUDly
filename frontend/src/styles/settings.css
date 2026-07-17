@@ -81,6 +81,7 @@
 
 .setting-row {
     display: flex;
+    flex-wrap: wrap; /* allow inline range-error to drop below the label+input row */
     justify-content: space-between;
     align-items: center;
     padding: 1rem 0;
@@ -89,6 +90,13 @@
 
 .setting-row:last-child {
     border-bottom: none;
+}
+
+/* Inline range-error inserted after .setting-input (outside the flex row) must
+   span the full width so it appears below the label+input pair, not beside it.
+   Issue #1411. */
+.setting-row > .field-error {
+    flex-basis: 100%;
 }
 
 .setting-info {
