@@ -1225,3 +1225,48 @@ func TestHandler_getServiceConfig_ViewConfigPermission_Enforced(t *testing.T) {
 	assert.Equal(t, 403, ce.code, "expected 403, got %d", ce.code)
 	mockStore.AssertNotCalled(t, "GetServiceConfig", mock.Anything, mock.Anything, mock.Anything)
 }
+
+// TestHandler_updateConfig_RequiresUpdateConfigPermission verifies that the
+// settings write endpoint (PUT /api/config) returns 403 to a caller who holds
+// view:config (sufficient for GET) but not update:config. The frontend's
+// applyReadOnlySettings already hides Save/Reset for such users, but the
+// backend must reject any attempt to write config regardless of the UI gate
+// (issues #1401, #1410: non-admin settings RBAC fix).
+func TestHandler_updateConfig_RequiresUpdateConfigPermission(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	// A non-admin user who was granted view:config (by migration 000088) but
+	// not update:config. This mirrors the Standard-Users permission set after
+	// the fix: they can read settings (GET) but cannot write them (PUT).
+	userSession := &Session{
+		UserID: "dddddddd-dddd-dddd-dddd-dddddddddddd",
+		Email:  "standard@example.com",
+	}
+	mockAuth.On("ValidateSession", ctx, "user-token").Return(userSession, nil)
+	// Grant view:config so the session itself is valid (GET would succeed).
+	mockAuth.On("HasPermissionAPI", ctx, userSession.UserID, "view", "config").Return(true, nil).Maybe()
+	// Deny update:config — this is the permission PUT /api/config checks.
+	mockAuth.On("HasPermissionAPI", ctx, userSession.UserID, "update", "config").Return(false, nil)
+	// Deny admin:* so requireAdmin also fails (belt-and-suspenders: the route
+	// is AuthAdmin-gated, but the handler adds its own requirePermission check).
+	mockAuth.On("HasPermissionAPI", ctx, userSession.UserID, mock.AnythingOfType("string"), mock.AnythingOfType("string")).
+		Return(false, nil).Maybe()
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer user-token"},
+		Body:    `{"default_term": 1}`,
+	}
+	result, err := handler.updateConfig(ctx, req)
+	require.Error(t, err, "updateConfig must be rejected for a user who lacks update:config")
+	assert.Nil(t, result)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError, got %T: %v", err, err)
+	assert.Equal(t, 403, ce.code, "expected 403, got %d", ce.code)
+	// The store must never be reached — the permission check fires first.
+	mockStore.AssertNotCalled(t, "GetGlobalConfig", mock.Anything)
+	mockStore.AssertNotCalled(t, "SaveGlobalConfig", mock.Anything, mock.Anything)
+}

@@ -59,12 +59,15 @@ describe('permissions', () => {
       // Issue #1407 (four-eyes): approve-own is intentionally absent from the
       // standard user permission set. Self-approval requires an explicit custom
       // group grant; ownership alone does not confer the right to approve.
+      // Issue #1401: view:config added (migration 000088) so non-admin users can
+      // read settings via GET /api/config and GET /api/ri-exchange/config.
       const perms = getRolePermissions('user');
       const expected = [
         'view:recommendations',
         'view:plans',
         'view:purchases',
         'view:history',
+        'view:config',  // #1401: allows reading settings (not writing)
         'create:plans',
         'update:plans',
         'delete:plans',
@@ -81,17 +84,22 @@ describe('permissions', () => {
       expected.forEach((p) => expect(perms.has(p)).toBe(true));
       // approve-own must NOT be in the standard user permission set (issue #1407).
       expect(perms.has('approve-own:purchases')).toBe(false);
+      // update:config must NOT be granted; only admins can write settings.
+      expect(perms.has('update:config')).toBe(false);
       expect(perms.size).toBe(expected.length);
     });
 
-    test('readonly role grants only view on recommendations/plans/history', () => {
+    test('readonly role grants view on recommendations/plans/history/config', () => {
+      // Issue #1401: view:config added so read-only users can view settings.
       const perms = getRolePermissions('readonly');
       expect(perms.has('view:recommendations')).toBe(true);
       expect(perms.has('view:plans')).toBe(true);
       expect(perms.has('view:history')).toBe(true);
+      expect(perms.has('view:config')).toBe(true);   // #1401 addition
       expect(perms.has('view:purchases')).toBe(false);
       expect(perms.has('create:plans')).toBe(false);
-      expect(perms.size).toBe(3);
+      expect(perms.has('update:config')).toBe(false); // read-only, not write
+      expect(perms.size).toBe(4);
     });
 
     test('unknown role grants no permissions', () => {

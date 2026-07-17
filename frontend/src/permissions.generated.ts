@@ -28,6 +28,7 @@ export const USER_PERMS: ReadonlySet<string> = new Set([
   'sell-own:purchases',
   'update:plans',
   'update:purchases',
+  'view:config',
   'view:history',
   'view:plans',
   'view:purchases',
@@ -35,6 +36,7 @@ export const USER_PERMS: ReadonlySet<string> = new Set([
 ]);
 
 export const READONLY_PERMS: ReadonlySet<string> = new Set([
+  'view:config',
   'view:history',
   'view:plans',
   'view:recommendations',

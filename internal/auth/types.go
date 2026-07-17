@@ -560,6 +560,15 @@ func DefaultUserPermissions() []Permission {
 		// offering_class = 'standard' and the cloud account to match the
 		// row's cloud_account_id before creating the listing.
 		{Action: ActionSellOwn, Resource: ResourcePurchases},
+		// view:config — every authenticated user can read the global settings
+		// (providers, default term/payment/coverage, etc.) as read-only. The
+		// GET /api/config and GET /api/ri-exchange/config handlers both require
+		// this permission; without it non-admin users got 403 and the Settings
+		// page rendered a blank form (issues #1401, #1410, #1413). Writing
+		// to config still requires update:config, which only admins hold via
+		// admin:*. The handler also withholds the SourceIdentity field from
+		// non-admin sessions regardless of this grant (issue #407).
+		{Action: ActionView, Resource: ResourceConfig},
 	}
 }
 
@@ -569,6 +578,9 @@ func DefaultReadOnlyPermissions() []Permission {
 		{Action: ActionView, Resource: ResourceRecommendations},
 		{Action: ActionView, Resource: ResourcePlans},
 		{Action: ActionView, Resource: ResourceHistory},
+		// view:config — read-only users can view global settings (issue #1401).
+		// They cannot write config (update:config is admin-only via admin:*).
+		{Action: ActionView, Resource: ResourceConfig},
 	}
 }
 
