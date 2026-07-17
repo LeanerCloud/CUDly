@@ -2918,10 +2918,9 @@ function buildVariantRowMarkup(
   const pctText = pct === null ? '\u2014' : pct.toFixed(1) + '%';
   const nestedClass = isNested ? ' rec-variant-row' : '';
   const cellCtx = { accountName, badge, pct, pctClass, pctText, period };
-  // Issue #869: omit the checkbox cell entirely for viewer (readonly) sessions.
-  // The column header also omits the select-all checkbox, so the column is
-  // visually absent rather than present-but-empty, matching the no-actions
-  // experience on Plans and Purchases for the same role.
+  // Issue #869: viewer (readonly) sessions get no checkbox or action buttons
+  // in the leading column; the cell is still emitted so column widths align
+  // with the cell-summary rows (which always carry the expand chevron there).
   // Issue #120: inline "Plan" button deep-links into the Create Purchase Plan
   // modal pre-seeded with this rec. Only rendered when the session has
   // create:plans permission (mirrors the bulk Create Plan button gate).
@@ -2930,7 +2929,7 @@ function buildVariantRowMarkup(
     : '';
   const checkboxCell = showCheckboxes
     ? `<td class="checkbox-col"><input type="checkbox" data-rec-id="${recId}" ${isSelected ? 'checked' : ''} aria-label="Select recommendation">${planBtnHtml}</td>`
-    : '';
+    : `<td class="checkbox-col"></td>`;
   return `
   <tr class="recommendation-row${nestedClass} ${savingsClass} ${isSelected ? 'selected' : ''}" data-rec-id="${recId}">
     ${checkboxCell}
@@ -3169,10 +3168,11 @@ function buildListMarkup(
     const chevronButton = `<button type="button" class="rec-cell-chevron" data-cell-key="${escapeHtml(key)}" aria-expanded="${isExpanded}" aria-label="${isExpanded ? 'Collapse' : 'Expand'} cell variants">
         ${chevron}
       </button>`;
-    const chevronCell = showCheckboxes
-      ? `<td class="checkbox-col">${chevronButton}</td>`
-      : '';
-    const inlineChevron = showCheckboxes ? '' : `${chevronButton} `;
+    // Issue #1006: the expand chevron always lives in the leading td.checkbox-col,
+    // before the Provider column, for all roles including readonly viewers.
+    // This matches the SP-group rows (which always emitted a leading cell) and
+    // the owner decision to keep the control at the table's far-left edge.
+    const chevronCell = `<td class="checkbox-col">${chevronButton}</td>`;
 
     rows.push(`
   <tr class="rec-cell-summary-row" data-cell-key="${escapeHtml(key)}">
@@ -3181,7 +3181,7 @@ function buildListMarkup(
     <td>${escapeHtml(accountName)}</td>
     <td><span class="service-badge">${escapeHtml(rep.service)}</span></td>
     <td colspan="${summaryColspan}" class="rec-cell-summary-content">
-      <span class="rec-cell-identity">${inlineChevron}${identityParts.join(' &mdash; ')}</span>
+      <span class="rec-cell-identity">${identityParts.join(' &mdash; ')}</span>
       ${rangeParts.length > 0 ? `<span class="rec-cell-range">${rangeParts.join(' &middot; ')}</span>` : ''}
     </td>
   </tr>`);
@@ -3202,7 +3202,9 @@ function buildListMarkup(
   // can't express the indeterminate state.
   // Issue #869: skip the tri-state computation entirely for viewer sessions
   // to avoid dead-code paths when showCheckboxes is false.
-  let checkboxColHeader = '';
+  // Issue #1006: the leading th.checkbox-col is always present (empty for viewers)
+  // so the column aligns with the chevron cells in every row type.
+  let checkboxColHeader: string;
   if (showCheckboxes) {
     const bestVariants = pickBestVariantPerCell(recommendations);
     const bestVariantIds = new Set(bestVariants.map((r) => r.id));
@@ -3213,6 +3215,8 @@ function buildListMarkup(
     const selectAllIndeterminate = selectedBestCount > 0 && selectedBestCount < bestVariants.length;
     const selectAllDataIndeterminate = ` data-indeterminate="${selectAllIndeterminate ? 'true' : 'false'}"`;
     checkboxColHeader = `<th class="checkbox-col"><input type="checkbox" id="select-all-recs" aria-label="Select all recommendations"${selectAllCheckedAttr}${selectAllDataIndeterminate}></th>`;
+  } else {
+    checkboxColHeader = `<th class="checkbox-col"></th>`;
   }
 
   return `
@@ -4534,8 +4538,8 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   if (emptyResult) {
     const tbody = container.querySelector('tbody');
     if (tbody) {
-      // colspan = checkbox col (1 when shown, 0 when hidden) + all visible data columns.
-      const colspan = (showCheckboxes ? 1 : 0) + visibleCols.length;
+      // colspan = leading col (always 1: checkbox for editors, empty for viewers) + all visible data columns.
+      const colspan = 1 + visibleCols.length;
       const tr = document.createElement('tr');
       const td = document.createElement('td');
       td.setAttribute('colspan', String(colspan));
