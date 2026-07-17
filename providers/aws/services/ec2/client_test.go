@@ -1,8 +1,11 @@
 package ec2
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log"
+	"os"
 	"testing"
 	"time"
 
@@ -819,4 +822,66 @@ func TestBuildEC2OfferingQuery_ValidPlatform(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, types.RIProductDescription("Linux/UNIX"), q.productDesc)
 	assert.Equal(t, types.Tenancy("default"), q.tenancy)
+}
+
+// TestPurchaseCommitment_IdempotencySkipLogMasked asserts that the re-drive
+// skip-log line emits a masked token (first 8 chars + "..."), not the raw
+// 64-char idempotency token (issue #656).
+//
+// This is a real §4 regression test: it captures the bytes written to the
+// standard logger and asserts both that the raw token is absent AND that
+// the masked form is present.  Reverting line 137 of client.go to log
+// opts.IdempotencyToken raw causes the NotContains assertion to fail.
+func TestPurchaseCommitment_IdempotencySkipLogMasked(t *testing.T) {
+	// Not parallel: we swap the global log writer and must restore it before
+	// any other test that also captures the logger races with us.
+	mockEC2 := &MockEC2Client{}
+	t.Cleanup(func() { mockEC2.AssertExpectations(t) })
+	client := &Client{client: mockEC2, region: "us-east-1"}
+
+	token := common.DeriveIdempotencyToken("exec-idem-656", 0)
+
+	// Capture the standard logger so we can assert what is actually emitted.
+	var logBuf bytes.Buffer
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	// Simulate that an RI tagged with this token already exists (re-drive path).
+	mockEC2.On("DescribeReservedInstances", mock.Anything, mock.MatchedBy(func(in *ec2.DescribeReservedInstancesInput) bool {
+		for _, f := range in.Filters {
+			if aws.ToString(f.Name) == "tag:"+common.IdempotencyTagKey {
+				return len(f.Values) == 1 && f.Values[0] == token
+			}
+		}
+		return false
+	})).Return(&ec2.DescribeReservedInstancesOutput{
+		ReservedInstances: []types.ReservedInstances{
+			{ReservedInstancesId: aws.String("ri-existing-656")},
+		},
+	}, nil).Once()
+
+	rec := common.Recommendation{
+		ResourceType:  "t3.micro",
+		Count:         1,
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Details:       &common.ComputeDetails{Platform: "Linux/UNIX", Tenancy: "default", Scope: "Region"},
+	}
+
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{IdempotencyToken: token})
+
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Equal(t, "ri-existing-656", result.CommitmentID)
+
+	// Core regression assertions: the re-drive log line must contain the masked
+	// form and must NOT contain the full raw token.
+	logOutput := logBuf.String()
+	masked := common.MaskToken(token)
+	assert.Contains(t, logOutput, masked, "re-drive log must emit the masked token")
+	assert.NotContains(t, logOutput, token, "re-drive log must NOT emit the raw idempotency token")
+
+	// Sanity-check that MaskToken itself has the expected shape (first 8 chars + "...").
+	assert.Equal(t, token[:8]+"...", masked, "MaskToken shape: first 8 chars + ellipsis")
+	assert.NotEqual(t, token, masked, "masked token must not equal raw token")
 }
