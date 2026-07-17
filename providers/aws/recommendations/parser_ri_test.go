@@ -260,6 +260,94 @@ func TestParseRecommendationDetail_WithAccountAndCosts(t *testing.T) {
 	assert.Equal(t, 650.00, rec.OnDemandCost)
 }
 
+// TestParseRecommendationDetail_MalformedCostFields is the regression test for
+// COR-07 (#1171): a present-but-unparseable upfront / on-demand / recurring
+// cost string must fail loud instead of silently leaving the field at 0,
+// which would surface a wrong money figure (e.g. $0 upfront on an all-upfront
+// RI) into savings math and purchase decisions.
+func TestParseRecommendationDetail_MalformedCostFields(t *testing.T) {
+	client := &Client{}
+
+	params := common.RecommendationParams{
+		Service:        common.ServiceEC2,
+		PaymentOption:  "all-upfront",
+		Term:           "1yr",
+		LookbackPeriod: "7d",
+	}
+
+	baseDetails := func() *types.ReservationPurchaseRecommendationDetail {
+		return &types.ReservationPurchaseRecommendationDetail{
+			RecommendedNumberOfInstancesToPurchase: aws.String("2"),
+			EstimatedMonthlySavingsAmount:          aws.String("150.00"),
+			EstimatedMonthlySavingsPercentage:      aws.String("30.0"),
+			AccountId:                              aws.String("123456789012"),
+			UpfrontCost:                            aws.String("500.00"),
+			EstimatedMonthlyOnDemandCost:           aws.String("650.00"),
+			RecurringStandardMonthlyCost:           aws.String("42.50"),
+			InstanceDetails: &types.InstanceDetails{
+				EC2InstanceDetails: &types.EC2InstanceDetails{
+					InstanceType: aws.String("m5.large"),
+					Platform:     aws.String("Linux/UNIX"),
+					Region:       aws.String("us-east-1"),
+					Tenancy:      aws.String("shared"),
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name        string
+		mutate      func(d *types.ReservationPurchaseRecommendationDetail)
+		errContains string
+	}{
+		{
+			name: "malformed upfront cost",
+			mutate: func(d *types.ReservationPurchaseRecommendationDetail) {
+				d.UpfrontCost = aws.String("not-a-number")
+			},
+			errContains: `failed to parse upfront cost "not-a-number"`,
+		},
+		{
+			name: "malformed on-demand cost",
+			mutate: func(d *types.ReservationPurchaseRecommendationDetail) {
+				d.EstimatedMonthlyOnDemandCost = aws.String("$650.00")
+			},
+			errContains: `failed to parse estimated monthly on-demand cost "$650.00"`,
+		},
+		{
+			name: "malformed recurring monthly cost",
+			mutate: func(d *types.ReservationPurchaseRecommendationDetail) {
+				d.RecurringStandardMonthlyCost = aws.String("")
+			},
+			errContains: `failed to parse recurring standard monthly cost ""`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			details := baseDetails()
+			tt.mutate(details)
+
+			rec, err := client.parseRecommendationDetail(context.Background(), details, params)
+
+			require.Error(t, err)
+			assert.Nil(t, rec)
+			assert.Contains(t, err.Error(), "failed to parse AWS cost details")
+			assert.Contains(t, err.Error(), tt.errContains)
+		})
+	}
+
+	// Sanity check: the same details with all cost fields well-formed parse
+	// cleanly, so the failures above are attributable to the malformed field.
+	rec, err := client.parseRecommendationDetail(context.Background(), baseDetails(), params)
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	assert.Equal(t, 500.00, rec.CommitmentCost)
+	assert.Equal(t, 650.00, rec.OnDemandCost)
+	require.NotNil(t, rec.RecurringMonthlyCost)
+	assert.Equal(t, 42.50, *rec.RecurringMonthlyCost)
+}
+
 func TestParseRecommendations(t *testing.T) {
 	client := &Client{}
 
