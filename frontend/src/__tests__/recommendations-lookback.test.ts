@@ -28,6 +28,7 @@ jest.mock('../api', () => ({
   getConfig: jest.fn(),
   updateConfig: jest.fn().mockResolvedValue({}),
   listAccounts: jest.fn().mockResolvedValue([]),
+  listAccountsMinimal: jest.fn().mockResolvedValue([]),
   listAccountServiceOverrides: jest.fn().mockResolvedValue([]),
 }));
 
