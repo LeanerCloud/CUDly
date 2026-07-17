@@ -665,6 +665,71 @@ func TestExecuteForAccount_CredentialFailure_MarksFailed(t *testing.T) {
 	}
 }
 
+// TestExecuteForAccount_CredentialFailure_SaveErrorSurfaced is the regression
+// guard for COR-10 (#1184): when credential resolution fails AND persisting
+// the per-account "failed" row also fails, the save failure must surface as an
+// AUDIT LOSS error alongside the credential error instead of being silently
+// discarded. The failed row is as much audit trail as a success row.
+func TestExecuteForAccount_CredentialFailure_SaveErrorSurfaced(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+	mockFactory := new(MockProviderFactory)
+
+	// No credentials stored — credential resolution fails for the account.
+	credStore := &MockCredentialStore{
+		LoadRawFn: func(_ context.Context, _, _ string) ([]byte, error) {
+			return nil, nil
+		},
+	}
+
+	// Persisting the per-account "failed" row also fails.
+	saveErr := errors.New("db write failed")
+	mockStore.SavePurchaseExecutionFn = func(_ context.Context, _ *config.PurchaseExecution) error {
+		return saveErr
+	}
+
+	account := config.CloudAccount{
+		ID: "aaaaaaaa-0000-0000-0000-000000000001", Name: "aws-failing",
+		Provider: "aws", ExternalID: "111111111111", AWSAuthMode: "access_keys",
+	}
+	plan := &config.PurchasePlan{
+		ID:           "plan-credfail-save",
+		Name:         "Credential Failure Save Error Plan",
+		RampSchedule: config.RampSchedule{CurrentStep: 0, TotalSteps: 1},
+	}
+	baseExec := &config.PurchaseExecution{
+		ExecutionID: "exec-credfail-save",
+		PlanID:      "plan-credfail-save",
+		Status:      "pending",
+		Recommendations: []config.RecommendationRecord{
+			{
+				Provider: "aws", Service: "ec2", ResourceType: "m5.large",
+				Region: "us-east-1", Count: 1, Selected: true,
+			},
+		},
+	}
+
+	manager := &Manager{
+		config:          mockStore,
+		email:           mockEmail,
+		providerFactory: mockFactory,
+		credStore:       credStore,
+	}
+
+	committed, err := manager.executeForAccount(ctx, baseExec, plan, account)
+	assert.False(t, committed)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "AUDIT LOSS: failed to save execution record for account "+account.ID)
+	assert.ErrorIs(t, err, saveErr, "the underlying save error must stay inspectable via errors.Is")
+	assert.Contains(t, err.Error(), "credential resolution failed for account "+account.ID,
+		"the original credential failure must not be masked by the save failure")
+
+	// No provider may ever be constructed when credentials fail to resolve.
+	mockFactory.AssertNotCalled(t, "CreateAndValidateProvider")
+	mockStore.AssertExpectations(t)
+}
+
 // TestExecuteMultiAccount_PartialFailure_IsolatesAccounts is the regression
 // guard for spec E-2: when one account (account-I) has invalid credentials and
 // another (account-V) has valid credentials, account-V's execution must

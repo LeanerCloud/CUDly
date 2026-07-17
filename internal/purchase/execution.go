@@ -197,15 +197,6 @@ func (m *Manager) executeMultiAccount(ctx context.Context, baseExec *config.Purc
 	return fmt.Errorf("%w: %s", errAllAccountsFailed, strings.Join(errs, "; "))
 }
 
-// saveExecutionStatusBestEffort saves the execution record and logs any error.
-// Used in error paths where we need to persist the failure status but cannot
-// propagate the save error (the original error is already being returned).
-func (m *Manager) saveExecutionStatusBestEffort(ctx context.Context, exec *config.PurchaseExecution) {
-	if err := m.config.SavePurchaseExecution(ctx, exec); err != nil {
-		logging.Warnf("execution: failed to persist error status for account %v: %v", exec.CloudAccountID, err)
-	}
-}
-
 // executeForAccount runs a single plan execution for one cloud account.
 // It creates a new PurchaseExecution record tagged with cloud_account_id, resolves
 // per-account credentials, executes purchases, and saves the result.
@@ -240,8 +231,12 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 	if err != nil {
 		acctExec.Status = "failed"
 		acctExec.Error = err.Error()
-		m.saveExecutionStatusBestEffort(ctx, &acctExec)
-		return false, fmt.Errorf("credential resolution failed for account %s: %w", account.ID, err)
+		credErr := fmt.Errorf("credential resolution failed for account %s: %w", account.ID, err)
+		// Audit-trail save: the failed row is as much a part of the audit
+		// trail as a success row, so a save failure must surface (AUDIT LOSS)
+		// instead of being silently dropped. Extracted to a helper to keep
+		// executeForAccount under the gocyclo:10 budget.
+		return false, m.persistFailedAccountExecution(ctx, &acctExec, account, credErr)
 	}
 
 	accountID := account.ExternalID
@@ -297,6 +292,22 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 		return committed, fmt.Errorf("some purchases failed: %v", purchaseErrors)
 	}
 	return committed, nil
+}
+
+// persistFailedAccountExecution writes a per-account execution row that the
+// caller has already stamped with Status="failed" + Error, and joins any save
+// failure with the originating cause via errors.Join so neither error is
+// silently dropped (the row is as much audit trail as a success row; issue
+// #1184 / COR-10). Extracted from executeForAccount so the new branch keeps
+// that function under the gocyclo:10 budget.
+func (m *Manager) persistFailedAccountExecution(ctx context.Context, acctExec *config.PurchaseExecution, account config.CloudAccount, cause error) error {
+	if saveErr := m.config.SavePurchaseExecution(ctx, acctExec); saveErr != nil {
+		return errors.Join(
+			fmt.Errorf("AUDIT LOSS: failed to save execution record for account %s: %w", account.ID, saveErr),
+			cause,
+		)
+	}
+	return cause
 }
 
 // resolveSingleAccountProvider derives per-account credentials for the
