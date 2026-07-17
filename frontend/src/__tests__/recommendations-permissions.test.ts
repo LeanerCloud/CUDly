@@ -317,8 +317,10 @@ describe('Recommendations checkbox + row-click gating for viewer role (issue #86
     expect(rowCheckboxes.length).toBe(0);
   });
 
-  test('readonly role: grouped-row summary has no checkbox-col and column span is aligned', async () => {
+  test('readonly role: grouped-row summary has chevron in leading checkbox-col and column span is aligned (closes #1006)', async () => {
     // Two variants share the same cell key -- buildListMarkup renders a summary row.
+    // Issue #1006: the expand chevron must sit in td.checkbox-col at the far-left
+    // (before Provider), not inline inside the content cell.
     (api.getRecommendations as jest.Mock).mockResolvedValue({
       summary: {},
       recommendations: [sampleRecVariantA, sampleRecVariantB],
@@ -335,13 +337,18 @@ describe('Recommendations checkbox + row-click gating for viewer role (issue #86
     const summaryRow = table!.querySelector('tr.rec-cell-summary-row');
     expect(summaryRow).not.toBeNull();
 
-    // Header must not contain a checkbox-col th.
+    // Header must have a leading th.checkbox-col (empty for viewers, aligns the chevron column).
     const headerCheckboxCols = table!.querySelectorAll('thead tr th.checkbox-col');
-    expect(headerCheckboxCols.length).toBe(0);
+    expect(headerCheckboxCols.length).toBe(1);
 
-    // Summary row must not contain a checkbox-col td (the bug this PR fixes).
+    // Summary row must have a td.checkbox-col at the far-left containing the chevron button.
     const summaryCheckboxCols = summaryRow!.querySelectorAll('td.checkbox-col');
-    expect(summaryCheckboxCols.length).toBe(0);
+    expect(summaryCheckboxCols.length).toBe(1);
+
+    // The chevron button lives inside the leading td.checkbox-col, not inline in the content.
+    const chevron = summaryCheckboxCols[0]!.querySelector<HTMLButtonElement>('.rec-cell-chevron');
+    expect(chevron).not.toBeNull();
+    expect(summaryRow!.querySelector('.rec-cell-summary-content .rec-cell-chevron')).toBeNull();
 
     // Effective column count: sum of colspan values in each row must match header th count.
     const headerColCount = table!.querySelectorAll('thead tr th').length;
@@ -501,7 +508,7 @@ describe('Recommendations SP-group child-row checkbox gating (issue #135 + #869)
     return list!.querySelector('table') as HTMLTableElement;
   };
 
-  test('readonly role: expanded SP-group child variant rows have no checkbox-col', async () => {
+  test('readonly role: expanded SP-group child variant rows have an empty leading checkbox-col but no checkbox input', async () => {
     mockUser('readonly');
     await loadRecommendations();
     const table = expandSpGroup();
@@ -510,10 +517,11 @@ describe('Recommendations SP-group child-row checkbox gating (issue #135 + #869)
     const childRows = table.querySelectorAll('tr.rec-variant-row');
     expect(childRows.length).toBeGreaterThan(0);
 
-    // The bug this guards: child rows must not render a checkbox cell for
-    // readonly sessions (showCheckboxes must be threaded into the nested call).
+    // Issue #1006: variant rows carry an empty td.checkbox-col so columns
+    // stay aligned with the leading cell in the summary/header rows.  No
+    // checkbox input or action buttons appear for readonly sessions.
     for (const row of Array.from(childRows)) {
-      expect(row.querySelectorAll('td.checkbox-col').length).toBe(0);
+      expect(row.querySelectorAll('td.checkbox-col').length).toBe(1);
       expect(row.querySelectorAll('input[data-rec-id]').length).toBe(0);
     }
   });
