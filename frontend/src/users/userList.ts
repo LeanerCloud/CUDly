@@ -14,7 +14,7 @@ import {
   clearSelectedUserIds,
   setAllUsers,
 } from './state';
-import { escapeHtml, formatRelativeTime, formatDate, showSuccess, showError } from './utils';
+import { escapeHtml, formatRelativeTime, formatDate, showSuccess, showError, validateGroupCombination } from './utils';
 import { openEditUserModal, deleteUser } from './userActions';
 import { ADMINISTRATORS_GROUP_ID } from '../permissions';
 
@@ -210,6 +210,9 @@ function renderUserExpandPanel(user: APIUser): string {
 /**
  * Toggle a group membership for a user inline (no modal).
  *
+ * Before the API call, validates that the resulting group set is not a
+ * contradictory combination (issue #1405: view-only + write-capable).
+ *
  * After a successful API call, patch state in-memory and refresh only the
  * affected expand panel rather than re-rendering the whole table. This
  * prevents the panel from collapsing on every toggle (issue #998) and
@@ -225,6 +228,20 @@ async function toggleUserGroup(userId: string, groupId: string, checked: boolean
   const next = checked
     ? [...new Set([...user.groups, groupId])]
     : user.groups.filter(g => g !== groupId);
+
+  // Validate the resulting group combination before hitting the API.
+  // A view-only group (all permissions are view:*) combined with a
+  // write-capable group is semantically contradictory (issue #1405).
+  const combinationError = validateGroupCombination(next, availableGroups);
+  if (combinationError) {
+    showError(combinationError);
+    // Revert the checkbox immediately so the DOM reflects reality.
+    const cb = document.querySelector<HTMLInputElement>(
+      `.group-assign-checkbox[data-user-id="${userId}"][data-group-id="${groupId}"]`,
+    );
+    if (cb) cb.checked = !checked;
+    return;
+  }
 
   try {
     await api.updateUser(userId, { groups: next });
@@ -276,6 +293,9 @@ async function toggleUserGroup(userId: string, groupId: string, checked: boolean
  */
 function setupUserTableListeners(): void {
   // Select all checkbox
+  // Patch all rows in-place instead of calling renderUsers(), which would
+  // tear down and rebuild the entire table and collapse any open expand
+  // panels (issue #1404 symptom: expand arrow / panel lost on checkbox click).
   const selectAllCheckbox = document.getElementById('select-all-users') as HTMLInputElement;
   if (selectAllCheckbox) {
     selectAllCheckbox.addEventListener('change', (e) => {
@@ -285,24 +305,56 @@ function setupUserTableListeners(): void {
       } else {
         clearSelectedUserIds();
       }
-      renderUsers(filteredUsers);
+      // Patch each row's selected class and its individual checkbox without
+      // re-rendering the whole table (preserves open expand panels).
+      filteredUsers.forEach(user => {
+        const row = document.querySelector<HTMLElement>(
+          `tr.user-row[data-user-id="${user.id}"]`,
+        );
+        const cb = document.querySelector<HTMLInputElement>(
+          `.user-checkbox[data-user-id="${user.id}"]`,
+        );
+        if (row) {
+          if (checked) row.classList.add('row-selected');
+          else row.classList.remove('row-selected');
+        }
+        if (cb) cb.checked = checked;
+      });
       updateBulkActionsBar();
     });
   }
 
   // Individual checkboxes
+  // Same rationale: patch the affected row in-place instead of calling
+  // renderUsers() so open expand panels are not collapsed (issue #1404).
   document.querySelectorAll('.user-checkbox').forEach(checkbox => {
     checkbox.addEventListener('change', (e) => {
       const userId = (e.target as HTMLElement).dataset.userId;
       if (!userId) return;
 
-      if ((e.target as HTMLInputElement).checked) {
+      const nowChecked = (e.target as HTMLInputElement).checked;
+      if (nowChecked) {
         addSelectedUserId(userId);
       } else {
         removeSelectedUserId(userId);
       }
 
-      renderUsers(filteredUsers);
+      // Toggle the row-selected class on just the affected row.
+      const row = document.querySelector<HTMLElement>(
+        `tr.user-row[data-user-id="${userId}"]`,
+      );
+      if (row) {
+        if (nowChecked) row.classList.add('row-selected');
+        else row.classList.remove('row-selected');
+      }
+
+      // Keep the select-all checkbox in sync.
+      const selectAll = document.getElementById('select-all-users') as HTMLInputElement | null;
+      if (selectAll) {
+        selectAll.checked =
+          selectedUserIds.size > 0 && selectedUserIds.size === filteredUsers.length;
+      }
+
       updateBulkActionsBar();
     });
   });
