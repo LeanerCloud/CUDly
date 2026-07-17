@@ -674,10 +674,14 @@ function canSellOnMarketplace(p: HistoryPurchase): boolean {
     return false;
   }
   // Guard against listing a matured RI: compute remaining months from the
-  // purchase timestamp and the total term. term is in months; timestamp is
-  // the purchase date. We require at least 1 full month remaining.
-  const termMonths = typeof p.term === 'number' ? p.term : Number(p.term) || 0;
-  if (termMonths <= 0) return false;
+  // purchase timestamp and the total term. purchase_history.term is stored in
+  // YEARS (1 or 3), so convert to months before comparing against elapsed
+  // months (mirrors the row.Term * 12 conversion in handler_marketplace.go).
+  // Without the conversion a 3-year RI was treated as 3 months and the Sell
+  // button vanished after ~3 months. We require at least 1 full month remaining.
+  const termYears = typeof p.term === 'number' ? p.term : Number(p.term) || 0;
+  if (termYears <= 0) return false;
+  const termMonths = termYears * 12;
   const purchaseMs = new Date(p.timestamp).getTime();
   if (!Number.isFinite(purchaseMs)) return false;
   const elapsedMonths = (Date.now() - purchaseMs) / (1000 * 60 * 60 * 24 * 30.4375);
@@ -1377,7 +1381,13 @@ function wireRowActionHandlers(container: HTMLElement): void {
       bodyEl.className = 'marketplace-pricing-modal-body';
 
       if (purchase) {
-        const termMonths = typeof purchase.term === 'number' ? purchase.term : Number(purchase.term) || 0;
+        // purchase_history.term is stored in YEARS (1 or 3); convert to months
+        // before computing the remaining term and residual so the price summary
+        // shown to the user reflects real remaining value rather than ~1/3 of it
+        // (a 3-year RI was previously treated as 3 months). Mirrors the
+        // row.Term * 12 conversion in internal/api/handler_marketplace.go.
+        const termYears = typeof purchase.term === 'number' ? purchase.term : Number(purchase.term) || 0;
+        const termMonths = termYears > 0 ? termYears * 12 : 0;
         const purchaseMs = new Date(purchase.timestamp).getTime();
         const elapsedMonths = Number.isFinite(purchaseMs)
           ? (Date.now() - purchaseMs) / (1000 * 60 * 60 * 24 * 30.4375)
@@ -1387,8 +1397,8 @@ function wireRowActionHandlers(container: HTMLElement): void {
         const monthly = purchase.monthly_cost ?? 0;
         // Prorate the upfront cost to its residual value over the remaining
         // term. Using the full upfront overstates the listing value for a
-        // partially elapsed RI (a 12-month RI at month 6 has only half its
-        // upfront value left). Mirrors resolveMarketplacePriceSchedule in
+        // partially elapsed RI (a 36-month RI at month 6 retains 30/36 of its
+        // upfront value). Mirrors resolveMarketplacePriceSchedule in
         // internal/api/handler_marketplace.go, which drops the upfront term to
         // 0 when the original term is unknown (<=0); we do the same here.
         const upfrontRemaining = termMonths > 0 ? upfront * (remainingMonths / termMonths) : 0;
