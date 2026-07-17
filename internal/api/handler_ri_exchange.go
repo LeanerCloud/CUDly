@@ -1314,6 +1314,32 @@ func handlerAcceptedAmount(freshQ *exchange.ExchangeQuoteSummary, fallback strin
 	return "0"
 }
 
+// checkCapsAndComputeHeadroom validates the spending-cap configuration, runs the
+// daily-cap check, and computes the effective MaxPaymentDueUSD that Execute must
+// not exceed (H2: remaining daily headroom vs per-exchange cap, whichever is
+// smaller). Returns a non-empty reason string on any failure so the caller can
+// forward it to failExchange.
+func checkCapsAndComputeHeadroom(dailySpendStr, paymentDue string, cfg *config.GlobalConfig) (effectiveCap *big.Rat, reason string) {
+	if cfg.RIExchangeMaxDailyUSD == 0 {
+		return nil, "daily spending cap is not configured (RIExchangeMaxDailyUSD is 0)"
+	}
+	if reason := checkDailyCap(dailySpendStr, paymentDue, cfg.RIExchangeMaxDailyUSD); reason != "" {
+		return nil, reason
+	}
+	if cfg.RIExchangeMaxPerExchangeUSD == 0 {
+		return nil, "per-exchange spending cap is not configured (RIExchangeMaxPerExchangeUSD is 0)"
+	}
+	// checkDailyCap already verified dailySpendStr is parseable; a second failure
+	// is an internal error - fail closed to avoid executing with wrong headroom.
+	dailySpent, err := exchange.ParseDecimalRat(dailySpendStr)
+	if err != nil || dailySpent == nil {
+		return nil, fmt.Sprintf("daily spend re-parse failed (internal error): %v", err)
+	}
+	dailyCap := new(big.Rat).SetFloat64(cfg.RIExchangeMaxDailyUSD)
+	perExchangeCap := new(big.Rat).SetFloat64(cfg.RIExchangeMaxPerExchangeUSD)
+	return handlerChooseEffectiveCap(dailyCap, dailySpent, perExchangeCap), ""
+}
+
 // executeApprovedExchange checks caps and executes the exchange after approval.
 func (h *Handler) executeApprovedExchange(ctx context.Context, id string, record *config.RIExchangeRecord) (any, error) {
 	dailySpendStr, err := h.config.GetRIExchangeDailySpend(ctx, time.Now())
@@ -1326,13 +1352,6 @@ func (h *Handler) executeApprovedExchange(ctx context.Context, id string, record
 		return h.failExchange(ctx, id, "config load failed")
 	}
 
-	if globalCfg.RIExchangeMaxDailyUSD == 0 {
-		return h.failExchange(ctx, id, "daily spending cap is not configured (RIExchangeMaxDailyUSD is 0)")
-	}
-	if reason := checkDailyCap(dailySpendStr, record.PaymentDue, globalCfg.RIExchangeMaxDailyUSD); reason != "" {
-		return h.failExchange(ctx, id, reason)
-	}
-
 	region := record.Region
 	if region == "" {
 		// Region is a required field captured at record-creation time.
@@ -1341,17 +1360,10 @@ func (h *Handler) executeApprovedExchange(ctx context.Context, id string, record
 		return h.failExchange(ctx, id, "exchange record has no region; cannot execute safely")
 	}
 
-	if globalCfg.RIExchangeMaxPerExchangeUSD == 0 {
-		return h.failExchange(ctx, id, "per-exchange spending cap is not configured (RIExchangeMaxPerExchangeUSD is 0)")
+	effectiveCap, reason := checkCapsAndComputeHeadroom(dailySpendStr, record.PaymentDue, globalCfg)
+	if reason != "" {
+		return h.failExchange(ctx, id, reason)
 	}
-
-	// H2: bound Execute's MaxPaymentDueUSD by remaining daily headroom so a
-	// fresh re-quote inside Execute cannot accept an amount that would breach
-	// the daily cap. dailySpend was verified parseable by checkDailyCap above.
-	dailySpent, _ := exchange.ParseDecimalRat(dailySpendStr)
-	dailyCap := new(big.Rat).SetFloat64(globalCfg.RIExchangeMaxDailyUSD)
-	perExchangeCap := new(big.Rat).SetFloat64(globalCfg.RIExchangeMaxPerExchangeUSD)
-	effectiveCap := handlerChooseEffectiveCap(dailyCap, dailySpent, perExchangeCap)
 
 	execFn := exchange.ExecuteExchange
 	if h.executeExchangeFn != nil {

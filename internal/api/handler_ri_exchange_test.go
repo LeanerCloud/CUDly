@@ -1773,5 +1773,5 @@ func TestExecuteApprovedExchange_LedgerWriteFailure_ReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "ledger update failed",
 		"error must describe the ledger failure for operator triage")
 	assert.Contains(t, err.Error(), "exch-h4-test",
-		"error must include the exchange ID so operators can correlate with AWS")
+		"error must include the exchange ID for operator correlation with AWS")
 }
