@@ -64,7 +64,7 @@ func NewFromAWSConfig(ctx context.Context, region, accountID string) (pkgladder.
 	// recommendations.Client satisfies riCoverageSource and utilizationSource
 	// directly, and is the underlying client for the on-demand series and SP
 	// coverage/utilization adapters.
-	recoClient := recommendations.NewClient(awsCfg)
+	recoClient := recommendations.NewClient(&awsCfg)
 
 	// ec2svc.Client satisfies riLister (ListConvertibleReservedInstances).
 	ec2Client := ec2svc.NewClient(awsCfg)
