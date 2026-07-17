@@ -7370,6 +7370,91 @@ describe('renderUsageSparkline (issue #239)', () => {
 });
 
 // ============================================================================
+// Issue #1417: sparkline integration — SVG renders inside the table
+// ============================================================================
+// The unit tests above verify renderUsageSparkline in isolation.  This block
+// confirms the SVG actually appears inside the recommendations table HTML when
+// a recommendation carries non-empty usage_history data.
+describe('Issue #1417: usage-history sparkline renders in recommendations table', () => {
+  beforeEach(() => {
+    document.body.innerHTML = `
+      <div id="opportunities-tab" class="tab-content active">
+        <div id="recommendations-summary"></div>
+        <div id="recommendations-list"></div>
+      </div>
+      <div id="purchase-modal" class="hidden">
+        <div id="purchase-details"></div>
+        <div class="modal-buttons">
+          <button type="button" id="close-purchase-modal-btn">Cancel</button>
+          <button type="button" id="execute-purchase-btn" class="primary">Send for Approval</button>
+        </div>
+      </div>
+    `;
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    (state.getHiddenColumns as jest.Mock).mockReturnValue(new Set());
+    (state.getRecommendationsSort as jest.Mock).mockReturnValue({ column: 'savings', direction: 'desc' });
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    (state.getCurrentUser as jest.Mock).mockReturnValue({ id: 'u-admin', email: 'admin@example.com', groups: ['00000000-0000-5000-8000-000000000001'] });
+    (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+      last_collected_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      last_collection_error: null,
+    });
+    (recsApi.refreshRecommendations as jest.Mock).mockResolvedValue({});
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  test('SVG polyline appears in table row when rec has 7-day usage_history', async () => {
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: { total_count: 1, total_monthly_savings: 100, total_upfront_cost: 500, avg_payback_months: 5 },
+      recommendations: [{
+        id: 'rec-sparkline', provider: 'aws', cloud_account_id: 'acct-1',
+        service: 'ec2', resource_type: 't3.medium', region: 'us-east-1',
+        count: 1, term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 500,
+        usage_history: [80, 85, 90, 70, 95, 100, 60],
+      }],
+      regions: [],
+    });
+
+    await loadRecommendations();
+
+    const list = document.getElementById('recommendations-list');
+    const html = list?.innerHTML ?? '';
+    // The sparkline SVG must be present in the rendered table.
+    expect(html).toContain('class="usage-sparkline"');
+    // It must contain a polyline (7 points -> polyline, not circle).
+    expect(html).toContain('<polyline');
+    // The sparkline cell must immediately contain the SVG (not the em-dash).
+    // This matches the literal pattern produced by renderColumnCell:
+    //   <td class="usage-sparkline-cell" title="..."><svg ...>
+    expect(html).toContain('usage-sparkline-cell" title="RI coverage last 7 days"><svg');
+  });
+
+  test('em-dash renders in table cell when usage_history is null', async () => {
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [{
+        id: 'rec-no-sparkline', provider: 'aws', cloud_account_id: 'acct-1',
+        service: 'ec2', resource_type: 't3.medium', region: 'us-east-1',
+        count: 1, term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 500,
+        usage_history: null,
+      }],
+      regions: [],
+    });
+
+    await loadRecommendations();
+
+    const list = document.getElementById('recommendations-list');
+    const html = list?.innerHTML ?? '';
+    // Null usage_history must degrade to the em-dash fallback, not an SVG.
+    expect(html).not.toContain('class="usage-sparkline"');
+    expect(html).toContain('class="usage-sparkline-cell"');
+  });
+});
+
+// ============================================================================
 // Issue #163: Column filter localStorage persistence
 // ============================================================================
 
