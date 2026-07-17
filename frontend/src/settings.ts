@@ -364,8 +364,21 @@ function updateDirtyMarkers(): void {
   reflectDirtyState(anyDirty);
 }
 
-/** Returns true if any tracked field has been changed since the last save/load. */
+/**
+ * Returns true if any tracked field has been changed since the last save/load.
+ *
+ * Returns false when no snapshot has been taken yet (settings are still
+ * loading or have never loaded successfully). Before the first
+ * snapshotAllFields() call, savedSnapshot is an empty object, and comparing
+ * any live DOM value against undefined would always return true -- causing
+ * spurious "unsaved changes" prompts for users who navigate away before the
+ * async settings load completes (issue #1441).
+ */
 export function isUnsavedChanges(): boolean {
+  // savedSnapshot starts as {} and is populated by snapshotAllFields() only
+  // after loadGlobalSettings() resolves. If it is still empty the form is
+  // still loading and no edit could have been made yet.
+  if (Object.keys(savedSnapshot).length === 0) return false;
   return TRACKED_FIELDS.some(id => getFieldValue(id) !== savedSnapshot[id]);
 }
 
