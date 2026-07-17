@@ -64,10 +64,11 @@ func NewClient(cred azcore.TokenCredential, subscriptionID, region string) *Syna
 }
 
 // NewClientWithHTTP creates a new Azure Synapse client with a custom HTTP client (for testing).
-// If httpClient is nil, http.DefaultClient is used.
+// When httpClient is nil, the SSRF-hardened httpclient.New() is used so the nil
+// fallback also blocks IMDS connections.
 func NewClientWithHTTP(cred azcore.TokenCredential, subscriptionID, region string, httpClient HTTPClient) *SynapseClient {
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = httpclient.New()
 	}
 	return &SynapseClient{
 		cred:           cred,
@@ -345,7 +346,7 @@ func (c *SynapseClient) GetOfferingDetails(ctx context.Context, rec common.Recom
 		upfrontCost = 0
 		recurringCost = totalCost / (float64(termYears) * 12)
 	default:
-		// Fail loud on an unrecognised payment option rather than silently
+		// Fail loud on an unrecognized payment option rather than silently
 		// billing it as all-upfront (owner policy: no silent fallbacks on
 		// money-affecting fields).
 		return nil, fmt.Errorf("unsupported payment option for Azure Synapse offering details: %q", rec.PaymentOption)

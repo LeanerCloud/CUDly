@@ -905,3 +905,24 @@ func TestPurchaseCommitment_canonicalReservedResourceType(t *testing.T) {
 		armreservations.ReservedResourceType(capturedRRT),
 		"reservedResourceType %q must be a member of armreservations.PossibleReservedResourceTypeValues()", capturedRRT)
 }
+
+// ---- nil HTTP client fallback ----------------------------------------------
+
+// TestNewClientWithHTTP_NilFallbackIsHardened is a regression test for the
+// codebase-review finding SEC-03 (issue #1143): when httpClient is nil, the
+// httpClient falls back to httpclient.New() (SSRF-hardened), not
+// http.DefaultClient, so the fallback also rejects IMDS connections.
+func TestNewClientWithHTTP_NilFallbackIsHardened(t *testing.T) {
+	c := NewClientWithHTTP(nil, "sub-123", "eastus", nil)
+	require.NotNil(t, c.httpClient)
+	require.NotEqual(t, http.DefaultClient, c.httpClient,
+		"nil fallback must never be http.DefaultClient")
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://169.254.169.254/metadata/instance", nil)
+	require.NoError(t, err)
+	resp, err := c.httpClient.Do(req)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
+	require.Error(t, err, "nil-fallback client must reject IMDS connections")
+	assert.Contains(t, err.Error(), "blocked")
+}
