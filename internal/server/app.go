@@ -1167,3 +1167,8 @@ func (a *authServiceAdapter) RevokeAPIKeyAPI(ctx context.Context, userID, keyID 
 func (a *authServiceAdapter) ValidateUserAPIKeyAPI(ctx context.Context, apiKey string) (any, any, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	return a.service.ValidateUserAPIKeyAPI(ctx, apiKey)
 }
+
+func (a *authServiceAdapter) HasAPIKeyPermissionAPI(ctx context.Context, apiKey, action, resource string) (userID string, allowed bool, err error) {
+	userID, allowed, err = a.service.HasAPIKeyPermissionAPI(ctx, apiKey, action, resource)
+	return
+}

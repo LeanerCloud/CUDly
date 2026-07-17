@@ -327,3 +327,8 @@ func (m *MockAuthService) ValidateUserAPIKeyAPI(ctx context.Context, apiKey stri
 	args := m.Called(ctx, apiKey)
 	return args.Get(0), args.Get(1), args.Error(2)
 }
+
+func (m *MockAuthService) HasAPIKeyPermissionAPI(ctx context.Context, apiKey, action, resource string) (string, bool, error) {
+	args := m.Called(ctx, apiKey, action, resource)
+	return args.String(0), args.Bool(1), args.Error(2)
+}
