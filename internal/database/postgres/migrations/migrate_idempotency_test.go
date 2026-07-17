@@ -13,15 +13,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMigrations_FullStackIdempotent proves the entire migration stack is
-// idempotent: running it to head twice against a fresh DB leaves the second
-// run a no-op and the schema_migrations row clean (not dirty).
+// TestMigrations_FullStackIdempotent verifies that calling RunMigrations on an
+// already-fully-migrated DB is a clean no-op: m.Up() returns ErrNoChange
+// (swallowed by RunMigrations), the DB version is unchanged, and the
+// schema_migrations row is not set dirty.
 //
-// This is the invariant the opt-in CUDLY_MIGRATION_AUTOHEAL path relies on
-// (maybeAutoHealDirty in migrate.go Force()s past a dirty version and lets
-// Up() re-apply the pending tail). If a migration were NOT idempotent, a
-// re-apply would error or corrupt data, so this test guards the whole
-// directory as new migrations are added.
+// SCOPE LIMITATION: this test does NOT verify per-migration idempotency (i.e.
+// that re-running a single migration on a DB that already has its effects does
+// not fail or corrupt data). The second call to RunMigrations hits ErrNoChange
+// from golang-migrate and returns without executing any migration SQL -- so
+// individual migration bodies are never actually re-run here.
+//
+// The conservative auto-heal in maybeAutoHealDirty no longer relies on
+// per-migration idempotency: instead of silently Force-clearing the dirty flag
+// (which risked recording a rolled-back migration as applied), it now fails
+// loud and defers to an operator to confirm the schema state via
+// CUDLY_FORCE_MIGRATION_VERSION. Per-migration re-run safety is therefore not
+// an invariant that auto-heal depends on, and is tracked separately.
 func TestMigrations_FullStackIdempotent(t *testing.T) {
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
@@ -40,10 +48,11 @@ func TestMigrations_FullStackIdempotent(t *testing.T) {
 	require.False(t, dirtyAfterFirst, "DB must not be dirty after the first run")
 	require.Greater(t, versionAfterFirst, uint(0), "head version should be > 0")
 
-	// Second run: must be a no-op (golang-migrate's m.Up() returns ErrNoChange,
-	// which RunMigrations swallows) and must not flip the dirty flag.
+	// Second run: m.Up() returns ErrNoChange (no SQL executed), which
+	// RunMigrations swallows. The version must be unchanged and the dirty flag
+	// must not be set.
 	require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""),
-		"second migration run must be a clean no-op (ErrNoChange), proving idempotency")
+		"second migration run on a fully-migrated DB must be a clean no-op (ErrNoChange)")
 
 	versionAfterSecond, dirtyAfterSecond, err := migrations.GetMigrationVersion(ctx, pool, migrationsPath)
 	require.NoError(t, err)
