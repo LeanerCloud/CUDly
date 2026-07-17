@@ -2529,10 +2529,35 @@ func (s *PostgresStore) CompleteRIExchange(ctx context.Context, id, exchangeID s
 	return nil
 }
 
+// CompleteRIExchangeWithPayment marks an RI exchange as completed and updates
+// payment_due to the amount AWS actually accepted. Use this on the
+// manual-approval path instead of CompleteRIExchange so the daily-spend ledger
+// (GetRIExchangeDailySpend) reflects the accepted amount, not the stale
+// pre-execution quote (H3 fix).
+func (s *PostgresStore) CompleteRIExchangeWithPayment(ctx context.Context, id, exchangeID, acceptedPaymentDue string) error {
+	query := `
+		UPDATE ri_exchange_history
+		SET status = 'completed', exchange_id = $2, completed_at = NOW(), payment_due = $3
+		WHERE id = $1
+	`
+
+	result, err := s.db.Exec(ctx, query, id, exchangeID, acceptedPaymentDue)
+	if err != nil {
+		return fmt.Errorf("failed to complete ri exchange with payment: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("ri exchange record not found: %s", id)
+	}
+
+	return nil
+}
+
 // StampRIExchangeApprovedBy sets the approved_by column on an RI exchange row
-// (issue #300). Called after CompleteRIExchange when approval came from a
-// session-authed user. The stamping is best-effort (log + continue on failure
-// so the exchange itself isn't rolled back just because the audit stamp failed).
+// (issue #300). Called after CompleteRIExchangeWithPayment when approval came
+// from a session-authed user. The stamping is best-effort (log + continue on
+// failure so the exchange itself isn't rolled back just because the audit stamp
+// failed).
 func (s *PostgresStore) StampRIExchangeApprovedBy(ctx context.Context, id, approverEmail string) error {
 	query := `
 		UPDATE ri_exchange_history
@@ -2570,14 +2595,22 @@ func (s *PostgresStore) FailRIExchange(ctx context.Context, id, errorMsg string)
 	return nil
 }
 
-// GetRIExchangeDailySpend returns total payment_due for completed exchanges on a given date (UTC).
+// GetRIExchangeDailySpend returns total payment_due for completed and in-flight
+// (processing) exchanges on a given date (UTC).
+//
+// M5 fix: including 'processing' rows prevents a TOCTOU race where two
+// concurrent approvals both read the same daily-spend total (before either
+// exchange's ledger row is committed) and together exceed the daily cap.
+// For 'completed' rows the time anchor is completed_at; for 'processing' rows
+// it is updated_at (the moment the record transitioned to processing, i.e.
+// when it was approved).
 func (s *PostgresStore) GetRIExchangeDailySpend(ctx context.Context, date time.Time) (string, error) {
 	query := `
 		SELECT COALESCE(SUM(payment_due), 0)::text
 		FROM ri_exchange_history
-		WHERE status = 'completed'
-		  AND completed_at >= date_trunc('day', $1::timestamptz AT TIME ZONE 'UTC')
-		  AND completed_at < date_trunc('day', $1::timestamptz AT TIME ZONE 'UTC') + INTERVAL '1 day'
+		WHERE status IN ('completed', 'processing')
+		  AND COALESCE(completed_at, updated_at) >= date_trunc('day', $1::timestamptz AT TIME ZONE 'UTC')
+		  AND COALESCE(completed_at, updated_at) < date_trunc('day', $1::timestamptz AT TIME ZONE 'UTC') + INTERVAL '1 day'
 	`
 
 	var total string

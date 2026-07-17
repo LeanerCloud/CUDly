@@ -163,6 +163,9 @@ func (m *mockConfigStoreForHealth) TransitionRIExchangeStatus(ctx context.Contex
 func (m *mockConfigStoreForHealth) CompleteRIExchange(ctx context.Context, id string, exchangeID string) error {
 	return nil
 }
+func (m *mockConfigStoreForHealth) CompleteRIExchangeWithPayment(_ context.Context, _, _, _ string) error {
+	return nil
+}
 func (m *mockConfigStoreForHealth) FailRIExchange(ctx context.Context, id string, errorMsg string) error {
 	return nil
 }

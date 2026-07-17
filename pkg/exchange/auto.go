@@ -199,7 +199,12 @@ func RunAutoExchange(ctx context.Context, params RunAutoExchangeParams) (*AutoEx
 	perExchangeCap := new(big.Rat).SetFloat64(params.Config.MaxPaymentPerExchangeUSD)
 
 	for _, rec := range recs {
-		processRecommendation(ctx, params, rec, perExchangeCap, result)
+		if processRecommendation(ctx, params, rec, perExchangeCap, result) {
+			// H4: processAutoExchange signalled halt because a ledger write failed
+			// after money moved. Stop processing further recommendations so
+			// subsequent exchanges don't bypass the daily cap.
+			break
+		}
 	}
 
 	return result, nil
@@ -207,7 +212,9 @@ func RunAutoExchange(ctx context.Context, params RunAutoExchangeParams) (*AutoEx
 
 // processRecommendation handles a single reshape recommendation: validates,
 // quotes, and either creates a pending record (manual) or executes (auto).
-func processRecommendation(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, perExchangeCap *big.Rat, result *AutoExchangeResult) {
+// Returns true (halt) when processAutoExchange signals that a ledger write
+// failed after money moved and no further exchanges should be attempted.
+func processRecommendation(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, perExchangeCap *big.Rat, result *AutoExchangeResult) bool {
 	// Skip idle RIs with no target
 	if rec.TargetInstanceType == "" {
 		result.Skipped = append(result.Skipped, SkippedRecommendation{
@@ -215,19 +222,19 @@ func processRecommendation(ctx context.Context, params RunAutoExchangeParams, re
 			SourceInstanceType: rec.SourceInstanceType,
 			Reason:             "RI is idle (0% utilization) - no target instance type recommended",
 		})
-		return
+		return false
 	}
 
 	offeringID, skip := resolveOffering(ctx, params, rec)
 	if skip != nil {
 		result.Skipped = append(result.Skipped, *skip)
-		return
+		return false
 	}
 
 	quote, skip := getValidatedQuote(ctx, params, rec, offeringID, perExchangeCap)
 	if skip != nil {
 		result.Skipped = append(result.Skipped, *skip)
-		return
+		return false
 	}
 
 	// A nil PaymentDueUSD documents a zero-cost exchange (no payment due),
@@ -245,14 +252,16 @@ func processRecommendation(ctx context.Context, params RunAutoExchangeParams, re
 		} else {
 			result.Pending = append(result.Pending, outcome)
 		}
-	} else {
-		outcome := processAutoExchange(ctx, params, rec, offeringID, paymentDueStr, perExchangeCap)
-		if outcome.Error != "" {
-			result.Failed = append(result.Failed, outcome)
-		} else {
-			result.Completed = append(result.Completed, outcome)
-		}
+		return false
 	}
+
+	outcome, halt := processAutoExchange(ctx, params, rec, offeringID, paymentDueStr, perExchangeCap)
+	if outcome.Error != "" {
+		result.Failed = append(result.Failed, outcome)
+	} else {
+		result.Completed = append(result.Completed, outcome)
+	}
+	return halt
 }
 
 // resolveOffering looks up RI metadata and finds the target offering ID.
@@ -405,12 +414,67 @@ func processManualExchange(ctx context.Context, params RunAutoExchangeParams, re
 	}
 }
 
+// maxLedgerAttempts is the number of times processAutoExchange retries a
+// SaveRIExchangeRecord write after money has moved. Persistent failure halts
+// the run to prevent subsequent exchanges from bypassing the daily cap
+// (GetRIExchangeDailySpend sums the ledger rows that this write would create).
+const maxLedgerAttempts = 3
+
+// chooseEffectiveCap returns the smaller of perExchangeCap and daily headroom
+// (dailyCap - dailySpent). This bounds Execute's MaxPaymentDueUSD so a fresh
+// re-quote cannot accept an amount that exceeds the daily cap (H2 fix).
+func chooseEffectiveCap(dailyCap, dailySpent, perExchangeCap *big.Rat) *big.Rat {
+	remaining := new(big.Rat).Sub(dailyCap, dailySpent)
+	if remaining.Cmp(perExchangeCap) < 0 {
+		return remaining
+	}
+	return perExchangeCap
+}
+
+// acceptedAmountFromQuote returns the payment amount confirmed by a fresh
+// Execute quote, or fallback when freshQ is nil or carries an empty
+// PaymentDueUSDStr. Zero-cost exchanges (PaymentDueRaw empty, AWS returned
+// nil) are recorded as "0" so GetRIExchangeDailySpend's SUM is not distorted
+// by a NULL payment_due in the DB (H3 fix).
+func acceptedAmountFromQuote(freshQ *ExchangeQuoteSummary, fallback string) string {
+	if freshQ == nil {
+		return fallback
+	}
+	if freshQ.PaymentDueUSDStr != "" {
+		return freshQ.PaymentDueUSDStr
+	}
+	return "0"
+}
+
+// saveLedgerRecord saves a completed exchange record with retry, returning a
+// non-nil error if all maxLedgerAttempts fail. Callers treat persistent
+// failure as a halt signal to prevent subsequent exchanges from bypassing the
+// daily cap via a missing ledger row (H4 fix).
+func saveLedgerRecord(ctx context.Context, params RunAutoExchangeParams, record *ExchangeRecord, sourceRIID string) error {
+	var err error
+	for attempt := 1; attempt <= maxLedgerAttempts; attempt++ {
+		err = params.Store.SaveRIExchangeRecord(ctx, record)
+		if err == nil {
+			return nil
+		}
+		if attempt < maxLedgerAttempts {
+			logging.Warnf("ledger save retry %d/%d for %s after money moved: %v",
+				attempt, maxLedgerAttempts, sourceRIID, err)
+		}
+	}
+	return err
+}
+
 // processAutoExchange executes a single exchange in auto mode.
 // If overlapping scheduled runs attempt to exchange the same RI, the first
 // succeeds and the second fails because AWS replaces the source RI atomically.
 // No DB-level mutex is needed — AWS itself guarantees idempotency (an RI can
 // only be exchanged once). The failed attempt is recorded with status=failed.
-func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID, paymentDueStr string, perExchangeCap *big.Rat) ExchangeOutcome {
+//
+// Returns (outcome, halt). halt=true means a ledger write failed after money
+// moved; the caller (processRecommendation/RunAutoExchange) must stop further
+// exchanges to preserve cap integrity.
+func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID, paymentDueStr string, perExchangeCap *big.Rat) (ExchangeOutcome, bool) {
 	outcome := ExchangeOutcome{
 		SourceRIID:         rec.SourceRIID,
 		SourceInstanceType: rec.SourceInstanceType,
@@ -426,7 +490,7 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 	// simulation reflects what would happen if the cap were not a factor.
 	if params.DryRun {
 		outcome.Simulated = true
-		return outcome
+		return outcome, false
 	}
 
 	// Check daily cap
@@ -435,7 +499,7 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 		logging.Errorf("daily cap check failed for %s: %v", rec.SourceRIID, err)
 		outcome.Error = fmt.Sprintf("daily cap check failed: %v", err)
 		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error, ExchangeModeAuto)
-		return outcome
+		return outcome, false
 	}
 
 	dailyCap := new(big.Rat).SetFloat64(params.Config.MaxPaymentDailyUSD)
@@ -444,7 +508,7 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 		logging.Errorf("failed to parse daily spend %q: %v", dailySpendStr, err)
 		outcome.Error = fmt.Sprintf("failed to parse daily spend: %v", err)
 		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error, ExchangeModeAuto)
-		return outcome
+		return outcome, false
 	}
 
 	// paymentDueStr is always a decimal here: processRecommendation sets it to
@@ -457,7 +521,7 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 		logging.Errorf("failed to parse payment due %q for %s: %v", paymentDueStr, rec.SourceRIID, err)
 		outcome.Error = fmt.Sprintf("failed to parse payment due %q: %v", paymentDueStr, err)
 		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error, ExchangeModeAuto)
-		return outcome
+		return outcome, false
 	}
 
 	newTotal := new(big.Rat).Add(dailySpent, paymentDue)
@@ -467,24 +531,34 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 		logging.Warnf("skipping exchange for %s: %s", rec.SourceRIID, reason)
 		outcome.Error = reason
 		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, reason, ExchangeModeAuto)
-		return outcome
+		return outcome, false
 	}
 
+	// H2: bound Execute's MaxPaymentDueUSD by remaining daily headroom so a
+	// fresh re-quote inside Execute cannot accept an amount that would breach
+	// the daily cap. effectiveCap = min(perExchangeCap, dailyCap - dailySpent).
+	effectiveCap := chooseEffectiveCap(dailyCap, dailySpent, perExchangeCap)
+
 	// Execute the exchange
-	exchangeID, _, execErr := params.ExchangeClient.Execute(ctx, ExchangeExecuteRequest{
+	exchangeID, freshQ, execErr := params.ExchangeClient.Execute(ctx, ExchangeExecuteRequest{
 		Region:           params.Region,
 		ReservedIDs:      []string{rec.SourceRIID},
 		TargetOfferingID: offeringID,
 		TargetCount:      rec.TargetCount,
-		MaxPaymentDueUSD: perExchangeCap,
+		MaxPaymentDueUSD: effectiveCap,
 	})
 
 	if execErr != nil {
 		logging.Errorf("exchange execution failed for %s: %v", rec.SourceRIID, execErr)
 		outcome.Error = execErr.Error()
 		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error, ExchangeModeAuto)
-		return outcome
+		return outcome, false
 	}
+
+	// H3: persist the amount AWS actually accepted, not the stale pre-execution
+	// quote. acceptedAmountFromQuote extracts PaymentDueUSDStr from the fresh
+	// Execute quote; falls back to paymentDueStr when freshQ is nil (defensive).
+	accepted := acceptedAmountFromQuote(freshQ, paymentDueStr)
 
 	// Save completed record with ladder linkage when applicable.
 	now := time.Now()
@@ -498,20 +572,28 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 		TargetOfferingID:   offeringID,
 		TargetInstanceType: rec.TargetInstanceType,
 		TargetCount:        int(rec.TargetCount),
-		PaymentDue:         paymentDueStr,
+		PaymentDue:         accepted,
 		Status:             "completed",
 		Mode:               string(ExchangeModeAuto),
 		CompletedAt:        &now,
 		LadderRunID:        params.LadderRunID,
 	}
 
-	if err := params.Store.SaveRIExchangeRecord(ctx, record); err != nil {
-		logging.Errorf("failed to save completed exchange record for %s: %v", rec.SourceRIID, err)
+	// Set ExchangeID now so it is present in the outcome even if the ledger
+	// write fails below (callers and logs need it to correlate with AWS).
+	outcome.ExchangeID = exchangeID
+
+	// H4: retry the ledger write via saveLedgerRecord; persistent failure halts
+	// the run so subsequent exchanges don't bypass the cap via missing rows.
+	if saveErr := saveLedgerRecord(ctx, params, record, rec.SourceRIID); saveErr != nil {
+		logging.Errorf("all %d ledger save attempts failed for %s after money moved: %v; halting to prevent cap bypass",
+			maxLedgerAttempts, rec.SourceRIID, saveErr)
+		outcome.Error = fmt.Sprintf("ledger save failed after exchange executed: %v", saveErr)
+		return outcome, true // halt=true: stop processing further exchanges
 	}
 
 	outcome.RecordID = record.ID
-	outcome.ExchangeID = exchangeID
-	return outcome
+	return outcome, false
 }
 
 // ExchangeMode constrains the originating code path of an exchange record so

@@ -36,10 +36,12 @@ func TestCheckDailyCap_InvalidDailySpend(t *testing.T) {
 }
 
 func TestCheckDailyCap_InvalidPaymentDue(t *testing.T) {
-	// Unparseable payment due → treated as $0, within cap
+	// H1 fix: an unparseable payment-due string must fail closed (return a
+	// blocking reason) instead of being treated as $0. Proceeding as $0 would
+	// allow an exchange of unknown cost through the daily cap check.
 	reason := checkDailyCap("100.00", "not-a-number", 500.0)
-	// $100 + $0 = $100 < $500 → allowed
-	assert.Equal(t, "", reason)
+	assert.NotEmpty(t, reason, "unparseable payment due must block the exchange (fail closed)")
+	assert.Contains(t, reason, "could not parse payment due")
 }
 
 func TestCheckDailyCap_ExactlyAtCap(t *testing.T) {

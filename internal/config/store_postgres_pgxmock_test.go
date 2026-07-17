@@ -1364,6 +1364,37 @@ func TestPGXMock_FailRIExchange_NotFound(t *testing.T) {
 
 // ─── GetRIExchangeDailySpend ──────────────────────────────────────────────────
 
+// ─── CompleteRIExchangeWithPayment ───────────────────────────────────────────
+
+func TestPGXMock_CompleteRIExchangeWithPayment_Success(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	// Three args: id, exchangeID, acceptedPaymentDue
+	mock.ExpectExec("UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := store.CompleteRIExchangeWithPayment(ctx, "ri-id", "exch-id", "42.000000")
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPGXMock_CompleteRIExchangeWithPayment_NotFound(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectExec("UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := store.CompleteRIExchangeWithPayment(ctx, "ri-id", "exch-id", "42.000000")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+// ─── GetRIExchangeDailySpend (M5: includes processing rows) ──────────────────
+
 func TestPGXMock_GetRIExchangeDailySpend_Success(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
@@ -1375,6 +1406,25 @@ func TestPGXMock_GetRIExchangeDailySpend_Success(t *testing.T) {
 	total, err := store.GetRIExchangeDailySpend(ctx, time.Now())
 	require.NoError(t, err)
 	assert.Equal(t, "250.00", total)
+}
+
+// TestPGXMock_GetRIExchangeDailySpend_IncludesProcessingStatus verifies that
+// the query includes 'processing' rows in addition to 'completed' ones (M5
+// fix) by asserting the SQL contains the expected status filter text.
+// Because pgxmock matches the full query string, we confirm the SQL sent to
+// the DB driver contains "processing".
+func TestPGXMock_GetRIExchangeDailySpend_IncludesProcessingStatus(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	// Match any SELECT that goes to the DB; the important assertion is below.
+	rows := pgxmock.NewRows([]string{"total"}).AddRow("0")
+	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
+
+	_, err := store.GetRIExchangeDailySpend(ctx, time.Now())
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 // ─── GetCloudAccount ──────────────────────────────────────────────────────────

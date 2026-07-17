@@ -1268,6 +1268,52 @@ func (h *Handler) failExchange(ctx context.Context, id, reason string) (any, err
 	return map[string]any{"status": "failed", "reason": reason}, nil
 }
 
+// retryCompleteWithPayment calls CompleteRIExchangeWithPayment up to
+// maxLedgerAttempts times, logging retries. Returns a non-nil error if all
+// attempts fail. Extracted from executeApprovedExchange to reduce its
+// cyclomatic complexity (H4 fix).
+func (h *Handler) retryCompleteWithPayment(ctx context.Context, id, exchangeID, acceptedPaymentDue string) error {
+	const maxAttempts = 3
+	var err error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		err = h.config.CompleteRIExchangeWithPayment(ctx, id, exchangeID, acceptedPaymentDue)
+		if err == nil {
+			return nil
+		}
+		if attempt < maxAttempts {
+			logging.Warnf("ledger write retry %d/%d for exchange %s after money moved: %v",
+				attempt, maxAttempts, id, err)
+		}
+	}
+	return err
+}
+
+// handlerChooseEffectiveCap returns the smaller of perExchangeCap and daily
+// headroom (dailyCap - dailySpent), bounding Execute's MaxPaymentDueUSD so a
+// fresh re-quote cannot exceed the remaining daily budget (H2 fix).
+func handlerChooseEffectiveCap(dailyCap, dailySpent, perExchangeCap *big.Rat) *big.Rat {
+	remaining := new(big.Rat).Sub(dailyCap, dailySpent)
+	if remaining.Cmp(perExchangeCap) < 0 {
+		return remaining
+	}
+	return perExchangeCap
+}
+
+// handlerAcceptedAmount extracts the confirmed payment amount from a fresh
+// Execute quote, falling back to fallback when freshQ is nil or empty (H3 fix).
+func handlerAcceptedAmount(freshQ *exchange.ExchangeQuoteSummary, fallback string) string {
+	if freshQ == nil {
+		return fallback
+	}
+	if freshQ.PaymentDueUSDStr != "" {
+		return freshQ.PaymentDueUSDStr
+	}
+	// Zero-cost exchange: PaymentDueRaw was empty (AWS returned nil) so
+	// PaymentDueUSDStr is also empty. Use "0" to avoid a NULL payment_due in
+	// the DB that would silently distort GetRIExchangeDailySpend's SUM.
+	return "0"
+}
+
 // executeApprovedExchange checks caps and executes the exchange after approval.
 func (h *Handler) executeApprovedExchange(ctx context.Context, id string, record *config.RIExchangeRecord) (any, error) {
 	dailySpendStr, err := h.config.GetRIExchangeDailySpend(ctx, time.Now())
@@ -1299,27 +1345,49 @@ func (h *Handler) executeApprovedExchange(ctx context.Context, id string, record
 		return h.failExchange(ctx, id, "per-exchange spending cap is not configured (RIExchangeMaxPerExchangeUSD is 0)")
 	}
 
+	// H2: bound Execute's MaxPaymentDueUSD by remaining daily headroom so a
+	// fresh re-quote inside Execute cannot accept an amount that would breach
+	// the daily cap. dailySpend was verified parseable by checkDailyCap above.
+	dailySpent, _ := exchange.ParseDecimalRat(dailySpendStr)
+	dailyCap := new(big.Rat).SetFloat64(globalCfg.RIExchangeMaxDailyUSD)
 	perExchangeCap := new(big.Rat).SetFloat64(globalCfg.RIExchangeMaxPerExchangeUSD)
-	exchangeID, _, execErr := exchange.ExecuteExchange(ctx, exchange.ExchangeExecuteRequest{
+	effectiveCap := handlerChooseEffectiveCap(dailyCap, dailySpent, perExchangeCap)
+
+	execFn := exchange.ExecuteExchange
+	if h.executeExchangeFn != nil {
+		execFn = h.executeExchangeFn
+	}
+	exchangeID, freshQ, execErr := execFn(ctx, exchange.ExchangeExecuteRequest{
 		Region:           region,
 		ReservedIDs:      record.SourceRIIDs,
 		TargetOfferingID: record.TargetOfferingID,
 		TargetCount:      int32(record.TargetCount), // #nosec G115 -- RI quantity stored from validated API request; AWS limits RI counts well below math.MaxInt32
-		MaxPaymentDueUSD: perExchangeCap,
+		MaxPaymentDueUSD: effectiveCap,
 	})
 	if execErr != nil {
 		return h.failExchange(ctx, id, execErr.Error())
 	}
 
-	if err := h.config.CompleteRIExchange(ctx, id, exchangeID); err != nil {
-		logging.Errorf("failed to mark exchange %s as completed: %v", id, err)
+	// H3: persist the amount AWS actually accepted, not the stale pre-execution
+	// quote stored in record.PaymentDue.
+	acceptedPaymentDue := handlerAcceptedAmount(freshQ, record.PaymentDue)
+
+	// H4: retry the ledger write via retryCompleteWithPayment; persistent
+	// failure is returned as an error (HTTP 500) so the caller knows money
+	// moved but the record was not updated.
+	if completeErr := h.retryCompleteWithPayment(ctx, id, exchangeID, acceptedPaymentDue); completeErr != nil {
+		logging.Errorf("all ledger write attempts failed for exchange %s after money moved: %v",
+			id, completeErr)
+		return nil, fmt.Errorf("exchange executed (id=%s) but ledger update failed: %w",
+			exchangeID, completeErr)
 	}
 
 	return map[string]any{"status": "completed", "exchange_id": exchangeID}, nil
 }
 
 // checkDailyCap verifies the exchange payment won't exceed the daily spending cap.
-// Returns an empty string if within cap, or a reason string if exceeded.
+// Returns an empty string if within cap, or a reason string if exceeded or if
+// either input cannot be parsed (fail closed on parse errors).
 func checkDailyCap(dailySpendStr, paymentDueStr string, maxDailyUSD float64) string {
 	dailyCap := new(big.Rat).SetFloat64(maxDailyUSD)
 	dailySpent, err := exchange.ParseDecimalRat(dailySpendStr)
@@ -1331,8 +1399,11 @@ func checkDailyCap(dailySpendStr, paymentDueStr string, maxDailyUSD float64) str
 	}
 	paymentDue, err := exchange.ParseDecimalRat(paymentDueStr)
 	if err != nil || paymentDue == nil {
-		logging.Warnf("checkDailyCap: failed to parse payment due string %q: %v; treating as $0", paymentDueStr, err)
-		paymentDue = new(big.Rat)
+		// H1 fix: fail closed on an unparseable payment-due string instead of
+		// treating it as $0. An unparseable value means we cannot determine the
+		// true cost of this exchange, so proceeding risks exceeding the cap.
+		logging.Warnf("checkDailyCap: failed to parse payment due string %q: %v; blocking exchange to avoid cap bypass", paymentDueStr, err)
+		return fmt.Sprintf("daily spend check failed: could not parse payment due value %q", paymentDueStr)
 	}
 
 	newTotal := new(big.Rat).Add(dailySpent, paymentDue)

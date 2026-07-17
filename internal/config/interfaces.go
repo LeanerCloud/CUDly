@@ -246,9 +246,15 @@ type StoreInterface interface {
 	// actor is the UUID of the user performing the transition (nil for system-initiated paths).
 	TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*RIExchangeRecord, error)
 	CompleteRIExchange(ctx context.Context, id string, exchangeID string) error
+	// CompleteRIExchangeWithPayment marks an RI exchange as completed and
+	// updates payment_due to the amount AWS actually accepted. Use this instead
+	// of CompleteRIExchange on the manual-approval path so the daily-spend
+	// ledger (GetRIExchangeDailySpend) reflects the real accepted amount rather
+	// than the stale pre-execution quote (H3 fix).
+	CompleteRIExchangeWithPayment(ctx context.Context, id string, exchangeID string, acceptedPaymentDue string) error
 	// StampRIExchangeApprovedBy sets the approved_by column on a completed
-	// exchange row (issue #300). Called after CompleteRIExchange when the
-	// approval came from a session-authed user rather than an email token.
+	// exchange row (issue #300). Called after CompleteRIExchangeWithPayment when
+	// the approval came from a session-authed user rather than an email token.
 	StampRIExchangeApprovedBy(ctx context.Context, id string, approverEmail string) error
 	FailRIExchange(ctx context.Context, id string, errorMsg string) error
 	GetRIExchangeDailySpend(ctx context.Context, date time.Time) (string, error)
