@@ -1369,15 +1369,15 @@ func (h *Handler) rejectRIExchange(ctx context.Context, id, token string) (any, 
 	}
 
 	// Token-based rejection: no session user, so transitioned_by = NULL.
-	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "cancelled", nil)
+	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", config.StatusCanceled, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
 	}
 	if transitioned == nil {
-		return nil, NewClientError(409, "exchange already processed, expired, or was cancelled")
+		return nil, NewClientError(409, "exchange already processed, expired, or was canceled")
 	}
 
-	return map[string]string{"status": "cancelled"}, nil
+	return map[string]string{"status": config.StatusCanceled}, nil
 }
 
 // RIExchangeConfigResponse is the response for GET /api/ri-exchange/config.

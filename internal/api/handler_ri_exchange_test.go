@@ -262,8 +262,9 @@ func TestRejectRIExchange_AlreadyCompleted(t *testing.T) {
 		ExchangeID:    "exch-already-done",
 	}, nil)
 
-	// Transition from pending→canceled fails (record is not pending)
-	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "cancelled", mock.Anything).
+	// Transition from pending->canceled fails (record is not pending).
+	// Uses canonical spelling; see config.StatusCanceled.
+	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", config.StatusCanceled, mock.Anything).
 		Return((*config.RIExchangeRecord)(nil), nil)
 
 	_, err := h.rejectRIExchange(ctx, id, token)
@@ -1577,10 +1578,10 @@ func TestRejectRIExchange_TokenPathActorIsNil(t *testing.T) {
 	mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
 		ID: id, Status: "pending", ApprovalToken: "tok",
 	}, nil)
-	// Token path: actor must be nil.
-	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "cancelled",
+	// Token path: actor must be nil. Canonical spelling used (#1277 follow-up).
+	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", config.StatusCanceled,
 		(*string)(nil),
-	).Return(&config.RIExchangeRecord{ID: id, Status: "cancelled"}, nil)
+	).Return(&config.RIExchangeRecord{ID: id, Status: config.StatusCanceled}, nil)
 
 	_, err := (&Handler{config: mockStore}).rejectRIExchange(ctx, id, "tok")
 	require.NoError(t, err)
