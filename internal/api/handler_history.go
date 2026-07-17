@@ -976,14 +976,14 @@ func appendMissing(dst []string, vals ...string) []string {
 // through unchanged.
 //
 // Rows with an empty AccountID are exempt from the drop for scoped users
-// (issue #1032, regression of #621). An empty AccountID means the execution
-// was ambient (exec.CloudAccountID == nil) AND its recommendations carry no
-// common account. These are in-flight financial actions the user owns that
-// cannot be attributed to a specific cloud account — dropping them silently
-// re-introduces the #621 disappearance bug for non-admin users. Passing them
-// through is safe: the session's allowed_accounts gate already ensures the
-// user has view:purchases permission, and unattributed rows carry no
-// account-specific data that would violate cross-tenant isolation.
+// only when the requesting user created the row (issue #1032, regression of
+// #621). An empty AccountID means the execution was ambient
+// (exec.CloudAccountID == nil) AND its recommendations carry no common
+// account. These are in-flight financial actions the user owns that cannot be
+// attributed to a specific cloud account; dropping them silently re-introduces
+// the #621 disappearance bug. The exemption is now gated on ownership so that
+// another user's multi-account in-flight row (including CreatedByUserEmail PII
+// and dollar amounts) is not visible to unrelated scoped users.
 func (h *Handler) filterPurchaseHistoryByAllowedAccounts(ctx context.Context, session *Session, purchases []config.PurchaseHistoryRecord) ([]config.PurchaseHistoryRecord, error) {
 	allowed, err := h.getAllowedAccounts(ctx, session)
 	if err != nil {
@@ -997,10 +997,14 @@ func (h *Handler) filterPurchaseHistoryByAllowedAccounts(ctx context.Context, se
 	for _rvc := range purchases {
 		p := purchases[_rvc]
 		// Empty AccountID: unattributed ambient/multi-account synthesized row.
-		// Pass through so scoped users see in-flight financial actions that
-		// cannot be pinned to a single account (issue #1032 / #621 regression).
+		// Pass through only when the requesting user created the row (issue
+		// #1032 / #621 regression + adversarial-review F1). Dropping rows
+		// owned by other users prevents PII (CreatedByUserEmail) and dollar
+		// amounts from leaking across user boundaries.
 		if p.AccountID == "" {
-			filtered = append(filtered, p)
+			if p.CreatedByUserID == session.UserID {
+				filtered = append(filtered, p)
+			}
 			continue
 		}
 		if auth.MatchesAccount(allowed, p.AccountID, nameByID[p.AccountID]) {

@@ -483,12 +483,17 @@ func TestHandler_getHistory_GetIsReadOnly(t *testing.T) {
 func TestHandler_getHistory_ScopedUserSeesEmptyAccountRows(t *testing.T) {
 	ctx := context.Background()
 
-	// Ambient execution: CloudAccountID == nil, recommendations also have no
-	// account — this is the multi-account/ambient-credentials path.
+	const scopedUserID = "scoped-user-id"
+
+	// Ambient execution created by the scoped user: CloudAccountID == nil and
+	// recommendations carry no common account. CreatedByUserID must match the
+	// requesting session so the ownership gate (adversarial-review F1) passes.
+	creatorID := scopedUserID
 	ambientExec := config.PurchaseExecution{
-		ExecutionID:   "ambient-exec-1",
-		Status:        "pending",
-		ScheduledDate: time.Now(),
+		ExecutionID:     "ambient-exec-1",
+		Status:          "pending",
+		ScheduledDate:   time.Now(),
+		CreatedByUserID: &creatorID,
 		Recommendations: []config.RecommendationRecord{
 			// No CloudAccountID on either rec → collapseRecommendationAccount
 			// returns "" → executionToHistoryRow sets AccountID = "".
@@ -510,14 +515,16 @@ func TestHandler_getHistory_ScopedUserSeesEmptyAccountRows(t *testing.T) {
 
 	// Scoped user: only allowed to access one specific account UUID.
 	scopedUser := &Session{
-		UserID: "scoped-user-id",
+		UserID: scopedUserID,
 		Email:  "scoped@example.com",
 	}
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "scoped-token").Return(scopedUser, nil)
-	mockAuth.On("HasPermissionAPI", ctx, "scoped-user-id", "view", "purchases").Return(true, nil)
+	mockAuth.On("HasPermissionAPI", ctx, scopedUserID, "view", "purchases").Return(true, nil)
 	// allowed_accounts is non-empty → user is scoped (not unrestricted).
-	mockAuth.On("GetAllowedAccountsAPI", ctx, "scoped-user-id").Return([]string{"aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"}, nil)
+	mockAuth.On("GetAllowedAccountsAPI", ctx, scopedUserID).Return([]string{"aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"}, nil)
+	// resolveUserEmails resolves creator emails; stub for the scoped user's own ID.
+	mockAuth.On("GetUser", ctx, scopedUserID).Return(&User{Email: "scoped@example.com"}, nil).Maybe()
 
 	handler := &Handler{
 		auth:   mockAuth,
@@ -533,12 +540,73 @@ func TestHandler_getHistory_ScopedUserSeesEmptyAccountRows(t *testing.T) {
 
 	resp := result.(HistoryResponse)
 	require.Len(t, resp.Purchases, 1,
-		"issue #1032 / #621 regression: a scoped user must see in-flight ambient-account executions; dropping them re-creates the financial-action-vanishes bug")
+		"issue #1032 / #621 regression: a scoped user must see their own in-flight ambient-account executions; dropping them re-creates the financial-action-vanishes bug")
 	assert.Equal(t, "ambient-exec-1", resp.Purchases[0].PurchaseID)
 	assert.Equal(t, "", resp.Purchases[0].AccountID,
-		"the AccountID is empty (ambient execution) and must remain visible to scoped users")
+		"the AccountID is empty (ambient execution) and must remain visible to scoped users who created the row")
 	assert.Equal(t, "pending", resp.Purchases[0].Status)
 	assert.Equal(t, 1, resp.Summary.TotalPending)
+}
+
+// TestHandler_getHistory_ScopedUserCannotSeeOtherUsersEmptyAccountRows is the
+// adversarial-review F1 regression test: a scoped user must NOT see in-flight
+// ambient-account rows (AccountID == "") created by OTHER users. Before the
+// fix, filterPurchaseHistoryByAllowedAccounts passed ALL empty-AccountID rows
+// through unconditionally, leaking other users' CreatedByUserEmail (PII) and
+// dollar amounts to any scoped user who had view:purchases.
+//
+// Fails pre-fix: user B's ambient row passes through the empty-AccountID
+// exemption and resp.Purchases has length 1 instead of 0.
+func TestHandler_getHistory_ScopedUserCannotSeeOtherUsersEmptyAccountRows(t *testing.T) {
+	ctx := context.Background()
+
+	const userAID = "user-a-id"
+	const userBID = "user-b-id"
+
+	// Ambient execution created by user B with PII-carrying fields.
+	creatorID := userBID
+	otherUsersExec := config.PurchaseExecution{
+		ExecutionID:     "other-user-ambient-exec",
+		Status:          "pending",
+		ScheduledDate:   time.Now(),
+		CreatedByUserID: &creatorID,
+		Recommendations: []config.RecommendationRecord{
+			// No cloud account → AccountID will be "".
+			{Provider: "aws", Service: "ec2", Region: "us-east-1"},
+		},
+	}
+
+	mockStore := new(MockConfigStore)
+	approverEmail := "ops@example.com"
+	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{otherUsersExec}, nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return nil, nil
+	}
+
+	// User A: scoped to one account, different from user B.
+	userASession := &Session{UserID: userAID, Email: "a@example.com"}
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "user-a-token").Return(userASession, nil)
+	mockAuth.On("HasPermissionAPI", ctx, userAID, "view", "purchases").Return(true, nil)
+	mockAuth.On("GetAllowedAccountsAPI", ctx, userAID).Return([]string{"aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"}, nil)
+	// resolveUserEmails may try to look up user B's email; stub it to return a
+	// value so the test exercises the actual row filtering, not an email lookup error.
+	mockAuth.On("GetUser", ctx, userBID).Return(&User{Email: "b@example.com"}, nil).Maybe()
+
+	handler := &Handler{auth: mockAuth, config: mockStore}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer user-a-token"},
+	}
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	result, err := handler.getHistory(ctx, req, map[string]string{})
+	require.NoError(t, err)
+
+	resp := result.(HistoryResponse)
+	assert.Empty(t, resp.Purchases,
+		"adversarial-review F1: scoped user A must NOT see another user's empty-account in-flight row (PII/financial leak)")
 }
 
 // TestHandler_expireStaleExecutionsAsync_SystemActorIsNil asserts that the

@@ -214,12 +214,20 @@ type AuthServiceInterface interface {
 	// HasAPIKeyPermissionAPI validates a user API key and checks the
 	// requested action/resource against the key's effective permissions
 	// (the intersection of the key's scoped permissions with the owning
-	// user's group-derived permissions). Returns the owning user's ID and
-	// whether the permission is held; a non-nil error means the key did
-	// not validate or the lookup failed, and callers must deny (fail
-	// closed). Wired into requirePermission so per-key scoping is
+	// user's group-derived permissions). Returns the owning user's ID, the
+	// key's database ID, and whether the permission is held; a non-nil error
+	// means the key did not validate or the lookup failed, and callers must
+	// deny (fail closed). Wired into requirePermission so per-key scoping is
 	// enforced at request time (issue #1142).
-	HasAPIKeyPermissionAPI(ctx context.Context, apiKey, action, resource string) (string, bool, error)
+	HasAPIKeyPermissionAPI(ctx context.Context, apiKey, action, resource string) (userID, keyID string, allowed bool, err error)
+	// HasAPIKeyPermissionForConstraintsAPI checks request-derived permission
+	// constraint sets against a user API key's effective permissions (the
+	// intersection of the key's own constraints and the owning user's
+	// group-derived permissions). Must be called after HasAPIKeyPermissionAPI
+	// confirms action/resource access. Enforces per-key caps (MaxPurchaseAmount,
+	// Providers, Services, Regions, AccountIDs) that the key's owner cannot
+	// override via their broader group permissions (adversarial-review F2).
+	HasAPIKeyPermissionForConstraintsAPI(ctx context.Context, keyID, userID, action, resource string, constraintSets []auth.PermissionConstraints) (bool, error)
 }
 
 // Auth request/response types (to avoid import cycle with auth package).
@@ -260,6 +268,12 @@ type PasswordResetConfirm struct {
 type Session struct {
 	UserID string `json:"user_id"`
 	Email  string `json:"email"`
+	// UserAPIKeyID is the database key ID when the request was authenticated via
+	// a user API key (not the admin infra key). Empty for bearer-token and
+	// admin-API-key sessions. Used by requirePermissionConstraints to evaluate
+	// constraints against the key's effective permissions rather than the owning
+	// user's full group permissions (adversarial-review F2).
+	UserAPIKeyID string `json:"-"`
 }
 
 type User struct {

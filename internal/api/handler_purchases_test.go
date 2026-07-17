@@ -3707,6 +3707,65 @@ func TestHandler_executePurchase_PermissionConstraintsDenied(t *testing.T) {
 	assert.Contains(t, ce.Error(), "constraints")
 }
 
+// TestHandler_executePurchase_UserAPIKeyConstraintsDenied is the
+// adversarial-review F2 regression test: a user API key with a
+// MaxPurchaseAmount cap must be denied when the request exceeds that cap, even
+// if the OWNING USER's group permissions allow a higher limit. Pre-fix,
+// requirePermissionConstraints always called HasPermissionForConstraintsAPI
+// with session.UserID, which re-derives from the user's GROUP permissions and
+// silently ignores the key's own Constraints — so a $100-capped CI key could
+// spend up to the user's full limit.
+//
+// Fails pre-fix: HasAPIKeyPermissionForConstraintsAPI is never called;
+// HasPermissionForConstraintsAPI (the user path) is called instead and returns
+// true (user has no cap), so the request is not rejected and falls through to
+// execution.
+func TestHandler_executePurchase_UserAPIKeyConstraintsDenied(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	// No store expectations: the request must be rejected before saving.
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	const ownerUserID = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+	const keyID = "key-id-ci-100-cap"
+
+	// requirePermission routes to HasAPIKeyPermissionAPI for x-api-key headers.
+	// Returns the owning user's ID and the key's DB ID so the session carries
+	// UserAPIKeyID for the downstream constraint check.
+	mockAuth.On("HasAPIKeyPermissionAPI", ctx, "ci-key-value", "execute", "purchases").
+		Return(ownerUserID, keyID, true, nil)
+	// validatePurchaseRecommendationScope uses GetAllowedAccountsAPI to scope
+	// the request; return empty so no account filter is applied.
+	mockAuth.On("GetAllowedAccountsAPI", ctx, ownerUserID).Return([]string{}, nil)
+	// requirePermissionConstraints must call HasAPIKeyPermissionForConstraintsAPI
+	// (not HasPermissionForConstraintsAPI) when session.UserAPIKeyID != "".
+	// The key's cap blocks the $500 purchase.
+	mockAuth.On("HasAPIKeyPermissionForConstraintsAPI", ctx, keyID, ownerUserID, "execute", "purchases",
+		mock.MatchedBy(func(sets []auth.PermissionConstraints) bool {
+			if len(sets) != 1 {
+				return false
+			}
+			return sets[0].MaxPurchaseAmount == 500.0
+		})).Return(false, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"x-api-key": "ci-key-value"},
+		Body: `{"recommendations": [
+			{"id": "rec-1", "provider": "aws", "service": "ec2", "region": "us-east-1", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": 500.0, "savings": 50.0}
+		]}`,
+	}
+	_, err := handler.executePurchase(ctx, req)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a 403 clientError, got: %v", err)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.Error(), "constraints",
+		"adversarial-review F2: user API key's MaxPurchaseAmount cap must be enforced at execution time")
+}
+
 // TestPurchaseConstraintSets_AccountDimensionAlwaysPopulated pins the SEC-01
 // fail-closed shape of the AccountIDs dimension: every constraint set must
 // carry a non-empty AccountIDs list. The auth matcher treats an empty

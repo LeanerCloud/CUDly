@@ -236,15 +236,12 @@ func (h *Handler) requirePermission(ctx context.Context, req *events.LambdaFunct
 	// that fails validation falls through to bearer-token auth, matching
 	// resolveAuthenticatedUserID, so a stale x-api-key header cannot lock
 	// out a caller that also presents a valid session.
-	if apiKey != "" {
-		userID, has, err := h.auth.HasAPIKeyPermissionAPI(ctx, apiKey, action, resource)
-		if err == nil {
-			if !has {
-				return nil, NewClientError(403, fmt.Sprintf("permission denied: requires %s on %s", action, resource))
-			}
-			return &Session{UserID: userID}, nil
-		}
-		logging.Debugf("User API key permission check failed: %v", err)
+	session, apiKeyErr := h.authorizeAPIKey(ctx, apiKey, action, resource)
+	if apiKeyErr != nil {
+		return nil, apiKeyErr
+	}
+	if session != nil {
+		return session, nil
 	}
 
 	token := h.extractBearerToken(req)
@@ -266,6 +263,37 @@ func (h *Handler) requirePermission(ctx context.Context, req *events.LambdaFunct
 	}
 
 	return session, nil
+}
+
+// authorizeAPIKey checks whether the given API key value has the required
+// permission. It returns:
+//   - (nil, nil)         if apiKey is absent or fails validation (caller falls
+//     through to bearer-token auth)
+//   - (session, nil)     if the key grants the permission and identity is valid
+//   - (nil, 403 error)   if the key is present and actively denies the request
+//   - (nil, other error) if an invariant is violated (e.g. incomplete identity)
+//
+// Fail closed: empty userID or keyID after a successful grant is an internal
+// error, not a fall-through, so the caller cannot silently skip key constraints.
+func (h *Handler) authorizeAPIKey(ctx context.Context, apiKey, action, resource string) (*Session, error) {
+	if apiKey == "" {
+		return nil, nil
+	}
+	userID, keyID, has, err := h.auth.HasAPIKeyPermissionAPI(ctx, apiKey, action, resource)
+	if err != nil {
+		logging.Debugf("User API key permission check failed: %v", err)
+		return nil, nil // validation error: fall through to bearer-token auth
+	}
+	if !has {
+		return nil, NewClientError(403, fmt.Sprintf("permission denied: requires %s on %s", action, resource))
+	}
+	if userID == "" || keyID == "" {
+		return nil, fmt.Errorf("API key permission check returned incomplete identity")
+	}
+	// Thread the key's database ID so requirePermissionConstraints can evaluate
+	// constraints against the key's effective permissions (not just the owning
+	// user's group permissions).
+	return &Session{UserID: userID, UserAPIKeyID: keyID}, nil
 }
 
 // unattributedAccountConstraint is the request-side AccountIDs value passed
@@ -291,6 +319,13 @@ const unattributedAccountConstraint = "unattributed"
 // infrastructure credential with no user row, so it bypasses the check just
 // like it bypasses requirePermission's per-user lookup. Fails closed on a
 // missing auth service or a lookup error.
+//
+// For user-API-key sessions (session.UserAPIKeyID != ""), constraints are
+// evaluated against the KEY's effective permissions (the intersection of the
+// key's own constraints and the owning user's group permissions). This
+// prevents a CI key with MaxPurchaseAmount=$100 from spending up to the
+// owning user's full group limit by inheriting the broader group permissions
+// (adversarial-review F2).
 func (h *Handler) requirePermissionConstraints(ctx context.Context, session *Session, action, resource string, constraintSets []auth.PermissionConstraints) error {
 	if session == nil {
 		return fmt.Errorf("internal error: nil session passed to requirePermissionConstraints")
@@ -300,6 +335,18 @@ func (h *Handler) requirePermissionConstraints(ctx context.Context, session *Ses
 	}
 	if h.auth == nil {
 		return fmt.Errorf("authentication service not configured")
+	}
+	// User API key: evaluate constraints against the key's effective permissions,
+	// not the owning user's full group permissions.
+	if session.UserAPIKeyID != "" {
+		has, err := h.auth.HasAPIKeyPermissionForConstraintsAPI(ctx, session.UserAPIKeyID, session.UserID, action, resource, constraintSets)
+		if err != nil {
+			return fmt.Errorf("permission constraint check failed: %w", err)
+		}
+		if !has {
+			return NewClientError(403, fmt.Sprintf("permission denied: this request exceeds the constraints configured on your %s permission for %s", action, resource))
+		}
+		return nil
 	}
 	has, err := h.auth.HasPermissionForConstraintsAPI(ctx, session.UserID, action, resource, constraintSets)
 	if err != nil {

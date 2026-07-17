@@ -263,12 +263,14 @@ func (m *MockAuthService) GetUserPermissionsAPI(ctx context.Context, userID stri
 }
 
 // allowConstraintChecks stubs the SEC-01 execution-time permission
-// constraint check (HasPermissionForConstraintsAPI) to succeed for any
-// request, modeling a granting permission with no Constraints configured.
-// Tests that target constraint behavior register an explicit expectation
-// instead.
+// constraint check (HasPermissionForConstraintsAPI and the user-API-key
+// variant HasAPIKeyPermissionForConstraintsAPI) to succeed for any request,
+// modeling a granting permission with no Constraints configured. Tests that
+// target constraint behavior register explicit expectations instead.
 func (m *MockAuthService) allowConstraintChecks() {
 	m.On("HasPermissionForConstraintsAPI", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(true, nil).Maybe()
+	m.On("HasAPIKeyPermissionForConstraintsAPI", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(true, nil).Maybe()
 }
 
@@ -328,7 +330,12 @@ func (m *MockAuthService) ValidateUserAPIKeyAPI(ctx context.Context, apiKey stri
 	return args.Get(0), args.Get(1), args.Error(2)
 }
 
-func (m *MockAuthService) HasAPIKeyPermissionAPI(ctx context.Context, apiKey, action, resource string) (string, bool, error) {
+func (m *MockAuthService) HasAPIKeyPermissionAPI(ctx context.Context, apiKey, action, resource string) (string, string, bool, error) {
 	args := m.Called(ctx, apiKey, action, resource)
-	return args.String(0), args.Bool(1), args.Error(2)
+	return args.String(0), args.String(1), args.Bool(2), args.Error(3)
+}
+
+func (m *MockAuthService) HasAPIKeyPermissionForConstraintsAPI(ctx context.Context, keyID, userID, action, resource string, constraintSets []auth.PermissionConstraints) (bool, error) {
+	args := m.Called(ctx, keyID, userID, action, resource, constraintSets)
+	return args.Bool(0), args.Error(1)
 }

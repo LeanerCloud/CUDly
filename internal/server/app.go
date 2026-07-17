@@ -1168,7 +1168,11 @@ func (a *authServiceAdapter) ValidateUserAPIKeyAPI(ctx context.Context, apiKey s
 	return a.service.ValidateUserAPIKeyAPI(ctx, apiKey)
 }
 
-func (a *authServiceAdapter) HasAPIKeyPermissionAPI(ctx context.Context, apiKey, action, resource string) (userID string, allowed bool, err error) {
-	userID, allowed, err = a.service.HasAPIKeyPermissionAPI(ctx, apiKey, action, resource)
+func (a *authServiceAdapter) HasAPIKeyPermissionAPI(ctx context.Context, apiKey, action, resource string) (userID, keyID string, allowed bool, err error) {
+	userID, keyID, allowed, err = a.service.HasAPIKeyPermissionAPI(ctx, apiKey, action, resource)
 	return
+}
+
+func (a *authServiceAdapter) HasAPIKeyPermissionForConstraintsAPI(ctx context.Context, keyID, userID, action, resource string, constraintSets []auth.PermissionConstraints) (bool, error) {
+	return a.service.HasAPIKeyPermissionForConstraintsAPI(ctx, keyID, userID, action, resource, constraintSets)
 }
