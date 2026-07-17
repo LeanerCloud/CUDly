@@ -2176,6 +2176,13 @@ function getStatusBadgeClass(status: string): string {
     case 'pending': return 'status-badge pending';
     case 'processing': return 'status-badge running';
     case 'failed': return 'status-badge failed';
+    // Migration 000089 (expand-contract rename, ri_exchange_history.status):
+    // backend may return either spelling during the rolling deploy window.
+    // Match both so a row written by EITHER old or new code keeps the muted
+    // "disabled" visual treatment instead of falling through to the default
+    // class. The CONTRACT migration (#1278) normalizes the data; the British
+    // branch can be removed then.
+    case 'canceled':
     case 'cancelled': return 'status-badge disabled';
     default: return 'status-badge';
   }

@@ -386,7 +386,15 @@ function statusBadgeHTML(status: string): string {
       // In-flight (issue #621): not finished — never show the green Completed
       // badge for these, or the user may think the purchase is done.
       return '<span class="badge badge-warning">In Progress</span>';
+    case 'canceled':
     case 'cancelled':
+      // Migration 000089 (expand-contract rename): the backend may return
+      // either the new US spelling ('canceled') or the legacy British
+      // spelling ('cancelled') during the rolling deploy window. Match both
+      // so a row written by EITHER old or new code renders the muted Cancelled
+      // badge instead of falling through to the green Completed default.
+      // The CONTRACT migration (#1278) will normalize the data once the deploy
+      // is stable; the British branch can be removed then.
       return '<span class="badge badge-muted">Cancelled</span>';
     case 'partially_completed':
       // #642: some commitments succeeded, some failed. Not a clean success
@@ -414,7 +422,11 @@ function buildStatusChipRowHTML(purchases: HistoryPurchase[], active: StatusFilt
   for (const p of purchases) {
     const s = normalizeStatus(p).toLowerCase();
     if (s === 'pending' || s === 'notified' || isInFlightStatus(s)) counts.pending++;
-    else if (s === 'cancelled') counts.cancelled++;
+    // Migration 000089 (expand-contract rename): the backend may return
+    // either spelling during the rolling deploy window. Counting only the
+    // British spelling would silently bucket new 'canceled' rows into the
+    // Completed total, hiding them from the user.
+    else if (s === 'canceled' || s === 'cancelled') counts.cancelled++;
     else if (s === 'failed') counts.failed++;
     else if (s === 'expired') counts.expired++;
     else counts.completed++;
@@ -845,6 +857,11 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
     const s = normalizeStatus(p).toLowerCase();
     if (activeStatusFilter === 'pending') return s === 'pending' || s === 'notified' || isInFlightStatus(s);
     if (activeStatusFilter === 'completed') return s === 'completed' || s === 'partially_completed' || !p.status;
+    // Migration 000089: the Cancelled chip key is 'cancelled' (British, kept
+    // stable for URL/state compatibility) but it must surface BOTH spellings
+    // during the expand-contract deploy window so new 'canceled' rows aren't
+    // hidden from the filter.
+    if (activeStatusFilter === 'cancelled') return s === 'cancelled' || s === 'canceled';
     return s === activeStatusFilter;
   })) {
     activeStatusFilter = 'all';
@@ -860,6 +877,9 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
     const s = normalizeStatus(p).toLowerCase();
     if (activeStatusFilter === 'pending') return s === 'pending' || s === 'notified' || isInFlightStatus(s);
     if (activeStatusFilter === 'completed') return s === 'completed' || s === 'partially_completed' || !p.status;
+    // Migration 000089: surface BOTH spellings under the Cancelled chip during
+    // the expand-contract deploy window (see the equivalent guard above).
+    if (activeStatusFilter === 'cancelled') return s === 'cancelled' || s === 'canceled';
     return s === activeStatusFilter;
   });
 
