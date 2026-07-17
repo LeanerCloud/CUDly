@@ -3,6 +3,7 @@ package purchase
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -291,6 +292,42 @@ func TestManager_GetOrCreateExecution_LookupError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to check for existing execution")
 	assert.Nil(t, execution)
+
+	mockStore.AssertExpectations(t)
+}
+
+// TestManager_GetOrCreateExecution_CreatesOnErrNotFound is the F2 regression
+// guard: when GetExecutionByPlanAndDate wraps ErrNotFound (zero rows), the
+// create branch must fire rather than treating it as a hard error.
+// Pre-fix, the store returned a plain fmt.Errorf on zero rows, so getOrCreateExecution
+// treated it as a fatal error and the create branch was unreachable.
+func TestManager_GetOrCreateExecution_CreatesOnErrNotFound(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+
+	nextExec := time.Now().Add(24 * time.Hour)
+	plan := &config.PurchasePlan{
+		ID:                "plan-f2",
+		Name:              "F2 Plan",
+		NextExecutionDate: &nextExec,
+		RampSchedule:      config.RampSchedule{CurrentStep: 2},
+	}
+
+	// Store returns ErrNotFound (wrapped), matching the post-fix store behavior.
+	notFoundErr := fmt.Errorf("%w: plan plan-f2 at %v", config.ErrNotFound, nextExec)
+	mockStore.On("GetExecutionByPlanAndDate", ctx, "plan-f2", nextExec).Return(nil, notFoundErr)
+	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+
+	manager := &Manager{config: mockStore, dashboardURL: "https://example.com"}
+
+	execution, err := manager.getOrCreateExecution(ctx, plan)
+	require.NoError(t, err, "ErrNotFound must trigger the create path, not a hard error (F2)")
+	require.NotNil(t, execution)
+	assert.Equal(t, "plan-f2", execution.PlanID)
+	assert.Equal(t, "pending", execution.Status)
+	assert.Equal(t, 2, execution.StepNumber)
+	assert.NotEmpty(t, execution.ExecutionID)
+	assert.NotEmpty(t, execution.ApprovalToken)
 
 	mockStore.AssertExpectations(t)
 }

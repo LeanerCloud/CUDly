@@ -197,8 +197,9 @@ func TestManager_ProcessScheduledPurchases_DuePurchase(t *testing.T) {
 	}
 
 	plan := &config.PurchasePlan{
-		ID:   "plan-456",
-		Name: "Test Plan",
+		ID:           "plan-456",
+		Name:         "Test Plan",
+		AutoPurchase: true, // required by executableByScheduler gate (F1 fix)
 		RampSchedule: config.RampSchedule{
 			CurrentStep: 0,
 			TotalSteps:  4,
@@ -210,9 +211,11 @@ func TestManager_ProcessScheduledPurchases_DuePurchase(t *testing.T) {
 	claimedExec.Status = "running"
 	mockStore.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
+	// executableByScheduler calls GetPurchasePlan first (AutoPurchase gate), then
+	// executePurchase calls it again to build purchase options — two calls total.
+	mockStore.On("GetPurchasePlan", ctx, "plan-456").Return(plan, nil)
 	mockStore.On("TransitionExecutionStatus", ctx, "exec-123",
 		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).Return(&claimedExec, nil)
-	mockStore.On("GetPurchasePlan", ctx, "plan-456").Return(plan, nil).Once()
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
@@ -302,13 +305,21 @@ func TestManager_ProcessScheduledPurchases_ExecutionFails(t *testing.T) {
 		},
 	}
 
+	autoPurchasePlan := &config.PurchasePlan{
+		ID:           "plan-456",
+		AutoPurchase: true,
+	}
 	claimedExec := executions[0]
 	claimedExec.Status = "running"
 	mockStore.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
+	// First call: executableByScheduler gate check (AutoPurchase=true -> proceed).
+	// Second call: executePurchase fetches the plan config and returns error to
+	// simulate a purchase failure — this is what drives the row to "failed".
+	mockStore.On("GetPurchasePlan", ctx, "plan-456").Return(autoPurchasePlan, nil).Once()
+	mockStore.On("GetPurchasePlan", ctx, "plan-456").Return(nil, errors.New("plan not found")).Once()
 	mockStore.On("TransitionExecutionStatus", ctx, "exec-123",
 		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).Return(&claimedExec, nil)
-	mockStore.On("GetPurchasePlan", ctx, "plan-456").Return(nil, errors.New("plan not found")).Once()
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	// updatePlanProgress is NOT called when execution fails
 
@@ -325,6 +336,137 @@ func TestManager_ProcessScheduledPurchases_ExecutionFails(t *testing.T) {
 	assert.Equal(t, 0, result.Executed)
 
 	mockStore.AssertExpectations(t)
+}
+
+// ─── F1 regression: AutoPurchase gate (adversarial review follow-up) ─────────
+
+// TestManager_ProcessScheduledPurchases_PendingAutoFalseSkipped is the
+// regression test for F1: a pending execution whose owning plan has
+// AutoPurchase=false must NOT be executed by the cron sweep. Before the fix
+// the sweep executed all pending/notified rows regardless of the plan setting.
+func TestManager_ProcessScheduledPurchases_PendingAutoFalseSkipped(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+
+	pastDate := time.Now().Add(-1 * time.Hour)
+	executions := []config.PurchaseExecution{
+		{
+			ExecutionID:   "exec-noauto",
+			PlanID:        "plan-noauto",
+			Status:        "pending",
+			ScheduledDate: pastDate,
+		},
+	}
+	plan := &config.PurchasePlan{
+		ID:           "plan-noauto",
+		AutoPurchase: false, // gate must block execution
+	}
+
+	mockStore.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
+	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
+	mockStore.On("GetPurchasePlan", ctx, "plan-noauto").Return(plan, nil)
+	// TransitionExecutionStatus must NOT be called — the row must be skipped.
+
+	manager := &Manager{
+		config:       mockStore,
+		email:        mockEmail,
+		dashboardURL: "https://dashboard.example.com",
+	}
+
+	result, err := manager.ProcessScheduledPurchases(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.Processed, "AutoPurchase=false rows must not be processed")
+	assert.Equal(t, 0, result.Executed)
+	assert.Equal(t, 0, result.Failed)
+
+	mockStore.AssertExpectations(t)
+	mockStore.AssertNotCalled(t, "TransitionExecutionStatus",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestManager_ProcessScheduledPurchases_WebSourceSkipped verifies that a
+// pending execution with Source="web" is never auto-executed by the cron
+// sweep, even when the plan has AutoPurchase=true. Web-submitted rows must
+// wait for the token-link approval path.
+func TestManager_ProcessScheduledPurchases_WebSourceSkipped(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+
+	pastDate := time.Now().Add(-1 * time.Hour)
+	executions := []config.PurchaseExecution{
+		{
+			ExecutionID:   "exec-web",
+			PlanID:        "plan-web",
+			Status:        "pending",
+			Source:        "web",
+			ScheduledDate: pastDate,
+		},
+	}
+
+	mockStore.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
+	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
+	// executableByScheduler short-circuits on Source="web" — GetPurchasePlan must NOT be called.
+	// TransitionExecutionStatus must NOT be called.
+
+	manager := &Manager{
+		config:       mockStore,
+		email:        mockEmail,
+		dashboardURL: "https://dashboard.example.com",
+	}
+
+	result, err := manager.ProcessScheduledPurchases(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.Processed, "web-sourced rows must not be auto-executed")
+	assert.Equal(t, 0, result.Executed)
+	assert.Equal(t, 0, result.Failed)
+
+	mockStore.AssertExpectations(t)
+	mockStore.AssertNotCalled(t, "GetPurchasePlan", mock.Anything, mock.Anything)
+	mockStore.AssertNotCalled(t, "TransitionExecutionStatus",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestManager_ProcessScheduledPurchases_GateCheckErrorCounted verifies that a
+// plan-fetch error during the AutoPurchase gate check counts as a failure and
+// does NOT proceed to claim+execute the row.
+func TestManager_ProcessScheduledPurchases_GateCheckErrorCounted(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+
+	pastDate := time.Now().Add(-1 * time.Hour)
+	executions := []config.PurchaseExecution{
+		{
+			ExecutionID:   "exec-gate-err",
+			PlanID:        "plan-gate-err",
+			Status:        "pending",
+			ScheduledDate: pastDate,
+		},
+	}
+
+	mockStore.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
+	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
+	mockStore.On("GetPurchasePlan", ctx, "plan-gate-err").Return(nil, errors.New("db timeout"))
+
+	manager := &Manager{
+		config:       mockStore,
+		email:        mockEmail,
+		dashboardURL: "https://dashboard.example.com",
+	}
+
+	result, err := manager.ProcessScheduledPurchases(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.Processed, "gate-check error rows are not yet processed")
+	assert.Equal(t, 0, result.Executed)
+	assert.Equal(t, 1, result.Failed, "gate-check error must count as a failure")
+	assert.Len(t, result.Errors, 1)
+	assert.Contains(t, result.Errors[0], "AutoPurchase gate check failed")
+
+	mockStore.AssertExpectations(t)
+	mockStore.AssertNotCalled(t, "TransitionExecutionStatus",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestManager_RecoverStrandedApprovals_FailsStrandedRow is the regression test

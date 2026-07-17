@@ -612,8 +612,13 @@ func (h *Handler) approveViaToken(ctx context.Context, req *events.LambdaFunctio
 	// Check for Gmail-style pre-fire delay (issue #291 wave-2).
 	// Token/email-link path: no authenticated session UUID is available, so the
 	// scheduled transition is recorded as system-initiated (transitioned_by = NULL).
+	// Fail closed: a config-read error must NOT silently discard the configured
+	// free-cancel window and execute immediately. Return 500 so the caller can retry.
 	globalCfg, cfgErr := h.config.GetGlobalConfig(ctx)
-	if cfgErr == nil && globalCfg.GetPurchaseDelay() > 0 {
+	if cfgErr != nil {
+		return nil, fmt.Errorf("failed to read global config for purchase delay check: %w", cfgErr)
+	}
+	if globalCfg.GetPurchaseDelay() > 0 {
 		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), actor, nil)
 	}
 	// ApproveExecution now runs the purchase synchronously inside the
@@ -699,8 +704,13 @@ func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.Lam
 	// Check for Gmail-style pre-fire delay (issue #291 wave-2). When
 	// PurchaseDelayHours > 0 the SDK call is deferred; the user gets a
 	// "scheduled, revoke before X" email and a window to cancel at $0.
+	// Fail closed: a config-read error must NOT silently discard the configured
+	// free-cancel window and execute immediately. Return 500 so the caller can retry.
 	globalCfg, cfgErr := h.config.GetGlobalConfig(ctx)
-	if cfgErr == nil && globalCfg.GetPurchaseDelay() > 0 {
+	if cfgErr != nil {
+		return nil, fmt.Errorf("failed to read global config for purchase delay check: %w", cfgErr)
+	}
+	if globalCfg.GetPurchaseDelay() > 0 {
 		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), session.Email, actor)
 	}
 

@@ -372,6 +372,95 @@ func TestHandler_approvePurchase_SessionExecuteFailureSurfacesAs409(t *testing.T
 	assert.Contains(t, ce.Error(), "could not be approved")
 }
 
+// --- F3 regression: global-config read error must fail closed (not execute) ---
+
+// TestHandler_approveViaToken_GlobalConfigError_FailsClosed pins the F3 fix:
+// when GetGlobalConfig returns an error during the email-link (token) approve
+// path, the handler must return an error rather than silently executing the
+// purchase (which would discard the configured free-cancel window). Pre-fix,
+// both approve paths used "if cfgErr == nil && delay > 0 { delay }" and fell
+// through to execute on any transient config error.
+func TestHandler_approveViaToken_GlobalConfigError_FailsClosed(t *testing.T) {
+	ctx := context.Background()
+	execID := "f3f3f3f3-f3f3-f3f3-f3f3-f3f3f3f3f301"
+	contactEmail := "approver@example.com"
+
+	mockConfig := new(MockConfigStore)
+	exec := approvalTestExec(execID, contactEmail, mockConfig)
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	// GetGlobalConfig fails on every call. authorizeApprovalAction consumes the
+	// first call best-effort (error silently ignored, globalNotify stays "");
+	// approveViaToken must fail closed on its own call rather than executing
+	// the purchase without the configured delay. Matching all calls is correct
+	// because the first (best-effort) call also fails — contact_email on the
+	// per-account record still matches the approver, so authorizeApprovalAction
+	// succeeds despite the config failure.
+	mockConfig.On("GetGlobalConfig", ctx).Return(nil, errors.New("db transient error"))
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: contactEmail}, nil)
+	// No approve-any / approve-own permissions — dispatch falls to token path.
+	mockAuth.On("HasPermissionAPI", ctx, "", "approve-any", "purchases").Return(false, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", ctx, "", "approve-own", "purchases").Return(false, nil).Maybe()
+
+	mockPurchase := new(MockPurchaseManager)
+	// Neither approve path must be reached.
+
+	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+
+	_, err := handler.approvePurchase(ctx, req, execID, "valid-token")
+	require.Error(t, err, "config error must propagate; must not execute immediately (F3 token path)")
+	assert.Contains(t, err.Error(), "failed to read global config")
+	mockPurchase.AssertNotCalled(t, "ApproveExecution",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockPurchase.AssertNotCalled(t, "ApproveAndExecute",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestHandler_approvePurchaseViaSession_GlobalConfigError_FailsClosed pins the
+// F3 fix for the session (dashboard) approve path: same contract as the token
+// path — a transient config error must not discard the free-cancel window.
+func TestHandler_approvePurchaseViaSession_GlobalConfigError_FailsClosed(t *testing.T) {
+	ctx := context.Background()
+	execID := "f3f3f3f3-f3f3-f3f3-f3f3-f3f3f3f3f302"
+	adminEmail := "admin@example.com"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:     execID,
+		ApprovalToken:   "valid-token",
+		Status:          "pending",
+		Recommendations: []config.RecommendationRecord{{ID: "r1"}},
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	// GetGlobalConfig always fails — approvePurchaseViaSession must return the
+	// error rather than executing the purchase without the configured delay.
+	mockConfig.On("GetGlobalConfig", ctx).Return(nil, errors.New("db transient error"))
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)
+	mockAuth.grantAdmin()
+	// approvePurchaseViaSession enforces CSRF.
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
+
+	mockPurchase := new(MockPurchaseManager)
+	// ApproveAndExecute must not be called.
+
+	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+
+	_, err := handler.approvePurchase(ctx, req, execID, "")
+	require.Error(t, err, "config error must propagate; must not execute immediately (F3 session path)")
+	assert.Contains(t, err.Error(), "failed to read global config")
+	mockPurchase.AssertNotCalled(t, "ApproveAndExecute",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
 // --- Regression tests for issue #609 (orphan-account guard) ---
 
 // TestHandler_approvePurchase_AzureOrphanRejects409 is the regression guard

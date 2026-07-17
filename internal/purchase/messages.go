@@ -80,6 +80,29 @@ func (m *Manager) ProcessMessage(ctx context.Context, body string) error {
 }
 
 // handleExecutePurchase processes an execute_purchase message.
+// checkAutoExecuteGate enforces the AutoPurchase and source gate for
+// pending/notified rows on the SQS execute_purchase path. Extracted from
+// handleExecutePurchase to keep that function under the gocyclo:10 limit.
+// Returns nil when execution may proceed; a non-nil error means the message
+// should be dead-lettered (the row is not eligible for auto-execution).
+//
+// "approved" rows bypass the gate: they have already passed the human
+// approval path and are always eligible for execution.
+func (m *Manager) checkAutoExecuteGate(ctx context.Context, execution *config.PurchaseExecution) error {
+	if execution.Status != "pending" && execution.Status != "notified" {
+		return nil
+	}
+	eligible, err := m.executableByScheduler(ctx, execution)
+	if err != nil {
+		return fmt.Errorf("AutoPurchase gate check failed for execution %s: %w", execution.ExecutionID, err)
+	}
+	if !eligible {
+		return fmt.Errorf("execution %s (status=%s source=%q) is not eligible for auto-execution: AutoPurchase=false or source=web — approve via the approval link",
+			execution.ExecutionID, execution.Status, execution.Source)
+	}
+	return nil
+}
+
 func (m *Manager) handleExecutePurchase(ctx context.Context, msg *AsyncMessage) error {
 	if msg.ExecutionID == "" {
 		return fmt.Errorf("execution_id required for execute_purchase message")
@@ -94,6 +117,13 @@ func (m *Manager) handleExecutePurchase(ctx context.Context, msg *AsyncMessage) 
 	}
 
 	logging.Infof("Executing purchase from async message: %s", msg.ExecutionID)
+
+	// AutoPurchase gate: pending/notified rows require AutoPurchase=true on the
+	// owning plan; web-sourced rows must use the token-link approval path.
+	// "approved" rows bypass the gate (already human-approved). Fail closed.
+	if err := m.checkAutoExecuteGate(ctx, execution); err != nil {
+		return err
+	}
 
 	// Atomically claim the row before touching the cloud (issue #1013). SQS
 	// delivery is at-least-once: a redelivered execute_purchase message (slow

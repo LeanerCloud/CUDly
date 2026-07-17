@@ -215,8 +215,17 @@ func (m *Manager) reapOne(ctx context.Context, exec *config.PurchaseExecution, r
 	// Best-effort: if this save fails (network blip, etc.) the row is
 	// still in "failed" — operator just sees a generic failure without
 	// the reaper attribution. Bump Errored so ops can track it.
-	transitioned.Error = fmt.Sprintf("reaped after %dm in %s state — executor did not complete; safe to retry",
-		ageMinutes, prevStatus)
+	//
+	// "safe to retry" is only appended when every recommendation in the
+	// execution uses an idempotent provider API. Azure savings-plans use a
+	// timestamp-based alias name with no server-side idempotency key, so
+	// retrying a reaped Azure SP row risks creating a duplicate commitment.
+	safeMsg := ""
+	if allRecsSafeToRedrive(exec) {
+		safeMsg = "; safe to retry"
+	}
+	transitioned.Error = fmt.Sprintf("reaped after %dm in %s state — executor did not complete%s",
+		ageMinutes, prevStatus, safeMsg)
 	if saveErr := m.config.SavePurchaseExecution(ctx, transitioned); saveErr != nil {
 		logging.Errorf("purchase reaper: failed to persist canonical error for execution %s (already flipped to failed): %v",
 			exec.ExecutionID, saveErr)
