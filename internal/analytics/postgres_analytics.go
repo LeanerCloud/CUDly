@@ -221,8 +221,6 @@ func (s *PostgresAnalyticsStore) BulkInsertSnapshots(ctx context.Context, snapsh
 func (s *PostgresAnalyticsStore) QuerySavings(ctx context.Context, req QueryRequest) ([]SavingsSnapshot, error) {
 	accountClause, args := accountFilterClause(req.AccountUUIDs, req.AccountExternalIDsByProvider, []any{req.StartDate, req.EndDate})
 
-	// #nosec G201 — accountClause references only parameter placeholders built
-	// internally; the optional provider/service filters below are also bound.
 	query := `
 		SELECT id, account_id, cloud_account_id, timestamp, provider, service, region,
 		       commitment_type, total_commitment, total_usage, total_savings,
@@ -304,7 +302,6 @@ func (s *PostgresAnalyticsStore) QueryMonthlyTotals(ctx context.Context, account
 	// the INTERVAL '1 month' * N off-by-one (M1).
 	accountClause, args := accountFilterClause(accountUUIDs, accountExternalIDsByProvider, []any{months})
 
-	// #nosec G201 — accountClause uses only internally-built placeholders.
 	query := `
 		SELECT month, account_id, cloud_account_id, provider, service, total_savings, avg_coverage, snapshot_count
 		FROM monthly_savings_summary
@@ -352,7 +349,6 @@ func (s *PostgresAnalyticsStore) QueryByProvider(ctx context.Context, accountUUI
 	// timestamp and the outer query averages the instant totals over time; a
 	// flat AVG would report the mean per-row run-rate instead of the bucket
 	// total (COR-02).
-	// #nosec G201 — accountClause uses only internally-built placeholders.
 	query := `
 		SELECT provider, service, AVG(ts_savings) as total_savings, AVG(ts_coverage) as avg_coverage
 		FROM (
@@ -408,7 +404,6 @@ func (s *PostgresAnalyticsStore) QueryByService(ctx context.Context, accountUUID
 	// Same H5 nested rollup as QueryByProvider: a (service, region) bucket
 	// spans accounts and commitment types at the same timestamp, so SUM the
 	// rows per timestamp first, then AVG the instant totals over time (COR-02).
-	// #nosec G201 — accountClause / providerClause use only internally-built placeholders.
 	query := fmt.Sprintf(`
 		SELECT service, region, AVG(ts_savings) as total_savings, AVG(ts_coverage) as avg_coverage
 		FROM (

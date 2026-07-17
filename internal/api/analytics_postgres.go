@@ -165,9 +165,6 @@ func (c *PostgresAnalyticsClient) QueryHistory(
 	// breakdowns without a second trip to the DB. The account predicate is the
 	// shared dual-column clause (see accountFilterClause); the optional provider
 	// predicate mirrors QueryByService (parameter-bound, "" = no filter).
-	//
-	// #nosec G201 — `unit` is allowlisted by intervalToTruncUnit above and the
-	// account / provider clauses are parameter-bound (no user input interpolated).
 	accountClause, args := accountFilterClause(accountUUIDs, accountExternalIDsByProvider, []any{start, end})
 	providerClause := ""
 	if provider != "" {
@@ -269,9 +266,6 @@ func (c *PostgresAnalyticsClient) QueryBreakdown(
 
 	// Dual-column account predicate: see accountFilterClause / QueryHistory for
 	// rationale (issue #701/#498/#866).
-	//
-	// #nosec G201 — `column` is allowlisted by dimensionToColumn above and the
-	// account clause is parameter-bound (no user input interpolated).
 	accountClause, args := accountFilterClause(accountUUIDs, accountExternalIDsByProvider, []any{start, end})
 	query := fmt.Sprintf(`
 		SELECT %s AS bucket,
