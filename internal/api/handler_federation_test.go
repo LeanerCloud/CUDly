@@ -1157,14 +1157,14 @@ var canonicalReadActions = []string{
 //     outside the CONTACT_EMAIL assignment (no PII leak into script body).
 func TestGetFederationIaC_CLIMatrix(t *testing.T) {
 	cases := []struct {
-		name              string
-		target            string
-		source            string
-		sourceCloud       string
-		wantFileSuffix    string
-		wantContent       []string
-		wantNoContent     []string
-		checkPermissions  bool // true for AWS-target cases that embed IAM policy
+		name             string
+		target           string
+		source           string
+		sourceCloud      string
+		wantFileSuffix   string
+		wantContent      []string
+		wantNoContent    []string
+		checkPermissions bool // true for AWS-target cases that embed IAM policy
 	}{
 		{
 			name:             "aws-cross-account",
