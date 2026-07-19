@@ -227,7 +227,14 @@ func (h *Handler) expireStaleExecutions(staleExecs []config.PurchaseExecution) {
 		h.expireStaleExecutionsSweep(staleExecs)
 		return
 	}
-	go h.expireStaleExecutionsSweep(staleExecs)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logging.Warnf("history: expireStaleExecutionsAsync goroutine panic: %v", r)
+			}
+		}()
+		h.expireStaleExecutionsSweep(staleExecs)
+	}()
 }
 
 // expireStaleExecutionsSweep is the shared sweep body for both branches of
@@ -237,11 +244,10 @@ func (h *Handler) expireStaleExecutions(staleExecs []config.PurchaseExecution) {
 // should not abort the best-effort transitions.
 func (h *Handler) expireStaleExecutionsSweep(staleExecs []config.PurchaseExecution) {
 	ctx := context.Background()
-	for _rvc := range staleExecs {
-		exec := staleExecs[_rvc]
-		_, err := h.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"pending", "notified"}, "expired", nil)
+	for i := range staleExecs {
+		_, err := h.config.TransitionExecutionStatus(ctx, staleExecs[i].ExecutionID, []string{"pending", "notified"}, "expired", nil)
 		if err != nil {
-			logging.Warnf("history: expire sweep for execution %s failed: %v", exec.ExecutionID, err)
+			logging.Warnf("history: expire sweep for execution %s failed: %v", staleExecs[i].ExecutionID, err)
 		}
 	}
 }

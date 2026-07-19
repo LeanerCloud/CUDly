@@ -57,6 +57,11 @@ func NewDBRateLimiter(pool *pgxpool.Pool) *DBRateLimiter {
 // tests with a short-lived context.
 func (rl *DBRateLimiter) StartCleanupWorker(ctx context.Context) {
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logging.Warnf("db_rate_limiter: StartCleanupWorker goroutine panic: %v", r)
+			}
+		}()
 		ticker := time.NewTicker(dbRateLimiterScheduledCleanupInterval)
 		defer ticker.Stop()
 		for {
@@ -169,6 +174,11 @@ func (rl *DBRateLimiter) maybeCleanup() {
 	// Run cleanup in background
 	go func() {
 		defer rl.cleanupRunning.Store(false)
+		defer func() {
+			if r := recover(); r != nil {
+				logging.Warnf("db_rate_limiter: cleanup goroutine panic: %v", r)
+			}
+		}()
 		rl.cleanup()
 	}()
 }
