@@ -1968,7 +1968,8 @@ func TestPGXMock_CancelAllPendingExchanges_Success(t *testing.T) {
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	mock.ExpectExec("UPDATE").WillReturnResult(pgxmock.NewResult("UPDATE", 3))
+	// Now parameterized: $1 = status value.
+	mock.ExpectExec("UPDATE").WithArgs(pgxmock.AnyArg()).WillReturnResult(pgxmock.NewResult("UPDATE", 3))
 
 	n, err := store.CancelAllPendingExchanges(ctx)
 	require.NoError(t, err)
@@ -1987,7 +1988,8 @@ func TestPGXMock_CancelPendingExchangesByOrigin_Standalone(t *testing.T) {
 	ctx := context.Background()
 
 	// Standalone origin must target WHERE ladder_run_id IS NULL only.
-	mock.ExpectExec("ladder_run_id IS NULL").WillReturnResult(pgxmock.NewResult("UPDATE", 2))
+	// Now parameterized: $1 = status value.
+	mock.ExpectExec("ladder_run_id IS NULL").WithArgs(pgxmock.AnyArg()).WillReturnResult(pgxmock.NewResult("UPDATE", 2))
 
 	n, err := store.CancelPendingExchangesByOrigin(ctx, common.ExchangeOriginStandalone)
 	require.NoError(t, err)
@@ -2001,7 +2003,8 @@ func TestPGXMock_CancelPendingExchangesByOrigin_Ladder(t *testing.T) {
 	ctx := context.Background()
 
 	// Ladder origin must target WHERE ladder_run_id IS NOT NULL only.
-	mock.ExpectExec("ladder_run_id IS NOT NULL").WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	// Now parameterized: $1 = status value.
+	mock.ExpectExec("ladder_run_id IS NOT NULL").WithArgs(pgxmock.AnyArg()).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	n, err := store.CancelPendingExchangesByOrigin(ctx, common.ExchangeOriginLadder)
 	require.NoError(t, err)
@@ -2519,5 +2522,138 @@ func TestPGXMock_GetExecutionByPlanAndDate_NotFoundWrapsErrNotFound(t *testing.T
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrNotFound),
 		"zero-row GetExecutionByPlanAndDate must wrap ErrNotFound so getOrCreateExecution can create a new execution; got: %v", err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// ─── Canonical-cancel write regression tests (#1277 follow-up) ───────────────
+//
+// These tests assert that every cancel write path emits the canonical US
+// spelling 'canceled' (StatusCanceled) rather than the legacy 'cancelled'.
+// They fail on the pre-fix code (which hardcoded 'cancelled') and pass only
+// when the parameterized $N arg receives StatusCanceled = "canceled".
+
+// TestPGXMock_CancelExecutionAtomic_WritesCanonicalStatus verifies that
+// CancelExecutionAtomic sends StatusCanceled ("canceled") as the status
+// parameter and sets canceled_by (not cancelled_by).
+// Regression guard for the #1277 follow-up fix.
+func TestPGXMock_CancelExecutionAtomic_WritesCanonicalStatus(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	actor := "user@example.com"
+
+	// The mock uses regexp matching. We pin on:
+	//   - "canceled_by" to confirm the new column is targeted (not cancelled_by)
+	//   - WithArgs: $1=execID, $2=&actor, $3=StatusCanceled
+	// The RETURNING row also carries "canceled" so the caller's returned
+	// status is the canonical spelling end-to-end.
+	rows := pgxmock.NewRows([]string{"status"}).AddRow(StatusCanceled)
+	mock.ExpectQuery("canceled_by").
+		WithArgs("exec-1", &actor, StatusCanceled).
+		WillReturnRows(rows)
+
+	// Pass mock directly as pgx.Tx (PgxPoolIface embeds pgx.Tx).
+	ok, status, err := store.CancelExecutionAtomic(ctx, mock, "exec-1", &actor)
+	require.NoError(t, err)
+	assert.True(t, ok, "row should have been updated")
+	assert.Equal(t, StatusCanceled, status, "returned status must be canonical 'canceled'")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_CancelScheduledExecutionAtomic_WritesCanonicalStatus mirrors the
+// above for the scheduled-execution cancel path.
+func TestPGXMock_CancelScheduledExecutionAtomic_WritesCanonicalStatus(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	actor := "scheduler@system"
+
+	rows := pgxmock.NewRows([]string{"status"}).AddRow(StatusCanceled)
+	mock.ExpectQuery("canceled_by").
+		WithArgs("exec-sched", &actor, StatusCanceled).
+		WillReturnRows(rows)
+
+	ok, status, err := store.CancelScheduledExecutionAtomic(ctx, mock, "exec-sched", &actor)
+	require.NoError(t, err)
+	assert.True(t, ok, "row should have been updated")
+	assert.Equal(t, StatusCanceled, status, "returned status must be canonical 'canceled'")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_CancelAllPendingExchanges_WritesCanonicalStatus pins
+// CancelAllPendingExchanges to emit StatusCanceled as the $1 argument.
+// A pre-fix version of the code sent no parameter (the value was inlined as
+// the literal 'cancelled'), so this test double-checks that the parameterized
+// form is used and the value is the canonical spelling.
+func TestPGXMock_CancelAllPendingExchanges_WritesCanonicalStatus(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectExec("UPDATE ri_exchange_history").
+		WithArgs(StatusCanceled).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
+
+	n, err := store.CancelAllPendingExchanges(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), n)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_CancelPendingExchangesByOrigin_Standalone_WritesCanonicalStatus
+// asserts the standalone branch passes StatusCanceled.
+func TestPGXMock_CancelPendingExchangesByOrigin_Standalone_WritesCanonicalStatus(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectExec("ladder_run_id IS NULL").
+		WithArgs(StatusCanceled).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	n, err := store.CancelPendingExchangesByOrigin(ctx, common.ExchangeOriginStandalone)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_CancelPendingExchangesByOrigin_Ladder_WritesCanonicalStatus
+// asserts the ladder branch passes StatusCanceled.
+func TestPGXMock_CancelPendingExchangesByOrigin_Ladder_WritesCanonicalStatus(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectExec("ladder_run_id IS NOT NULL").
+		WithArgs(StatusCanceled).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 3))
+
+	n, err := store.CancelPendingExchangesByOrigin(ctx, common.ExchangeOriginLadder)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), n)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_CleanupOldExecutions_IncludesCanonicalStatus verifies that the
+// cleanup DELETE includes 'canceled' (canonical) in the terminal-status filter,
+// so Plans-canceled rows written by new code are not missed.
+// Regression guard for the #1277 follow-up Defect 2 fix.
+func TestPGXMock_CleanupOldExecutions_IncludesCanonicalStatus(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	// The regex pins on both 'cancelled' (legacy) and 'canceled' (canonical)
+	// appearing together in the SQL. If either is missing the mock won't
+	// match, causing an "unexpected query" error from ExpectationsWereMet.
+	mock.ExpectExec(`'cancelled'.*'canceled'`).
+		WithArgs(pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("DELETE", 4))
+
+	n, err := store.CleanupOldExecutions(ctx, 90)
+	require.NoError(t, err)
+	assert.Equal(t, int64(4), n)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

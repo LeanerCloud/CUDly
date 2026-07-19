@@ -1044,12 +1044,13 @@ func (s *PostgresStore) SetCancelledBy(ctx context.Context, executionID, cancell
 }
 
 // CancelExecutionAtomic atomically transitions an execution from
-// pending or notified to 'cancelled', setting cancelled_by to the supplied
-// actor (NULL when actor is nil). The UPDATE is conditional on
+// pending or notified to 'canceled' (canonical US spelling), setting
+// canceled_by to the supplied actor (NULL when actor is nil). The UPDATE
+// is conditional on
 // status IN ('pending','notified') so a concurrent approve that has
 // already transitioned the row to 'approved' causes zero rows to be
 // affected and the method returns (false, currentStatus, nil) with the
-// live status fetched via a follow-up SELECT. Returns (true, "cancelled",
+// live status fetched via a follow-up SELECT. Returns (true, "canceled",
 // nil) on success and (false, "", err) on a real DB error.
 //
 // The 'scheduled' status is intentionally NOT accepted here -- the
@@ -1064,16 +1065,17 @@ func (s *PostgresStore) SetCancelledBy(ctx context.Context, executionID, cancell
 // status guard is inside the UPDATE rather than checked optimistically
 // before entering the tx.
 func (s *PostgresStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (canceled bool, currentStatus string, err error) {
+	// StatusCanceled is the canonical US-spelling value; see types.go.
 	q := `
 		UPDATE purchase_executions
-		   SET status       = 'cancelled',
-		       cancelled_by = $2,
+		   SET status       = $3,
+		       canceled_by  = $2,
 		       updated_at   = NOW()
 		 WHERE execution_id = $1
 		   AND status IN ('pending', 'notified')
 		RETURNING status
 	`
-	rows, err := tx.Query(ctx, q, executionID, cancelledBy)
+	rows, err := tx.Query(ctx, q, executionID, cancelledBy, StatusCanceled)
 	if err != nil {
 		return false, "", fmt.Errorf("failed to cancel execution: %w", err)
 	}
@@ -1104,11 +1106,11 @@ func (s *PostgresStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, ex
 }
 
 // CancelScheduledExecutionAtomic atomically transitions an execution from
-// 'scheduled' to 'cancelled', setting cancelled_by to the supplied actor
-// (NULL when actor is nil). Used by the Gmail-style pre-fire delay revoke
-// path (issue #290 / #291 wave-2): an approved-but-not-yet-fired execution
-// can be revoked at $0 by flipping it to cancelled before the scheduler
-// fires the cloud SDK call.
+// 'scheduled' to 'canceled' (canonical US spelling), setting canceled_by to
+// the supplied actor (NULL when actor is nil). Used by the Gmail-style
+// pre-fire delay revoke path (issue #290 / #291 wave-2): an
+// approved-but-not-yet-fired execution can be revoked at $0 by flipping it
+// to canceled before the scheduler fires the cloud SDK call.
 //
 // The 'scheduled' status is the only accepted source. A concurrent
 // scheduler tick that already transitioned the row to 'approved' or
@@ -1117,20 +1119,21 @@ func (s *PostgresStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, ex
 // ("revocation window has closed") so the frontend can fall through to
 // the post-execution Azure direct-cancel API path.
 //
-// Returns (true, "cancelled", nil) on success and (false, "", err) on a
+// Returns (true, StatusCanceled, nil) on success and (false, "", err) on a
 // real DB error. Must be called inside a WithTx block so the suppression
 // cleanup commits atomically with the status flip.
 func (s *PostgresStore) CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (canceled bool, currentStatus string, err error) {
+	// StatusCanceled is the canonical US-spelling value; see types.go.
 	q := `
 		UPDATE purchase_executions
-		   SET status       = 'cancelled',
-		       cancelled_by = $2,
+		   SET status       = $3,
+		       canceled_by  = $2,
 		       updated_at   = NOW()
 		 WHERE execution_id = $1
 		   AND status = 'scheduled'
 		RETURNING status
 	`
-	rows, err := tx.Query(ctx, q, executionID, cancelledBy)
+	rows, err := tx.Query(ctx, q, executionID, cancelledBy, StatusCanceled)
 	if err != nil {
 		return false, "", fmt.Errorf("failed to cancel scheduled execution: %w", err)
 	}
@@ -1598,9 +1601,11 @@ func (s *PostgresStore) GetScheduledExecutionsDue(ctx context.Context) ([]Purcha
 // Two independent cleanup branches, each with its own retention window so
 // that a row far in one dimension doesn't block cleanup in the other:
 //
-//  1. Terminal-state cleanup: `status IN ('completed', 'cancelled') AND
-//     scheduled_date < NOW() - retention`. Keeps recent completions
-//     visible in the UI for at least `retention` days before purging.
+//  1. Terminal-state cleanup: `status IN ('completed', 'cancelled', 'canceled') AND
+//     scheduled_date < NOW() - retention`. Both spellings are included to
+//     cover legacy rows ('cancelled') and new code rows ('canceled', canonical
+//     US spelling per StatusCanceled / migration 000089). Keeps recent
+//     completions visible in the UI for at least `retention` days before purging.
 //
 //  2. Expired-execution cleanup: `expires_at IS NOT NULL AND expires_at <
 //     NOW() - retention`. A row whose approval token has been expired
@@ -1620,10 +1625,14 @@ func (s *PostgresStore) GetScheduledExecutionsDue(ctx context.Context) ([]Purcha
 // NULL `expires_at` is excluded from branch 2 so rows that never had an
 // expiration deadline are safe from expiry-based cleanup.
 func (s *PostgresStore) CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error) {
+	// Both spellings are included: 'cancelled' (legacy, pre-migration 000089
+	// rows) and 'canceled' (canonical, written by new code after the
+	// follow-up to #1277). #1278 will drop 'cancelled' once all rows are
+	// normalized.
 	query := `
 		DELETE FROM purchase_executions
 		WHERE (
-		        status IN ('completed', 'cancelled')
+		        status IN ('completed', 'cancelled', 'canceled')
 		    AND scheduled_date < NOW() - INTERVAL '1 day' * $1
 		      )
 		   OR (
@@ -2585,11 +2594,11 @@ func (s *PostgresStore) GetRIExchangeDailySpend(ctx context.Context, date time.T
 func (s *PostgresStore) CancelAllPendingExchanges(ctx context.Context) (int64, error) {
 	query := `
 		UPDATE ri_exchange_history
-		SET status = 'cancelled'
+		SET status = $1, updated_at = NOW()
 		WHERE status = 'pending'
 	`
 
-	result, err := s.db.Exec(ctx, query)
+	result, err := s.db.Exec(ctx, query, StatusCanceled)
 	if err != nil {
 		return 0, fmt.Errorf("failed to cancel pending exchanges: %w", err)
 	}
@@ -2622,20 +2631,20 @@ func (s *PostgresStore) CancelPendingExchangesByOrigin(ctx context.Context, orig
 	case common.ExchangeOriginLadder:
 		query = `
 			UPDATE ri_exchange_history
-			SET status = 'cancelled', updated_at = NOW()
+			SET status = $1, updated_at = NOW()
 			WHERE status = 'pending'
 			  AND ladder_run_id IS NOT NULL
 		`
 	default: // common.ExchangeOriginStandalone (validated non-unknown above)
 		query = `
 			UPDATE ri_exchange_history
-			SET status = 'cancelled', updated_at = NOW()
+			SET status = $1, updated_at = NOW()
 			WHERE status = 'pending'
 			  AND ladder_run_id IS NULL
 		`
 	}
 
-	result, err := s.db.Exec(ctx, query)
+	result, err := s.db.Exec(ctx, query, StatusCanceled)
 	if err != nil {
 		return 0, fmt.Errorf("failed to cancel pending exchanges by origin %q: %w", origin, err)
 	}

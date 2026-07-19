@@ -331,8 +331,9 @@ func TestHandler_rejectRIExchange_AlreadyProcessed(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockStore.On("GetRIExchangeRecord", ctx, "11111111-1111-1111-1111-111111111111").Return(
 		&config.RIExchangeRecord{ID: "11111111-1111-1111-1111-111111111111", ApprovalToken: "tok"}, nil)
-	// Transition returns nil indicating already processed
-	mockStore.On("TransitionRIExchangeStatus", ctx, "11111111-1111-1111-1111-111111111111", "pending", "cancelled", mock.Anything).
+	// Transition returns nil indicating already processed.
+	// Canonical spelling used (#1277 follow-up).
+	mockStore.On("TransitionRIExchangeStatus", ctx, "11111111-1111-1111-1111-111111111111", "pending", config.StatusCanceled, mock.Anything).
 		Return(nil, nil)
 
 	h := &Handler{config: mockStore}
