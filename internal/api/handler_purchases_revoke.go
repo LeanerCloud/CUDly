@@ -93,6 +93,12 @@ type azureCalculateRefundClient interface {
 	Post(ctx context.Context, reservationOrderID string, body armreservations.CalculateRefundRequest, options *armreservations.CalculateRefundClientPostOptions) (armreservations.CalculateRefundClientPostResponse, error)
 }
 
+type azureRevokeClientFactory struct {
+	newCredential            func() (azcore.TokenCredential, error)
+	newCalculateRefundClient func(azcore.TokenCredential) (azureCalculateRefundClient, error)
+	newReturnClient          func(azcore.TokenCredential) (azureReturnClient, error)
+}
+
 // revokePurchaseResult is the JSON body returned on a successful revocation.
 type revokePurchaseResult struct {
 	Status     string `json:"status"`
@@ -409,7 +415,7 @@ func (h *Handler) calculateAzureRevoke(ctx context.Context, req *events.LambdaFu
 		return nil, err
 	}
 
-	calcClient, _, err := h.buildAzureRevokeClients()
+	calcClient, err := h.buildAzureCalculateRefundClient()
 	if err != nil {
 		return nil, fmt.Errorf("revoke/calculate: %w", err)
 	}
@@ -562,28 +568,49 @@ func (h *Handler) revokeAzurePurchase(ctx context.Context, record *config.Purcha
 	return h.callAzureReturn(ctx, calcClient, returnClient, record, orderID, reservationID, expectedRefundAmount)
 }
 
-// buildAzureRevokeClients returns the injected factory's result when
-// h.newAzureRevokeClients is set (test path), or constructs the production
-// CalculateRefund and Return clients from a single
-// azidentity.NewDefaultAzureCredential (production default). Mirrors the
-// AzureSPProber.NewClient injected-factory pattern
-// (internal/commitmentopts/probe_azure.go): a nil field always means "use the
-// production default", so existing production construction sites need no
-// changes.
-func (h *Handler) buildAzureRevokeClients() (azureCalculateRefundClient, azureReturnClient, error) {
-	if h.newAzureRevokeClients != nil {
-		return h.newAzureRevokeClients()
+func (h *Handler) getAzureRevokeFactory() azureRevokeClientFactory {
+	if h.azureRevokeFactory != nil {
+		return *h.azureRevokeFactory
 	}
+	return azureRevokeClientFactory{
+		newCredential: func() (azcore.TokenCredential, error) {
+			return azidentity.NewDefaultAzureCredential(nil)
+		},
+		newCalculateRefundClient: func(cred azcore.TokenCredential) (azureCalculateRefundClient, error) {
+			return armreservations.NewCalculateRefundClient(cred, nil)
+		},
+		newReturnClient: func(cred azcore.TokenCredential) (azureReturnClient, error) {
+			return armreservations.NewReturnClient(cred, nil)
+		},
+	}
+}
 
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
+func (h *Handler) buildAzureCalculateRefundClient() (azureCalculateRefundClient, error) {
+	factory := h.getAzureRevokeFactory()
+	cred, err := factory.newCredential()
+	if err != nil {
+		return nil, fmt.Errorf("obtain credential: %w", err)
+	}
+	calcClient, err := factory.newCalculateRefundClient(cred)
+	if err != nil {
+		return nil, fmt.Errorf("create calculate-refund client: %w", err)
+	}
+	return calcClient, nil
+}
+
+// buildAzureRevokeClients constructs both clients from one credential because
+// the revoke flow calls CalculateRefund immediately before Return.
+func (h *Handler) buildAzureRevokeClients() (azureCalculateRefundClient, azureReturnClient, error) {
+	factory := h.getAzureRevokeFactory()
+	cred, err := factory.newCredential()
 	if err != nil {
 		return nil, nil, fmt.Errorf("obtain credential: %w", err)
 	}
-	calcClient, err := armreservations.NewCalculateRefundClient(cred, nil)
+	calcClient, err := factory.newCalculateRefundClient(cred)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create calculate-refund client: %w", err)
 	}
-	returnClient, err := armreservations.NewReturnClient(cred, nil)
+	returnClient, err := factory.newReturnClient(cred)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create return client: %w", err)
 	}

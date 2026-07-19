@@ -1353,7 +1353,7 @@ func TestRevokePurchase_GetExecutionByIDDBError_Returns500(t *testing.T) {
 // and the armreservations SDK constructors inline, so no test could reach past
 // that point without walking the live Azure credential chain (spawning az /
 // pwsh, popping macOS keychain prompts). These tests drive both handlers
-// end-to-end through h.newAzureRevokeClients using the existing
+// end-to-end through h.azureRevokeFactory using the existing
 // stubCalcRefundClient(WithAmount)/stubReturnClient fakes, proving the
 // previously-unreachable code is now covered without any live client.
 
@@ -1377,11 +1377,25 @@ func TestCalculateAzureRevoke_Success(t *testing.T) {
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	calcClient := &stubCalcRefundClientWithAmount{amount: 75.25, currency: "USD", sessID: "s-calc"}
+	credentialCalls := 0
+	calculateClientCalls := 0
+	returnClientCalls := 0
 	h := &Handler{
 		config: mockStore,
 		auth:   mockAuth,
-		newAzureRevokeClients: func() (azureCalculateRefundClient, azureReturnClient, error) {
-			return calcClient, nil, nil
+		azureRevokeFactory: &azureRevokeClientFactory{
+			newCredential: func() (azcore.TokenCredential, error) {
+				credentialCalls++
+				return nil, nil
+			},
+			newCalculateRefundClient: func(azcore.TokenCredential) (azureCalculateRefundClient, error) {
+				calculateClientCalls++
+				return calcClient, nil
+			},
+			newReturnClient: func(azcore.TokenCredential) (azureReturnClient, error) {
+				returnClientCalls++
+				return &stubReturnClient{}, nil
+			},
 		},
 	}
 
@@ -1391,6 +1405,9 @@ func TestCalculateAzureRevoke_Success(t *testing.T) {
 	require.True(t, ok)
 	assert.InDelta(t, 75.25, quote.RefundAmount, 0.0001)
 	assert.Equal(t, "USD", quote.RefundCurrency)
+	assert.Equal(t, 1, credentialCalls)
+	assert.Equal(t, 1, calculateClientCalls)
+	assert.Zero(t, returnClientCalls, "calculate must not construct an unused Return client")
 }
 
 // TestCalculateAzureRevoke_ClientFactoryError verifies that when the injected
@@ -1416,8 +1433,10 @@ func TestCalculateAzureRevoke_ClientFactoryError(t *testing.T) {
 	h := &Handler{
 		config: mockStore,
 		auth:   mockAuth,
-		newAzureRevokeClients: func() (azureCalculateRefundClient, azureReturnClient, error) {
-			return nil, nil, factoryErr
+		azureRevokeFactory: &azureRevokeClientFactory{
+			newCredential: func() (azcore.TokenCredential, error) {
+				return nil, factoryErr
+			},
 		},
 	}
 
@@ -1444,10 +1463,24 @@ func TestRevokeAzurePurchase_Success(t *testing.T) {
 
 	calcClient := &stubCalcRefundClientWithAmount{amount: 12.34, currency: "USD", sessID: "s-revoke"}
 	returnClient := &stubReturnClient{resp: armreservations.ReturnClientPostResponse{}}
+	credentialCalls := 0
+	calculateClientCalls := 0
+	returnClientCalls := 0
 	h := &Handler{
 		config: mockStore,
-		newAzureRevokeClients: func() (azureCalculateRefundClient, azureReturnClient, error) {
-			return calcClient, returnClient, nil
+		azureRevokeFactory: &azureRevokeClientFactory{
+			newCredential: func() (azcore.TokenCredential, error) {
+				credentialCalls++
+				return nil, nil
+			},
+			newCalculateRefundClient: func(azcore.TokenCredential) (azureCalculateRefundClient, error) {
+				calculateClientCalls++
+				return calcClient, nil
+			},
+			newReturnClient: func(azcore.TokenCredential) (azureReturnClient, error) {
+				returnClientCalls++
+				return returnClient, nil
+			},
 		},
 	}
 
@@ -1457,6 +1490,9 @@ func TestRevokeAzurePurchase_Success(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "revoked", m.Status)
 	assert.Equal(t, 1, returnClient.calls)
+	assert.Equal(t, 1, credentialCalls)
+	assert.Equal(t, 1, calculateClientCalls)
+	assert.Equal(t, 1, returnClientCalls)
 }
 
 // TestRevokeAzurePurchase_ClientFactoryError verifies that when the injected
@@ -1473,8 +1509,10 @@ func TestRevokeAzurePurchase_ClientFactoryError(t *testing.T) {
 	factoryErr := errors.New("credential unavailable")
 	h := &Handler{
 		config: mockStore,
-		newAzureRevokeClients: func() (azureCalculateRefundClient, azureReturnClient, error) {
-			return nil, nil, factoryErr
+		azureRevokeFactory: &azureRevokeClientFactory{
+			newCredential: func() (azcore.TokenCredential, error) {
+				return nil, factoryErr
+			},
 		},
 	}
 

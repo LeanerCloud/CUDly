@@ -132,16 +132,10 @@ type Handler struct {
 	// /health endpoint only — never logged outside that one place.
 	encryptionKeySource string
 
-	// newAzureRevokeClients builds the CalculateRefund and Return clients used
-	// by the Azure purchase-revoke handlers (calculateAzureRevoke,
-	// revokeAzurePurchase). When nil (the production default),
-	// buildAzureRevokeClients constructs them from
-	// azidentity.NewDefaultAzureCredential plus the armreservations SDK
-	// client constructors. Tests override this to inject
-	// stubCalcRefundClient/stubReturnClient so the handlers can be exercised
-	// without walking the live Azure credential chain (az CLI / PowerShell /
-	// keychain prompts).
-	newAzureRevokeClients func() (azureCalculateRefundClient, azureReturnClient, error)
+	// Optional Azure revoke client factory injected by tests. When nil, the
+	// revoke handlers use the production Azure credential and client
+	// constructors.
+	azureRevokeFactory *azureRevokeClientFactory
 }
 
 // getRIUtilizationCache returns the Postgres-backed TTL cache for Cost
