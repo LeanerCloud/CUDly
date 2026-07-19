@@ -323,6 +323,7 @@ func (r *Router) registerRoutes() {
 		// Notification one-click unsubscribe (RFC 8058). AuthPublic: the signed
 		// token in the query string is the credential (mirrors approve/cancel).
 		{ExactPath: "/api/notifications/unsubscribe", Method: "GET", Handler: r.unsubscribeHandler, Auth: AuthPublic},
+		{ExactPath: "/api/notifications/unsubscribe", Method: "POST", Handler: r.unsubscribeHandler, Auth: AuthPublic},
 
 		// Account self-registration (public, called by Terraform during federation IaC apply)
 		{ExactPath: "/api/register", Method: "POST", Handler: r.submitRegistrationHandler, Auth: AuthPublic},

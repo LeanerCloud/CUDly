@@ -54,6 +54,7 @@ func TestSMTPSender_PurchaseApproval_MutedRecipient_NoSend(t *testing.T) {
 // approval send attaches the RFC 8058 List-Unsubscribe header sourced from the
 // wired-in unsubscribe base URL.
 func TestSMTPSender_PurchaseApproval_EmitsListUnsubscribe(t *testing.T) {
+	setMuteTestSecret(t)
 	server := newMockSMTPServer(t, false)
 	server.start(t)
 	defer server.stop()
@@ -111,8 +112,80 @@ func TestSMTPSender_PurchaseApproval_WithCC_SuppressesListUnsubscribe(t *testing
 		"List-Unsubscribe must be suppressed when CC recipients are present")
 }
 
+func TestSMTPSender_RIExchangeApproval_MutedRecipient_NoSend(t *testing.T) {
+	server := newMockSMTPServer(t, false)
+	server.start(t)
+	defer server.stop()
+
+	base := &SMTPSender{
+		host:      "127.0.0.1",
+		port:      server.port,
+		fromEmail: "sender@test.com",
+		useTLS:    false,
+	}
+	mc := &scopeMuteCheckerSMTP{mutedScope: string(common.ScopeRIExchangeApprovals)}
+	sender := base.WithMuteChecker(mc).WithUnsubscribeBaseURL("https://dash.example.com")
+
+	err := sender.SendRIExchangePendingApproval(context.Background(), RIExchangeNotificationData{
+		RecipientEmail: "ri-approver@test.com",
+		DashboardURL:   "https://dash.example.com",
+		Exchanges:      []RIExchangeItem{{RecordID: "rec-1", ApprovalToken: "tok"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, string(common.ScopeRIExchangeApprovals), mc.seenScope)
+
+	server.stop()
+	server.mu.Lock()
+	got := server.receivedMsg
+	server.mu.Unlock()
+	assert.NotContains(t, got, "RI Exchange Approval Required")
+}
+
+func TestSMTPSender_RIExchangeApproval_EmitsScopedUnsubscribeHeaders(t *testing.T) {
+	setMuteTestSecret(t)
+	server := newMockSMTPServer(t, false)
+	server.start(t)
+	defer server.stop()
+
+	base := &SMTPSender{
+		host:      "127.0.0.1",
+		port:      server.port,
+		fromEmail: "sender@test.com",
+		useTLS:    false,
+	}
+	mc := &scopeMuteCheckerSMTP{}
+	sender := base.WithMuteChecker(mc).WithUnsubscribeBaseURL("https://dash.example.com")
+
+	err := sender.SendRIExchangePendingApproval(context.Background(), RIExchangeNotificationData{
+		RecipientEmail: "ri-approver@test.com",
+		DashboardURL:   "https://dash.example.com",
+		Exchanges:      []RIExchangeItem{{RecordID: "rec-1", ApprovalToken: "tok"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, string(common.ScopeRIExchangeApprovals), mc.seenScope)
+
+	server.stop()
+	server.mu.Lock()
+	got := server.receivedMsg
+	server.mu.Unlock()
+	assert.Contains(t, got, "List-Unsubscribe:")
+	assert.Contains(t, got, "scope="+string(common.ScopeRIExchangeApprovals))
+	assert.NotContains(t, got, "scope="+string(common.ScopePurchaseApprovals))
+	assert.Contains(t, got, "List-Unsubscribe-Post: List-Unsubscribe=One-Click")
+}
+
 type wiringMuteCheckerSMTP struct {
 	muted map[string]bool
+}
+
+type scopeMuteCheckerSMTP struct {
+	mutedScope string
+	seenScope  string
+}
+
+func (w *scopeMuteCheckerSMTP) IsNotificationMuted(_ context.Context, _ string, scope string) (bool, error) {
+	w.seenScope = scope
+	return scope == w.mutedScope, nil
 }
 
 func (w *wiringMuteCheckerSMTP) IsNotificationMuted(_ context.Context, recipientEmail, _ string) (bool, error) {

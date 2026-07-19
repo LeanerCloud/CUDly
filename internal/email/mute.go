@@ -45,9 +45,23 @@ func filterMutedRecipients(ctx context.Context, mc MuteChecker, addrs []string, 
 	return out
 }
 
+// prepareMuteAwareDelivery applies the shared approval-email mute policy and
+// returns the filtered CC list plus RFC 8058 header values. Headers are omitted
+// for shared envelopes because their token is bound to the primary recipient.
+func prepareMuteAwareDelivery(ctx context.Context, mc MuteChecker, baseURL, recipient string, cc []string, scope string) (filteredCC []string, headerValue, postValue string, muted bool) {
+	if isRecipientMuted(ctx, mc, recipient, scope) {
+		return nil, "", "", true
+	}
+	filteredCC = filterMutedRecipients(ctx, mc, cc, scope)
+	if len(filteredCC) == 0 {
+		headerValue, postValue = unsubscribeHeaderValuesFor(baseURL, recipient, scope)
+	}
+	return filteredCC, headerValue, postValue, false
+}
+
 // unsubscribeURLFor constructs the one-click unsubscribe URL for the given
 // (email, scope) pair. Returns "" when baseURL is empty or when no signing key
-// is available (e.g. NOTIFICATION_MUTE_SECRET unset in production), so a
+// is available (e.g. NOTIFICATION_MUTE_SECRET is unset), so a
 // tokenless, non-functional unsubscribe link is never emitted.
 func unsubscribeURLFor(baseURL, email, scope string) string {
 	if baseURL == "" {

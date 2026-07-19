@@ -88,6 +88,7 @@ func TestDecorateSenderWithMute_SuppressesMutedRecipient(t *testing.T) {
 // Pre-fix the production sender had no unsubscribe base URL, so no such header
 // was emitted.
 func TestDecorateSenderWithMute_EmitsListUnsubscribe(t *testing.T) {
+	t.Setenv("NOTIFICATION_MUTE_SECRET", "server-mute-wiring-test-secret")
 	ctx := context.Background()
 	ses := &wiringMockSES{}
 	base := email.NewSenderWithClients(nil, ses, email.SenderConfig{FromEmail: "noreply@example.com"})

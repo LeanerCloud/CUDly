@@ -144,24 +144,19 @@ func TestVerifyMuteToken_EmptyKeyFailsClosed(t *testing.T) {
 
 func TestResolveMuteSecret_EnvSetWins(t *testing.T) {
 	t.Setenv("NOTIFICATION_MUTE_SECRET", "the-real-secret")
-	t.Setenv("ENVIRONMENT", "production")
 	key, err := ResolveMuteSecret()
 	require.NoError(t, err)
 	assert.Equal(t, []byte("the-real-secret"), key)
 }
 
-func TestResolveMuteSecret_ProductionMissingFailsClosed(t *testing.T) {
+func TestResolveMuteSecret_MissingFailsClosedInEveryEnvironment(t *testing.T) {
 	t.Setenv("NOTIFICATION_MUTE_SECRET", "")
-	t.Setenv("ENVIRONMENT", "production")
-	key, err := ResolveMuteSecret()
-	require.ErrorIs(t, err, ErrMuteSecretMissing)
-	assert.Nil(t, key)
-}
-
-func TestResolveMuteSecret_NonProductionFallsBackToDevKey(t *testing.T) {
-	t.Setenv("NOTIFICATION_MUTE_SECRET", "")
-	t.Setenv("ENVIRONMENT", "")
-	key, err := ResolveMuteSecret()
-	require.NoError(t, err)
-	assert.Equal(t, []byte(devMuteSecret), key)
+	for _, environment := range []string{"", "development", "test", "production"} {
+		t.Run(environment, func(t *testing.T) {
+			t.Setenv("ENVIRONMENT", environment)
+			key, err := ResolveMuteSecret()
+			require.ErrorIs(t, err, ErrMuteSecretMissing)
+			assert.Nil(t, key)
+		})
+	}
 }

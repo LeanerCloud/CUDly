@@ -18,8 +18,8 @@ import (
 
 func validUnsubToken(t *testing.T, email, scope string) string {
 	t.Helper()
-	// Resolve the key the same way the handler does so the generated token
-	// verifies. With ENVIRONMENT unset this yields the deterministic dev key.
+	t.Setenv("NOTIFICATION_MUTE_SECRET", "handler-notifications-test-secret")
+	// Resolve the key the same way the handler does so the generated token verifies.
 	key, err := common.ResolveMuteSecret()
 	require.NoError(t, err)
 	return common.DeriveMuteToken(key, email, scope)
@@ -54,7 +54,36 @@ func TestUnsubscribeHandler_Success(t *testing.T) {
 	assert.Contains(t, raw.body, "purchase approval request")
 }
 
+func TestUnsubscribeHandler_POSTRejectsInvalidOneClickBody(t *testing.T) {
+	ctx := context.Background()
+	email := "user@example.com"
+	scope := string(common.ScopePurchaseApprovals)
+	token := validUnsubToken(t, email, scope)
+
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertNotCalled(t, "UpsertNotificationMute") })
+	h := &Handler{config: mockStore}
+
+	req := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{Method: "POST"},
+		},
+		QueryStringParameters: map[string]string{
+			"token": token,
+			"email": email,
+			"scope": scope,
+		},
+		Body: "List-Unsubscribe=Not-One-Click",
+	}
+	_, err := h.unsubscribeHandler(ctx, req, nil)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+}
+
 func TestUnsubscribeHandler_ForgedToken_Returns401(t *testing.T) {
+	t.Setenv("NOTIFICATION_MUTE_SECRET", "handler-forged-token-test-secret")
 	ctx := context.Background()
 	req := &events.LambdaFunctionURLRequest{
 		QueryStringParameters: map[string]string{
@@ -73,12 +102,10 @@ func TestUnsubscribeHandler_ForgedToken_Returns401(t *testing.T) {
 	assert.Equal(t, 401, ce.code)
 }
 
-func TestUnsubscribeHandler_ProductionMissingSecret_FailsClosed(t *testing.T) {
-	// With ENVIRONMENT=production and no NOTIFICATION_MUTE_SECRET, the handler
-	// must NOT verify against a well-known dev key (which would accept forged
-	// tokens). It returns a server-side error (500), never a 401/200, and never
-	// reaches the store.
-	t.Setenv("ENVIRONMENT", "production")
+func TestUnsubscribeHandler_MissingSecret_FailsClosed(t *testing.T) {
+	// A missing NOTIFICATION_MUTE_SECRET must fail closed in every environment.
+	// It returns a server-side error (500), never a 401/200, and never reaches
+	// the store.
 	t.Setenv("NOTIFICATION_MUTE_SECRET", "")
 	ctx := context.Background()
 
@@ -214,6 +241,7 @@ func TestIsPublicEndpoint_UnsubscribePath(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRouter_UnsubscribeRoute_Registered(t *testing.T) {
+	t.Setenv("NOTIFICATION_MUTE_SECRET", "router-unsubscribe-test-secret")
 	// Verify the route is wired: an unsigned token returns 401, which can only
 	// happen if the router dispatched to the correct handler.
 	ctx := context.Background()
@@ -238,4 +266,35 @@ func TestRouter_UnsubscribeRoute_Registered(t *testing.T) {
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
 	assert.Equal(t, 401, ce.code)
+}
+
+func TestRouter_UnsubscribePOSTRoute_MutesSignedRecipientAndScope(t *testing.T) {
+	ctx := context.Background()
+	email := "ri-approver@example.com"
+	scope := string(common.ScopeRIExchangeApprovals)
+	token := validUnsubToken(t, email, scope)
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("UpsertNotificationMute", ctx, email, scope, token).Return(nil).Once()
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	r := NewRouter(&Handler{config: mockStore})
+
+	req := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+				Method: "POST",
+				Path:   "/api/notifications/unsubscribe",
+			},
+		},
+		QueryStringParameters: map[string]string{
+			"token": token,
+			"email": email,
+			"scope": scope,
+		},
+		Body: "List-Unsubscribe=One-Click",
+	}
+	result, err := r.Route(ctx, "POST", "/api/notifications/unsubscribe", req)
+	require.NoError(t, err)
+	_, ok := result.(*rawResponse)
+	require.True(t, ok)
 }

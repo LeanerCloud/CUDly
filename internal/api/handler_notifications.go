@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"html/template"
+	"net/url"
 	"strings"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
@@ -51,30 +52,49 @@ func scopeLabel(scope string) string {
 	}
 }
 
-// unsubscribeHandler handles GET /api/notifications/unsubscribe.
+func validateOneClickUnsubscribeBody(req *events.LambdaFunctionURLRequest) error {
+	if req.RequestContext.HTTP.Method != "POST" {
+		return nil
+	}
+	values, err := url.ParseQuery(req.Body)
+	if err != nil || len(values) != 1 || len(values["List-Unsubscribe"]) != 1 ||
+		values.Get("List-Unsubscribe") != "One-Click" {
+		return NewClientError(400, "invalid one-click unsubscribe body")
+	}
+	return nil
+}
+
+func unsubscribeRequestParams(req *events.LambdaFunctionURLRequest) (token, email, scope string, err error) {
+	token = req.QueryStringParameters["token"]
+	email = req.QueryStringParameters["email"]
+	scope = req.QueryStringParameters["scope"]
+	if token == "" || email == "" || scope == "" {
+		return "", "", "", NewClientError(400, "token, email and scope are required")
+	}
+	if scope != string(common.ScopePurchaseApprovals) && scope != string(common.ScopeRIExchangeApprovals) {
+		return "", "", "", NewClientError(400, fmt.Sprintf("unknown notification scope: %s", scope))
+	}
+	return token, email, scope, nil
+}
+
+// unsubscribeHandler handles GET and RFC 8058 POST requests to
+// /api/notifications/unsubscribe.
 // The URL carries a signed token that encodes (email, scope); the handler
 // verifies the HMAC, upserts the mute row, and returns a confirmation page.
 //
 // Auth: AuthPublic (token-based, no login required — mirrors approve/cancel).
 func (h *Handler) unsubscribeHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
-	token := req.QueryStringParameters["token"]
-	email := req.QueryStringParameters["email"]
-	scope := req.QueryStringParameters["scope"]
-
-	if token == "" || email == "" || scope == "" {
-		return nil, NewClientError(400, "token, email and scope are required")
+	if err := validateOneClickUnsubscribeBody(req); err != nil {
+		return nil, err
+	}
+	token, email, scope, err := unsubscribeRequestParams(req)
+	if err != nil {
+		return nil, err
 	}
 
-	// Reject unknown scopes early so we never create phantom rows.
-	validScope := scope == string(common.ScopePurchaseApprovals) ||
-		scope == string(common.ScopeRIExchangeApprovals)
-	if !validScope {
-		return nil, NewClientError(400, fmt.Sprintf("unknown notification scope: %s", scope))
-	}
-
-	// Resolve the HMAC key with the fail-closed production policy: a missing
-	// NOTIFICATION_MUTE_SECRET in production is a server misconfiguration, not a
-	// client error, and must never silently verify against a well-known key.
+	// Resolve the HMAC key with the fail-closed policy: a missing
+	// NOTIFICATION_MUTE_SECRET is a server misconfiguration, not a client error,
+	// and must never silently verify against a well-known key.
 	key, err := common.ResolveMuteSecret()
 	if err != nil {
 		logging.Errorf("notifications/unsubscribe: %v", err)

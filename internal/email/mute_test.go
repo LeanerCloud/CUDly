@@ -20,6 +20,11 @@ type mockMuteChecker struct {
 	mock.Mock
 }
 
+func setMuteTestSecret(t *testing.T) {
+	t.Helper()
+	t.Setenv("NOTIFICATION_MUTE_SECRET", "email-mute-test-secret")
+}
+
 func (m *mockMuteChecker) IsNotificationMuted(ctx context.Context, email, scope string) (bool, error) {
 	args := m.Called(ctx, email, scope)
 	return args.Bool(0), args.Error(1)
@@ -133,6 +138,60 @@ func TestSendPurchaseApprovalRequest_MuteCheckError_FailOpen(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestSendRIExchangePendingApproval_MutedRecipient_NoSESCall(t *testing.T) {
+	ctx := context.Background()
+	ses := new(MockSESClient)
+	mc := new(mockMuteChecker)
+	mc.On("IsNotificationMuted", mock.Anything, "ri-approver@example.com", string(common.ScopeRIExchangeApprovals)).
+		Return(true, nil).Once()
+	t.Cleanup(func() {
+		mc.AssertExpectations(t)
+		ses.AssertNotCalled(t, "SendEmail")
+	})
+
+	s := newSenderWithMute(ses, mc)
+	err := s.SendRIExchangePendingApproval(ctx, RIExchangeNotificationData{
+		RecipientEmail: "ri-approver@example.com",
+		DashboardURL:   "https://dash.example.com",
+		Exchanges:      []RIExchangeItem{{RecordID: "rec-1", ApprovalToken: "tok"}},
+	})
+	require.NoError(t, err)
+}
+
+func TestSendRIExchangePendingApproval_EmitsScopedUnsubscribeHeaders(t *testing.T) {
+	setMuteTestSecret(t)
+	ctx := context.Background()
+	ses := new(MockSESClient)
+	mc := new(mockMuteChecker)
+	mc.On("IsNotificationMuted", mock.Anything, "ri-approver@example.com", string(common.ScopeRIExchangeApprovals)).
+		Return(false, nil).Once()
+
+	var captured *sesv2.SendEmailInput
+	ses.On("SendEmail", mock.Anything, mock.MatchedBy(func(in *sesv2.SendEmailInput) bool {
+		captured = in
+		return true
+	})).Return(&sesv2.SendEmailOutput{}, nil).Once()
+	t.Cleanup(func() {
+		mc.AssertExpectations(t)
+		ses.AssertExpectations(t)
+	})
+
+	s := newSenderWithMute(ses, mc).WithUnsubscribeBaseURL("https://dash.example.com")
+	err := s.SendRIExchangePendingApproval(ctx, RIExchangeNotificationData{
+		RecipientEmail: "ri-approver@example.com",
+		DashboardURL:   "https://dash.example.com",
+		Exchanges:      []RIExchangeItem{{RecordID: "rec-1", ApprovalToken: "tok"}},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, captured)
+	require.NotNil(t, captured.Content.Simple)
+	require.Len(t, captured.Content.Simple.Headers, 2)
+	assert.Equal(t, "List-Unsubscribe", *captured.Content.Simple.Headers[0].Name)
+	assert.Contains(t, *captured.Content.Simple.Headers[0].Value, "scope="+string(common.ScopeRIExchangeApprovals))
+	assert.NotContains(t, *captured.Content.Simple.Headers[0].Value, "scope="+string(common.ScopePurchaseApprovals))
+	assert.Equal(t, "List-Unsubscribe=One-Click", *captured.Content.Simple.Headers[1].Value)
+}
+
 // TestSendPurchaseApprovalRequest_WithCC_SuppressesListUnsubscribe verifies the
 // List-Unsubscribe header (whose token is bound to the primary recipient) is NOT
 // emitted when the message also goes to CC recipients. A shared-envelope CC
@@ -186,6 +245,7 @@ func TestBuildUnsubscribeURL_EmptyBaseURL_ReturnsEmpty(t *testing.T) {
 }
 
 func TestBuildUnsubscribeURL_WithBaseURL_ContainsParams(t *testing.T) {
+	setMuteTestSecret(t)
 	s := &Sender{unsubscribeBaseURL: "https://dash.example.com"}
 	u := s.buildUnsubscribeURL("user@example.com", "purchase_approvals")
 	assert.Contains(t, u, "email=user%40example.com")
@@ -201,6 +261,7 @@ func TestListUnsubscribeHeaders_EmptyBase_ReturnsEmpty(t *testing.T) {
 }
 
 func TestListUnsubscribeHeaders_WithBase(t *testing.T) {
+	setMuteTestSecret(t)
 	s := &Sender{unsubscribeBaseURL: "https://dash.example.com"}
 	hdr, post := s.listUnsubscribeHeaders("u@e.com", "purchase_approvals")
 	assert.Contains(t, hdr, "<https://dash.example.com/api/notifications/unsubscribe?")

@@ -488,8 +488,20 @@ func (s *SMTPSender) SendRIExchangePendingApproval(ctx context.Context, data RIE
 	if recipient == "" {
 		return ErrNoRecipient
 	}
+	scope := string(common.ScopeRIExchangeApprovals)
+	filteredCC, unsubHdr, postHdr, muted := prepareMuteAwareDelivery(
+		ctx, s.muteChecker, s.unsubscribeBaseURL, recipient, data.CCEmails, scope,
+	)
+	if muted {
+		logging.Infof("email/smtp: RI exchange approval skipped for muted recipient (scope=%s)", scope)
+		return nil
+	}
+	textBody, htmlBody, err := renderRIExchangePendingApproval(data)
+	if err != nil {
+		return err
+	}
 	subject := fmt.Sprintf("CUDly - RI Exchange Approval Required (%d exchanges)", len(data.Exchanges))
-	return sendRIExchangePendingApprovalVia(ctx, s, recipient, data.CCEmails, subject, data)
+	return s.sendMultipartWithUnsubscribe(ctx, recipient, filteredCC, subject, textBody, htmlBody, unsubHdr, postHdr)
 }
 
 // SendRIExchangeCompleted sends an RI exchange completion email via SMTP.
@@ -522,24 +534,12 @@ func (s *SMTPSender) SendPurchaseApprovalRequest(ctx context.Context, data Notif
 
 	scope := string(common.ScopePurchaseApprovals)
 
-	// Per-recipient mute check: skip silently if the approver has opted out.
-	if isRecipientMuted(ctx, s.muteChecker, recipient, scope) {
+	filteredCC, unsubHdr, postHdr, muted := prepareMuteAwareDelivery(
+		ctx, s.muteChecker, s.unsubscribeBaseURL, recipient, data.CCEmails, scope,
+	)
+	if muted {
 		logging.Infof("email/smtp: purchase approval skipped for muted recipient (scope=%s)", scope)
 		return nil
-	}
-
-	// Filter CC list against mutes so no muted address receives a copy.
-	filteredCC := filterMutedRecipients(ctx, s.muteChecker, data.CCEmails, scope)
-
-	// Build RFC 8058 List-Unsubscribe headers scoped to the primary recipient.
-	// The token in the header is bound to recipient only, but the SMTP envelope
-	// delivers a single shared message to recipient + all CC addresses. Emitting
-	// the header when CC recipients exist would let any of them one-click-mute
-	// the primary recipient (an authorization-boundary violation), so suppress
-	// the header entirely whenever there is a CC list.
-	var unsubHdr, postHdr string
-	if len(filteredCC) == 0 {
-		unsubHdr, postHdr = unsubscribeHeaderValuesFor(s.unsubscribeBaseURL, recipient, scope)
 	}
 
 	subject := fmt.Sprintf("CUDly - Purchase Approval Required (%d commitment(s))", len(data.Recommendations))

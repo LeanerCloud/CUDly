@@ -129,9 +129,9 @@ func (s *Sender) WithUnsubscribeBaseURL(u string) *Sender {
 }
 
 // muteKey resolves the NOTIFICATION_MUTE_SECRET HMAC key via the shared
-// fail-closed policy (common.ResolveMuteSecret). In production a missing secret
-// yields a nil key (and an error), so the send path emits no List-Unsubscribe
-// header rather than a forgeable one; non-production falls back to the dev key.
+// fail-closed policy (common.ResolveMuteSecret). A missing secret yields a nil
+// key, so the send path emits no List-Unsubscribe header rather than a
+// forgeable one.
 func muteKey() []byte {
 	key, err := common.ResolveMuteSecret()
 	if err != nil {

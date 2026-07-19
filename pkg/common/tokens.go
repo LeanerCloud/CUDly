@@ -15,31 +15,20 @@ import (
 // sign notification mute / List-Unsubscribe tokens.
 const muteSecretEnvVar = "NOTIFICATION_MUTE_SECRET"
 
-// devMuteSecret is the deterministic fallback key used ONLY in non-production
-// environments so local-dev and tests produce stable tokens without requiring
-// an env var. It is intentionally well-known and MUST NOT be relied on in
-// production: ResolveMuteSecret fails closed there instead of using it.
-const devMuteSecret = "dev-mute-secret-not-for-production"
-
-// ErrMuteSecretMissing is returned by ResolveMuteSecret when running in a
-// production environment with NOTIFICATION_MUTE_SECRET unset. Falling back to a
-// well-known key in production would make unsubscribe tokens forgeable for any
-// (email, scope) tuple, so the caller must fail closed.
-var ErrMuteSecretMissing = errors.New("common: NOTIFICATION_MUTE_SECRET is required in production")
+// ErrMuteSecretMissing is returned by ResolveMuteSecret when
+// NOTIFICATION_MUTE_SECRET is unset. Falling back to a well-known key in any
+// environment would make unsubscribe tokens forgeable for any (email, scope)
+// tuple, so callers must fail closed.
+var ErrMuteSecretMissing = errors.New("common: NOTIFICATION_MUTE_SECRET is required")
 
 // ResolveMuteSecret returns the HMAC key for notification mute tokens, applying
-// a fail-closed policy: when NOTIFICATION_MUTE_SECRET is set its bytes are
-// returned in every environment; when unset, non-production environments get
-// the deterministic dev fallback while production (ENVIRONMENT=production)
-// returns ErrMuteSecretMissing rather than silently using a forgeable key.
+// a fail-closed policy in every environment. Local development and tests must
+// provide an explicit test-only value rather than sharing a predictable key.
 func ResolveMuteSecret() ([]byte, error) {
 	if v := os.Getenv(muteSecretEnvVar); v != "" {
 		return []byte(v), nil
 	}
-	if os.Getenv("ENVIRONMENT") == "production" {
-		return nil, ErrMuteSecretMissing
-	}
-	return []byte(devMuteSecret), nil
+	return nil, ErrMuteSecretMissing
 }
 
 // GenerateApprovalToken returns a 32-byte cryptographically secure random
@@ -147,8 +136,8 @@ const (
 // List-Unsubscribe URL; the handler re-derives it from the query params and
 // compares in constant time, so a forged URL cannot mute a different address.
 //
-// key must be resolved by the caller via ResolveMuteSecret, which applies the
-// fail-closed production policy. An empty key is treated as a configuration
+// key must be resolved by the caller via ResolveMuteSecret, which applies a
+// fail-closed policy in every environment. An empty key is a configuration
 // error and yields the empty string so the caller emits no usable token (and a
 // later VerifyMuteToken comparison against it fails), rather than silently
 // signing with a well-known fallback.

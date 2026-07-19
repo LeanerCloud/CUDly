@@ -522,21 +522,20 @@ func (s *Sender) SendUserInviteEmail(ctx context.Context, email, setupURL string
 	)
 }
 
-// sendRIExchangePendingApprovalVia composes the plain-text + HTML approval
-// bodies and ships them through s.SendToEmailWithCCMultipart. HTML render
-// failures are non-fatal and degrade to single-part text so a template bug
-// never drops the approval email. Shared by Sender and SMTPSender -- issue #296.
-func sendRIExchangePendingApprovalVia(ctx context.Context, s SenderInterface, recipient string, ccEmails []string, subject string, data RIExchangeNotificationData) error {
+// renderRIExchangePendingApproval composes the plain-text + HTML approval
+// bodies. HTML render failures are non-fatal and degrade to single-part text.
+// Shared by the SES and SMTP delivery paths.
+func renderRIExchangePendingApproval(data RIExchangeNotificationData) (string, string, error) {
 	textBody, err := RenderRIExchangePendingApprovalEmail(data)
 	if err != nil {
-		return fmt.Errorf("failed to render ri exchange pending approval email (text): %w", err)
+		return "", "", fmt.Errorf("failed to render ri exchange pending approval email (text): %w", err)
 	}
 	htmlBody, htmlErr := RenderRIExchangePendingApprovalEmailHTML(data)
 	if htmlErr != nil {
 		logging.Warnf("email: HTML ri-exchange-pending render failed, falling back to text-only: %v", htmlErr)
 		htmlBody = ""
 	}
-	return s.SendToEmailWithCCMultipart(ctx, recipient, ccEmails, subject, textBody, htmlBody)
+	return textBody, htmlBody, nil
 }
 
 // SendRIExchangePendingApproval sends an email with RI exchange approval links
@@ -554,8 +553,21 @@ func (s *Sender) SendRIExchangePendingApproval(ctx context.Context, data RIExcha
 	if data.RecipientEmail == "" {
 		return ErrNoRecipient
 	}
+	scope := string(common.ScopeRIExchangeApprovals)
+	filteredCC, unsubHdr, postHdr, muted := prepareMuteAwareDelivery(
+		ctx, s.muteChecker, s.unsubscribeBaseURL, data.RecipientEmail, data.CCEmails, scope,
+	)
+	if muted {
+		logging.Infof("email: RI exchange approval skipped for muted recipient (scope=%s)", scope)
+		return nil
+	}
+	textBody, htmlBody, err := renderRIExchangePendingApproval(data)
+	if err != nil {
+		return err
+	}
 	subject := fmt.Sprintf("CUDly - RI Exchange Approval Required (%d exchanges)", len(data.Exchanges))
-	return sendRIExchangePendingApprovalVia(ctx, s, data.RecipientEmail, data.CCEmails, subject, data)
+	extraHeaders := addListUnsubscribeHeaders(unsubHdr, postHdr)
+	return s.sendToEmailWithCCMultipartHeaders(ctx, data.RecipientEmail, filteredCC, subject, textBody, htmlBody, extraHeaders)
 }
 
 // SendRIExchangeCompleted sends a notification about completed RI exchanges.
@@ -810,26 +822,14 @@ func (s *Sender) SendPurchaseApprovalRequest(ctx context.Context, data Notificat
 
 	scope := string(common.ScopePurchaseApprovals)
 
-	// Per-recipient mute check: skip silently if the approver has opted out.
-	if s.isMuted(ctx, data.RecipientEmail, scope) {
+	filteredCC, unsubHdr, postHdr, muted := prepareMuteAwareDelivery(
+		ctx, s.muteChecker, s.unsubscribeBaseURL, data.RecipientEmail, data.CCEmails, scope,
+	)
+	if muted {
 		logging.Infof("email: purchase approval skipped for muted recipient (scope=%s)", scope)
 		return nil
 	}
-
-	// Filter CC list against mutes so no muted address receives a copy.
-	filteredCC := s.filterMutedAddresses(ctx, data.CCEmails, scope)
-
-	// Build RFC 8058 List-Unsubscribe headers scoped to the primary recipient.
-	// The token in the header is bound to RecipientEmail only, but a SES message
-	// with a CC list delivers one shared message to all addresses. Emitting the
-	// header when CC recipients exist would let any of them one-click-mute the
-	// primary recipient (an authorization-boundary violation), so suppress the
-	// header entirely whenever there is a CC list.
-	var extraHeaders []types.MessageHeader
-	if len(filteredCC) == 0 {
-		unsubHdr, postHdr := s.listUnsubscribeHeaders(data.RecipientEmail, scope)
-		extraHeaders = addListUnsubscribeHeaders(unsubHdr, postHdr)
-	}
+	extraHeaders := addListUnsubscribeHeaders(unsubHdr, postHdr)
 
 	subject := fmt.Sprintf("CUDly - Purchase Approval Required (%d commitment(s))", len(data.Recommendations))
 	return sendPurchaseApprovalRequestWithCC(ctx, s, data.RecipientEmail, filteredCC, subject, data, extraHeaders)
