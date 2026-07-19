@@ -41,9 +41,9 @@ func TestServiceType_String(t *testing.T) {
 		{ServiceStorage, "storage"},
 		// Regression guard for issue #85: the frontend persists "savingsplans"
 		// (no hyphen) and the Go constant must match so direct comparisons of
-		// rec.Service == ServiceSavingsPlans don't silently miss rows. If you
+		// rec.Service == ServiceSavingsPlansAll don't silently miss rows. If you
 		// flip this back to "savings-plans" you also need a SQL migration.
-		{ServiceSavingsPlans, "savingsplans"},
+		{ServiceSavingsPlansAll, "savingsplans"},
 		{ServiceSavingsPlansCompute, "savings-plans-compute"},
 		{ServiceSavingsPlansEC2Instance, "savings-plans-ec2instance"},
 		{ServiceSavingsPlansSageMaker, "savings-plans-sagemaker"},
@@ -73,7 +73,7 @@ func TestIsSavingsPlan(t *testing.T) {
 		service ServiceType
 		want    bool
 	}{
-		{"legacy umbrella", ServiceSavingsPlans, true},
+		{"umbrella sentinel", ServiceSavingsPlansAll, true},
 		{"compute", ServiceSavingsPlansCompute, true},
 		{"ec2 instance", ServiceSavingsPlansEC2Instance, true},
 		{"sagemaker", ServiceSavingsPlansSageMaker, true},
@@ -87,6 +87,27 @@ func TestIsSavingsPlan(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, IsSavingsPlan(tt.service))
 		})
+	}
+}
+
+func TestSavingsPlansPlanTypes(t *testing.T) {
+	t.Parallel()
+	got := SavingsPlansPlanTypes()
+
+	// Must return exactly 4 plan types.
+	assert.Len(t, got, 4)
+
+	// Canonical order: Compute, EC2Instance, SageMaker, Database.
+	assert.Equal(t, []ServiceType{
+		ServiceSavingsPlansCompute,
+		ServiceSavingsPlansEC2Instance,
+		ServiceSavingsPlansSageMaker,
+		ServiceSavingsPlansDatabase,
+	}, got)
+
+	// Every returned slug must be recognised as a Savings Plan.
+	for _, st := range got {
+		assert.Truef(t, IsSavingsPlan(st), "IsSavingsPlan(%q) should be true", st)
 	}
 }
 
@@ -311,7 +332,7 @@ func TestSavingsPlanDetails_GetServiceType(t *testing.T) {
 		HourlyCommitment: 10.50,
 	}
 
-	assert.Equal(t, ServiceSavingsPlans, details.GetServiceType())
+	assert.Equal(t, ServiceSavingsPlansAll, details.GetServiceType())
 }
 
 func TestSavingsPlanDetails_GetDetailDescription(t *testing.T) {

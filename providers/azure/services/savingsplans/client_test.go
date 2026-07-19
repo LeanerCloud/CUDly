@@ -99,7 +99,7 @@ func TestNewClient(t *testing.T) {
 
 func TestGetServiceType(t *testing.T) {
 	c := NewClient(nil, "sub", "eastus")
-	assert.Equal(t, common.ServiceSavingsPlans, c.GetServiceType())
+	assert.Equal(t, common.ServiceSavingsPlansAll, c.GetServiceType())
 }
 
 func TestGetRegion(t *testing.T) {
@@ -174,7 +174,7 @@ func TestGetExistingCommitments_Happy(t *testing.T) {
 	got := commitments[0]
 	assert.Equal(t, common.ProviderAzure, got.Provider)
 	assert.Equal(t, common.CommitmentSavingsPlan, got.CommitmentType)
-	assert.Equal(t, common.ServiceSavingsPlans, got.Service)
+	assert.Equal(t, common.ServiceSavingsPlansAll, got.Service)
 	assert.Equal(t, spID, got.CommitmentID)
 	assert.Equal(t, spName, got.ResourceType)
 	assert.Equal(t, "Succeeded", got.State)

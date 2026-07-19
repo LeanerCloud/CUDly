@@ -50,14 +50,14 @@ func TestMapServiceType_AllBranches(t *testing.T) {
 		{"opensearch", common.ServiceOpenSearch},
 		{"redshift", common.ServiceRedshift},
 		{"memorydb", common.ServiceMemoryDB},
-		{"savingsplans", common.ServiceSavingsPlans},
+		{"savingsplans", common.ServiceSavingsPlansAll},
 		// Issue #85: the legacy hyphenated form is still accepted as a
 		// backwards-compat alias so Lambda-scheduled purchase executions
 		// persisted before the normalisation (rec.Service == "savings-plans"
 		// in purchase_executions.recommendations JSONB) still map correctly
 		// when re-executed. Once historical rows have aged out, the alias
 		// arm can be dropped and this case should flip to ServiceType("savings-plans").
-		{"savings-plans", common.ServiceSavingsPlans},
+		{"savings-plans", common.ServiceSavingsPlansAll},
 		{"unknown-service", common.ServiceType("unknown-service")},
 		{"", common.ServiceType("")},
 	}
@@ -1100,7 +1100,7 @@ func TestManager_ExecuteSinglePurchase_DetailsByService(t *testing.T) {
 			// details" on legacy rows, re-introducing #453 for SP umbrella.
 			name:        "sp_legacy_umbrella",
 			service:     "savings-plans",
-			serviceType: common.ServiceSavingsPlans,
+			serviceType: common.ServiceSavingsPlansAll,
 			region:      "us-east-1",
 			resource:    "LegacySP",
 			details:     &common.SavingsPlanDetails{PlanType: "Compute", HourlyCommitment: 0.75},

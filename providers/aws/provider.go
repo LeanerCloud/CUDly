@@ -433,9 +433,9 @@ func (p *AWSProvider) GetSupportedServices() []common.ServiceType {
 		common.ServiceSavingsPlansEC2Instance,
 		common.ServiceSavingsPlansSageMaker,
 		common.ServiceSavingsPlansDatabase,
-		// Legacy umbrella for backward compat with persisted records;
+		// Umbrella sentinel for backward compat with persisted records;
 		// see the GetServiceClient case below for rationale.
-		common.ServiceSavingsPlans,
+		common.ServiceSavingsPlansAll,
 		// Legacy service types for backward compatibility
 		common.ServiceEC2,
 		common.ServiceRDS,
@@ -475,8 +475,8 @@ func (p *AWSProvider) GetServiceClient(ctx context.Context, service common.Servi
 		common.ServiceSavingsPlansDatabase:
 		pt, _ := savingsplans.PlanTypeForServiceType(service)
 		return NewSavingsPlansClient(regionalCfg, pt), nil
-	case common.ServiceSavingsPlans:
-		// Legacy umbrella path for any persisted RecommendationRecord
+	case common.ServiceSavingsPlansAll:
+		// Umbrella sentinel path for any persisted RecommendationRecord
 		// (or scheduled purchase) still tagged with the pre-split slug.
 		// The constructor's empty plan type signals "umbrella mode" to
 		// the SP client: GetExistingCommitments returns every plan type

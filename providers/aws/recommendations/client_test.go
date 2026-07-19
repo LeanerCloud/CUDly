@@ -256,7 +256,7 @@ func TestGetRecommendations_SavingsPlans_Success(t *testing.T) {
 	client := NewClientWithAPI(mockAPI, "us-east-1")
 
 	params := common.RecommendationParams{
-		Service:        common.ServiceSavingsPlans,
+		Service:        common.ServiceSavingsPlansAll,
 		PaymentOption:  "partial-upfront",
 		Term:           "1yr",
 		LookbackPeriod: "7d",
