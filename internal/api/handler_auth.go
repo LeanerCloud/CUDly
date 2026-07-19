@@ -82,15 +82,9 @@ func (h *Handler) getCurrentUser(ctx context.Context, req *events.LambdaFunction
 		return nil, fmt.Errorf("authentication service not configured")
 	}
 
-	// Get token from Authorization header
-	token := h.extractBearerToken(req)
-	if token == "" {
-		return nil, NewClientError(401, "no authorization token provided")
-	}
-
-	session, err := h.auth.ValidateSession(ctx, token)
+	session, err := h.requireSessionPrincipal(ctx, req)
 	if err != nil {
-		return nil, NewClientError(401, "invalid session")
+		return nil, err
 	}
 
 	user, err := h.auth.GetUser(ctx, session.UserID)
@@ -176,6 +170,19 @@ func (h *Handler) getCurrentUserPermissions(ctx context.Context, req *events.Lam
 // special-case it (see getCurrentUserPermissions for the {admin, *}
 // short-circuit).
 func (h *Handler) resolveAuthenticatedUserID(ctx context.Context, req *events.LambdaFunctionURLRequest) (string, error) {
+	if principal, ok := principalFromContext(ctx); ok {
+		if principal.Kind == PrincipalAdminAPIKey {
+			return apiKeyAdminUserID, nil
+		}
+		if principal.UserID == "" {
+			return "", NewClientError(401, "authenticated principal has no user ID")
+		}
+		return principal.UserID, nil
+	}
+	return h.resolveAuthenticatedUserIDFromRequest(ctx, req)
+}
+
+func (h *Handler) resolveAuthenticatedUserIDFromRequest(ctx context.Context, req *events.LambdaFunctionURLRequest) (string, error) {
 	// Admin API key first (stateless, no per-user lookup).
 	apiKey := extractAPIKey(req)
 	if h.checkAdminAPIKey(apiKey) {
@@ -370,15 +377,9 @@ func (h *Handler) updateProfile(ctx context.Context, req *events.LambdaFunctionU
 		return nil, fmt.Errorf("authentication service not configured")
 	}
 
-	// Get current user from token
-	token := h.extractBearerToken(req)
-	if token == "" {
-		return nil, NewClientError(401, "no authorization token provided")
-	}
-
-	session, err := h.auth.ValidateSession(ctx, token)
+	session, err := h.requireSessionPrincipal(ctx, req)
 	if err != nil {
-		return nil, NewClientError(401, "invalid session")
+		return nil, err
 	}
 
 	// Parse request body
@@ -475,14 +476,9 @@ func (h *Handler) changePassword(ctx context.Context, req *events.LambdaFunction
 		return nil, err
 	}
 
-	token := h.extractBearerToken(req)
-	if token == "" {
-		return nil, NewClientError(401, "no authorization token provided")
-	}
-
-	session, err := h.auth.ValidateSession(ctx, token)
+	session, err := h.requireSessionPrincipal(ctx, req)
 	if err != nil {
-		return nil, NewClientError(401, "invalid session")
+		return nil, err
 	}
 
 	var pwdReq ChangePasswordRequest

@@ -381,13 +381,29 @@ func (r *Router) Route(ctx context.Context, method, path string, req *events.Lam
 		if r.matches(route, method, path) {
 			switch route.Auth {
 			case AuthAdmin:
-				if _, err := r.h.requireAdmin(ctx, req); err != nil {
+				_, hadPrincipal := principalFromContext(ctx)
+				session, err := r.h.requireAdmin(ctx, req)
+				if err != nil {
 					return nil, err
+				}
+				if !hadPrincipal {
+					if session.UserID == apiKeyAdminUserID {
+						ctx = contextWithPrincipal(ctx, &Principal{Kind: PrincipalAdminAPIKey})
+					} else {
+						ctx = contextWithPrincipal(ctx, &Principal{
+							Kind:    PrincipalSession,
+							Session: session,
+							UserID:  session.UserID,
+							Email:   session.Email,
+						})
+					}
 				}
 			case AuthUser:
-				if _, err := r.h.requireAuth(ctx, req); err != nil {
+				principal, err := r.h.requireAuth(ctx, req)
+				if err != nil {
 					return nil, err
 				}
+				ctx = contextWithPrincipal(ctx, principal)
 			case AuthPublic:
 				// no auth check; relied upon by middleware via isPublicEndpoint
 			default:

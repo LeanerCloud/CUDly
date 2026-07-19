@@ -72,7 +72,7 @@ func TestRouterAuthUser_ValidUserSession_Accepts(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	userSession := &Session{UserID: "11111111-1111-1111-1111-111111111111"}
 	mockAuth.On("ValidateSession", ctx, "user-token").Return(userSession, nil)
-	mockAuth.On("Logout", ctx, "user-token").Return(nil)
+	mockAuth.On("Logout", mock.Anything, "user-token").Return(nil)
 	h := &Handler{auth: mockAuth}
 	r := NewRouter(h)
 
@@ -83,6 +83,154 @@ func TestRouterAuthUser_ValidUserSession_Accepts(t *testing.T) {
 	result, err := r.Route(ctx, "POST", "/api/auth/logout", req)
 	require.NoError(t, err)
 	assert.NotNil(t, result)
+}
+
+func TestRouterAuthUser_SessionPrincipalAvoidsSecondValidation(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	session := &Session{UserID: "session-user"}
+	mockAuth.On("ValidateSession", ctx, "session-token").Return(session, nil).Once()
+	mockAuth.On("GetUserPermissionsAPI", mock.Anything, "session-user").Return([]auth.APIPermission{}, nil).Once()
+	h := &Handler{auth: mockAuth}
+	r := NewRouter(h)
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer session-token"}}
+
+	_, err := r.Route(ctx, "GET", "/api/auth/me/permissions", req)
+
+	require.NoError(t, err)
+	mockAuth.AssertNumberOfCalls(t, "ValidateSession", 1)
+	mockAuth.AssertExpectations(t)
+}
+
+func TestRouterAuthUser_UserAPIKeyPrincipalAvoidsSecondValidation(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	user := &auth.User{ID: "api-key-user", Email: "user@example.com"}
+	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "user-key").Return(nil, user, nil).Once()
+	mockAuth.On("GetUserPermissionsAPI", mock.Anything, "api-key-user").Return([]auth.APIPermission{}, nil).Once()
+	h := &Handler{auth: mockAuth}
+	r := NewRouter(h)
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"X-API-Key": "user-key"}}
+
+	_, err := r.Route(ctx, "GET", "/api/auth/me/permissions", req)
+
+	require.NoError(t, err)
+	mockAuth.AssertNumberOfCalls(t, "ValidateUserAPIKeyAPI", 1)
+	mockAuth.AssertExpectations(t)
+}
+
+func TestRouterAuthUser_AdminAPIKeyPrincipalReachesHandler(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	h := &Handler{auth: mockAuth, apiKey: "admin-key"}
+	r := NewRouter(h)
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"X-API-Key": "admin-key"}}
+
+	result, err := r.Route(ctx, "GET", "/api/auth/me/permissions", req)
+
+	require.NoError(t, err)
+	permissions, ok := result.(*UserPermissionsResponse)
+	require.True(t, ok)
+	require.True(t, permissions.IsAdmin)
+	mockAuth.AssertNotCalled(t, "ValidateUserAPIKeyAPI", mock.Anything, mock.Anything)
+	mockAuth.AssertNotCalled(t, "ValidateSession", mock.Anything, mock.Anything)
+}
+
+func TestHandleRequest_SessionPrincipalValidatedOnce(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	session := &Session{UserID: "session-user"}
+	mockAuth.On("ValidateSession", ctx, "session-token").Return(session, nil).Once()
+	mockAuth.On("GetUserPermissionsAPI", mock.Anything, "session-user").Return([]auth.APIPermission{}, nil).Once()
+	h := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer session-token"},
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{Method: "GET", Path: "/api/auth/me/permissions"},
+		},
+	}
+
+	response, err := h.HandleRequest(ctx, req)
+
+	require.NoError(t, err)
+	require.Equal(t, 200, response.StatusCode)
+	mockAuth.AssertNumberOfCalls(t, "ValidateSession", 1)
+	mockAuth.AssertExpectations(t)
+}
+
+func TestHandleRequest_UserAPIKeyPrincipalValidatedOnce(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	user := &auth.User{ID: "api-key-user", Email: "user@example.com"}
+	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "user-key").Return(nil, user, nil).Once()
+	mockAuth.On("GetUserPermissionsAPI", mock.Anything, "api-key-user").Return([]auth.APIPermission{}, nil).Once()
+	h := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"X-API-Key": "user-key"},
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{Method: "GET", Path: "/api/auth/me/permissions"},
+		},
+	}
+
+	response, err := h.HandleRequest(ctx, req)
+
+	require.NoError(t, err)
+	require.Equal(t, 200, response.StatusCode)
+	mockAuth.AssertNumberOfCalls(t, "ValidateUserAPIKeyAPI", 1)
+	mockAuth.AssertExpectations(t)
+}
+
+func TestHandleRequest_MixedCredentialsSessionOnlyHandlerUsesSession(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	apiUser := &auth.User{ID: "api-key-user", Email: "key@example.com"}
+	session := &Session{UserID: "session-user", Email: "session@example.com"}
+	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "user-key").Return(nil, apiUser, nil).Once()
+	mockAuth.On("ValidateSession", ctx, "session-token").Return(session, nil).Once()
+	mockAuth.On("GetUser", mock.Anything, "session-user").Return(&User{ID: "session-user", Email: "session@example.com"}, nil).Once()
+	h := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"X-API-Key": "user-key", "Authorization": "Bearer session-token"},
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{Method: "GET", Path: "/api/auth/me"},
+		},
+	}
+
+	response, err := h.HandleRequest(ctx, req)
+
+	require.NoError(t, err)
+	require.Equal(t, 200, response.StatusCode)
+	mockAuth.AssertNumberOfCalls(t, "ValidateUserAPIKeyAPI", 1)
+	mockAuth.AssertNumberOfCalls(t, "ValidateSession", 1)
+	mockAuth.AssertExpectations(t)
+}
+
+func TestHandleRequest_MixedCredentialsAuthAdminRetainsAPIKeyRestrictions(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	apiUser := &auth.User{ID: "api-key-user", Email: "key@example.com"}
+	session := &Session{UserID: "admin-session-user", Email: "admin@example.com"}
+	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "user-key").Return(nil, apiUser, nil).Once()
+	mockAuth.On("ValidateSession", ctx, "admin-session-token").Return(session, nil).Once()
+	mockAuth.On("HasPermissionAPI", mock.Anything, "admin-session-user", auth.ActionAdmin, auth.ResourceAll).Return(true, nil).Once()
+	mockAuth.On("HasAPIKeyPermissionAPI", mock.Anything, "user-key", auth.ActionView, auth.ResourceUsers).
+		Return("api-key-user", "key-id", false, nil).Once()
+	h := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"X-API-Key": "user-key", "Authorization": "Bearer admin-session-token"},
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{Method: "GET", Path: "/api/users"},
+		},
+	}
+
+	response, err := h.HandleRequest(ctx, req)
+
+	require.NoError(t, err)
+	require.Equal(t, 403, response.StatusCode)
+	mockAuth.AssertNumberOfCalls(t, "ValidateUserAPIKeyAPI", 1)
+	mockAuth.AssertNumberOfCalls(t, "ValidateSession", 1)
+	mockAuth.AssertNotCalled(t, "ListUsersAPI", mock.Anything)
+	mockAuth.AssertExpectations(t)
 }
 
 // TestRouterAuthPublic_NoCredentials_Accepts verifies that AuthPublic

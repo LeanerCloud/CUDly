@@ -334,20 +334,15 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 // (creator-scope cancel, issue #1400). Ownership is enforced separately by
 // authorizePlannedPurchaseCancel; this gate is the minimum-verb check.
 func (h *Handler) requireDeleteOrCancelPurchasePermission(ctx context.Context, req *events.LambdaFunctionURLRequest) (*Session, error) {
-	apiKey := extractAPIKey(req)
-	if h.checkAdminAPIKey(apiKey) {
+	if principal, ok := principalFromContext(ctx); ok && principal.Kind == PrincipalAdminAPIKey {
 		return &Session{UserID: apiKeyAdminUserID}, nil
 	}
-	if h.auth == nil {
-		return nil, fmt.Errorf("authentication service not configured")
+	if h.checkAdminAPIKey(extractAPIKey(req)) {
+		return &Session{UserID: apiKeyAdminUserID}, nil
 	}
-	token := h.extractBearerToken(req)
-	if token == "" {
-		return nil, NewClientError(401, "no authorization token provided")
-	}
-	session, err := h.auth.ValidateSession(ctx, token)
+	session, err := h.requireSessionPrincipal(ctx, req)
 	if err != nil {
-		return nil, NewClientError(401, "invalid session")
+		return nil, err
 	}
 	for _, verb := range []string{auth.ActionDelete, auth.ActionCancelAny, auth.ActionCancelOwn} {
 		has, checkErr := h.auth.HasPermissionAPI(ctx, session.UserID, verb, auth.ResourcePurchases)
@@ -1465,18 +1460,7 @@ func (h *Handler) authorizeSessionCancel(ctx context.Context, session *Session, 
 // cancel-own check; falling through to the API-key admin role would let
 // a key impersonate ownership we cannot verify.
 func (h *Handler) requireSession(ctx context.Context, req *events.LambdaFunctionURLRequest) (*Session, error) {
-	if h.auth == nil {
-		return nil, fmt.Errorf("authentication service not configured")
-	}
-	token := h.extractBearerToken(req)
-	if token == "" {
-		return nil, NewClientError(401, "no authorization token provided")
-	}
-	session, err := h.auth.ValidateSession(ctx, token)
-	if err != nil || session == nil {
-		return nil, NewClientError(401, "invalid session")
-	}
-	return session, nil
+	return h.requireSessionPrincipal(ctx, req)
 }
 
 // retryThreshold is the number of attempts after which a retry is

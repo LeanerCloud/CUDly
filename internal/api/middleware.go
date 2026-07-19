@@ -73,9 +73,20 @@ type Principal struct {
 	// Field order groups the pointer-bearing Session ahead of the trailing
 	// string so the struct satisfies govet fieldalignment.
 	Kind    PrincipalKind
-	Session *Session // non-nil only for PrincipalSession
+	Session *Session // non-nil when a valid bearer session was presented
 	UserID  string   // empty for PrincipalAdminAPIKey
 	Email   string   // empty for PrincipalAdminAPIKey; populated for session/user-api-key
+}
+
+type principalContextKey struct{}
+
+func contextWithPrincipal(ctx context.Context, principal *Principal) context.Context {
+	return context.WithValue(ctx, principalContextKey{}, principal)
+}
+
+func principalFromContext(ctx context.Context) (*Principal, bool) {
+	principal, ok := ctx.Value(principalContextKey{}).(*Principal)
+	return principal, ok && principal != nil
 }
 
 // authenticate checks authentication via admin API key, user API key, or Bearer token.
@@ -108,12 +119,16 @@ func (h *Handler) authenticatePrincipal(ctx context.Context, req *events.LambdaF
 		return nil, NewClientError(401, "authentication required")
 	}
 
-	if p := h.principalFromUserAPIKey(ctx, apiKey); p != nil {
-		return p, nil
+	userPrincipal := h.principalFromUserAPIKey(ctx, apiKey)
+	sessionPrincipal := h.principalFromBearerToken(ctx, req)
+	if userPrincipal != nil {
+		if sessionPrincipal != nil {
+			userPrincipal.Session = sessionPrincipal.Session
+		}
+		return userPrincipal, nil
 	}
-
-	if p := h.principalFromBearerToken(ctx, req); p != nil {
-		return p, nil
+	if sessionPrincipal != nil {
+		return sessionPrincipal, nil
 	}
 
 	return nil, NewClientError(401, "authentication required")
@@ -312,6 +327,9 @@ func (h *Handler) validateCSRF(ctx context.Context, req *events.LambdaFunctionUR
 // protection doesn't apply. An invalid API key returns false — the caller
 // then falls through to session-based CSRF validation.
 func (h *Handler) apiKeyBypassCSRF(ctx context.Context, req *events.LambdaFunctionURLRequest) bool {
+	if principal, ok := principalFromContext(ctx); ok {
+		return principal.Kind == PrincipalAdminAPIKey || principal.Kind == PrincipalUserAPIKey
+	}
 	apiKey := req.Headers["x-api-key"]
 	if apiKey == "" {
 		apiKey = req.Headers["X-API-Key"]
@@ -389,15 +407,36 @@ func redactQueryParam(u, param string) string {
 // of any kind (admin API key, user API key, or session bearer token).
 //
 // Used as a defense-in-depth check by Router.Route for AuthUser routes:
-// validateSecurity → authenticate already runs before dispatch, but if a
-// future refactor reorders middleware or a new route bypasses
-// validateSecurity, this check still rejects unauthenticated requests at
-// the router level. Returns the resolved Principal on success, a 401
-// ClientError otherwise. Callers should use the returned Principal rather
-// than re-resolving the caller's identity through a second ValidateSession
-// or ValidateUserAPIKeyAPI call.
+// HandleRequest normally places authenticatePrincipal's result in the request
+// context before dispatch. Router.Route still calls this helper so standalone
+// router use remains protected; an existing context principal is reused and a
+// missing one is resolved here. Returns a 401 ClientError on failure.
 func (h *Handler) requireAuth(ctx context.Context, req *events.LambdaFunctionURLRequest) (*Principal, error) {
+	if principal, ok := principalFromContext(ctx); ok {
+		return principal, nil
+	}
 	return h.authenticatePrincipal(ctx, req)
+}
+
+func (h *Handler) requireSessionPrincipal(ctx context.Context, req *events.LambdaFunctionURLRequest) (*Session, error) {
+	if principal, ok := principalFromContext(ctx); ok {
+		if principal.Session == nil {
+			return nil, NewClientError(401, "session authentication required")
+		}
+		return principal.Session, nil
+	}
+	if h.auth == nil {
+		return nil, fmt.Errorf("authentication service not configured")
+	}
+	token := h.extractBearerToken(req)
+	if token == "" {
+		return nil, NewClientError(401, "no authorization token provided")
+	}
+	session, err := h.auth.ValidateSession(ctx, token)
+	if err != nil || session == nil {
+		return nil, NewClientError(401, "invalid session")
+	}
+	return session, nil
 }
 
 // requireAdmin gates the coarse admin-only routes (AuthAdmin). "Admin" is now
@@ -407,24 +446,33 @@ func (h *Handler) requireAuth(ctx context.Context, req *events.LambdaFunctionURL
 // permissions include {admin, *}. Fail closed: a missing auth service, an
 // invalid session, or a permission-lookup error denies access.
 func (h *Handler) requireAdmin(ctx context.Context, req *events.LambdaFunctionURLRequest) (*Session, error) {
-	// Check admin API key first (stateless auth)
-	apiKey := extractAPIKey(req)
-	if h.checkAdminAPIKey(apiKey) {
-		return &Session{UserID: apiKeyAdminUserID}, nil
+	var session *Session
+	if principal, ok := principalFromContext(ctx); ok {
+		if principal.Kind == PrincipalAdminAPIKey {
+			return &Session{UserID: apiKeyAdminUserID}, nil
+		}
+		if principal.Session == nil {
+			return nil, NewClientError(401, "session authentication required")
+		}
+		session = principal.Session
+	} else {
+		// Check admin API key first (stateless auth).
+		apiKey := extractAPIKey(req)
+		if h.checkAdminAPIKey(apiKey) {
+			return &Session{UserID: apiKeyAdminUserID}, nil
+		}
+		if h.auth == nil {
+			return nil, fmt.Errorf("authentication service not configured")
+		}
+		var err error
+		session, err = h.requireSessionPrincipal(ctx, req)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")
-	}
-
-	token := h.extractBearerToken(req)
-	if token == "" {
-		return nil, NewClientError(401, "no authorization token provided")
-	}
-
-	session, err := h.auth.ValidateSession(ctx, token)
-	if err != nil {
-		return nil, NewClientError(401, "invalid session")
 	}
 
 	// HasPermissionAPI(admin, *) returns true only for users who hold the
