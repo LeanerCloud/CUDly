@@ -22,6 +22,43 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/azure/services/savingsplans"
 )
 
+// serviceRecsGetter is the narrow interface satisfied by each per-service
+// client (compute, database, cache, cosmosdb). The interface exists solely to
+// allow tests to substitute fake implementations; production code uses the
+// concrete types via the newXxxClientFn variables below.
+type serviceRecsGetter interface {
+	GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error)
+}
+
+// newComputeClientFn, newDatabaseClientFn, newCacheClientFn,
+// newCosmosDBClientFn, and newSavingsPlansClientFn default to the real
+// constructors and are overridden in tests to inject fakes. The variables are
+// package-level (not fields on the adapter) so that the constructor signature
+// stays unchanged and the injection is limited to the test package that owns
+// the test binary's address space.
+//
+// getAdvisorRecsFn wraps r.getAdvisorRecommendations; it is a field rather
+// than a package-level var so that injection is scoped to the adapter
+// instance and avoids shared-state issues when tests run the advisor path
+// concurrently. Tests that do not need real ARM calls set it to noopAdvisorFn.
+var (
+	newComputeClientFn func(azcore.TokenCredential, string, string) serviceRecsGetter = func(cred azcore.TokenCredential, sub, region string) serviceRecsGetter {
+		return compute.NewClient(cred, sub, region)
+	}
+	newDatabaseClientFn func(azcore.TokenCredential, string, string) serviceRecsGetter = func(cred azcore.TokenCredential, sub, region string) serviceRecsGetter {
+		return database.NewClient(cred, sub, region)
+	}
+	newCacheClientFn func(azcore.TokenCredential, string, string) serviceRecsGetter = func(cred azcore.TokenCredential, sub, region string) serviceRecsGetter {
+		return cache.NewClient(cred, sub, region)
+	}
+	newCosmosDBClientFn func(azcore.TokenCredential, string, string) serviceRecsGetter = func(cred azcore.TokenCredential, sub, region string) serviceRecsGetter {
+		return cosmosdb.NewClient(cred, sub, region)
+	}
+	newSavingsPlansClientFn func(azcore.TokenCredential, string, string) serviceRecsGetter = func(cred azcore.TokenCredential, sub, region string) serviceRecsGetter {
+		return savingsplans.NewClient(cred, sub, region)
+	}
+)
+
 // RecommendationsClientAdapter aggregates Azure reservation recommendations across all services.
 //
 // Invariant: subscriptionID must be non-empty. Downstream converters use it as
@@ -31,9 +68,13 @@ import (
 // path is NewRecommendationsClientAdapter; direct struct literals bypass the
 // invariant check and should be confined to tests that deliberately exercise
 // the unvalidated shape.
+//
+// getAdvisorRecsFn defaults to r.getAdvisorRecommendations and may be
+// overridden per-instance in tests to avoid real ARM network calls.
 type RecommendationsClientAdapter struct {
-	cred           azcore.TokenCredential
-	subscriptionID string
+	cred             azcore.TokenCredential
+	subscriptionID   string
+	getAdvisorRecsFn func(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error)
 }
 
 // NewRecommendationsClientAdapter builds a RecommendationsClientAdapter with
@@ -44,10 +85,12 @@ func NewRecommendationsClientAdapter(cred azcore.TokenCredential, subscriptionID
 	if subscriptionID == "" {
 		return nil, fmt.Errorf("azure recommendations: subscriptionID is required")
 	}
-	return &RecommendationsClientAdapter{
+	r := &RecommendationsClientAdapter{
 		cred:           cred,
 		subscriptionID: subscriptionID,
-	}, nil
+	}
+	r.getAdvisorRecsFn = r.getAdvisorRecommendations
+	return r, nil
 }
 
 // GetRecommendations retrieves all Azure reservation recommendations across services.
@@ -109,7 +152,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	// Compute (VM) recommendations — subscription-wide.
 	if includeCompute {
 		goService(&computeErr, func() {
-			computeClient := compute.NewClient(r.cred, r.subscriptionID, "")
+			computeClient := newComputeClientFn(r.cred, r.subscriptionID, "")
 			computeRecs, computeErr = computeClient.GetRecommendations(gctx, params)
 		})
 	}
@@ -117,7 +160,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	// Database (SQL) recommendations — subscription-wide.
 	if includeDB {
 		goService(&dbErr, func() {
-			dbClient := database.NewClient(r.cred, r.subscriptionID, "")
+			dbClient := newDatabaseClientFn(r.cred, r.subscriptionID, "")
 			dbRecs, dbErr = dbClient.GetRecommendations(gctx, params)
 		})
 	}
@@ -125,7 +168,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	// Cache (Redis) recommendations — subscription-wide.
 	if includeCache {
 		goService(&cacheErr, func() {
-			cacheClient := cache.NewClient(r.cred, r.subscriptionID, "")
+			cacheClient := newCacheClientFn(r.cred, r.subscriptionID, "")
 			cacheRecs, cacheErr = cacheClient.GetRecommendations(gctx, params)
 		})
 	}
@@ -133,7 +176,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	// CosmosDB (NoSQL) recommendations — subscription-wide.
 	if includeCosmos {
 		goService(&cosmosErr, func() {
-			cosmosClient := cosmosdb.NewClient(r.cred, r.subscriptionID, "")
+			cosmosClient := newCosmosDBClientFn(r.cred, r.subscriptionID, "")
 			cosmosRecs, cosmosErr = cosmosClient.GetRecommendations(gctx, params)
 		})
 	}
@@ -145,7 +188,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	// a scheduler change.
 	if includeSP {
 		goService(&spErr, func() {
-			spClient := savingsplans.NewClient(r.cred, r.subscriptionID, "")
+			spClient := newSavingsPlansClientFn(r.cred, r.subscriptionID, "")
 			spRecs, spErr = spClient.GetRecommendations(gctx, params)
 		})
 	}
@@ -153,8 +196,15 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	// Azure Advisor adds cross-cutting cost recommendations independent of the
 	// per-service Reservation API. Failures here are non-fatal — the per-service
 	// results above are still useful on their own.
+	//
+	// getAdvisorRecsFn defaults to r.getAdvisorRecommendations and may be
+	// replaced per-adapter in tests to avoid real ARM network calls.
+	advisorFn := r.getAdvisorRecsFn
+	if advisorFn == nil {
+		advisorFn = r.getAdvisorRecommendations
+	}
 	goService(&advisorErr, func() {
-		advisorRecs, advisorErr = r.getAdvisorRecommendations(gctx, params)
+		advisorRecs, advisorErr = advisorFn(gctx, params)
 	})
 
 	// Wait for all goroutines. g.Wait() always returns nil because every

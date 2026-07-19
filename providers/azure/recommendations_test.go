@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
@@ -556,4 +557,193 @@ func TestMergeServiceResults_StubsDoNotMaskTotalFailure(t *testing.T) {
 	assert.ErrorIs(t, err, authErr)
 	assert.Contains(t, err.Error(), "all 4 Azure recommendation services failed")
 	assert.Nil(t, recs)
+}
+
+// fakeServiceClient is a test double for serviceRecsGetter. It sleeps for
+// sleepDur to simulate network latency and then returns the fixed recs slice
+// (or err when non-nil). sleep is done inside GetRecommendations so that
+// mock latency is isolated to the mock body — the test's assert path never
+// sleeps (see memory feedback_no_sleep_in_tests).
+type fakeServiceClient struct {
+	sleepDur time.Duration
+	recs     []common.Recommendation
+	err      error
+}
+
+func (f *fakeServiceClient) GetRecommendations(ctx context.Context, _ common.RecommendationParams) ([]common.Recommendation, error) {
+	select {
+	case <-time.After(f.sleepDur):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return f.recs, f.err
+}
+
+// newFakeFn returns a constructor compatible with the newXxxClientFn signature
+// that ignores the credential/subscription/region and always returns fake.
+func newFakeFn(fake serviceRecsGetter) func(azcore.TokenCredential, string, string) serviceRecsGetter {
+	return func(_ azcore.TokenCredential, _, _ string) serviceRecsGetter { return fake }
+}
+
+// noopAdvisorFn is a getAdvisorRecsFn replacement that returns immediately
+// with zero results, used in timing/isolation tests to keep all latency inside
+// the injectable fakeServiceClient mocks.
+func noopAdvisorFn(_ context.Context, _ common.RecommendationParams) ([]common.Recommendation, error) {
+	return nil, nil
+}
+
+const fakeServiceSleep = 100 * time.Millisecond
+
+// TestGetRecommendations_Parallelism proves that all four service goroutines
+// run concurrently: total wall-clock time must be well under 2x per-service
+// sleep (i.e. less than 200ms) rather than near 4x (400ms sequential).
+//
+// savingsplans and advisor are injected as instant no-ops so that all latency
+// comes from the four fakeServiceClient mocks; without this, both paths make
+// real ARM network calls whose RTT dwarfs the 100ms threshold.
+func TestGetRecommendations_Parallelism(t *testing.T) {
+	origCompute := newComputeClientFn
+	origDatabase := newDatabaseClientFn
+	origCache := newCacheClientFn
+	origCosmos := newCosmosDBClientFn
+	origSP := newSavingsPlansClientFn
+	t.Cleanup(func() {
+		newComputeClientFn = origCompute
+		newDatabaseClientFn = origDatabase
+		newCacheClientFn = origCache
+		newCosmosDBClientFn = origCosmos
+		newSavingsPlansClientFn = origSP
+	})
+
+	rec := func(svc common.ServiceType) common.Recommendation {
+		return common.Recommendation{Provider: common.ProviderAzure, Service: svc}
+	}
+
+	noopFake := newFakeFn(&fakeServiceClient{})
+	newComputeClientFn = newFakeFn(&fakeServiceClient{sleepDur: fakeServiceSleep, recs: []common.Recommendation{rec(common.ServiceCompute)}})
+	newDatabaseClientFn = newFakeFn(&fakeServiceClient{sleepDur: fakeServiceSleep, recs: []common.Recommendation{rec(common.ServiceRelationalDB)}})
+	newCacheClientFn = newFakeFn(&fakeServiceClient{sleepDur: fakeServiceSleep, recs: []common.Recommendation{rec(common.ServiceCache)}})
+	newCosmosDBClientFn = newFakeFn(&fakeServiceClient{sleepDur: fakeServiceSleep, recs: []common.Recommendation{rec(common.ServiceNoSQL)}})
+	newSavingsPlansClientFn = noopFake
+
+	adapter := &RecommendationsClientAdapter{
+		cred:             &mockAzureTokenCredential{},
+		subscriptionID:   "sub-parallelism",
+		getAdvisorRecsFn: noopAdvisorFn,
+	}
+
+	start := time.Now()
+	_, err := adapter.GetRecommendations(context.Background(), common.RecommendationParams{})
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	// With 4 services sleeping 100ms in parallel the wall-clock must be
+	// substantially less than 2x per-service sleep. We allow 190ms headroom
+	// for scheduler jitter; if the calls were serial this would take ~400ms.
+	assert.Less(t, elapsed, 2*fakeServiceSleep,
+		"expected parallel dispatch: elapsed %v >= 2x per-service sleep %v -- services may be running serially",
+		elapsed, fakeServiceSleep)
+}
+
+// TestGetRecommendations_OrderPreservation verifies that the merged slice
+// follows the canonical order compute -> database -> cache -> cosmosdb regardless
+// of which fake goroutine returns first (staggered sleeps force an
+// out-of-start-order completion).
+//
+// savingsplans and advisor are injected as instant no-ops so the test is
+// fully hermetic: no real ARM calls, deterministic rec count.
+func TestGetRecommendations_OrderPreservation(t *testing.T) {
+	origCompute := newComputeClientFn
+	origDatabase := newDatabaseClientFn
+	origCache := newCacheClientFn
+	origCosmos := newCosmosDBClientFn
+	origSP := newSavingsPlansClientFn
+	t.Cleanup(func() {
+		newComputeClientFn = origCompute
+		newDatabaseClientFn = origDatabase
+		newCacheClientFn = origCache
+		newCosmosDBClientFn = origCosmos
+		newSavingsPlansClientFn = origSP
+	})
+
+	makeRec := func(svc common.ServiceType) common.Recommendation {
+		return common.Recommendation{Provider: common.ProviderAzure, Service: svc, ResourceType: string(svc)}
+	}
+
+	// Stagger sleeps so goroutines complete in reverse order: cosmosdb
+	// finishes first (~10ms), compute last (~40ms). The merged slice must
+	// still reflect the canonical order.
+	newComputeClientFn = newFakeFn(&fakeServiceClient{sleepDur: 40 * time.Millisecond, recs: []common.Recommendation{makeRec(common.ServiceCompute)}})
+	newDatabaseClientFn = newFakeFn(&fakeServiceClient{sleepDur: 30 * time.Millisecond, recs: []common.Recommendation{makeRec(common.ServiceRelationalDB)}})
+	newCacheClientFn = newFakeFn(&fakeServiceClient{sleepDur: 20 * time.Millisecond, recs: []common.Recommendation{makeRec(common.ServiceCache)}})
+	newCosmosDBClientFn = newFakeFn(&fakeServiceClient{sleepDur: 10 * time.Millisecond, recs: []common.Recommendation{makeRec(common.ServiceNoSQL)}})
+	newSavingsPlansClientFn = newFakeFn(&fakeServiceClient{})
+
+	adapter := &RecommendationsClientAdapter{
+		cred:             &mockAzureTokenCredential{},
+		subscriptionID:   "sub-order",
+		getAdvisorRecsFn: noopAdvisorFn,
+	}
+
+	recs, err := adapter.GetRecommendations(context.Background(), common.RecommendationParams{})
+	require.NoError(t, err)
+
+	// savingsplans and advisor are no-ops; we expect exactly 4 recs (one per
+	// injectable service) in canonical order.
+	require.Len(t, recs, 4, "expected one rec per injectable service")
+	assert.Equal(t, common.ServiceCompute, recs[0].Service, "slot 0 must be compute")
+	assert.Equal(t, common.ServiceRelationalDB, recs[1].Service, "slot 1 must be database")
+	assert.Equal(t, common.ServiceCache, recs[2].Service, "slot 2 must be cache")
+	assert.Equal(t, common.ServiceNoSQL, recs[3].Service, "slot 3 must be cosmosdb")
+}
+
+// TestGetRecommendations_ErrorIsolation asserts that a single service error
+// does not prevent the other services' results from appearing in the merged
+// slice (no sibling cancellation).
+//
+// savingsplans and advisor are injected as instant no-ops so the rec count is
+// fully deterministic regardless of network availability.
+func TestGetRecommendations_ErrorIsolation(t *testing.T) {
+	origCompute := newComputeClientFn
+	origDatabase := newDatabaseClientFn
+	origCache := newCacheClientFn
+	origCosmos := newCosmosDBClientFn
+	origSP := newSavingsPlansClientFn
+	t.Cleanup(func() {
+		newComputeClientFn = origCompute
+		newDatabaseClientFn = origDatabase
+		newCacheClientFn = origCache
+		newCosmosDBClientFn = origCosmos
+		newSavingsPlansClientFn = origSP
+	})
+
+	makeRec := func(svc common.ServiceType) common.Recommendation {
+		return common.Recommendation{Provider: common.ProviderAzure, Service: svc}
+	}
+
+	// database returns an error; the other three must still contribute recs.
+	newComputeClientFn = newFakeFn(&fakeServiceClient{sleepDur: fakeServiceSleep, recs: []common.Recommendation{makeRec(common.ServiceCompute)}})
+	newDatabaseClientFn = newFakeFn(&fakeServiceClient{sleepDur: fakeServiceSleep, err: errors.New("db unavailable")})
+	newCacheClientFn = newFakeFn(&fakeServiceClient{sleepDur: fakeServiceSleep, recs: []common.Recommendation{makeRec(common.ServiceCache)}})
+	newCosmosDBClientFn = newFakeFn(&fakeServiceClient{sleepDur: fakeServiceSleep, recs: []common.Recommendation{makeRec(common.ServiceNoSQL)}})
+	newSavingsPlansClientFn = newFakeFn(&fakeServiceClient{})
+
+	adapter := &RecommendationsClientAdapter{
+		cred:             &mockAzureTokenCredential{},
+		subscriptionID:   "sub-isolation",
+		getAdvisorRecsFn: noopAdvisorFn,
+	}
+
+	recs, err := adapter.GetRecommendations(context.Background(), common.RecommendationParams{})
+	require.NoError(t, err, "a per-service error must not surface as a GetRecommendations error")
+	require.Len(t, recs, 3, "expected recs from the 3 healthy injectable services")
+
+	services := make([]common.ServiceType, len(recs))
+	for i, r := range recs {
+		services[i] = r.Service
+	}
+	assert.Contains(t, services, common.ServiceCompute, "compute recs must be present despite db error")
+	assert.Contains(t, services, common.ServiceCache, "cache recs must be present despite db error")
+	assert.Contains(t, services, common.ServiceNoSQL, "cosmosdb recs must be present despite db error")
+	assert.NotContains(t, services, common.ServiceRelationalDB, "db recs must be absent when db errors")
 }
