@@ -701,7 +701,7 @@ type MockRecommendationsClient struct {
 	mock.Mock
 }
 
-func (m *MockRecommendationsClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (m *MockRecommendationsClient) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	args := m.Called(ctx, params)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -1630,7 +1630,7 @@ func TestScheduler_CollectAWSRecommendations_FallbackToFiltered(t *testing.T) {
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProvider, nil)
 	mockProvider.On("GetRecommendationsClient", ctx).Return(mockRecClient, nil)
 	mockRecClient.On("GetAllRecommendations", ctx).Return([]common.Recommendation{}, nil) // Empty
-	mockRecClient.On("GetRecommendations", ctx, mock.AnythingOfType("common.RecommendationParams")).Return(filteredRecommendations, nil)
+	mockRecClient.On("GetRecommendations", ctx, mock.AnythingOfType("*common.RecommendationParams")).Return(filteredRecommendations, nil)
 
 	scheduler := &Scheduler{
 		config:          mockStore,
@@ -1668,7 +1668,7 @@ func TestScheduler_CollectAWSRecommendations_FallbackError(t *testing.T) {
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProvider, nil)
 	mockProvider.On("GetRecommendationsClient", ctx).Return(mockRecClient, nil)
 	mockRecClient.On("GetAllRecommendations", ctx).Return([]common.Recommendation{}, nil) // Empty -> triggers fallback
-	mockRecClient.On("GetRecommendations", ctx, mock.AnythingOfType("common.RecommendationParams")).Return(nil, fallbackErr)
+	mockRecClient.On("GetRecommendations", ctx, mock.AnythingOfType("*common.RecommendationParams")).Return(nil, fallbackErr)
 
 	scheduler := &Scheduler{
 		config:          mockStore,

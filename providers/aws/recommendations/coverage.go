@@ -324,9 +324,9 @@ func serviceRegionFilter(service, region string) *types.Expression {
 // held only across the outbound SDK call, matching fetchRIPageWithRetry,
 // so the coverage-enrichment fan-out stays inside the global IO cap.
 func (c *Client) fetchCoveragePage(ctx context.Context, input *costexplorer.GetReservationCoverageInput) (*costexplorer.GetReservationCoverageOutput, error) {
-	rl := c.newRateLimiter()
+	c.rateLimiter.Reset()
 	for {
-		if waitErr := rl.Wait(ctx); waitErr != nil {
+		if waitErr := c.rateLimiter.Wait(ctx); waitErr != nil {
 			return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
 		}
 		if acqErr := concurrency.Acquire(ctx); acqErr != nil {
@@ -334,7 +334,7 @@ func (c *Client) fetchCoveragePage(ctx context.Context, input *costexplorer.GetR
 		}
 		result, err := c.costExplorerClient.GetReservationCoverage(ctx, input)
 		concurrency.Release(ctx)
-		if !rl.ShouldRetry(err) {
+		if !c.rateLimiter.ShouldRetry(err) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to get reservation coverage: %w", err)
 			}

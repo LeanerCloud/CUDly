@@ -45,7 +45,7 @@ func newStubPager(entries ...ec2types.InstanceTypeInfo) *stubInstanceTypePager {
 }
 
 // knownInstanceTypes returns a slice with two well-known instance types for
-// use in tests that need a populated catalogue.
+// use in tests that need a populated catalog.
 func knownInstanceTypes() []ec2types.InstanceTypeInfo {
 	return []ec2types.InstanceTypeInfo{
 		{
@@ -111,11 +111,20 @@ func TestExtractInstanceTypeSKUEntry(t *testing.T) {
 			wantVCPU:  1,
 			wantMemGB: 0.5,
 		},
+		{
+			name: "MemoryInfo present but SizeInMiB nil -- MemGB zero",
+			info: ec2types.InstanceTypeInfo{
+				VCpuInfo:   &ec2types.VCpuInfo{DefaultVCpus: aws.Int32(8)},
+				MemoryInfo: &ec2types.MemoryInfo{},
+			},
+			wantVCPU:  8,
+			wantMemGB: 0.0,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			entry := extractInstanceTypeSKUEntry(tt.info)
+			entry := extractInstanceTypeSKUEntry(&tt.info)
 			assert.Equal(t, tt.wantVCPU, entry.vCPUs)
 			assert.InDelta(t, tt.wantMemGB, entry.memoryGB, 0.001)
 		})
@@ -132,12 +141,12 @@ func TestFetchInstanceTypeCatalogue_PopulatesMap(t *testing.T) {
 	assert.Len(t, m, 2)
 
 	m5, ok := m["m5.large"]
-	require.True(t, ok, "m5.large must be in catalogue")
+	require.True(t, ok, "m5.large must be in catalog")
 	assert.Equal(t, 2, m5.vCPUs)
 	assert.InDelta(t, 8.0, m5.memoryGB, 0.001)
 
 	r5, ok := m["r5.xlarge"]
-	require.True(t, ok, "r5.xlarge must be in catalogue")
+	require.True(t, ok, "r5.xlarge must be in catalog")
 	assert.Equal(t, 4, r5.vCPUs)
 	assert.InDelta(t, 32.0, r5.memoryGB, 0.001)
 }
@@ -146,7 +155,7 @@ func TestFetchInstanceTypeCatalogue_PopulatesMap(t *testing.T) {
 func TestFetchInstanceTypeCatalogue_PageError(t *testing.T) {
 	errPager := &errorOnFirstPagePager{}
 	m := fetchInstanceTypeCatalogue(context.Background(), errPager)
-	assert.Nil(t, m, "catalogue must be nil on page fetch error")
+	assert.Nil(t, m, "catalog must be nil on page fetch error")
 }
 
 // TestFetchInstanceTypeCatalogue_ContextCanceled returns nil when ctx is canceled.
@@ -156,7 +165,9 @@ func TestFetchInstanceTypeCatalogue_ContextCanceled(t *testing.T) {
 
 	pager := newStubPager(knownInstanceTypes()...)
 	m := fetchInstanceTypeCatalogue(ctx, pager)
-	assert.Nil(t, m, "catalogue must be nil when ctx is already canceled")
+	assert.Nil(t, m, "catalog must be nil when ctx is already canceled")
+	// NextPage must not have been called on a pre-canceled ctx.
+	assert.Equal(t, int32(0), atomic.LoadInt32(&pager.callCount))
 }
 
 // TestInstanceTypeLookup_CachedOnce asserts that a single GetRecommendations
@@ -183,7 +194,7 @@ func TestInstanceTypeLookup_CachedOnce(t *testing.T) {
 }
 
 // TestParseEC2Details_VCPUAndMemoryPopulated asserts that parseEC2Details
-// enriches ComputeDetails.VCPU and MemoryGB from the catalogue.
+// enriches ComputeDetails.VCPU and MemoryGB from the catalog.
 func TestParseEC2Details_VCPUAndMemoryPopulated(t *testing.T) {
 	pager := newStubPager(knownInstanceTypes()...)
 	client := NewClientWithAPI(&mockCostExplorerAPI{}, "us-east-1")
@@ -228,12 +239,12 @@ func TestParseEC2Details_CatalogueMiss(t *testing.T) {
 
 	rec := &common.Recommendation{}
 	err := client.parseEC2Details(context.Background(), rec, details)
-	require.NoError(t, err, "catalogue miss must not fail the conversion")
+	require.NoError(t, err, "catalog miss must not fail the conversion")
 
 	cd, ok := rec.Details.(*common.ComputeDetails)
 	require.True(t, ok)
-	assert.Equal(t, 0, cd.VCPU, "VCPU must be 0 on catalogue miss")
-	assert.InDelta(t, 0.0, cd.MemoryGB, 0.001, "MemoryGB must be 0 on catalogue miss")
+	assert.Equal(t, 0, cd.VCPU, "VCPU must be 0 on catalog miss")
+	assert.InDelta(t, 0.0, cd.MemoryGB, 0.001, "MemoryGB must be 0 on catalog miss")
 }
 
 // TestParseEC2Details_NoCatalogueConfigured leaves VCPU/MemoryGB at zero

@@ -298,9 +298,11 @@ func (a *spCoverageAccumulator) summarize(windowHours float64) SPCoverageSummary
 // Days==0 as "no data for this scope", not "no SPs in the account", and
 // check Days before dereferencing the pointer fields.
 //
-// Concurrency: each fetch builds its own RateLimiter via c.newRateLimiter()
-// (see feedback_rate_limiter_per_call), so concurrent SP calls no longer
-// race on a shared retry counter.
+// Concurrency: Client is NOT safe for concurrent SP calls - the shared
+// rateLimiter's Reset() is unsynchronized (see
+// feedback_rate_limiter_per_call), so concurrent callers race on the retry
+// counter. Call from a single goroutine per Client; the ladder consumer
+// (PR 5) is sequential by design.
 func (c *Client) GetSPCoverageSummary(ctx context.Context, region string, lookbackDays int) (SPCoverageSummary, error) {
 	if lookbackDays <= 0 {
 		return SPCoverageSummary{}, fmt.Errorf("sp coverage: lookbackDays must be positive, got %d", lookbackDays)
@@ -359,13 +361,13 @@ func (c *Client) GetSPCoverageSummary(ctx context.Context, region string, lookba
 // fetchSPCoveragePage calls GetSavingsPlansCoverage with rate-limit retry.
 // Mirrors fetchCoveragePage in coverage.go so both paths back off consistently.
 func (c *Client) fetchSPCoveragePage(ctx context.Context, input *costexplorer.GetSavingsPlansCoverageInput) (*costexplorer.GetSavingsPlansCoverageOutput, error) {
-	rl := c.newRateLimiter()
+	c.rateLimiter.Reset()
 	for {
-		if waitErr := rl.Wait(ctx); waitErr != nil {
+		if waitErr := c.rateLimiter.Wait(ctx); waitErr != nil {
 			return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
 		}
 		result, err := c.costExplorerClient.GetSavingsPlansCoverage(ctx, input)
-		if !rl.ShouldRetry(err) {
+		if !c.rateLimiter.ShouldRetry(err) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to get SP coverage: %w", err)
 			}
@@ -410,9 +412,11 @@ func (c *Client) fetchSPCoveragePage(ctx context.Context, input *costexplorer.Ge
 // real GetSavingsPlansUtilization per plan type) and confirm the returned
 // dimension values match the map.
 //
-// Concurrency: each fetch builds its own RateLimiter via c.newRateLimiter()
-// (see feedback_rate_limiter_per_call), so concurrent SP calls no longer
-// race on a shared retry counter.
+// Concurrency: Client is NOT safe for concurrent SP calls - the shared
+// rateLimiter's Reset() is unsynchronized (see
+// feedback_rate_limiter_per_call), so concurrent callers race on the retry
+// counter. Call from a single goroutine per Client; the ladder consumer
+// (PR 5) is sequential by design.
 func (c *Client) GetSPUtilization(ctx context.Context, planType types.SupportedSavingsPlansType, region string, lookbackDays int) (SPUtilizationSummary, error) {
 	if err := validateSPPlanType(planType); err != nil {
 		return SPUtilizationSummary{}, fmt.Errorf("sp utilization: %w", err)
@@ -448,13 +452,13 @@ func (c *Client) GetSPUtilization(ctx context.Context, planType types.SupportedS
 // fetchSPUtilizationPage calls GetSavingsPlansUtilization with rate-limit retry.
 // Mirrors fetchUtilizationPage in utilization.go so both paths back off consistently.
 func (c *Client) fetchSPUtilizationPage(ctx context.Context, input *costexplorer.GetSavingsPlansUtilizationInput) (*costexplorer.GetSavingsPlansUtilizationOutput, error) {
-	rl := c.newRateLimiter()
+	c.rateLimiter.Reset()
 	for {
-		if waitErr := rl.Wait(ctx); waitErr != nil {
+		if waitErr := c.rateLimiter.Wait(ctx); waitErr != nil {
 			return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
 		}
 		result, err := c.costExplorerClient.GetSavingsPlansUtilization(ctx, input)
-		if !rl.ShouldRetry(err) {
+		if !c.rateLimiter.ShouldRetry(err) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to get SP utilization: %w", err)
 			}

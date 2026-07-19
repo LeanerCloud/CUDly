@@ -133,12 +133,12 @@ func (c *Client) fetchSPPageWithRetry(
 	ctx context.Context,
 	input *costexplorer.GetSavingsPlansPurchaseRecommendationInput,
 ) (*costexplorer.GetSavingsPlansPurchaseRecommendationOutput, error) {
-	rl := c.newRateLimiter()
+	c.rateLimiter.Reset()
 	var result *costexplorer.GetSavingsPlansPurchaseRecommendationOutput
 	var err error
 
 	for {
-		if waitErr := rl.Wait(ctx); waitErr != nil {
+		if waitErr := c.rateLimiter.Wait(ctx); waitErr != nil {
 			return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
 		}
 
@@ -147,7 +147,7 @@ func (c *Client) fetchSPPageWithRetry(
 		}
 		result, err = c.costExplorerClient.GetSavingsPlansPurchaseRecommendation(ctx, input)
 		concurrency.Release(ctx)
-		if !rl.ShouldRetry(err) {
+		if !c.rateLimiter.ShouldRetry(err) {
 			break
 		}
 	}

@@ -421,7 +421,7 @@ func TestCosmosDBClient_GetRecommendations_WithMockPager(t *testing.T) {
 	}
 	client.SetRecommendationsPager(mockPager)
 
-	recommendations, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recommendations, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.NotNil(t, recommendations)
 }
@@ -437,7 +437,7 @@ func TestCosmosDBClient_GetRecommendations_PagerError(t *testing.T) {
 
 	client.SetRecommendationsPager(mockPager)
 
-	_, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	_, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get Cosmos DB recommendations")
 }
@@ -463,7 +463,7 @@ func TestCosmosDBClient_GetRecommendations_MultiplePages(t *testing.T) {
 	}
 	client.SetRecommendationsPager(mockPager)
 
-	recommendations, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recommendations, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.NotNil(t, recommendations)
 	assert.Equal(t, 2, mockPager.index) // Verify both pages were consumed

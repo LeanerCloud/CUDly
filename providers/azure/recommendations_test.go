@@ -325,7 +325,8 @@ func TestRecommendationsClientAdapter_GetRecommendations_PropagatesContextCancel
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := adapter.GetRecommendations(ctx, common.RecommendationParams{})
+	emptyParams := common.RecommendationParams{}
+	_, err := adapter.GetRecommendations(ctx, &emptyParams)
 	require.Error(t, err, "expected context.Canceled to propagate from GetRecommendations")
 	assert.ErrorIs(t, err, context.Canceled,
 		"GetRecommendations must propagate the parent ctx error after g.Wait()")
@@ -616,7 +617,7 @@ type fakeServiceClient struct {
 	err      error
 }
 
-func (f *fakeServiceClient) GetRecommendations(ctx context.Context, _ common.RecommendationParams) ([]common.Recommendation, error) {
+func (f *fakeServiceClient) GetRecommendations(ctx context.Context, _ *common.RecommendationParams) ([]common.Recommendation, error) {
 	select {
 	case <-time.After(f.sleepDur):
 	case <-ctx.Done():
@@ -679,7 +680,7 @@ func TestGetRecommendations_Parallelism(t *testing.T) {
 	}
 
 	start := time.Now()
-	_, err := adapter.GetRecommendations(context.Background(), common.RecommendationParams{})
+	_, err := adapter.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	elapsed := time.Since(start)
 
 	require.NoError(t, err)
@@ -731,7 +732,7 @@ func TestGetRecommendations_OrderPreservation(t *testing.T) {
 		getAdvisorRecsFn: noopAdvisorFn,
 	}
 
-	recs, err := adapter.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := adapter.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	require.NoError(t, err)
 
 	// savingsplans and advisor are no-ops; we expect exactly 4 recs (one per
@@ -780,7 +781,7 @@ func TestGetRecommendations_ErrorIsolation(t *testing.T) {
 		getAdvisorRecsFn: noopAdvisorFn,
 	}
 
-	recs, err := adapter.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := adapter.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	require.NoError(t, err, "a per-service error must not surface as a GetRecommendations error")
 	require.Len(t, recs, 3, "expected recs from the 3 healthy injectable services")
 

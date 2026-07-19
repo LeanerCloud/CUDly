@@ -101,7 +101,11 @@ type RecommendationsClientAdapter struct {
 // Mirrors the Azure parallelisation in
 // providers/azure/recommendations.go (closes #258, commit b10326c5) and the
 // AWS service-loop parallelisation (closes #266).
-func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p *common.RecommendationParams) ([]common.Recommendation, error) {
+	if p == nil {
+		return nil, fmt.Errorf("params cannot be nil")
+	}
+	params := *p
 	// Context cancellation is terminal: bail out before any API fan-out.
 	// Newer cloud.google.com/go/compute REST clients can complete a regions
 	// List call (and return a real 403) even when ctx is already cancelled,
@@ -218,7 +222,7 @@ func (r *RecommendationsClientAdapter) collectComputeRecs(ctx context.Context, p
 	if err != nil {
 		return nil, err
 	}
-	return client.GetRecommendations(ctx, params)
+	return client.GetRecommendations(ctx, &params)
 }
 
 // collectSQLRecs fetches Cloud SQL CUD recommendations for one region.
@@ -231,7 +235,7 @@ func (r *RecommendationsClientAdapter) collectSQLRecs(ctx context.Context, param
 	if err != nil {
 		return nil, err
 	}
-	return client.GetRecommendations(ctx, params)
+	return client.GetRecommendations(ctx, &params)
 }
 
 // collectCacheRecs fetches Memorystore recommendations for one region.
@@ -244,7 +248,7 @@ func (r *RecommendationsClientAdapter) collectCacheRecs(ctx context.Context, par
 	if err != nil {
 		return nil, err
 	}
-	return client.GetRecommendations(ctx, params)
+	return client.GetRecommendations(ctx, &params)
 }
 
 // collectStorageRecs fetches Cloud Storage recommendations for one region.
@@ -257,7 +261,7 @@ func (r *RecommendationsClientAdapter) collectStorageRecs(ctx context.Context, p
 	if err != nil {
 		return nil, err
 	}
-	return client.GetRecommendations(ctx, params)
+	return client.GetRecommendations(ctx, &params)
 }
 
 // collectRegion fetches recommendations for all four GCP services
@@ -351,13 +355,13 @@ func (r *RecommendationsClientAdapter) GetRecommendationsForService(ctx context.
 	params := common.RecommendationParams{
 		Service: service,
 	}
-	return r.GetRecommendations(ctx, params)
+	return r.GetRecommendations(ctx, &params)
 }
 
 // GetAllRecommendations retrieves all GCP commitment recommendations across all services
 func (r *RecommendationsClientAdapter) GetAllRecommendations(ctx context.Context) ([]common.Recommendation, error) {
 	params := common.RecommendationParams{}
-	return r.GetRecommendations(ctx, params)
+	return r.GetRecommendations(ctx, &params)
 }
 
 // getRegions retrieves available GCP regions for the project

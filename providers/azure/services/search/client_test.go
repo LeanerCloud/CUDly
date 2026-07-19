@@ -430,7 +430,7 @@ func TestSearchClient_GetRecommendations_WithMockPager(t *testing.T) {
 
 	client.SetRecommendationsPager(mockPager)
 
-	recs, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recs, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Empty(t, recs)
 }
@@ -471,7 +471,7 @@ func TestSearchClient_GetRecommendations_AlwaysEmpty(t *testing.T) {
 	}
 	client.SetRecommendationsPager(pagerWithVMRecs)
 
-	recs, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recs, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Empty(t, recs,
 		"Azure Search has no Consumption API reservation stream; GetRecommendations "+

@@ -152,7 +152,7 @@ func TestGetRecommendations_empty(t *testing.T) {
 	c := newTestClient()
 	c.SetRecommendationsPager(&fakeRecommendationsPager{})
 
-	recs, err := c.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := c.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Empty(t, recs)
 }
@@ -176,7 +176,7 @@ func TestGetRecommendations_singlePage(t *testing.T) {
 		},
 	})
 
-	recs, err := c.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := c.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 
@@ -228,7 +228,7 @@ func TestGetRecommendations_multiPage(t *testing.T) {
 		},
 	})
 
-	recs, err := c.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := c.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Len(t, recs, 2)
 }
@@ -237,7 +237,7 @@ func TestGetRecommendations_pagerError(t *testing.T) {
 	c := newTestClient()
 	c.SetRecommendationsPager(&errorRecommendationsPager{})
 
-	_, err := c.GetRecommendations(context.Background(), common.RecommendationParams{})
+	_, err := c.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	assert.Error(t, err)
 }
 
@@ -266,7 +266,7 @@ func TestGetRecommendations_regionFilter(t *testing.T) {
 		},
 	})
 
-	recs, err := c.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := c.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	assert.Equal(t, "DW500c", recs[0].ResourceType)
@@ -292,7 +292,7 @@ func TestGetRecommendations_modernShape(t *testing.T) {
 		},
 	})
 
-	recs, err := c.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := c.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	assert.Equal(t, "DW2000c", recs[0].ResourceType)

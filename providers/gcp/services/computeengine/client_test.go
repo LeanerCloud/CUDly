@@ -790,7 +790,7 @@ func TestComputeEngineClient_GetRecommendations_WithMock(t *testing.T) {
 	mockClient := &MockRecommenderClient{iterator: mockIterator}
 	client.SetRecommenderClient(mockClient)
 
-	recommendations, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recommendations, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Len(t, recommendations, 1)
 	assert.Equal(t, common.ProviderGCP, recommendations[0].Provider)
@@ -814,7 +814,7 @@ func TestComputeEngineClient_GetRecommendations_IteratorError(t *testing.T) {
 	mockClient := &MockRecommenderClient{iterator: mockIterator}
 	client.SetRecommenderClient(mockClient)
 
-	recs, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recs, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "computeengine: iterate recommendations")
 	assert.Nil(t, recs, "partial data must not leak on iterator failure")
@@ -832,7 +832,7 @@ func TestComputeEngineClient_GetRecommendations_Empty(t *testing.T) {
 	mockClient := &MockRecommenderClient{iterator: mockIterator}
 	client.SetRecommenderClient(mockClient)
 
-	recommendations, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recommendations, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Empty(t, recommendations)
 }
@@ -936,8 +936,8 @@ func TestComputeEngineClient_GetRecommendations_CtxCancelReturnsError(t *testing
 	require.NoError(t, err)
 	client.SetRecommenderClient(&infiniteRecommenderClient{})
 
-	_, err = client.GetRecommendations(ctx, common.RecommendationParams{})
-	require.Error(t, err, "canceled context must surface an error, not a partial result set")
+	_, err = client.GetRecommendations(ctx, &common.RecommendationParams{})
+	require.Error(t, err, "cancelled context must surface an error, not a partial result set")
 }
 
 // TestComputeEngineClient_GetRecommendations_PageCapFires asserts that the
@@ -947,7 +947,7 @@ func TestComputeEngineClient_GetRecommendations_PageCapFires(t *testing.T) {
 	require.NoError(t, err)
 	client.SetRecommenderClient(&infiniteRecommenderClient{})
 
-	_, err = client.GetRecommendations(context.Background(), common.RecommendationParams{})
+	_, err = client.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	require.Error(t, err, "page cap must surface an error when the iterator never terminates")
 }
 
@@ -1562,7 +1562,7 @@ func TestGetRecommendations_FiltersNonActiveStates(t *testing.T) {
 	mockClient := &MockRecommenderClient{iterator: mockIterator}
 	client.SetRecommenderClient(mockClient)
 
-	results, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	results, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	require.Len(t, results, 1,
 		"only the ACTIVE recommendation must be returned; CLAIMED/SUCCEEDED/FAILED/DISMISSED must be filtered (H-1)")
@@ -1595,7 +1595,7 @@ func TestGetRecommendations_ActiveRecIncluded(t *testing.T) {
 	mockClient := &MockRecommenderClient{iterator: mockIterator}
 	client.SetRecommenderClient(mockClient)
 
-	results, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	results, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	require.Len(t, results, 1, "an ACTIVE recommendation must be included")
 }
