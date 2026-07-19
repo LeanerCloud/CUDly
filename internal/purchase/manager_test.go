@@ -386,9 +386,12 @@ func TestManager_ProcessScheduledPurchases_PendingAutoFalseSkipped(t *testing.T)
 }
 
 // TestManager_ProcessScheduledPurchases_WebSourceSkipped verifies that a
-// pending execution with Source="web" is never auto-executed by the cron
-// sweep, even when the plan has AutoPurchase=true. Web-submitted rows must
-// wait for the token-link approval path.
+// pending execution with the canonical web source (common.PurchaseSourceWeb,
+// "cudly-web") is never auto-executed by the cron sweep, even when the plan
+// has AutoPurchase=true. Web-submitted rows must wait for the token-link
+// approval path. Uses the real persisted value, not a bare "web" literal, so
+// the test reproduces the production data shape (regression guard for the
+// stringly-typed gate that let "cudly-web" rows through).
 func TestManager_ProcessScheduledPurchases_WebSourceSkipped(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -400,15 +403,24 @@ func TestManager_ProcessScheduledPurchases_WebSourceSkipped(t *testing.T) {
 			ExecutionID:   "exec-web",
 			PlanID:        "plan-web",
 			Status:        "pending",
-			Source:        "web",
+			Source:        common.PurchaseSourceWeb,
 			ScheduledDate: pastDate,
 		},
 	}
 
 	mockStore.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
-	// executableByScheduler short-circuits on Source="web" — GetPurchasePlan must NOT be called.
-	// TransitionExecutionStatus must NOT be called.
+
+	// Sentinel: web rows must short-circuit in executableByScheduler BEFORE the
+	// AutoPurchase plan fetch. GetPurchasePlanFn returns AutoPurchase=true (the
+	// dangerous case: if the gate is bypassed the row would execute), and flips
+	// planFetched. The mock's default GetPurchasePlan stub does not record the
+	// call, so AssertNotCalled alone cannot detect the bypass — hence this flag.
+	planFetched := false
+	mockStore.GetPurchasePlanFn = func(_ context.Context, planID string) (*config.PurchasePlan, error) {
+		planFetched = true
+		return &config.PurchasePlan{ID: planID, AutoPurchase: true}, nil
+	}
 
 	manager := &Manager{
 		config:       mockStore,
@@ -421,9 +433,11 @@ func TestManager_ProcessScheduledPurchases_WebSourceSkipped(t *testing.T) {
 	assert.Equal(t, 0, result.Processed, "web-sourced rows must not be auto-executed")
 	assert.Equal(t, 0, result.Executed)
 	assert.Equal(t, 0, result.Failed)
+	assert.False(t, planFetched,
+		"web rows must short-circuit before the AutoPurchase plan fetch; a bare \"web\" "+
+			"literal gate lets the persisted \"cudly-web\" value through to execution")
 
 	mockStore.AssertExpectations(t)
-	mockStore.AssertNotCalled(t, "GetPurchasePlan", mock.Anything, mock.Anything)
 	mockStore.AssertNotCalled(t, "TransitionExecutionStatus",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }

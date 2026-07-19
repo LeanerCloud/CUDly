@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -118,16 +119,24 @@ func TestManager_ProcessMessage(t *testing.T) {
 			ExecutionID: "exec-web",
 			PlanID:      "plan-1",
 			Status:      "pending",
-			Source:      "web",
+			Source:      common.PurchaseSourceWeb,
 		}
 		mockStore.On("GetExecutionByID", ctx, "exec-web").Return(execution, nil)
-		// GetPurchasePlan must NOT be called (Source=web short-circuits)
-		// TransitionExecutionStatus must NOT be called
+		// Sentinel: web rows must short-circuit BEFORE the AutoPurchase plan
+		// fetch. Return AutoPurchase=true (the dangerous case) and flag the
+		// fetch; the default GetPurchasePlan stub doesn't record the call, so
+		// AssertNotCalled alone can't catch a bypass of the "cudly-web" gate.
+		planFetched := false
+		mockStore.GetPurchasePlanFn = func(_ context.Context, planID string) (*config.PurchasePlan, error) {
+			planFetched = true
+			return &config.PurchasePlan{ID: planID, AutoPurchase: true}, nil
+		}
 
 		err := manager.ProcessMessage(ctx, `{"type": "execute_purchase", "execution_id": "exec-web"}`)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not eligible for auto-execution")
-		mockStore.AssertNotCalled(t, "GetPurchasePlan", mock.Anything, mock.Anything)
+		assert.False(t, planFetched,
+			"web rows must short-circuit before the AutoPurchase plan fetch on the SQS path")
 		mockStore.AssertNotCalled(t, "TransitionExecutionStatus",
 			mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	})

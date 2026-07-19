@@ -11,6 +11,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/email"
 	"github.com/LeanerCloud/CUDly/internal/oidc"
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -494,8 +495,9 @@ func (m *Manager) RecoverStrandedApprovals(ctx context.Context) (int, error) {
 // an explicit human approval action (fail closed on money paths).
 //
 // Rules:
-//   - source="web" rows must wait for the token-link approval path; the
-//     scheduler and SQS paths must never bypass that gate.
+//   - web-submitted rows (Source == common.PurchaseSourceWeb, "cudly-web") must
+//     wait for the token-link approval path; the scheduler and SQS paths must
+//     never bypass that gate.
 //   - All other pending/notified rows require the owning plan to have
 //     AutoPurchase=true. A plan-fetch error is propagated so the caller can
 //     fail closed rather than defaulting to "execute".
@@ -503,7 +505,11 @@ func (m *Manager) RecoverStrandedApprovals(ctx context.Context) (int, error) {
 // "approved" rows are handled by the session/token approval paths and
 // RecoverStrandedApprovals; this helper is only called for pending/notified.
 func (m *Manager) executableByScheduler(ctx context.Context, exec *config.PurchaseExecution) (bool, error) {
-	if exec.Source == "web" {
+	// Compare against the typed source constant, not a bare "web" literal: the
+	// persisted value is "cudly-web" (common.PurchaseSourceWeb), so the old
+	// literal never matched and web rows could be auto-executed without the
+	// token-link approval when AutoPurchase=true (fail-open on a money path).
+	if exec.Source == common.PurchaseSourceWeb {
 		return false, nil
 	}
 	plan, err := m.config.GetPurchasePlan(ctx, exec.PlanID)
