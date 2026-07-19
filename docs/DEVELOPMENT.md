@@ -321,7 +321,6 @@ make security-scan-terraform   # tfsec
 make terraform-validate
 make terraform-fmt-check
 make terraform-fmt
-make cost-estimate             # requires infracost
 
 make docker-build              # build Docker image
 make docker-test               # build and test image
