@@ -244,10 +244,10 @@ func (h *Handler) expireStaleExecutions(staleExecs []config.PurchaseExecution) {
 // should not abort the best-effort transitions.
 func (h *Handler) expireStaleExecutionsSweep(staleExecs []config.PurchaseExecution) {
 	ctx := context.Background()
-	for _, exec := range staleExecs {
-		_, err := h.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"pending", "notified"}, "expired", nil)
+	for i := range staleExecs {
+		_, err := h.config.TransitionExecutionStatus(ctx, staleExecs[i].ExecutionID, []string{"pending", "notified"}, "expired", nil)
 		if err != nil {
-			logging.Warnf("history: expire sweep for execution %s failed: %v", exec.ExecutionID, err)
+			logging.Warnf("history: expire sweep for execution %s failed: %v", staleExecs[i].ExecutionID, err)
 		}
 	}
 }
