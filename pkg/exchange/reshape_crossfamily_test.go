@@ -361,6 +361,99 @@ func TestAnalyzeReshapingWithRecs_TermZeroSkipsTermGuard(t *testing.T) {
 	assert.Equal(t, "r5.large", recs[0].AlternativeTargets[0].InstanceType)
 }
 
+// --- Audit fixtures from exchange-alternatives-audit.md (#152) ----------
+
+// TestAudit_CrossGroupAlternativesSurface pins audit fixture A:
+// a source from one use-case group (m5, general-purpose) must receive
+// alternatives from a different use-case group (c5 compute, r5 memory)
+// when CE returns recs for those families and dollar-units pass.
+// The old peerFamilyGroups allowlist prevented this; the CE-driven
+// approach correctly surfaces it.
+func TestAudit_CrossGroupAlternativesSurface(t *testing.T) {
+	t.Parallel()
+	// src: m5.xlarge, NF=8, $25/mo, 1y -- dollar-units target = 8*25 = 200
+	lookup := func(_ context.Context, _, _ string) ([]OfferingOption, error) {
+		return []OfferingOption{
+			// c5.large: NF=4, $50/mo, 1y -- units = 4*50=200 >= 200 (boundary pass)
+			{InstanceType: "c5.large", OfferingID: "off-c5-1y", EffectiveMonthlyCost: 50, NormalizationFactor: 4, CurrencyCode: "USD", TermSeconds: oneYearSeconds},
+			// r5.large: NF=4, $60/mo, 1y -- units = 4*60=240 >= 200 (pass)
+			{InstanceType: "r5.large", OfferingID: "off-r5-1y", EffectiveMonthlyCost: 60, NormalizationFactor: 4, CurrencyCode: "USD", TermSeconds: oneYearSeconds},
+		}, nil
+	}
+	recs := AnalyzeReshapingWithRecs(
+		context.Background(),
+		[]RIInfo{{
+			ID: "ri-m5", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible",
+			NormalizationFactor: 8, MonthlyCost: 25, CurrencyCode: "USD", TermSeconds: oneYearSeconds,
+		}},
+		[]UtilizationInfo{{RIID: "ri-m5", UtilizationPercent: 50}},
+		95, "us-east-1", "USD", lookup,
+	)
+	require.Len(t, recs, 1)
+	alts := recs[0].AlternativeTargets
+	require.Len(t, alts, 2,
+		"c5 and r5 are cross-group but cross-family; both must surface when dollar-units pass")
+	assert.Equal(t, "c5.large", alts[0].InstanceType, "ascending cost: c5 ($50) before r5 ($60)")
+	assert.Equal(t, "r5.large", alts[1].InstanceType)
+}
+
+// TestAudit_NewGenerationFamilySurfaces pins audit fixture B:
+// a family that post-dates the old allowlist (m8g) must surface as
+// an alternative when CE returns a rec for it and dollar-units pass.
+// The old allowlist would have silently excluded m8g; the CE-driven
+// path surfaces any family AWS recommends.
+func TestAudit_NewGenerationFamilySurfaces(t *testing.T) {
+	t.Parallel()
+	// src: m5.xlarge, NF=8, $25/mo, 1y -- target = 200
+	lookup := func(_ context.Context, _, _ string) ([]OfferingOption, error) {
+		return []OfferingOption{
+			// m8g.large: NF=4, $52/mo, 1y -- units = 4*52=208 >= 200 (pass)
+			{InstanceType: "m8g.large", OfferingID: "off-m8g-1y", EffectiveMonthlyCost: 52, NormalizationFactor: 4, CurrencyCode: "USD", TermSeconds: oneYearSeconds},
+		}, nil
+	}
+	recs := AnalyzeReshapingWithRecs(
+		context.Background(),
+		[]RIInfo{{
+			ID: "ri-m5", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible",
+			NormalizationFactor: 8, MonthlyCost: 25, CurrencyCode: "USD", TermSeconds: oneYearSeconds,
+		}},
+		[]UtilizationInfo{{RIID: "ri-m5", UtilizationPercent: 50}},
+		95, "us-east-1", "USD", lookup,
+	)
+	require.Len(t, recs, 1)
+	require.Len(t, recs[0].AlternativeTargets, 1,
+		"m8g is a cross-family new-gen offering; must surface without an allowlist entry")
+	assert.Equal(t, "m8g.large", recs[0].AlternativeTargets[0].InstanceType)
+}
+
+// TestAudit_DollarUnitsPreFilterBlocksInvalidAlternative pins audit
+// fixture C: when a CE rec's NF*EMC product falls below the source's
+// NF*MonthlyCost, the offering is dropped before reaching the UI.
+// This ensures users never click "Exchange" on an alternative that
+// AWS would refuse for the dollar-units rule.
+func TestAudit_DollarUnitsPreFilterBlocksInvalidAlternative(t *testing.T) {
+	t.Parallel()
+	// src: m5.xlarge, NF=8, $25/mo -- target = 200
+	lookup := func(_ context.Context, _, _ string) ([]OfferingOption, error) {
+		return []OfferingOption{
+			// c5.medium: NF=2, $60/mo -- units = 2*60=120 < 200 (fail)
+			{InstanceType: "c5.medium", OfferingID: "off-c5-med", EffectiveMonthlyCost: 60, NormalizationFactor: 2, CurrencyCode: "USD", TermSeconds: oneYearSeconds},
+		}, nil
+	}
+	recs := AnalyzeReshapingWithRecs(
+		context.Background(),
+		[]RIInfo{{
+			ID: "ri-m5", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible",
+			NormalizationFactor: 8, MonthlyCost: 25, CurrencyCode: "USD", TermSeconds: oneYearSeconds,
+		}},
+		[]UtilizationInfo{{RIID: "ri-m5", UtilizationPercent: 50}},
+		95, "us-east-1", "USD", lookup,
+	)
+	require.Len(t, recs, 1)
+	assert.Empty(t, recs[0].AlternativeTargets,
+		"c5.medium fails the NF*EMC >= src check (120 < 200); must not surface")
+}
+
 // TestPassesDollarUnitsCheck pins the local pre-filter rule that gates
 // cross-family alternatives. The rule is conservative: when source NF
 // or any side's price is zero, the check returns false (skip). When
