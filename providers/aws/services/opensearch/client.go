@@ -150,6 +150,17 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		Timestamp:      time.Now(),
 	}
 
+	// Validate the instance count at the boundary, before any lookups or the
+	// idempotency short-circuit. Previously this ran after idempotencyGuard, so
+	// a re-drive carrying an invalid count (negative / int32-overflow) against
+	// an already-existing reservation would short-circuit to Success and never
+	// surface the bad input. Fail loud up front instead.
+	instanceCount, countErr := safeInt32Count(rec.Count)
+	if countErr != nil {
+		result.Error = countErr
+		return result, result.Error
+	}
+
 	offeringID, err := c.findOfferingID(ctx, rec, opts.ExecutionID)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to find offering: %w", err)
@@ -188,11 +199,6 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		return result, nil
 	}
 
-	instanceCount, countErr := safeInt32Count(rec.Count)
-	if countErr != nil {
-		result.Error = countErr
-		return result, result.Error
-	}
 	input := &opensearch.PurchaseReservedInstanceOfferingInput{
 		ReservedInstanceOfferingId: aws.String(offeringID),
 		ReservationName:            aws.String(reservationName),
