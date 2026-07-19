@@ -1805,6 +1805,7 @@ func (s *PostgresStore) GetActivePurchaseHistory(ctx context.Context, asOf time.
 	conds := []string{
 		"term > 0",
 		"timestamp + make_interval(hours => term * 8760) >= $1",
+		"revoked_at IS NULL",
 	}
 	args := []any{asOf}
 	conds, args = appendAccountPredicate(conds, args, accountIDs, externalIDsByProvider)

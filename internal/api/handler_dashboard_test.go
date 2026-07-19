@@ -846,7 +846,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, nil, map[string][]string{"": {"account-123"}})
+		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, "", nil, map[string][]string{"": {"account-123"}})
 
 		assert.Equal(t, 0, activeCommitments)
 		assert.Equal(t, 0.0, committedMonthly)
@@ -860,7 +860,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, nil, map[string][]string{"": {"account-123"}})
+		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, "", nil, map[string][]string{"": {"account-123"}})
 
 		assert.Equal(t, 0, activeCommitments)
 		assert.Equal(t, 0.0, committedMonthly)
@@ -886,7 +886,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, nil, map[string][]string{"": {"account-123"}})
+		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, "", nil, map[string][]string{"": {"account-123"}})
 
 		assert.Equal(t, 1, activeCommitments)
 		assert.Equal(t, 100.0, committedMonthly)
@@ -913,7 +913,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, nil, map[string][]string{"": {"account-123"}})
+		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, "", nil, map[string][]string{"": {"account-123"}})
 
 		// Should skip expired commitments
 		assert.Equal(t, 0, activeCommitments)
@@ -940,7 +940,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, _, savingsByService := handler.calculateCommitmentMetrics(ctx, nil, map[string][]string{"": {"account-123"}})
+		activeCommitments, committedMonthly, _, savingsByService := handler.calculateCommitmentMetrics(ctx, "", nil, map[string][]string{"": {"account-123"}})
 
 		assert.Equal(t, 1, activeCommitments)
 		assert.Equal(t, 50.0, committedMonthly)
@@ -973,7 +973,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, _, _ := handler.calculateCommitmentMetrics(ctx, nil, map[string][]string{"": {"account-123"}})
+		activeCommitments, committedMonthly, _, _ := handler.calculateCommitmentMetrics(ctx, "", nil, map[string][]string{"": {"account-123"}})
 
 		// Only the status="" row counts; the failed row must be excluded.
 		assert.Equal(t, 1, activeCommitments,
@@ -1007,7 +1007,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, _, _ := handler.calculateCommitmentMetrics(ctx, uuids, nil)
+		activeCommitments, committedMonthly, _, _ := handler.calculateCommitmentMetrics(ctx, "", uuids, nil)
 
 		assert.Equal(t, 2, activeCommitments)
 		assert.Equal(t, 250.0, committedMonthly,
@@ -1035,7 +1035,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 		handler := &Handler{config: mockStore}
 
 		activeCommitments, committedMonthly, _, _ := handler.calculateCommitmentMetrics(
-			ctx, []string{"bbbbbbbb-1111-2222-3333-444444444444"}, map[string][]string{"aws": {"999988887777"}})
+			ctx, "", []string{"bbbbbbbb-1111-2222-3333-444444444444"}, map[string][]string{"aws": {"999988887777"}})
 
 		assert.Equal(t, 1, activeCommitments, "external-id-only commitment must be counted")
 		assert.Equal(t, 175.0, committedMonthly)
@@ -1097,7 +1097,7 @@ func TestHandler_calculateCommitmentMetrics_NoTruncationBeyond1000(t *testing.T)
 
 	handler := &Handler{config: mockStore}
 
-	activeCommitments, committedMonthly, _, savingsByService := handler.calculateCommitmentMetrics(ctx, nil, nil)
+	activeCommitments, committedMonthly, _, savingsByService := handler.calculateCommitmentMetrics(ctx, "", nil, nil)
 
 	assert.Equal(t, 1, activeCommitments,
 		"the still-active 3y commitment beyond the old 1000-row cap must be counted")
@@ -1584,4 +1584,102 @@ func TestFirstServiceConfig(t *testing.T) {
 				"must always return ec2 (lexicographically first key), iteration %d", i)
 		}
 	})
+}
+
+// TestIsActiveCommitment_RevokedReturnsFalse is the defect-#2 regression guard.
+// A revoked commitment (RevokedAt != nil) must never be treated as active,
+// regardless of whether its term window is still open. Pre-fix, isActiveCommitment
+// did not check RevokedAt, so revoked rows slipped through into KPI totals.
+func TestIsActiveCommitment_RevokedReturnsFalse(t *testing.T) {
+	now := time.Now()
+	revokedAt := now.AddDate(0, -1, 0) // revoked 1 month ago
+	p := config.PurchaseHistoryRecord{
+		Timestamp: now.AddDate(0, -3, 0), // purchased 3 months ago
+		Term:      1,                     // 1-year term, still within window
+		RevokedAt: &revokedAt,
+		Status:    "",
+	}
+	// Pre-fix: isActiveCommitment returned true (only checked term expiry + status).
+	// Post-fix: must return false because RevokedAt != nil.
+	assert.False(t, isActiveCommitment(p, now),
+		"revoked commitment must not be active even when its term has not expired")
+}
+
+// TestHandler_calculateCommitmentMetrics_RevokedExcluded is the defect-#2
+// regression guard for the dashboard KPI path. A revoked purchase returned by
+// GetActivePurchaseHistory (e.g., from a DB snapshot before the SQL fix was
+// deployed) must not contribute to activeCommitments or committedMonthly.
+func TestHandler_calculateCommitmentMetrics_RevokedExcluded(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+	revokedAt := now.AddDate(0, -1, 0)
+	purchases := []config.PurchaseHistoryRecord{
+		{
+			// Active, non-revoked commitment.
+			Service:          "ec2",
+			Timestamp:        now.AddDate(0, -3, 0),
+			Term:             1,
+			EstimatedSavings: 100.0,
+		},
+		{
+			// Revoked commitment: term still open but revoked_at is set.
+			// Pre-fix: counted as active, inflating KPIs.
+			Service:          "ec2",
+			Timestamp:        now.AddDate(0, -6, 0),
+			Term:             1,
+			EstimatedSavings: 999.0,
+			RevokedAt:        &revokedAt,
+		},
+	}
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"),
+		[]string(nil), map[string][]string{"": {"acct-1"}}).Return(purchases, nil)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	handler := &Handler{config: mockStore}
+	activeCommitments, committedMonthly, _, savingsByService := handler.calculateCommitmentMetrics(
+		ctx, "", nil, map[string][]string{"": {"acct-1"}})
+
+	assert.Equal(t, 1, activeCommitments,
+		"revoked commitment must not increment activeCommitments")
+	assert.InDelta(t, 100.0, committedMonthly, 0.001,
+		"revoked commitment savings must not appear in committedMonthly")
+	assert.InDelta(t, 100.0, savingsByService["ec2"], 0.001,
+		"revoked commitment must be excluded from per-service savings map")
+}
+
+// TestHandler_calculateCommitmentMetrics_ProviderFilter is the defect-#4
+// regression guard. When a provider chip is active, commitment KPIs must be
+// restricted to that provider only. Pre-fix, calculateCommitmentMetrics ignored
+// the provider param, so aws-only KPIs mixed in azure/gcp purchases.
+func TestHandler_calculateCommitmentMetrics_ProviderFilter(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+	purchases := []config.PurchaseHistoryRecord{
+		{Provider: "aws", Service: "ec2", Timestamp: now.AddDate(0, -3, 0), Term: 1, EstimatedSavings: 100.0},
+		{Provider: "azure", Service: "vm", Timestamp: now.AddDate(0, -3, 0), Term: 1, EstimatedSavings: 200.0},
+		{Provider: "gcp", Service: "cud", Timestamp: now.AddDate(0, -3, 0), Term: 1, EstimatedSavings: 300.0},
+	}
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"),
+		[]string(nil), map[string][]string(nil)).Return(purchases, nil)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	handler := &Handler{config: mockStore}
+
+	// Filter to aws only.
+	activeCommitments, committedMonthly, _, savingsByService := handler.calculateCommitmentMetrics(
+		ctx, "aws", nil, nil)
+
+	assert.Equal(t, 1, activeCommitments,
+		"provider filter must restrict activeCommitments to aws rows only")
+	assert.InDelta(t, 100.0, committedMonthly, 0.001,
+		"provider filter must restrict committedMonthly to aws rows only")
+	assert.InDelta(t, 100.0, savingsByService["ec2"], 0.001)
+	assert.NotContains(t, savingsByService, "vm",
+		"azure rows must not appear when filtering to aws")
+	assert.NotContains(t, savingsByService, "cud",
+		"gcp rows must not appear when filtering to aws")
 }

@@ -2035,3 +2035,40 @@ func TestHandler_getHistory_ExpireIfStale_LambdaGuard(t *testing.T) {
 		assert.Equal(t, "pending", historyResp.Purchases[0].Status)
 	})
 }
+
+// TestSummarizePurchaseHistory_RevokedExcludedFromKPIs is the defect-#2
+// regression guard. A revoked commitment (RevokedAt != nil) must count toward
+// TotalPurchases and TotalRevoked, but must be excluded from TotalCompleted and
+// all dollar KPIs. Pre-fix, summarizePurchaseHistory had no revoked case, so
+// revoked rows fell through to the completed-dollar-total path and inflated
+// TotalUpfront and TotalMonthlySavings.
+func TestSummarizePurchaseHistory_RevokedExcludedFromKPIs(t *testing.T) {
+	now := time.Now()
+	revokedAt := now.AddDate(0, -1, 0) // revoked 1 month ago
+
+	purchases := []config.PurchaseHistoryRecord{
+		// Completed, non-revoked: must contribute to dollar totals.
+		{Status: "completed", UpfrontCost: 100.0, EstimatedSavings: 10.0},
+		// Revoked: term still open but revoked_at is set.
+		// Pre-fix: fell through to the completed branch, inflating TotalUpfront
+		// by 500 and TotalMonthlySavings by 50.
+		{Status: "completed", UpfrontCost: 500.0, EstimatedSavings: 50.0, RevokedAt: &revokedAt},
+		// Revoked with empty status (legacy DB row): same guard must apply.
+		{Status: "", UpfrontCost: 750.0, EstimatedSavings: 75.0, RevokedAt: &revokedAt},
+	}
+
+	summary := summarizePurchaseHistory(purchases)
+
+	assert.Equal(t, 3, summary.TotalPurchases, "all rows count toward TotalPurchases")
+	assert.Equal(t, 2, summary.TotalRevoked,
+		"revoked rows must be counted in TotalRevoked")
+	assert.Equal(t, 1, summary.TotalCompleted,
+		"revoked rows must not inflate TotalCompleted")
+
+	assert.InDelta(t, 100.0, summary.TotalUpfront, 0.001,
+		"revoked upfront cost must not appear in TotalUpfront")
+	assert.InDelta(t, 10.0, summary.TotalMonthlySavings, 0.001,
+		"revoked savings must not appear in TotalMonthlySavings")
+	assert.InDelta(t, 120.0, summary.TotalAnnualSavings, 0.001,
+		"TotalAnnualSavings must exclude revoked rows")
+}
