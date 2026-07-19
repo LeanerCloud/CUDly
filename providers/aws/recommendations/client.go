@@ -134,6 +134,9 @@ func (c *Client) SetRecLookbackPeriod(period string) {
 
 // GetRecommendations fetches Reserved Instance recommendations for any service.
 func (c *Client) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
+	if params == nil {
+		return nil, fmt.Errorf("params cannot be nil")
+	}
 	// Handle Savings Plans separately — they use a different Cost Explorer API
 	// (GetSavingsPlansPurchaseRecommendation, not GetReservationPurchaseRecommendation).
 	// Match any SP slug — the legacy umbrella plus the four per-plan-type slugs —
@@ -206,12 +209,12 @@ func (c *Client) fetchRIPageWithRetry(
 	ctx context.Context,
 	input *costexplorer.GetReservationPurchaseRecommendationInput,
 ) (*costexplorer.GetReservationPurchaseRecommendationOutput, error) {
-	c.rateLimiter.Reset()
+	rateLimiter := c.rateLimiter.newOperation()
 	var result *costexplorer.GetReservationPurchaseRecommendationOutput
 	var err error
 
 	for {
-		if waitErr := c.rateLimiter.Wait(ctx); waitErr != nil {
+		if waitErr := rateLimiter.Wait(ctx); waitErr != nil {
 			return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
 		}
 
@@ -220,13 +223,13 @@ func (c *Client) fetchRIPageWithRetry(
 		}
 		result, err = c.costExplorerClient.GetReservationPurchaseRecommendation(ctx, input)
 		concurrency.Release(ctx)
-		if !c.rateLimiter.ShouldRetry(err) {
+		if !rateLimiter.ShouldRetry(err) {
 			break
 		}
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to get RI recommendations after %d retries: %w", c.rateLimiter.GetRetryCount(), err)
+		return nil, fmt.Errorf("failed to get RI recommendations after %d retries: %w", rateLimiter.GetRetryCount(), err)
 	}
 
 	return result, nil

@@ -57,6 +57,13 @@ func NewRateLimiterWithOptions(baseDelay, maxDelay time.Duration, maxRetries int
 	}
 }
 
+// newOperation returns a limiter with the same retry policy and independent
+// retry state. A Client is shared across concurrent service sweeps, so retry
+// counters must be scoped to one API operation.
+func (r *RateLimiter) newOperation() *RateLimiter {
+	return NewRateLimiterWithOptions(r.baseDelay, r.maxDelay, r.maxRetries)
+}
+
 // Wait implements exponential backoff delay
 func (r *RateLimiter) Wait(ctx context.Context) error {
 	if r.retryCount == 0 {

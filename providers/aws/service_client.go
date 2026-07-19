@@ -3,6 +3,7 @@ package aws
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	sptypes "github.com/aws/aws-sdk-go-v2/service/savingsplans/types"
@@ -72,6 +73,9 @@ func NewRecommendationsClient(cfg aws.Config) provider.RecommendationsClient {
 
 // GetRecommendations gets recommendations with filtering
 func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
+	if params == nil {
+		return nil, fmt.Errorf("params cannot be nil")
+	}
 	recs, err := r.client.GetRecommendations(ctx, params)
 	if err != nil {
 		return nil, err

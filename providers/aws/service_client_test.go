@@ -53,6 +53,15 @@ func newTestRecommendationsClient(ce *mockCostExplorerClient) *recommendations.C
 	return recommendations.NewClientWithAPI(ce, "us-east-1")
 }
 
+func TestRecommendationsClientAdapter_GetRecommendations_NilParams(t *testing.T) {
+	adapter := &RecommendationsClientAdapter{client: newTestRecommendationsClient(&mockCostExplorerClient{})}
+
+	recs, err := adapter.GetRecommendations(context.Background(), nil)
+
+	require.EqualError(t, err, "params cannot be nil")
+	assert.Nil(t, recs)
+}
+
 func TestNewEC2Client(t *testing.T) {
 	cfg := aws.Config{Region: "us-east-1"}
 	client := NewEC2Client(cfg)

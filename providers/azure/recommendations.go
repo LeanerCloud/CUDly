@@ -109,6 +109,9 @@ func NewRecommendationsClientAdapter(cred azcore.TokenCredential, subscriptionID
 // does not cancel sibling calls. Results are appended in a deterministic order
 // (compute → database → cache → cosmosdb → savingsplans → advisor) after all goroutines finish.
 func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
+	if params == nil {
+		return nil, fmt.Errorf("params cannot be nil")
+	}
 	var (
 		computeRecs, dbRecs, cacheRecs, cosmosRecs, advisorRecs, spRecs []common.Recommendation
 		computeErr, dbErr, cacheErr, cosmosErr, advisorErr, spErr       error
@@ -204,7 +207,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 		advisorFn = r.getAdvisorRecommendations
 	}
 	goService(&advisorErr, func() {
-		advisorRecs, advisorErr = r.getAdvisorRecommendations(gctx, *params)
+		advisorRecs, advisorErr = advisorFn(gctx, *params)
 	})
 
 	// Wait for all goroutines. g.Wait() always returns nil because every

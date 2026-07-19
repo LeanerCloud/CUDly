@@ -265,6 +265,33 @@ func TestRecommendationsClientAdapter_GetAllRecommendations(t *testing.T) {
 	}, recs)
 }
 
+func TestRecommendationsClientAdapter_GetRecommendations_NilParams(t *testing.T) {
+	adapter := &RecommendationsClientAdapter{}
+
+	recs, err := adapter.GetRecommendations(context.Background(), nil)
+
+	require.EqualError(t, err, "params cannot be nil")
+	assert.Nil(t, recs)
+}
+
+func TestGetRecommendations_UsesInjectedAdvisor(t *testing.T) {
+	want := common.Recommendation{Provider: common.ProviderAzure, Service: common.ServiceCompute}
+	called := false
+	adapter := &RecommendationsClientAdapter{
+		getAdvisorRecsFn: func(_ context.Context, _ common.RecommendationParams) ([]common.Recommendation, error) {
+			called = true
+			return []common.Recommendation{want}, nil
+		},
+	}
+	params := &common.RecommendationParams{Service: common.ServiceType("advisor-only")}
+
+	recs, err := adapter.GetRecommendations(context.Background(), params)
+
+	require.NoError(t, err)
+	require.True(t, called)
+	require.Equal(t, []common.Recommendation{want}, recs)
+}
+
 // TestGetRecommendations_SavingsPlansServiceIncluded pins that shouldIncludeService
 // allows ServiceSavingsPlansAll through both when params.Service is empty (all-services
 // sweep) and when explicitly set to ServiceSavingsPlansAll, and does not include it

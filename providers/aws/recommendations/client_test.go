@@ -303,6 +303,26 @@ func TestGetRecommendations_Error(t *testing.T) {
 	assert.Equal(t, 3, mockAPI.callCount)
 }
 
+func TestGetRecommendations_NilParams(t *testing.T) {
+	client := NewClientWithAPI(&mockCostExplorerAPI{}, "us-east-1")
+
+	recs, err := client.GetRecommendations(context.Background(), nil)
+
+	require.EqualError(t, err, "params cannot be nil")
+	assert.Nil(t, recs)
+}
+
+func TestRateLimiter_NewOperationHasIndependentRetryState(t *testing.T) {
+	policy := NewRateLimiterWithOptions(time.Millisecond, 10*time.Millisecond, 2)
+	first := policy.newOperation()
+	second := policy.newOperation()
+
+	require.True(t, first.ShouldRetry(newThrottleError()))
+	assert.Equal(t, 1, first.GetRetryCount())
+	assert.Zero(t, second.GetRetryCount())
+	assert.Zero(t, policy.GetRetryCount())
+}
+
 func TestGetRecommendations_EmptyResult(t *testing.T) {
 	mockAPI := &mockCostExplorerAPI{
 		riRecommendations: &costexplorer.GetReservationPurchaseRecommendationOutput{
