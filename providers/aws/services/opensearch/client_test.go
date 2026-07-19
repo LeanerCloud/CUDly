@@ -574,6 +574,7 @@ func TestClient_PurchaseCommitment_OfferingNotFound(t *testing.T) {
 	rec := common.Recommendation{
 		Service:       common.ServiceSearch,
 		ResourceType:  "m5.large.search",
+		Count:         1, // valid count: this test exercises the offering-lookup path
 		PaymentOption: "partial-upfront",
 		Term:          "1yr",
 		Details: common.SearchDetails{
@@ -788,6 +789,32 @@ func TestClient_PurchaseCommitment_Idempotent_GuardShortCircuits(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, "os-existing", result.CommitmentID)
+	mockOS.AssertNotCalled(t, "PurchaseReservedInstanceOffering", mock.Anything, mock.Anything)
+}
+
+// TestClient_PurchaseCommitment_InvalidCount_FailsBeforeIdempotencyGuard is the
+// regression guard for the count-validation ordering fix (follow-up to #831).
+// An invalid instance count must fail loud up front, even when an idempotency
+// token would otherwise short-circuit against an existing reservation. Before
+// the fix, safeInt32Count ran after idempotencyGuard, so this call returned
+// Success and silently ignored the bad count. The mocks assert the offering
+// lookup and reservation describe are never reached.
+func TestClient_PurchaseCommitment_InvalidCount_FailsBeforeIdempotencyGuard(t *testing.T) {
+	mockOS := &MockOpenSearchClient{}
+	client := &Client{client: mockOS, region: "eu-west-1"}
+	token := common.DeriveIdempotencyToken("exec-badcount", 0)
+
+	rec := osIdemRec()
+	rec.Count = 0 // invalid: safeInt32Count rejects n < 1
+
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{IdempotencyToken: token})
+	assert.Error(t, err)
+	assert.False(t, result.Success, "invalid count must not report Success via the idempotency short-circuit")
+	if err != nil {
+		assert.Contains(t, err.Error(), "instance count 0 is out of valid range")
+	}
+	mockOS.AssertNotCalled(t, "DescribeReservedInstanceOfferings", mock.Anything, mock.Anything)
+	mockOS.AssertNotCalled(t, "DescribeReservedInstances", mock.Anything, mock.Anything)
 	mockOS.AssertNotCalled(t, "PurchaseReservedInstanceOffering", mock.Anything, mock.Anything)
 }
 
@@ -1070,6 +1097,14 @@ func TestPurchaseCommitment_TagFailure_StructuredLog(t *testing.T) {
 	logOut := buf.String()
 	assert.Contains(t, logOut, "OPENSEARCH_TAG_FAILED", "structured sentinel must appear in log")
 	assert.Contains(t, logOut, "commitment_id="+riID, "commitment ID must be present for operator lookup")
+	// The error field must carry the underlying cause so operators can triage
+	// the tag failure without re-running; asserting only the sentinel would let
+	// a line missing the error text pass. The error may be wrapped (retry
+	// helper), so assert the field marker and the root cause independently
+	// rather than pinning the exact wrapper text.
+	assert.Contains(t, logOut, "error=", "structured line must include an error= field")
+	assert.Contains(t, logOut, "ValidationException: invalid resource type",
+		"structured line must surface the underlying tag-failure cause")
 	// The account ID (000000000000) must not be logged -- it is not PII but
 	// the structured line should stay minimal and scoped to the commitment.
 	assert.NotContains(t, logOut, "000000000000", "account ID must not appear in the tag-failure log line")
