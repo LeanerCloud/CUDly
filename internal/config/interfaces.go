@@ -437,7 +437,7 @@ type StoreInterface interface {
 	LatestLadderRunStartedAt(ctx context.Context, configID string) (*time.Time, error)
 	TransitionLadderRunStatus(ctx context.Context, id string, fromStatuses []ladder.RunStatus, toStatus ladder.RunStatus) (*LadderRunDB, error)
 
-	// Notification mutes (issue #297 / migration 000078).
+	// Notification mutes (issue #297 / migration 000091).
 	// UpsertNotificationMute inserts or updates a mute row for (email, scope).
 	// Idempotent for row existence: calling it again for an already-muted
 	// address refreshes muted_at and replaces unmute_token if the token changes.

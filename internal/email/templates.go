@@ -759,30 +759,6 @@ const purchaseApprovalRequestHTMLTemplate = `<!DOCTYPE html>
 </td></tr></table>
 </body></html>`
 
-// sendPurchaseApprovalRequestVia composes the plain-text + HTML approval-request
-// bodies and ships them through s.SendToEmailWithCCMultipart. HTML render
-// failures are non-fatal and degrade to single-part text so a template bug
-// never drops the approval email. Shared by Sender and SMTPSender — see
-// issue #287 / PR #298 dedup follow-up.
-func sendPurchaseApprovalRequestVia(ctx context.Context, s SenderInterface, recipient, subject string, data NotificationData) error {
-	textBody, err := RenderPurchaseApprovalRequestEmail(data)
-	if err != nil {
-		return fmt.Errorf("failed to render purchase approval request email (text): %w", err)
-	}
-	// HTML render failure is non-fatal: degrade to single-part text.
-	// SendToEmailWithCCMultipart already handles htmlBody=="" by delegating
-	// to the single-part path on each transport.
-	htmlBody, htmlErr := RenderPurchaseApprovalRequestEmailHTML(data)
-	if htmlErr != nil {
-		// Surface the render failure for production diagnosis. We deliberately
-		// don't return — text-only delivery is the safer fallback than dropping
-		// the approval email entirely.
-		logging.Warnf("email: HTML approval-request render failed, falling back to text-only: %v", htmlErr)
-		htmlBody = ""
-	}
-	return s.SendToEmailWithCCMultipart(ctx, recipient, data.CCEmails, subject, textBody, htmlBody)
-}
-
 // sendMultipartVia is the generic dual-render send helper used by the
 // invite / password-reset / welcome flows. The two render closures are
 // invoked back-to-back; an HTML render failure is non-fatal and degrades

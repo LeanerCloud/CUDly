@@ -181,13 +181,13 @@ func TestSendPurchaseApprovalRequest_WithCC_SuppressesListUnsubscribe(t *testing
 
 func TestBuildUnsubscribeURL_EmptyBaseURL_ReturnsEmpty(t *testing.T) {
 	s := &Sender{}
-	u, _ := s.buildUnsubscribeURL("user@example.com", "purchase_approvals")
+	u := s.buildUnsubscribeURL("user@example.com", "purchase_approvals")
 	assert.Empty(t, u)
 }
 
 func TestBuildUnsubscribeURL_WithBaseURL_ContainsParams(t *testing.T) {
 	s := &Sender{unsubscribeBaseURL: "https://dash.example.com"}
-	u, _ := s.buildUnsubscribeURL("user@example.com", "purchase_approvals")
+	u := s.buildUnsubscribeURL("user@example.com", "purchase_approvals")
 	assert.Contains(t, u, "email=user%40example.com")
 	assert.Contains(t, u, "scope=purchase_approvals")
 	assert.Contains(t, u, "token=")

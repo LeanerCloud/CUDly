@@ -248,7 +248,7 @@ func (s *SMTPSender) buildSMTPMessageMultipartWithHeaders(toEmail string, cc []s
 	if len(cc) > 0 {
 		headers += fmt.Sprintf("Cc: %s\r\n", strings.Join(cc, ", "))
 	}
-	headers += fmt.Sprintf("Subject: %s\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=\"%s\"\r\n", subject, boundary)
+	headers += fmt.Sprintf("Subject: %s\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=%q\r\n", subject, boundary)
 	headers += extraHeaders
 	headers += "\r\n"
 

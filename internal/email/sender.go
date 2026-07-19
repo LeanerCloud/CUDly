@@ -142,9 +142,9 @@ func muteKey() []byte {
 }
 
 // buildUnsubscribeURL constructs the one-click unsubscribe URL for the given
-// (email, scope) pair. Returns ("", "") when unsubscribeBaseURL is empty.
-func (s *Sender) buildUnsubscribeURL(email, scope string) (unsubURL, mailtoURL string) {
-	return unsubscribeURLFor(s.unsubscribeBaseURL, email, scope), ""
+// (email, scope) pair. Returns "" when unsubscribeBaseURL is empty.
+func (s *Sender) buildUnsubscribeURL(email, scope string) string {
+	return unsubscribeURLFor(s.unsubscribeBaseURL, email, scope)
 }
 
 // listUnsubscribeHeaders returns the List-Unsubscribe and List-Unsubscribe-Post
