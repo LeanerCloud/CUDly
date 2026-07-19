@@ -157,10 +157,11 @@ describe('Recommendations Module', () => {
   });
 
   describe('loadRecommendations', () => {
-    test('fetches recommendations with provider/account_ids hints (Bundle B)', async () => {
-      // After Bundle B, only provider + account_ids are sent to the API as
-      // hints; service/region/numeric filters are pure client-side via
-      // applyColumnFilters. The legacy DOM filter inputs are gone.
+    afterEach(() => (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({}));
+
+    test('fetches with provider/account_ids when no column filter is set', async () => {
+      // No column filters active: service and region are absent from the
+      // API call (undefined); provider + account_ids carry the only hints.
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
         recommendations: [],
@@ -172,7 +173,63 @@ describe('Recommendations Module', () => {
       expect(api.getRecommendations).toHaveBeenCalledWith({
         provider: 'all',
         account_ids: undefined,
+        service: undefined,
+        region: undefined,
       });
+    });
+
+    test('pushes single-value service filter to API params (issue #162)', async () => {
+      // A single-value service column filter must be forwarded to the API
+      // so the backend applies it in SQL, saving bandwidth on large tenants.
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        service: { kind: 'set', values: ['ec2'] },
+      });
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: {},
+        recommendations: [],
+        regions: [],
+      });
+
+      await loadRecommendations();
+
+      expect(api.getRecommendations).toHaveBeenCalledWith(
+        expect.objectContaining({ service: 'ec2' }),
+      );
+    });
+
+    test('pushes single-value region filter to API params (issue #162)', async () => {
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        region: { kind: 'set', values: ['us-east-1'] },
+      });
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: {},
+        recommendations: [],
+        regions: [],
+      });
+
+      await loadRecommendations();
+
+      expect(api.getRecommendations).toHaveBeenCalledWith(
+        expect.objectContaining({ region: 'us-east-1' }),
+      );
+    });
+
+    test('does not push multi-value service filter to API (stays client-side)', async () => {
+      // When the user has selected multiple services the server only supports
+      // equality (single-value); fall back to client-side filtering.
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        service: { kind: 'set', values: ['ec2', 'rds'] },
+      });
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: {},
+        recommendations: [],
+        regions: [],
+      });
+
+      await loadRecommendations();
+
+      const call = (api.getRecommendations as jest.Mock).mock.calls[0][0];
+      expect(call.service).toBeUndefined();
     });
 
     test('renders recommendations summary', async () => {
@@ -4985,11 +5042,16 @@ describe('Monthly Cost + Effective % column rendering', () => {
     });
     (state.getRecommendations as jest.Mock).mockReturnValue([nullRec]);
     // Apply a filter that would match $0 if NaN were treated as 0.
-    // Use mockReturnValueOnce so the override doesn't leak into subsequent tests.
-    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValueOnce({
+    // loadRecommendations now calls getRecommendationsColumnFilters once for
+    // pushdown extraction before the render path calls it again (issue #162),
+    // so we need mockReturnValue rather than mockReturnValueOnce. The mock is
+    // explicitly reset to {} afterward so subsequent tests are unaffected
+    // (jest.clearAllMocks does not reset mockReturnValue).
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
       on_demand_monthly: { kind: 'expr', expr: '0' },
     });
     await loadRecommendations();
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
 
     // Null-monthly_cost row should be filtered out; tbody should have no visible recommendation rows.
     const rows = document.querySelectorAll('tbody tr.recommendation-row');
