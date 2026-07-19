@@ -167,7 +167,15 @@ func (c *Client) parseSavingsPlansRecommendations(
 	var recommendations []common.Recommendation
 
 	for _, detail := range spRec.SavingsPlansPurchaseRecommendationDetails {
-		rec := c.parseSavingsPlanDetail(&detail, params, planType)
+		rec, err := c.parseSavingsPlanDetail(&detail, params, planType)
+		if err != nil {
+			// present-but-unparseable money field: drop this recommendation
+			// rather than forwarding a corrupt $0 to the scheduler/frontend.
+			// Mirrors the RI path (parseAWSCostDetails) which errors on the
+			// same class. Log so operators can detect malformed CE responses.
+			log.Printf("WARNING: skipping SP recommendation (planType=%s): %v", planType, err)
+			continue
+		}
 		if rec != nil {
 			recommendations = append(recommendations, *rec)
 		}
@@ -176,16 +184,34 @@ func (c *Client) parseSavingsPlansRecommendations(
 	return recommendations
 }
 
-// parseSavingsPlanDetail converts a single Savings Plan recommendation detail
-// parseOptionalFloat parses a string pointer as float64, logging a warning on failure.
-// Returns 0 if the pointer is nil.
-func parseOptionalFloat(field string, s *string) float64 {
+// parseOptionalFloat parses a *string pointer as float64.
+//   - nil pointer (field absent from API response): returns (0, nil) — absent
+//     is acceptable; callers treat 0 as "not available".
+//   - non-nil pointer that fails ParseFloat (present but unparseable): returns
+//     (0, error) — mirrors the RI path (parseAWSCostDetails) which errors on
+//     the same class rather than silently substituting 0. Callers must propagate
+//     this error and drop the recommendation so a corrupt money figure never
+//     reaches the scheduler or frontend.
+func parseOptionalFloat(field string, s *string) (float64, error) {
 	if s == nil {
-		return 0
+		return 0, nil
 	}
 	val, err := strconv.ParseFloat(*s, 64)
 	if err != nil {
-		log.Printf("WARNING: failed to parse %s: %v", field, err)
+		return 0, fmt.Errorf("failed to parse %s %q: %w", field, *s, err)
+	}
+	return val, nil
+}
+
+// parseOptionalFloatOrWarn parses a *string as float64 but treats present-but-
+// unparseable as a non-fatal warning (logs and returns 0). Use ONLY for
+// non-money fields (utilization percentages, averages) where a bad value
+// degrades gracefully. For money fields use parseOptionalFloat and propagate
+// the error.
+func parseOptionalFloatOrWarn(field string, s *string) float64 {
+	val, err := parseOptionalFloat(field, s)
+	if err != nil {
+		log.Printf("WARNING: %v — treating as 0", err)
 		return 0
 	}
 	return val
@@ -218,20 +244,57 @@ func extractEC2SPFields(planType types.SupportedSavingsPlansType, detail *types.
 	}
 }
 
+// spPlanTypeDisplayString converts a SupportedSavingsPlansType to a
+// human-readable plan-type label used in SavingsPlanDetails.PlanType.
+// Returns the raw SDK string for unrecognised types (forward-compat).
+func spPlanTypeDisplayString(pt types.SupportedSavingsPlansType) string {
+	switch pt {
+	case types.SupportedSavingsPlansTypeComputeSp:
+		return "Compute"
+	case types.SupportedSavingsPlansTypeEc2InstanceSp:
+		return "EC2Instance"
+	case types.SupportedSavingsPlansTypeSagemakerSp:
+		return "SageMaker"
+	case types.SupportedSavingsPlansTypeDatabaseSp:
+		return "Database"
+	}
+	return string(pt)
+}
+
+// parseSavingsPlanDetail converts a single Savings Plan recommendation detail
+// into a *common.Recommendation. Returns (nil, error) when any money field
+// (HourlyCommitmentToPurchase, EstimatedMonthlySavingsAmount, UpfrontCost) is
+// present in the API response but cannot be parsed as float64 — mirroring the
+// RI path (parseAWSCostDetails) which errors on the same class rather than
+// silently substituting 0. Non-money fields (percentages, utilization) degrade
+// to 0 with a log warning.
 func (c *Client) parseSavingsPlanDetail(
 	detail *types.SavingsPlansPurchaseRecommendationDetail,
 	params *common.RecommendationParams,
 	planType types.SupportedSavingsPlansType,
-) *common.Recommendation {
-	hourlyCommitment := parseOptionalFloat("HourlyCommitmentToPurchase", detail.HourlyCommitmentToPurchase)
-	monthlySavings := parseOptionalFloat("EstimatedMonthlySavingsAmount", detail.EstimatedMonthlySavingsAmount)
-	savingsPercent := parseOptionalFloat("EstimatedSavingsPercentage", detail.EstimatedSavingsPercentage)
-	upfrontCost := parseOptionalFloat("UpfrontCost", detail.UpfrontCost)
+) (*common.Recommendation, error) {
+	hourlyCommitment, err := parseOptionalFloat("HourlyCommitmentToPurchase", detail.HourlyCommitmentToPurchase)
+	if err != nil {
+		return nil, err
+	}
+	monthlySavings, err := parseOptionalFloat("EstimatedMonthlySavingsAmount", detail.EstimatedMonthlySavingsAmount)
+	if err != nil {
+		return nil, err
+	}
+	upfrontCost, err := parseOptionalFloat("UpfrontCost", detail.UpfrontCost)
+	if err != nil {
+		return nil, err
+	}
+
+	// Non-money fields: present-but-unparseable degrades to 0 with a warning
+	// rather than dropping the whole recommendation. The RI path uses the same
+	// two-tier treatment (hard error on cost, warn-and-continue on percentages).
+	savingsPercent := parseOptionalFloatOrWarn("EstimatedSavingsPercentage", detail.EstimatedSavingsPercentage)
 	// EstimatedAverageUtilization carries the "if you buy exactly this commitment,
 	// what % of it will AWS expect to be used" signal. Used by --target-coverage
 	// sizing in cmd/helpers.go; zero (nil pointer or parse failure) means "no signal"
 	// and the sizing path leaves the recommendation unchanged.
-	recommendedUtilization := parseOptionalFloat("EstimatedAverageUtilization", detail.EstimatedAverageUtilization)
+	recommendedUtilization := parseOptionalFloatOrWarn("EstimatedAverageUtilization", detail.EstimatedAverageUtilization)
 	// onDemandCost is the canonical monthly on-demand baseline for this SP
 	// recommendation. AWS Cost Explorer returns the average hourly on-demand
 	// spend over the lookback period in CurrentAverageHourlyOnDemandSpend;
@@ -242,7 +305,7 @@ func (c *Client) parseSavingsPlanDetail(
 	// monthly_cost + savings + amortized (which is less accurate for SP rows
 	// where monthly_cost reflects only the no-upfront recurring charge, not
 	// the full on-demand baseline). See #303.
-	onDemandCost := parseOptionalFloat("CurrentAverageHourlyOnDemandSpend", detail.CurrentAverageHourlyOnDemandSpend) * hoursPerMonth
+	onDemandCost := parseOptionalFloatOrWarn("CurrentAverageHourlyOnDemandSpend", detail.CurrentAverageHourlyOnDemandSpend) * hoursPerMonth
 	if detail.CurrentAverageHourlyOnDemandSpend == nil {
 		// CurrentAverageHourlyOnDemandSpend absent from AWS CE response — onDemandCost
 		// will be 0 and the scheduler's nonZeroPtr will store nil, causing the
@@ -251,17 +314,7 @@ func (c *Client) parseSavingsPlanDetail(
 		log.Printf("WARNING: CurrentAverageHourlyOnDemandSpend is nil for SP recommendation (planType=%s, account=%s) — Effective %% will use reconstruction fallback", planType, aws.ToString(detail.AccountId))
 	}
 
-	planTypeStr := string(planType)
-	switch planType {
-	case types.SupportedSavingsPlansTypeComputeSp:
-		planTypeStr = "Compute"
-	case types.SupportedSavingsPlansTypeEc2InstanceSp:
-		planTypeStr = "EC2Instance"
-	case types.SupportedSavingsPlansTypeSagemakerSp:
-		planTypeStr = "SageMaker"
-	case types.SupportedSavingsPlansTypeDatabaseSp:
-		planTypeStr = "Database"
-	}
+	planTypeStr := spPlanTypeDisplayString(planType)
 
 	accountID := ""
 	if detail.AccountId != nil {
@@ -318,7 +371,7 @@ func (c *Client) parseSavingsPlanDetail(
 			Region:           ec2Fields.region,
 			OfferingID:       ec2Fields.offeringID,
 		},
-	}
+	}, nil
 }
 
 // planTypesForParams resolves which AWS Cost Explorer plan types to query

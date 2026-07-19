@@ -27,6 +27,13 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
 
+// reservationResourceTypeCosmosDB is the canonical resourceType value for
+// Azure Cosmos DB in the Consumption API $filter.
+// Source: Azure REST API spec for Microsoft.Consumption/reservationRecommendations
+// (2021-10-01 stable). The previous hand-written value "CosmosDb" has wrong
+// case; the correct value is "CosmosDB".
+const reservationResourceTypeCosmosDB = "CosmosDB"
+
 // maxRecsPages caps Consumption API recommendation pagination.
 const maxRecsPages = 10
 
@@ -166,7 +173,7 @@ func (c *CosmosDBClient) GetRecommendations(ctx context.Context, params common.R
 		// filter — see the parallel comment in compute/client.go for the
 		// failure mode that the wrong shape produced.
 		scope := fmt.Sprintf("/subscriptions/%s", c.subscriptionID)
-		filter := "properties/scope eq 'Shared' and properties/resourceType eq 'CosmosDb'"
+		filter := "properties/scope eq 'Shared' and properties/resourceType eq '" + reservationResourceTypeCosmosDB + "'"
 		pager = client.NewListPager(scope, &armconsumption.ReservationRecommendationsClientListOptions{Filter: &filter})
 	}
 

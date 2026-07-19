@@ -1317,3 +1317,15 @@ func TestCosmosDBClient_PurchaseCommitment_DisplayNameConformsToAzureAllowlist(t
 	assert.Regexp(t, `^cosmos-`, capturedDisplayName)
 	assert.Contains(t, capturedDisplayName, "EnableCassandra")
 }
+
+// TestReservationResourceTypeCosmosDB_IsCanonical is the H2c regression test.
+//
+// The Consumption ReservationRecommendations API $filter for Azure Cosmos DB
+// requires exactly "CosmosDB" (uppercase DB). The pre-fix code used the
+// hand-written string "CosmosDb" (lowercase d) which is not a valid resourceType
+// enum member, causing the API to return no recommendations.
+func TestReservationResourceTypeCosmosDB_IsCanonical(t *testing.T) {
+	assert.Equal(t, "CosmosDB", reservationResourceTypeCosmosDB,
+		"Cosmos DB filter value must be the Azure REST API canonical enum \"CosmosDB\"; "+
+			"\"CosmosDb\" (pre-fix) is not a valid resourceType")
+}

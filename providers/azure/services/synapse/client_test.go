@@ -906,6 +906,18 @@ func TestPurchaseCommitment_canonicalReservedResourceType(t *testing.T) {
 		"reservedResourceType %q must be a member of armreservations.PossibleReservedResourceTypeValues()", capturedRRT)
 }
 
+// TestReservationResourceTypeSynapse_IsCanonical is the H2a regression test.
+//
+// The Consumption ReservationRecommendations API $filter for Azure Synapse
+// Analytics (Dedicated SQL Pool) requires exactly "SqlDataWarehouse".
+// The pre-fix code used the hand-written string "SQLDatabaseDTU" which is not
+// a valid resourceType enum member, causing the API to return no recommendations.
+func TestReservationResourceTypeSynapse_IsCanonical(t *testing.T) {
+	assert.Equal(t, "SqlDataWarehouse", reservationResourceTypeSynapse,
+		"Synapse filter value must be the Azure REST API canonical enum \"SqlDataWarehouse\"; "+
+			"\"SQLDatabaseDTU\" (pre-fix) is not a valid resourceType")
+}
+
 // ---- nil HTTP client fallback ----------------------------------------------
 
 // TestNewClientWithHTTP_NilFallbackIsHardened is a regression test for the

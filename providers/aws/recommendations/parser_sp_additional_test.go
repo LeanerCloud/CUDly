@@ -149,7 +149,8 @@ func TestParseSavingsPlanDetail(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := client.parseSavingsPlanDetail(tt.detail, &tt.params, tt.planType)
+			rec, err := client.parseSavingsPlanDetail(tt.detail, &tt.params, tt.planType)
+			require.NoError(t, err)
 			require.NotNil(t, rec)
 			if tt.validate != nil {
 				tt.validate(t, rec)
@@ -367,7 +368,8 @@ func TestParseSavingsPlanDetail_OnDemandCost(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := client.parseSavingsPlanDetail(tt.detail, &params, types.SupportedSavingsPlansTypeComputeSp)
+			rec, err := client.parseSavingsPlanDetail(tt.detail, &params, types.SupportedSavingsPlansTypeComputeSp)
+			require.NoError(t, err)
 			require.NotNil(t, rec)
 			assert.InDelta(t, tt.wantOnDemand, rec.OnDemandCost, 0.001,
 				"OnDemandCost should equal CurrentAverageHourlyOnDemandSpend × 730")

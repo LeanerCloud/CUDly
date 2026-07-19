@@ -367,19 +367,37 @@ func ExpandPaymentVariants(base common.Recommendation) []common.Recommendation {
 	}
 
 	months := termToMonths(base.Term)
-	recurringMonthly := totalReservation / float64(months)
+
+	// RecurringMonthlyCost semantics:
+	//   - nil   : CommitmentCost was absent from the provider response; the
+	//             frontend renders "-" (data not available) rather than "$0".
+	//   - &0.0  : all-upfront variant with a known non-zero CommitmentCost; the
+	//             full charge was already paid upfront, so the recurring charge
+	//             is a known zero.
+	//   - &N    : monthly variant; CommitmentCost spread evenly over term months.
+	//
+	// When CommitmentCost is 0 it means data was absent from the provider, NOT
+	// that the reservation is free. Using float64Ptr(0) in that case fabricates
+	// a non-nil &0.0 that the frontend renders as "$0" instead of "-", which is
+	// incorrect. Guard: only set non-nil pointers when we have real cost data.
+	var upfrontRecurring, monthlyRecurring *float64
+	if totalReservation != 0 {
+		upfrontRecurring = float64Ptr(0)
+		monthly := totalReservation / float64(months)
+		monthlyRecurring = float64Ptr(monthly)
+	}
 
 	allUpfront := base
 	allUpfront.PaymentOption = "upfront"
 	allUpfront.EstimatedSavings = savings
 	allUpfront.SavingsPercentage = savingsPct
-	allUpfront.RecurringMonthlyCost = float64Ptr(0)
+	allUpfront.RecurringMonthlyCost = upfrontRecurring
 
 	noUpfront := base
 	noUpfront.PaymentOption = "monthly"
 	noUpfront.EstimatedSavings = savings
 	noUpfront.SavingsPercentage = savingsPct
-	noUpfront.RecurringMonthlyCost = float64Ptr(recurringMonthly)
+	noUpfront.RecurringMonthlyCost = monthlyRecurring
 
 	return []common.Recommendation{allUpfront, noUpfront}
 }
