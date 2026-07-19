@@ -3,11 +3,13 @@ package api
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"testing"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/pkg/exchange"
 	"github.com/LeanerCloud/CUDly/providers/aws/recommendations"
 	ec2svc "github.com/LeanerCloud/CUDly/providers/aws/services/ec2"
 	azurecompute "github.com/LeanerCloud/CUDly/providers/azure/services/compute"
@@ -1585,4 +1587,191 @@ func TestRejectRIExchange_TokenPathActorIsNil(t *testing.T) {
 
 	_, err := (&Handler{config: mockStore}).rejectRIExchange(ctx, id, "tok")
 	require.NoError(t, err)
+}
+
+// ─── H1: checkDailyCap fails closed on unparseable paymentDue ─────────────────
+
+// TestCheckDailyCap_UnparseablePaymentDue_FailsClosed is the regression test
+// for H1: checkDailyCap must return a blocking reason when paymentDueStr cannot
+// be parsed, never treat it as $0 (which would allow an unknown-cost exchange
+// to proceed when the daily cap might be exceeded).
+func TestCheckDailyCap_UnparseablePaymentDue_FailsClosed(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name          string
+		paymentDueStr string
+	}{
+		{"not-a-number", "not-a-number"},
+		{"empty string", ""},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			reason := checkDailyCap("100.00", tc.paymentDueStr, 500.0)
+			assert.NotEmpty(t, reason,
+				"checkDailyCap must fail closed when paymentDueStr=%q cannot be parsed", tc.paymentDueStr)
+			assert.Contains(t, reason, "could not parse payment due",
+				"reason must reference the payment-due parsing failure, not treat it as $0")
+		})
+	}
+}
+
+// TestCheckDailyCap_ValidPaymentDue_WithinCap_Passes verifies the happy path:
+// valid parseable amounts within the daily cap must return an empty reason.
+func TestCheckDailyCap_ValidPaymentDue_WithinCap_Passes(t *testing.T) {
+	t.Parallel()
+	reason := checkDailyCap("100.00", "50.00", 500.0)
+	assert.Empty(t, reason, "within-cap exchange must not be blocked")
+}
+
+// ─── H2: effectiveCap bounded by daily headroom ───────────────────────────────
+
+// TestExecuteApprovedExchange_EffectiveCap_BoundedByDailyHeadroom is the
+// regression test for H2: when dailyCap-dailySpent < perExchangeCap, the cap
+// passed to Execute (MaxPaymentDueUSD) must be the daily headroom, not the full
+// perExchangeCap. This prevents a fresh re-quote from accepting an amount that
+// exceeds the daily budget.
+func TestExecuteApprovedExchange_EffectiveCap_BoundedByDailyHeadroom(t *testing.T) {
+	ctx := context.Background()
+	const id = "550e8400-e29b-41d4-a716-000000000012"
+
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	// dailySpent=$450, dailyCap=$500, perExchangeCap=$100 -> headroom=$50
+	mockStore.On("GetRIExchangeDailySpend", mock.Anything, mock.Anything).Return("450.00", nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		RIExchangeMaxDailyUSD:       500,
+		RIExchangeMaxPerExchangeUSD: 100,
+	}, nil)
+
+	var capturedReq exchange.ExchangeExecuteRequest
+	h := &Handler{
+		config: mockStore,
+		executeExchangeFn: func(_ context.Context, req exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error) {
+			capturedReq = req
+			return "exch-h2-handler", &exchange.ExchangeQuoteSummary{PaymentDueUSDStr: "40.000000"}, nil
+		},
+	}
+
+	mockStore.On("CompleteRIExchangeWithPayment", ctx, id, "exch-h2-handler", "40.000000").Return(nil)
+
+	record := &config.RIExchangeRecord{
+		ID:               id,
+		Region:           "us-east-1",
+		SourceRIIDs:      []string{"ri-1"},
+		TargetOfferingID: "offering-1",
+		TargetCount:      1,
+		PaymentDue:       "40.00",
+	}
+
+	_, err := h.executeApprovedExchange(ctx, id, record)
+	require.NoError(t, err)
+
+	// MaxPaymentDueUSD must equal headroom ($50), not perExchangeCap ($100).
+	require.NotNil(t, capturedReq.MaxPaymentDueUSD,
+		"MaxPaymentDueUSD must be set on the Execute request")
+	expectedCap := new(big.Rat).SetFrac64(50, 1)
+	assert.Equal(t, 0, capturedReq.MaxPaymentDueUSD.Cmp(expectedCap),
+		"MaxPaymentDueUSD must be daily headroom ($50), got $%s",
+		capturedReq.MaxPaymentDueUSD.FloatString(2))
+}
+
+// ─── H3: ledger records fresh accepted amount ─────────────────────────────────
+
+// TestExecuteApprovedExchange_AcceptedAmountFromFreshQuote is the regression
+// test for H3: CompleteRIExchangeWithPayment must be called with the amount
+// AWS confirmed during Execute (freshQ.PaymentDueUSDStr), not the stale
+// record.PaymentDue stored from the pre-execution quote.
+func TestExecuteApprovedExchange_AcceptedAmountFromFreshQuote(t *testing.T) {
+	ctx := context.Background()
+	const id = "550e8400-e29b-41d4-a716-000000000013"
+
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	mockStore.On("GetRIExchangeDailySpend", mock.Anything, mock.Anything).Return("0", nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		RIExchangeMaxDailyUSD:       1000,
+		RIExchangeMaxPerExchangeUSD: 500,
+	}, nil)
+
+	// Execute returns a fresh quote ($35.50) different from pre-execution ($30.00).
+	h := &Handler{
+		config: mockStore,
+		executeExchangeFn: func(_ context.Context, _ exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error) {
+			return "exch-h3-fresh", &exchange.ExchangeQuoteSummary{
+				PaymentDueUSDStr: "35.500000",
+			}, nil
+		},
+	}
+
+	// The FRESH amount "35.500000" must reach CompleteRIExchangeWithPayment,
+	// not the stale "30.00" from record.PaymentDue.
+	mockStore.On("CompleteRIExchangeWithPayment", ctx, id, "exch-h3-fresh", "35.500000").Return(nil)
+
+	record := &config.RIExchangeRecord{
+		ID:               id,
+		Region:           "us-east-1",
+		SourceRIIDs:      []string{"ri-1"},
+		TargetOfferingID: "offering-1",
+		TargetCount:      1,
+		PaymentDue:       "30.00", // stale pre-execution quote
+	}
+
+	resp, err := h.executeApprovedExchange(ctx, id, record)
+	require.NoError(t, err)
+	respMap, ok := resp.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "completed", respMap["status"])
+}
+
+// ─── H4: persistent ledger failure returns error ──────────────────────────────
+
+// TestExecuteApprovedExchange_LedgerWriteFailure_ReturnsError is the regression
+// test for H4: when CompleteRIExchangeWithPayment fails persistently (all retry
+// attempts exhausted) after money has already moved, executeApprovedExchange must
+// return an error rather than silently logging and returning a success response.
+// The caller (approveRIExchange) must see this as an error so it can return
+// HTTP 500 and the operator knows the ledger is inconsistent.
+func TestExecuteApprovedExchange_LedgerWriteFailure_ReturnsError(t *testing.T) {
+	ctx := context.Background()
+	const id = "550e8400-e29b-41d4-a716-000000000014"
+
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	mockStore.On("GetRIExchangeDailySpend", mock.Anything, mock.Anything).Return("0", nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		RIExchangeMaxDailyUSD:       1000,
+		RIExchangeMaxPerExchangeUSD: 500,
+	}, nil)
+
+	h := &Handler{
+		config: mockStore,
+		executeExchangeFn: func(_ context.Context, _ exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error) {
+			return "exch-h4-test", &exchange.ExchangeQuoteSummary{PaymentDueUSDStr: "0"}, nil
+		},
+	}
+
+	// Fail all three retry attempts.
+	mockStore.On("CompleteRIExchangeWithPayment", ctx, id, "exch-h4-test", "0").
+		Return(fmt.Errorf("DB write failed")).Times(3)
+
+	record := &config.RIExchangeRecord{
+		ID:               id,
+		Region:           "us-east-1",
+		SourceRIIDs:      []string{"ri-1"},
+		TargetOfferingID: "offering-1",
+		TargetCount:      1,
+		PaymentDue:       "0",
+	}
+
+	_, err := h.executeApprovedExchange(ctx, id, record)
+	require.Error(t, err, "persistent ledger failure must propagate as a non-nil error")
+	assert.Contains(t, err.Error(), "ledger update failed",
+		"error must describe the ledger failure for operator triage")
+	assert.Contains(t, err.Error(), "exch-h4-test",
+		"error must include the exchange ID for operator correlation with AWS")
 }

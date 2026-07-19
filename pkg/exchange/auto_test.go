@@ -24,9 +24,18 @@ type mockExchangeStore struct {
 	// cancelByOriginLast captures the origin argument of the last
 	// CancelPendingExchangesByOrigin call for assertion in scoping tests.
 	cancelByOriginLast *common.ExchangeOrigin
+	// saveErrFor, when non-nil, is called for each SaveRIExchangeRecord call.
+	// Returning a non-nil error simulates a DB write failure for that record.
+	// Use this to inject ledger-write failures without affecting other saves.
+	saveErrFor func(record *ExchangeRecord) error
 }
 
 func (m *mockExchangeStore) SaveRIExchangeRecord(_ context.Context, record *ExchangeRecord) error {
+	if m.saveErrFor != nil {
+		if err := m.saveErrFor(record); err != nil {
+			return err
+		}
+	}
 	if record.ID == "" {
 		record.ID = fmt.Sprintf("test-id-%d", len(m.savedRecords))
 	}
@@ -114,15 +123,27 @@ type mockExchangeClient struct {
 	executeResult string
 	executeErr    error
 	executeCalls  int
+	// executeRequests captures each ExchangeExecuteRequest passed to Execute.
+	// Use this to assert that MaxPaymentDueUSD is bounded correctly (H2).
+	executeRequests []ExchangeExecuteRequest
+	// executeQuoteResult, when non-nil, is returned as the quote from Execute
+	// instead of quoteResult. Use this to simulate a fresh quote whose amount
+	// differs from the pre-execution GetQuote result (H3 test).
+	executeQuoteResult *ExchangeQuoteSummary
 }
 
 func (m *mockExchangeClient) GetQuote(_ context.Context, _ ExchangeQuoteRequest) (*ExchangeQuoteSummary, error) {
 	return m.quoteResult, m.quoteErr
 }
 
-func (m *mockExchangeClient) Execute(_ context.Context, _ ExchangeExecuteRequest) (string, *ExchangeQuoteSummary, error) {
+func (m *mockExchangeClient) Execute(_ context.Context, req ExchangeExecuteRequest) (string, *ExchangeQuoteSummary, error) {
 	m.executeCalls++
-	return m.executeResult, m.quoteResult, m.executeErr
+	m.executeRequests = append(m.executeRequests, req)
+	q := m.quoteResult
+	if m.executeQuoteResult != nil {
+		q = m.executeQuoteResult
+	}
+	return m.executeResult, q, m.executeErr
 }
 
 func defaultQuote() *ExchangeQuoteSummary {
@@ -343,10 +364,11 @@ func TestProcessAutoExchange_UnparseablePaymentDue_FailsClosed(t *testing.T) {
 			}
 			perExchangeCap := new(big.Rat).SetFloat64(params.Config.MaxPaymentPerExchangeUSD)
 
-			outcome := processAutoExchange(context.Background(), params, rec, "offering-123", paymentDueStr, perExchangeCap)
+			outcome, halt := processAutoExchange(context.Background(), params, rec, "offering-123", paymentDueStr, perExchangeCap)
 
 			assert.Contains(t, outcome.Error, "failed to parse payment due")
 			assert.Empty(t, outcome.ExchangeID)
+			assert.False(t, halt, "parse failure should not halt subsequent exchanges")
 			assert.Zero(t, client.executeCalls, "exchange must not execute on unparseable payment due")
 
 			// A failed record must be persisted for the audit trail,
@@ -553,4 +575,245 @@ func TestRunAutoExchange_NoLadderRunID_RecordHasNilLadderRunID(t *testing.T) {
 	require.Len(t, store.savedRecords, 1)
 	assert.Nil(t, store.savedRecords[0].LadderRunID,
 		"standalone run must save record with nil LadderRunID")
+}
+
+// ─── H2: effective cap bounded by daily headroom ──────────────────────────────
+
+// TestProcessAutoExchange_EffectiveCap_BoundedByDailyHeadroom is the regression
+// test for H2: Execute's MaxPaymentDueUSD must be the minimum of perExchangeCap
+// and (dailyCap - dailySpent) so a fresh re-quote cannot accept an amount that
+// would exceed daily headroom.
+//
+// Setup: dailyCap=$500, dailySpent=$450, perExchangeCap=$100.
+// Headroom = $500-$450 = $50 < $100 perExchangeCap.
+// Expected: MaxPaymentDueUSD passed to Execute = $50 (headroom).
+func TestProcessAutoExchange_EffectiveCap_BoundedByDailyHeadroom(t *testing.T) {
+	t.Parallel()
+
+	due, _ := ParseDecimalRat("40.000000")
+	store := &mockExchangeStore{dailySpend: "450.00"}
+	client := &mockExchangeClient{
+		quoteResult:   defaultQuote(),
+		executeResult: "exch-h2-test",
+		// The fresh Execute quote is $40, which is under the effective cap ($50).
+		executeQuoteResult: &ExchangeQuoteSummary{
+			IsValidExchange:  true,
+			PaymentDueRaw:    "40.000000",
+			PaymentDueUSD:    due,
+			PaymentDueUSDStr: "40.000000",
+			CurrencyCode:     "USD",
+		},
+	}
+	params := defaultParams(store, client)
+	params.Config.Mode = "auto"
+	params.Config.MaxPaymentDailyUSD = 500.0
+	params.Config.MaxPaymentPerExchangeUSD = 100.0
+
+	rec := ReshapeRecommendation{
+		SourceRIID:         "ri-001",
+		SourceInstanceType: "m5.xlarge",
+		TargetInstanceType: "m5.large",
+		SourceCount:        1,
+		TargetCount:        2,
+		UtilizationPercent: 50.0,
+	}
+	perExchangeCap := new(big.Rat).SetFloat64(params.Config.MaxPaymentPerExchangeUSD)
+
+	outcome, halt := processAutoExchange(context.Background(), params, rec, "offering-123", "40.000000", perExchangeCap)
+
+	require.Empty(t, outcome.Error, "exchange should succeed within effective cap")
+	assert.False(t, halt)
+	assert.Equal(t, "exch-h2-test", outcome.ExchangeID)
+
+	// Assert that Execute was called with MaxPaymentDueUSD = $50 (headroom),
+	// not $100 (perExchangeCap).
+	require.Len(t, client.executeRequests, 1)
+	gotCap := client.executeRequests[0].MaxPaymentDueUSD
+	require.NotNil(t, gotCap)
+	expectedCap := new(big.Rat) // $50
+	expectedCap.SetFrac64(50, 1)
+	assert.Equal(t, 0, gotCap.Cmp(expectedCap),
+		"MaxPaymentDueUSD passed to Execute must equal dailyHeadroom ($50), got $%s", gotCap.FloatString(2))
+}
+
+// TestProcessAutoExchange_EffectiveCap_UsesPerExchangeCapWhenSmaller verifies
+// that when perExchangeCap < dailyHeadroom, perExchangeCap is used as-is.
+func TestProcessAutoExchange_EffectiveCap_UsesPerExchangeCapWhenSmaller(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExchangeStore{dailySpend: "0"} // headroom = $500
+	client := &mockExchangeClient{
+		quoteResult:   defaultQuote(),
+		executeResult: "exch-h2b-test",
+	}
+	params := defaultParams(store, client)
+	params.Config.Mode = "auto"
+	params.Config.MaxPaymentDailyUSD = 500.0
+	params.Config.MaxPaymentPerExchangeUSD = 100.0
+
+	rec := ReshapeRecommendation{
+		SourceRIID:         "ri-001",
+		SourceInstanceType: "m5.xlarge",
+		TargetInstanceType: "m5.large",
+		SourceCount:        1,
+		TargetCount:        2,
+		UtilizationPercent: 50.0,
+	}
+	perExchangeCap := new(big.Rat).SetFloat64(params.Config.MaxPaymentPerExchangeUSD)
+
+	_, halt := processAutoExchange(context.Background(), params, rec, "offering-123", "0.000000", perExchangeCap)
+	assert.False(t, halt)
+
+	require.Len(t, client.executeRequests, 1)
+	gotCap := client.executeRequests[0].MaxPaymentDueUSD
+	require.NotNil(t, gotCap)
+	// Headroom ($500) > perExchangeCap ($100), so effectiveCap = perExchangeCap.
+	expectedCap := new(big.Rat).SetFloat64(100.0)
+	assert.Equal(t, 0, gotCap.Cmp(expectedCap),
+		"MaxPaymentDueUSD must equal perExchangeCap ($100) when headroom is larger, got $%s", gotCap.FloatString(2))
+}
+
+// ─── H3: accepted amount from fresh Execute quote ─────────────────────────────
+
+// TestProcessAutoExchange_AcceptedAmountFromFreshQuote is the regression test
+// for H3: the completed record's PaymentDue must reflect the amount AWS
+// confirmed during Execute, not the stale pre-execution GetQuote amount.
+func TestProcessAutoExchange_AcceptedAmountFromFreshQuote(t *testing.T) {
+	t.Parallel()
+
+	preQuoteDue, _ := ParseDecimalRat("30.000000")
+	freshDue, _ := ParseDecimalRat("35.500000") // AWS re-quoted higher (within cap)
+
+	store := &mockExchangeStore{dailySpend: "0"}
+	client := &mockExchangeClient{
+		quoteResult: &ExchangeQuoteSummary{
+			IsValidExchange:  true,
+			PaymentDueRaw:    "30.000000",
+			PaymentDueUSD:    preQuoteDue,
+			PaymentDueUSDStr: "30.000000",
+			CurrencyCode:     "USD",
+		},
+		executeResult: "exch-h3-test",
+		// Execute returns a higher accepted amount.
+		executeQuoteResult: &ExchangeQuoteSummary{
+			IsValidExchange:  true,
+			PaymentDueRaw:    "35.500000",
+			PaymentDueUSD:    freshDue,
+			PaymentDueUSDStr: "35.500000",
+			CurrencyCode:     "USD",
+		},
+	}
+	params := defaultParams(store, client)
+	params.Config.Mode = "auto"
+	params.Config.MaxPaymentDailyUSD = 500.0
+	params.Config.MaxPaymentPerExchangeUSD = 100.0
+
+	rec := ReshapeRecommendation{
+		SourceRIID:         "ri-001",
+		SourceInstanceType: "m5.xlarge",
+		TargetInstanceType: "m5.large",
+		SourceCount:        1,
+		TargetCount:        2,
+		UtilizationPercent: 50.0,
+	}
+	perExchangeCap := new(big.Rat).SetFloat64(params.Config.MaxPaymentPerExchangeUSD)
+
+	outcome, halt := processAutoExchange(context.Background(), params, rec, "offering-123", "30.000000", perExchangeCap)
+
+	require.Empty(t, outcome.Error)
+	assert.False(t, halt)
+
+	// The saved record must carry the FRESH accepted amount, not the pre-quote.
+	require.Len(t, store.savedRecords, 1)
+	assert.Equal(t, "35.500000", store.savedRecords[0].PaymentDue,
+		"completed record must store the amount AWS actually accepted, not the pre-execution quote")
+}
+
+// ─── H4: halt on persistent ledger-save failure ──────────────────────────────
+
+// TestProcessAutoExchange_LedgerSaveFailure_HaltsAndReturnsError is the
+// regression test for H4: when SaveRIExchangeRecord fails for a completed
+// exchange (money has already moved), processAutoExchange must retry and, on
+// persistent failure, return halt=true to stop further exchanges.
+func TestProcessAutoExchange_LedgerSaveFailure_HaltsAndReturnsError(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExchangeStore{
+		dailySpend: "0",
+		saveErrFor: func(r *ExchangeRecord) error {
+			if r.Status == "completed" {
+				return fmt.Errorf("DB connection refused")
+			}
+			return nil
+		},
+	}
+	client := &mockExchangeClient{
+		quoteResult:   defaultQuote(),
+		executeResult: "exch-h4-test",
+	}
+	params := defaultParams(store, client)
+	params.Config.Mode = "auto"
+
+	rec := ReshapeRecommendation{
+		SourceRIID:         "ri-001",
+		SourceInstanceType: "m5.xlarge",
+		TargetInstanceType: "m5.large",
+		SourceCount:        1,
+		TargetCount:        2,
+		UtilizationPercent: 50.0,
+	}
+	perExchangeCap := new(big.Rat).SetFloat64(params.Config.MaxPaymentPerExchangeUSD)
+
+	outcome, halt := processAutoExchange(context.Background(), params, rec, "offering-123", "0.000000", perExchangeCap)
+
+	// Execute succeeded but ledger write failed: outcome must carry an error
+	// and halt must be true to prevent cap bypass.
+	assert.Contains(t, outcome.Error, "ledger save failed")
+	assert.Equal(t, "exch-h4-test", outcome.ExchangeID,
+		"ExchangeID must be set even when ledger write fails (money moved)")
+	assert.True(t, halt, "persistent ledger failure must signal halt to stop further exchanges")
+}
+
+// TestRunAutoExchange_LedgerSaveFailure_StopsAfterFirstExchange verifies that
+// when the first exchange's ledger write fails (H4), RunAutoExchange does not
+// proceed to a second exchange recommendation.
+func TestRunAutoExchange_LedgerSaveFailure_StopsAfterFirstExchange(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExchangeStore{
+		dailySpend: "0",
+		saveErrFor: func(r *ExchangeRecord) error {
+			if r.Status == "completed" {
+				return fmt.Errorf("DB write failed")
+			}
+			return nil
+		},
+	}
+	client := &mockExchangeClient{
+		quoteResult:   defaultQuote(),
+		executeResult: "exch-stop-test",
+	}
+	params := defaultParams(store, client)
+	params.Config.Mode = "auto"
+	// Add a second RI so there are two recommendations.
+	params.RIs = append(params.RIs, RIInfo{
+		ID: "ri-002", InstanceType: "m5.xlarge", InstanceCount: 1,
+		OfferingClass: "convertible", NormalizationFactor: 8,
+	})
+	params.Utilization = append(params.Utilization,
+		UtilizationInfo{RIID: "ri-002", UtilizationPercent: 50.0})
+	params.RIMetadata["ri-002"] = RIMetadataInfo{
+		ProductDescription: "Linux/UNIX", InstanceTenancy: "default",
+		Scope: "Region", Duration: 31536000,
+	}
+
+	result, err := RunAutoExchange(context.Background(), params)
+	require.NoError(t, err)
+
+	// First exchange executes but ledger fails -> appears in Failed.
+	// Second exchange must NOT have been attempted.
+	assert.Len(t, result.Failed, 1, "exactly one failed outcome (the ledger failure)")
+	assert.Empty(t, result.Completed, "no completed outcomes when ledger fails")
+	assert.Equal(t, 1, client.executeCalls,
+		"Execute must be called exactly once; second exchange must be halted")
 }

@@ -519,6 +519,11 @@ func (m *MockConfigStore) CompleteRIExchange(ctx context.Context, id, exchangeID
 	return args.Error(0)
 }
 
+func (m *MockConfigStore) CompleteRIExchangeWithPayment(ctx context.Context, id, exchangeID, acceptedPaymentDue string) error {
+	args := m.Called(ctx, id, exchangeID, acceptedPaymentDue)
+	return args.Error(0)
+}
+
 func (m *MockConfigStore) FailRIExchange(ctx context.Context, id, errorMsg string) error {
 	args := m.Called(ctx, id, errorMsg)
 	return args.Error(0)

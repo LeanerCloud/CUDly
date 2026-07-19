@@ -119,6 +119,18 @@ func TestPostgresStore_CompleteRIExchange_NilDB(t *testing.T) {
 	assert.True(t, panicked, "expected panic with nil db connection")
 }
 
+// TestPostgresStore_CompleteRIExchangeWithPayment_NilDB exercises the method entry.
+func TestPostgresStore_CompleteRIExchangeWithPayment_NilDB(t *testing.T) {
+	store := NewPostgresStore(nil)
+	ctx := context.Background()
+
+	panicked := callWithRecover(func() {
+		_ = store.CompleteRIExchangeWithPayment(ctx, "ri-id", "exchange-id", "42.000000")
+	})
+
+	assert.True(t, panicked, "expected panic with nil db connection")
+}
+
 // TestPostgresStore_FailRIExchange_NilDB exercises the method entry.
 func TestPostgresStore_FailRIExchange_NilDB(t *testing.T) {
 	store := NewPostgresStore(nil)

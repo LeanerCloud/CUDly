@@ -16,6 +16,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/email"
 	"github.com/LeanerCloud/CUDly/internal/oidc"
 	"github.com/LeanerCloud/CUDly/internal/runtime"
+	"github.com/LeanerCloud/CUDly/pkg/exchange"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -119,6 +120,12 @@ type Handler struct {
 	// Nil is valid: the endpoint returns unavailable and save-side
 	// validation no-ops, deferring to the frontend's hardcoded rules.
 	commitmentOpts CommitmentOptsInterface
+
+	// executeExchangeFn is the RI exchange execution function injected by tests.
+	// When nil (the production default), executeApprovedExchange calls
+	// exchange.ExecuteExchange directly. Tests inject a stub so the handler
+	// can be exercised end-to-end without live AWS credentials or a real RI.
+	executeExchangeFn func(ctx context.Context, req exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error)
 
 	// encryptionKeySource is the env var name that resolved the credential
 	// encryption key. Empty when no credStore is configured. Used by the

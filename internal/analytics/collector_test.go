@@ -313,6 +313,9 @@ func (m *mockConfigStore) TransitionRIExchangeStatus(ctx context.Context, id str
 func (m *mockConfigStore) CompleteRIExchange(ctx context.Context, id string, exchangeID string) error {
 	return nil
 }
+func (m *mockConfigStore) CompleteRIExchangeWithPayment(_ context.Context, _, _, _ string) error {
+	return nil
+}
 func (m *mockConfigStore) FailRIExchange(ctx context.Context, id string, errorMsg string) error {
 	return nil
 }
