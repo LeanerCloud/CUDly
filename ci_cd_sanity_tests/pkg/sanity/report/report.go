@@ -28,7 +28,7 @@ type CheckResult struct {
 }
 
 // Report aggregates the results of a full sanity-test run against a single cloud
-// provider and is serialised to JSON for upload to the CI artefact store.
+// provider and is serialized to JSON for upload to the CI artifact store.
 type Report struct {
 	RunID     string        `json:"run_id"`
 	Cloud     string        `json:"cloud"`
@@ -39,7 +39,7 @@ type Report struct {
 }
 
 // Add appends a single check result to the report. Not safe for concurrent
-// use; callers running checks in goroutines must serialise Add calls.
+// use; callers running checks in goroutines must serialize Add calls.
 func (r *Report) Add(res CheckResult) {
 	r.Results = append(r.Results, res)
 }
@@ -55,8 +55,8 @@ func (r *Report) HasFailures() bool {
 	return false
 }
 
-// WriteJSON serialises the report to path with indented JSON and 0600
-// permissions so it can be uploaded as a CI artefact.
+// WriteJSON serializes the report to path with indented JSON and 0600
+// permissions so it can be uploaded as a CI artifact.
 func (r *Report) WriteJSON(path string) error {
 	b, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {

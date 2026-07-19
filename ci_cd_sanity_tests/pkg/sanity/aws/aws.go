@@ -83,7 +83,7 @@ func checkRDS(ctx context.Context, cfg aws.Config, maxList int32) (map[string]st
 }
 
 // Run executes all AWS sanity checks in sequence and returns a Report
-// summarising each result. It returns an error only for fatal setup failures
+// summarizing each result. It returns an error only for fatal setup failures
 // (credential load, SDK init); individual check failures are captured inside
 // the Report so callers can surface them all rather than stopping at the first.
 func Run(ctx context.Context, opts Options) (*report.Report, error) {
