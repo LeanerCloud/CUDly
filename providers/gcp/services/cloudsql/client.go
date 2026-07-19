@@ -455,14 +455,13 @@ func skuMatchesTier(sku *cloudbilling.Sku, tier, region string) bool {
 	return true
 }
 
-// extractResourceTypeFromContent extracts the last path segment of the first
-// non-empty Operation.Resource across all operation groups. Used by all four
-// GCP service converters to set rec.ResourceType from Recommender payloads.
-func extractResourceTypeFromContent(content *recommenderpb.RecommendationContent) string {
-	if content == nil || content.OperationGroups == nil {
+// extractGCPResourceType returns the last path segment of the first non-empty
+// resource field found across all operation groups, or "" if none is present.
+func extractGCPResourceType(rec *recommenderpb.Recommendation) string {
+	if rec.Content == nil || rec.Content.OperationGroups == nil {
 		return ""
 	}
-	for _, opGroup := range content.OperationGroups {
+	for _, opGroup := range rec.Content.OperationGroups {
 		for _, op := range opGroup.Operations {
 			if op.Resource == "" {
 				continue
@@ -476,13 +475,13 @@ func extractResourceTypeFromContent(content *recommenderpb.RecommendationContent
 	return ""
 }
 
-// extractEstimatedSavings returns the negative of the PrimaryImpact cost
-// projection (GCP encodes savings as a negative cost delta).
-func extractEstimatedSavings(gcpRec *recommenderpb.Recommendation) float64 {
-	if gcpRec.PrimaryImpact == nil {
+// extractGCPSavings returns the estimated monthly savings (positive value)
+// from the primary cost impact of a GCP recommendation, or 0 if absent.
+func extractGCPSavings(rec *recommenderpb.Recommendation) float64 {
+	if rec.PrimaryImpact == nil {
 		return 0
 	}
-	costProj := gcpRec.PrimaryImpact.GetCostProjection()
+	costProj := rec.PrimaryImpact.GetCostProjection()
 	if costProj == nil || costProj.Cost == nil {
 		return 0
 	}
@@ -508,6 +507,15 @@ func (c *CloudSQLClient) fillSQLPricing(ctx context.Context, rec *common.Recomme
 			rec.BreakEvenMonths = pricing.CommitmentPrice / monthlySavings
 		}
 	}
+}
+
+// termYearsFromLabel converts a term string such as "1yr" or "3yr" to an
+// integer number of years (defaults to 1 for any unrecognized value).
+func termYearsFromLabel(term string) int {
+	if term == "3yr" || term == "3" {
+		return 3
+	}
+	return 1
 }
 
 // convertGCPRecommendation converts a GCP Recommender recommendation to common format.
@@ -536,17 +544,25 @@ func (c *CloudSQLClient) convertGCPRecommendation(ctx context.Context, gcpRec *r
 		PaymentOption:  paymentOption,
 	}
 
-	rec.ResourceType = extractResourceTypeFromContent(gcpRec.Content)
-	rec.EstimatedSavings = extractEstimatedSavings(gcpRec)
+	rec.ResourceType = extractGCPResourceType(gcpRec)
+	rec.EstimatedSavings = extractGCPSavings(gcpRec)
 
 	// Thread pricing into the converter so the scorer can rank/filter GCP recs
-	// correctly (issue #1022 C2).
+	// correctly (issue #1022 C2). fillSQLPricing performs the single billing
+	// lookup and populates CommitmentCost; we reuse that value below to derive
+	// RecurringMonthlyCost rather than issuing a second SKU call.
 	if rec.ResourceType != "" {
-		termYears := 1
-		if rec.Term == "3yr" || rec.Term == "3" {
-			termYears = 3
-		}
+		termYears := termYearsFromLabel(rec.Term)
 		c.fillSQLPricing(ctx, rec, termYears)
+
+		// Cloud SQL CUDs are monthly-payment commitments, so the per-month
+		// charge is CommitmentCost / termMonths. When the billing lookup
+		// failed, CommitmentCost stays 0 and RecurringMonthlyCost remains nil
+		// so the frontend renders "—" rather than a stale value.
+		if rec.CommitmentCost > 0 {
+			monthly := rec.CommitmentCost / float64(termYears*12)
+			rec.RecurringMonthlyCost = &monthly
+		}
 	}
 
 	return rec
