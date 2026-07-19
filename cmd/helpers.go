@@ -123,6 +123,12 @@ func CalculateTotalInstances(recs []common.Recommendation) int {
 // on-demand ratio) and stays unscaled. Pre-sizing values can still be
 // recovered: RecommendedCount holds AWS's pre-sized count for RIs.
 func ApplyCoverage(recs []common.Recommendation, coverage float64) []common.Recommendation {
+	return applyCoverage(recs, coverage, nil)
+}
+
+// applyCoverage applies legacy percentage sizing and optionally records
+// recommendations whose discrete RI count is reduced to zero.
+func applyCoverage(recs []common.Recommendation, coverage float64, drops *common.DropSummary) []common.Recommendation {
 	if coverage >= 100 {
 		return recs
 	}
@@ -170,6 +176,8 @@ func ApplyCoverage(recs []common.Recommendation, coverage float64) []common.Reco
 			adjusted = common.ScaleRecommendationCosts(adjusted, sizedRatio)
 			adjusted.Count = newCount
 			result = append(result, adjusted)
+		} else if drops != nil {
+			drops.Add(common.DropTargetSizedToZero, 1)
 		}
 	}
 	return result
@@ -476,7 +484,7 @@ func applySizing(recs []common.Recommendation, cfg Config, coverage float64, dro
 	if cfg.TargetCoverage > 0 {
 		return ApplyTargetCoverage(recs, cfg.TargetCoverage, drops)
 	}
-	return ApplyCoverage(recs, coverage)
+	return applyCoverage(recs, coverage, drops)
 }
 
 // ApplyCountOverride overrides the count for all recommendations.

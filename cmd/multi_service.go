@@ -133,29 +133,27 @@ func runToolMultiService(ctx context.Context, cfg Config) {
 	AppLogger.Printf("\n📥 Fetching recommendations from all services...\n")
 	allRecs, drops := fetchAllRecs(ctx, awsCfg, recClient, accountCache, servicesToProcess, engineData, cfg, coverageMap)
 
-	if line := drops.FormatOneLine(); line != "" {
-		AppLogger.Printf("\n%s\n", line)
-	}
-
 	// Phase 2: score and display.
 	scoredResult := scoreAndDisplay(allRecs, cfg)
 	if len(scoredResult.Passed) == 0 {
+		printDropSummary(drops)
 		AppLogger.Printf("\nℹ️  No recommendations passed filters. Nothing to purchase.\n")
 		return
 	}
 
 	// Phases 3-4: confirm, purchase, and produce summary outputs.
-	runPurchaseAndReport(ctx, awsCfg, scoredResult, isDryRun, cfg)
+	runPurchaseAndReport(ctx, awsCfg, scoredResult, isDryRun, cfg, drops)
 }
 
 // runPurchaseAndReport handles the confirm, execute, and report phases of
 // the multi-service pipeline. It is a separate function to keep
 // runToolMultiService within the cyclomatic-complexity limit.
-func runPurchaseAndReport(ctx context.Context, awsCfg aws.Config, scoredResult scorer.ScoredResult, isDryRun bool, cfg Config) {
+func runPurchaseAndReport(ctx context.Context, awsCfg aws.Config, scoredResult scorer.ScoredResult, isDryRun bool, cfg Config, drops *common.DropSummary) {
 	runID := uuid.New().String()
 	if !isDryRun {
 		totalInstances, totalSavings := sumPassedRecs(scoredResult.Passed)
 		if !ConfirmPurchase(totalInstances, totalSavings, cfg.SkipConfirmation) {
+			printDropSummary(drops)
 			AppLogger.Printf("\n❌ Purchase canceled.\n")
 			return
 		}
@@ -164,11 +162,11 @@ func runPurchaseAndReport(ctx context.Context, awsCfg aws.Config, scoredResult s
 	allResults := executePurchasePipeline(ctx, awsCfg, scoredResult.Passed, isDryRun, runID, cfg)
 
 	// Produce summary outputs.
-	writeReportAndSummary(scoredResult.Passed, allResults, isDryRun, cfg)
+	writeReportAndSummary(scoredResult.Passed, allResults, isDryRun, cfg, drops)
 }
 
 // writeReportAndSummary writes the CSV report and prints the final summary.
-func writeReportAndSummary(passed []common.Recommendation, allResults []common.PurchaseResult, isDryRun bool, cfg Config) {
+func writeReportAndSummary(passed []common.Recommendation, allResults []common.PurchaseResult, isDryRun bool, cfg Config, drops *common.DropSummary) {
 	serviceStats := buildServiceStats(passed, allResults)
 	finalCSVOutput := generateCSVFilename(isDryRun, cfg)
 	if err := writeMultiServiceCSVReport(allResults, finalCSVOutput); err != nil {
@@ -176,7 +174,19 @@ func writeReportAndSummary(passed []common.Recommendation, allResults []common.P
 	} else {
 		AppLogger.Printf("\n📋 CSV report written to: %s\n", finalCSVOutput)
 	}
+	printDropSummary(drops)
 	printMultiServiceSummary(passed, allResults, serviceStats, isDryRun)
+}
+
+// printDropSummary writes the accumulated drop reasons at the terminal summary
+// boundary. A nil or empty summary produces no output.
+func printDropSummary(drops *common.DropSummary) {
+	if drops == nil {
+		return
+	}
+	if line := drops.FormatOneLine(); line != "" {
+		AppLogger.Printf("\n%s\n", line)
+	}
 }
 
 // loadAWSConfig builds an aws.Config from the tool config.

@@ -1,16 +1,20 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/csv"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/scorer"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	rdstypes "github.com/aws/aws-sdk-go-v2/service/rds/types"
 	"github.com/stretchr/testify/assert"
@@ -556,6 +560,44 @@ func TestApplyCoverageToRecommendations(t *testing.T) {
 			assert.Equal(t, tt.expectedRecs, len(result))
 		})
 	}
+}
+
+func TestPrintDropSummaryImmediatelyPrecedesTerminalOutput(t *testing.T) {
+	for _, terminal := range []string{
+		"ℹ️  No recommendations passed filters. Nothing to purchase.",
+		"FINAL SUMMARY",
+	} {
+		t.Run(terminal, func(t *testing.T) {
+			oldLogger := AppLogger
+			var output bytes.Buffer
+			AppLogger = log.New(&output, "", 0)
+			t.Cleanup(func() { AppLogger = oldLogger })
+
+			drops := common.NewDropSummary()
+			drops.Add(common.DropTargetSizedToZero, 1)
+
+			printDropSummary(drops)
+			AppLogger.Printf("\n%s\n", terminal)
+
+			assert.Contains(t, output.String(),
+				"Dropped 1 recs: target-sized-to-zero=1\n\n"+terminal)
+			assert.Equal(t, 1, strings.Count(output.String(), "Dropped 1 recs"))
+		})
+	}
+}
+
+func TestRunPurchaseAndReportDeclinedConfirmationPrintsDropsBeforeCancellation(t *testing.T) {
+	drops := common.NewDropSummary()
+	drops.Add(common.DropTargetSizedToZero, 1)
+	scored := scorer.ScoredResult{Passed: []common.Recommendation{{Count: 1, EstimatedSavings: 10}}}
+
+	output := captureAppOutput(t, func() {
+		runPurchaseAndReport(context.Background(), aws.Config{}, scored, false, Config{}, drops)
+	})
+
+	assert.Contains(t, output,
+		"Dropped 1 recs: target-sized-to-zero=1\n\n❌ Purchase canceled.")
+	assert.Equal(t, 1, strings.Count(output, "Dropped 1 recs"))
 }
 
 func TestServiceProcessingOrder(t *testing.T) {

@@ -383,6 +383,21 @@ func TestApplyCoverage_RICostScaling(t *testing.T) {
 	assert.Equal(t, 60.0, monthly)
 }
 
+func TestApplySizing_LegacyCoverageRecordsCountsFlooredToZero(t *testing.T) {
+	recs := []common.Recommendation{
+		{Service: common.ServiceEC2, Count: 1},
+		{Service: common.ServiceRDS, Count: 10},
+	}
+	drops := common.NewDropSummary()
+
+	out := applySizing(recs, Config{}, 10, drops)
+
+	require.Len(t, out, 1)
+	assert.Equal(t, 1, out[0].Count)
+	assert.Equal(t, 1, drops.Total())
+	assert.Contains(t, drops.FormatOneLine(), common.DropTargetSizedToZero)
+}
+
 func TestAdjustRecommendationsForExisting(t *testing.T) {
 	ctx := context.Background()
 
