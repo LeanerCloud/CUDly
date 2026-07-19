@@ -385,7 +385,7 @@ func (r *Router) Route(ctx context.Context, method, path string, req *events.Lam
 					return nil, err
 				}
 			case AuthUser:
-				if err := r.h.requireAuth(ctx, req); err != nil {
+				if _, err := r.h.requireAuth(ctx, req); err != nil {
 					return nil, err
 				}
 			case AuthPublic:

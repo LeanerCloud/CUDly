@@ -5,8 +5,10 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -100,18 +102,21 @@ func TestRouterAuthPublic_NoCredentials_Accepts(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestRequireAuth_AdminAPIKey verifies the new requireAuth helper accepts
-// the admin API key.
+// TestRequireAuth_AdminAPIKey verifies that requireAuth accepts the admin
+// API key and returns a Principal of kind PrincipalAdminAPIKey.
 func TestRequireAuth_AdminAPIKey(t *testing.T) {
 	h := &Handler{apiKey: "admin-secret"}
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"X-API-Key": "admin-secret"},
 	}
-	require.NoError(t, h.requireAuth(context.Background(), req))
+	p, err := h.requireAuth(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+	assert.Equal(t, PrincipalAdminAPIKey, p.Kind)
 }
 
 // TestRequireAuth_UserSession verifies requireAuth accepts a valid
-// non-admin user session.
+// non-admin user session and returns a populated Principal.
 func TestRequireAuth_UserSession(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
@@ -121,7 +126,12 @@ func TestRequireAuth_UserSession(t *testing.T) {
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"Authorization": "Bearer user-token"},
 	}
-	require.NoError(t, h.requireAuth(ctx, req))
+	p, err := h.requireAuth(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+	assert.Equal(t, PrincipalSession, p.Kind)
+	assert.Equal(t, "uid", p.UserID)
+	assert.Equal(t, userSession, p.Session)
 }
 
 // TestRequireAuth_NoCredential_Rejects verifies requireAuth returns a 401
@@ -130,9 +140,79 @@ func TestRequireAuth_NoCredential_Rejects(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	h := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{}}
-	err := h.requireAuth(context.Background(), req)
+	_, err := h.requireAuth(context.Background(), req)
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
+	assert.Equal(t, 401, ce.code)
+}
+
+// TestRequireAuth_UserAPIKey verifies that a valid user API key yields a
+// Principal with Kind == PrincipalUserAPIKey and populated UserID/Email.
+// The mock returns the real *auth.User concrete type — the same type that
+// auth.Service.ValidateUserAPIKeyAPI returns in production — so this test
+// exercises the same type assertion that principalFromUserAPIKey performs.
+func TestRequireAuth_UserAPIKey(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	userRec := &auth.User{ID: "uid-123", Email: "alice@example.com"}
+	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "valid-user-key").
+		Return(nil, userRec, nil)
+
+	h := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"X-API-Key": "valid-user-key"},
+	}
+	p, err := h.requireAuth(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+	assert.Equal(t, PrincipalUserAPIKey, p.Kind)
+	assert.Equal(t, "uid-123", p.UserID)
+	assert.Equal(t, "alice@example.com", p.Email)
+}
+
+// TestRequireAuth_UserAPIKey_BadRecord verifies that principalFromUserAPIKey
+// fails closed when ValidateUserAPIKeyAPI succeeds but returns a userRaw
+// value that is not *auth.User (unexpected concrete type). Post-fix it
+// must return nil and the overall requireAuth must return a 401 ClientError.
+func TestRequireAuth_UserAPIKey_BadRecord(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	// Return a value that is NOT *auth.User — the concrete type principalFromUserAPIKey asserts.
+	type unexpectedType struct{ Name string }
+	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "bad-record-key").
+		Return(nil, &unexpectedType{Name: "oops"}, nil)
+	// Bearer and session path must also return nothing.
+	mockAuth.On("ValidateSession", ctx, mock.Anything).
+		Return(nil, errors.New("no session")).Maybe()
+
+	h := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"X-API-Key": "bad-record-key"},
+	}
+	_, err := h.requireAuth(ctx, req)
+	require.Error(t, err, "expected denial when user record has unexpected type")
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError, got %T: %v", err, err)
+	assert.Equal(t, 401, ce.code)
+}
+
+// TestRequireAuth_NilAuth_Rejects verifies that a Handler constructed with
+// auth == nil returns a 401 ClientError for a non-admin credential, confirming
+// the h.auth == nil branch fails closed.
+func TestRequireAuth_NilAuth_Rejects(t *testing.T) {
+	// No admin key configured, auth is nil.
+	h := &Handler{auth: nil}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"X-API-Key": "some-key"},
+	}
+	_, err := h.requireAuth(context.Background(), req)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError, got %T: %v", err, err)
 	assert.Equal(t, 401, ce.code)
 }
