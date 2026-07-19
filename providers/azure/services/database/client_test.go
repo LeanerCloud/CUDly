@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	azpricing "github.com/LeanerCloud/CUDly/providers/azure/internal/pricing"
 	"github.com/LeanerCloud/CUDly/providers/azure/mocks"
 )
 
@@ -213,7 +214,7 @@ func TestSQLPricingStructure(t *testing.T) {
 
 func TestAzureRetailPriceStructure(t *testing.T) {
 	price := AzureRetailPrice{
-		Items: []DatabaseRetailPriceItem{
+		Items: []azpricing.RetailPriceItem{
 			{
 				CurrencyCode:    "USD",
 				RetailPrice:     500.0,

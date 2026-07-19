@@ -157,23 +157,15 @@ func (c *ComputeClient) GetRegion() string {
 	return c.region
 }
 
-// AzureRetailPrice represents pricing from Azure Retail Prices API
-type AzureRetailPriceItem struct {
-	CurrencyCode    string  `json:"currencyCode"`
-	RetailPrice     float64 `json:"retailPrice"`
-	UnitPrice       float64 `json:"unitPrice"`
-	ArmRegionName   string  `json:"armRegionName"`
-	ProductName     string  `json:"productName"`
-	ServiceName     string  `json:"serviceName"`
-	ArmSKUName      string  `json:"armSkuName"`
-	ReservationTerm string  `json:"reservationTerm"`
-	Type            string  `json:"type"`
-}
+// AzureRetailPriceItem is a type alias for pricing.RetailPriceItem kept for
+// backward compatibility within this package. New code should use
+// pricing.RetailPriceItem directly.
+type AzureRetailPriceItem = pricing.RetailPriceItem
 
-type AzureRetailPrice struct {
-	Items        []AzureRetailPriceItem `json:"Items"`
-	NextPageLink string                 `json:"NextPageLink"`
-}
+// AzureRetailPrice is the response envelope for the Azure Retail Prices API.
+// It wraps pricing.Page[pricing.RetailPriceItem] under a package-local name
+// so existing call sites do not need to be updated.
+type AzureRetailPrice = pricing.Page[pricing.RetailPriceItem]
 
 // GetRecommendations gets VM RI recommendations from Azure Consumption API
 func (c *ComputeClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
