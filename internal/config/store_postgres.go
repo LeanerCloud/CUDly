@@ -1810,11 +1810,17 @@ func (s *PostgresStore) GetActivePurchaseHistory(ctx context.Context, asOf time.
 	args := []any{asOf}
 	conds, args = appendAccountPredicate(conds, args, accountIDs, externalIDsByProvider)
 
+	// The column list MUST match scanPurchaseHistoryRow's scan destinations
+	// exactly (pgx errors on a field/destination count mismatch). #808 added
+	// offering_class, listing_id, listing_state to the scanner and every other
+	// purchase-history SELECT but missed this one, which broke every real-Postgres
+	// call here (dashboard KPIs, /api/inventory/*, analytics collector).
 	query := fmt.Sprintf(`
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
 		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
-		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id
+		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id,
+		       offering_class, listing_id, listing_state
 		FROM purchase_history
 		WHERE %s
 		ORDER BY timestamp DESC
