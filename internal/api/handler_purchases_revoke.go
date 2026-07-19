@@ -409,13 +409,9 @@ func (h *Handler) calculateAzureRevoke(ctx context.Context, req *events.LambdaFu
 		return nil, err
 	}
 
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	calcClient, _, err := h.buildAzureRevokeClients()
 	if err != nil {
-		return nil, fmt.Errorf("revoke/calculate: obtain credential: %w", err)
-	}
-	calcClient, err := armreservations.NewCalculateRefundClient(cred, nil)
-	if err != nil {
-		return nil, fmt.Errorf("revoke/calculate: create calculate-refund client: %w", err)
+		return nil, fmt.Errorf("revoke/calculate: %w", err)
 	}
 
 	quantity := int32(count) // #nosec G115 -- Azure reservation count bounded by API limits (<<math.MaxInt32) //nolint:gosec
@@ -558,22 +554,40 @@ func (h *Handler) revokeAzurePurchase(ctx context.Context, record *config.Purcha
 		return nil, NewClientError(422, "cannot determine Azure reservation order ID from purchase record; contact Azure Support to request a refund")
 	}
 
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	calcClient, returnClient, err := h.buildAzureRevokeClients()
 	if err != nil {
-		return nil, fmt.Errorf("revoke azure: obtain credential: %w", err)
-	}
-
-	calcClient, err := armreservations.NewCalculateRefundClient(cred, nil)
-	if err != nil {
-		return nil, fmt.Errorf("revoke azure: create calculate-refund client: %w", err)
-	}
-
-	returnClient, err := armreservations.NewReturnClient(cred, nil)
-	if err != nil {
-		return nil, fmt.Errorf("revoke azure: create return client: %w", err)
+		return nil, fmt.Errorf("revoke azure: %w", err)
 	}
 
 	return h.callAzureReturn(ctx, calcClient, returnClient, record, orderID, reservationID, expectedRefundAmount)
+}
+
+// buildAzureRevokeClients returns the injected factory's result when
+// h.newAzureRevokeClients is set (test path), or constructs the production
+// CalculateRefund and Return clients from a single
+// azidentity.NewDefaultAzureCredential (production default). Mirrors the
+// AzureSPProber.NewClient injected-factory pattern
+// (internal/commitmentopts/probe_azure.go): a nil field always means "use the
+// production default", so existing production construction sites need no
+// changes.
+func (h *Handler) buildAzureRevokeClients() (azureCalculateRefundClient, azureReturnClient, error) {
+	if h.newAzureRevokeClients != nil {
+		return h.newAzureRevokeClients()
+	}
+
+	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("obtain credential: %w", err)
+	}
+	calcClient, err := armreservations.NewCalculateRefundClient(cred, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create calculate-refund client: %w", err)
+	}
+	returnClient, err := armreservations.NewReturnClient(cred, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create return client: %w", err)
+	}
+	return calcClient, returnClient, nil
 }
 
 // callAzureReturn executes the two-step Azure reservation return:
