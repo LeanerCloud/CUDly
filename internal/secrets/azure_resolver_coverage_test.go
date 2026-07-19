@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
@@ -131,7 +132,11 @@ func TestAzureResolver_DifferentVaultURLs(t *testing.T) {
 
 // TestAzureResolver_ContextHandling tests context handling in Azure resolver.
 func TestAzureResolver_ContextHandling(t *testing.T) {
-	resolver, server := newTestAzureResolver(t, notFoundHandler)
+	var handlerCalls atomic.Int32
+	resolver, server := newTestAzureResolver(t, func(w http.ResponseWriter, r *http.Request) {
+		handlerCalls.Add(1)
+		notFoundHandler(w, r)
+	})
 	defer server.Close()
 
 	cancelledCtx, cancel := context.WithCancel(context.Background())
@@ -139,7 +144,8 @@ func TestAzureResolver_ContextHandling(t *testing.T) {
 
 	// GetSecret with canceled context should fail before reaching the server.
 	_, err := resolver.GetSecret(cancelledCtx, "test-secret")
-	assert.Error(t, err)
+	require.Error(t, err)
+	assert.Zero(t, handlerCalls.Load(), "canceled request must not reach the HTTP handler")
 }
 
 // TestAzureResolver_EmptySecretID tests getting a secret with empty ID.
