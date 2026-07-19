@@ -721,3 +721,58 @@ func TestFindOfferingID_InvalidTerm_ErrorsBeforeAPICall(t *testing.T) {
 	}
 	mockEC.AssertNotCalled(t, "DescribeReservedCacheNodesOfferings", mock.Anything, mock.Anything)
 }
+
+// TestFindOfferingID_CtxCancelledBeforePage asserts that findOfferingID returns
+// context.Canceled immediately when the context is already cancelled before the
+// first pagination iteration, without calling the AWS API (issue #515).
+func TestFindOfferingID_CtxCancelledBeforePage(t *testing.T) {
+	mockEC := &MockElastiCacheClient{}
+	t.Cleanup(func() { mockEC.AssertExpectations(t) })
+	client := &Client{client: mockEC, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "cache.r6g.large",
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+		Details:       &common.CacheDetails{Engine: "redis"},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before the first iteration
+
+	// The mock must not be called: ctx.Err() fires at the top of the loop.
+	_, err := client.findOfferingID(ctx, rec, "")
+
+	assert.ErrorIs(t, err, context.Canceled)
+	mockEC.AssertNumberOfCalls(t, "DescribeReservedCacheNodesOfferings", 0)
+}
+
+// TestFindOfferingID_EmptyStringTokenEndsPagination asserts that a page whose
+// Marker is a pointer to an empty string (rather than nil) is treated as the
+// terminal page and does not cause an extra API call (issue #515).
+func TestFindOfferingID_EmptyStringTokenEndsPagination(t *testing.T) {
+	mockEC := &MockElastiCacheClient{}
+	t.Cleanup(func() { mockEC.AssertExpectations(t) })
+	client := &Client{client: mockEC, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "cache.r6g.large",
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+		Details:       &common.CacheDetails{Engine: "redis"},
+	}
+
+	// Single page with zero results and Marker = ""; must not loop again.
+	mockEC.On("DescribeReservedCacheNodesOfferings", mock.Anything, mock.Anything).
+		Return(&elasticache.DescribeReservedCacheNodesOfferingsOutput{
+			ReservedCacheNodesOfferings: []types.ReservedCacheNodesOffering{},
+			Marker:                      aws.String(""),
+		}, nil).Once()
+
+	_, err := client.findOfferingID(context.Background(), rec, "")
+
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "no offerings found")
+	}
+	mockEC.AssertNumberOfCalls(t, "DescribeReservedCacheNodesOfferings", 1)
+}
