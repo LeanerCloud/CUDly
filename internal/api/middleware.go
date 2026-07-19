@@ -59,7 +59,7 @@ const (
 	PrincipalAdminAPIKey PrincipalKind = "admin-api-key"
 	// PrincipalUserAPIKey is set when the request authenticated with a
 	// per-user API key issued via /api/api-keys.
-	PrincipalUserAPIKey PrincipalKind = "user-api-key"
+	PrincipalUserAPIKey PrincipalKind = "user-api-key" // #nosec G101 -- credential-type label, not a credential value
 	// PrincipalSession is set when the request authenticated with a
 	// bearer-token session (X-Authorization / Authorization header).
 	PrincipalSession PrincipalKind = "session"
@@ -78,7 +78,7 @@ type Principal struct {
 	Email   string   // empty for PrincipalAdminAPIKey; populated for session/user-api-key
 }
 
-// authenticate checks authentication via admin API key, user API key, or Bearer token
+// authenticate checks authentication via admin API key, user API key, or Bearer token.
 func (h *Handler) authenticate(ctx context.Context, req *events.LambdaFunctionURLRequest) bool {
 	apiKey := extractAPIKey(req)
 
