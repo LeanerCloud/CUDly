@@ -1311,3 +1311,252 @@ func TestReservationResourceTypeSQLDB_IsCanonical(t *testing.T) {
 		"SQL Database filter value must be the Azure REST API canonical enum \"SQLDatabases\"; "+
 			"\"SqlDatabase\" (pre-fix) is not a valid resourceType")
 }
+
+// MockSQLServersPager mocks the SQLServersPager interface.
+// CallCount tracks how many times NextPage was invoked.
+type MockSQLServersPager struct {
+	err       error
+	pages     []armsql.ServersClientListResponse
+	index     int
+	CallCount int
+}
+
+func (m *MockSQLServersPager) More() bool {
+	return m.index < len(m.pages)
+}
+
+func (m *MockSQLServersPager) NextPage(_ context.Context) (armsql.ServersClientListResponse, error) {
+	m.CallCount++
+	if m.err != nil {
+		return armsql.ServersClientListResponse{}, m.err
+	}
+	if m.index >= len(m.pages) {
+		return armsql.ServersClientListResponse{}, errors.New("no more pages")
+	}
+	page := m.pages[m.index]
+	m.index++
+	return page, nil
+}
+
+// MockSQLManagedInstancesPager mocks the SQLManagedInstancesPager interface.
+// CallCount tracks how many times NextPage was invoked.
+type MockSQLManagedInstancesPager struct {
+	err       error
+	pages     []armsql.ManagedInstancesClientListResponse
+	index     int
+	CallCount int
+}
+
+func (m *MockSQLManagedInstancesPager) More() bool {
+	return m.index < len(m.pages)
+}
+
+func (m *MockSQLManagedInstancesPager) NextPage(_ context.Context) (armsql.ManagedInstancesClientListResponse, error) {
+	m.CallCount++
+	if m.err != nil {
+		return armsql.ManagedInstancesClientListResponse{}, m.err
+	}
+	if m.index >= len(m.pages) {
+		return armsql.ManagedInstancesClientListResponse{}, errors.New("no more pages")
+	}
+	page := m.pages[m.index]
+	m.index++
+	return page, nil
+}
+
+// buildMIPage builds a single-page managed-instances response with the
+// given ZoneRedundant values.
+func buildMIPage(zoneRedundant ...bool) armsql.ManagedInstancesClientListResponse {
+	instances := make([]*armsql.ManagedInstance, 0, len(zoneRedundant))
+	for _, zr := range zoneRedundant {
+		zr := zr
+		instances = append(instances, &armsql.ManagedInstance{
+			Properties: &armsql.ManagedInstanceProperties{ZoneRedundant: &zr},
+		})
+	}
+	return armsql.ManagedInstancesClientListResponse{
+		ManagedInstanceListResult: armsql.ManagedInstanceListResult{Value: instances},
+	}
+}
+
+// buildServerPage builds a single-page servers response with n placeholder servers.
+func buildServerPage(n int) armsql.ServersClientListResponse {
+	servers := make([]*armsql.Server, n)
+	for i := range servers {
+		loc := "eastus"
+		servers[i] = &armsql.Server{Location: &loc}
+	}
+	return armsql.ServersClientListResponse{
+		ServerListResult: armsql.ServerListResult{Value: servers},
+	}
+}
+
+// TestDatabaseClient_ConvertAzureSQLRecommendation_PopulatesAZConfig asserts
+// that a subscription with all zone-redundant managed instances produces
+// AZConfig="zoneRedundant" in the recommendation Details.
+func TestDatabaseClient_ConvertAzureSQLRecommendation_PopulatesAZConfig(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	client.SetCapabilitiesClient(&MockCapabilitiesClient{})
+	client.SetManagedInstancesPager(&MockSQLManagedInstancesPager{
+		pages: []armsql.ManagedInstancesClientListResponse{buildMIPage(true)},
+	})
+	// No regular servers.
+	client.SetServersPager(&MockSQLServersPager{})
+
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithNormalizedSize("GeneralPurpose_Gen5_2"),
+	)
+	out := client.convertAzureSQLRecommendation(context.Background(), rec)
+	require.NotNil(t, out)
+	details, ok := out.Details.(common.DatabaseDetails)
+	require.True(t, ok)
+	assert.Equal(t, "zoneRedundant", details.AZConfig)
+}
+
+// TestDatabaseClient_ConvertAzureSQLRecommendation_AmbiguousAZConfig asserts
+// that a subscription with mixed zone-redundancy produces AZConfig="" (empty).
+func TestDatabaseClient_ConvertAzureSQLRecommendation_AmbiguousAZConfig(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	client.SetCapabilitiesClient(&MockCapabilitiesClient{})
+	// One zone-redundant and one non-zone-redundant = ambiguous.
+	client.SetManagedInstancesPager(&MockSQLManagedInstancesPager{
+		pages: []armsql.ManagedInstancesClientListResponse{buildMIPage(true, false)},
+	})
+	client.SetServersPager(&MockSQLServersPager{})
+
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithNormalizedSize("GeneralPurpose_Gen5_2"),
+	)
+	out := client.convertAzureSQLRecommendation(context.Background(), rec)
+	require.NotNil(t, out)
+	details, ok := out.Details.(common.DatabaseDetails)
+	require.True(t, ok)
+	assert.Empty(t, details.AZConfig, "ambiguous zone-redundancy must leave AZConfig empty")
+}
+
+// TestDatabaseClient_ConvertAzureSQLRecommendation_AZConfigPagerErrorFallsBack
+// asserts that a managed-instances pager failure leaves AZConfig empty
+// without failing the recommendation conversion.
+func TestDatabaseClient_ConvertAzureSQLRecommendation_AZConfigPagerErrorFallsBack(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	client.SetCapabilitiesClient(&MockCapabilitiesClient{})
+	client.SetManagedInstancesPager(&MockSQLManagedInstancesPager{
+		pages: []armsql.ManagedInstancesClientListResponse{{}},
+		err:   errors.New("transient error"),
+	})
+	client.SetServersPager(&MockSQLServersPager{})
+
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithNormalizedSize("GeneralPurpose_Gen5_2"),
+	)
+	out := client.convertAzureSQLRecommendation(context.Background(), rec)
+	require.NotNil(t, out, "conversion must NOT fail on pager error")
+	details, ok := out.Details.(common.DatabaseDetails)
+	require.True(t, ok)
+	assert.Empty(t, details.AZConfig, "AZConfig empty on pager error")
+}
+
+// TestDatabaseClient_ConvertAzureSQLRecommendation_PopulatesDeployment asserts
+// that a subscription with only managed instances produces
+// Deployment="managed".
+func TestDatabaseClient_ConvertAzureSQLRecommendation_PopulatesDeployment(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	client.SetCapabilitiesClient(&MockCapabilitiesClient{})
+	zr := true
+	client.SetManagedInstancesPager(&MockSQLManagedInstancesPager{
+		pages: []armsql.ManagedInstancesClientListResponse{
+			{ManagedInstanceListResult: armsql.ManagedInstanceListResult{
+				Value: []*armsql.ManagedInstance{
+					{Properties: &armsql.ManagedInstanceProperties{ZoneRedundant: &zr}},
+				},
+			}},
+		},
+	})
+	// No regular servers.
+	client.SetServersPager(&MockSQLServersPager{})
+
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithNormalizedSize("GeneralPurpose_Gen5_2"),
+	)
+	out := client.convertAzureSQLRecommendation(context.Background(), rec)
+	require.NotNil(t, out)
+	details, ok := out.Details.(common.DatabaseDetails)
+	require.True(t, ok)
+	assert.Equal(t, "managed", details.Deployment)
+}
+
+// TestDatabaseClient_ConvertAzureSQLRecommendation_DeploymentSingle asserts
+// that a subscription with only regular servers (no managed instances)
+// produces Deployment="single".
+func TestDatabaseClient_ConvertAzureSQLRecommendation_DeploymentSingle(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	client.SetCapabilitiesClient(&MockCapabilitiesClient{})
+	// No managed instances.
+	client.SetManagedInstancesPager(&MockSQLManagedInstancesPager{})
+	client.SetServersPager(&MockSQLServersPager{
+		pages: []armsql.ServersClientListResponse{buildServerPage(2)},
+	})
+
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithNormalizedSize("GeneralPurpose_Gen5_2"),
+	)
+	out := client.convertAzureSQLRecommendation(context.Background(), rec)
+	require.NotNil(t, out)
+	details, ok := out.Details.(common.DatabaseDetails)
+	require.True(t, ok)
+	assert.Equal(t, "single", details.Deployment)
+}
+
+// TestDatabaseClient_ConvertAzureSQLRecommendation_DeploymentPagerErrorFallsBack
+// asserts that a servers pager failure leaves Deployment empty without
+// failing the conversion.
+func TestDatabaseClient_ConvertAzureSQLRecommendation_DeploymentPagerErrorFallsBack(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	client.SetCapabilitiesClient(&MockCapabilitiesClient{})
+	client.SetManagedInstancesPager(&MockSQLManagedInstancesPager{})
+	client.SetServersPager(&MockSQLServersPager{
+		pages: []armsql.ServersClientListResponse{{}},
+		err:   errors.New("transient servers error"),
+	})
+
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithNormalizedSize("GeneralPurpose_Gen5_2"),
+	)
+	out := client.convertAzureSQLRecommendation(context.Background(), rec)
+	require.NotNil(t, out, "conversion must NOT fail on servers pager error")
+	details, ok := out.Details.(common.DatabaseDetails)
+	require.True(t, ok)
+	assert.Empty(t, details.Deployment, "Deployment empty on pager error")
+}
+
+// TestDatabaseClient_ServerInfo_FetchedOnce pins the perf invariant: many
+// converter calls in the same GetRecommendations run trigger exactly ONE
+// walk of the managed-instances and servers pagers regardless of call count.
+func TestDatabaseClient_ServerInfo_FetchedOnce(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	client.SetCapabilitiesClient(&MockCapabilitiesClient{})
+
+	miPager := &MockSQLManagedInstancesPager{
+		pages: []armsql.ManagedInstancesClientListResponse{buildMIPage(true)},
+	}
+	serversPager := &MockSQLServersPager{}
+
+	client.SetManagedInstancesPager(miPager)
+	client.SetServersPager(serversPager)
+
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithNormalizedSize("GeneralPurpose_Gen5_2"),
+	)
+	// Call the converter 10 times — fetchServerInfo must run only once.
+	for i := 0; i < 10; i++ {
+		out := client.convertAzureSQLRecommendation(context.Background(), rec)
+		require.NotNil(t, out)
+	}
+	// The pager is walked exactly once: the sync.Once gate fires on the
+	// first converter call and all subsequent calls read the cached value.
+	assert.Equal(t, 1, miPager.CallCount,
+		"managed-instances pager must be walked ONCE regardless of converter call count")
+	// Servers pager is also walked once (zero pages = no servers found).
+	assert.Equal(t, 0, serversPager.CallCount,
+		"servers pager NextPage not called when it has no pages")
+}
