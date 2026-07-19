@@ -286,7 +286,7 @@ func ApplyTargetCoverage(recs []common.Recommendation, targetPct float64, drops 
 //
 // Split out of ApplyTargetCoverage to keep that function under gocyclo's
 // complexity threshold.
-func applyTargetCoverageOne(rec common.Recommendation, targetPct float64, unsupportedSeen map[common.CommitmentType]bool) (result common.Recommendation, kept bool, missingSignal bool, drop string) {
+func applyTargetCoverageOne(rec common.Recommendation, targetPct float64, unsupportedSeen map[common.CommitmentType]bool) (result common.Recommendation, kept, missingSignal bool, drop string) {
 	switch {
 	case common.IsSavingsPlan(rec.Service):
 		adjusted, ok := applyTargetCoverageSP(rec, targetPct)

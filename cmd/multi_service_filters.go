@@ -61,10 +61,9 @@ func processRecommendation(rec *common.Recommendation, cfg *Config, instanceVers
 	if !passesDimensionFilters(rec, cfg) {
 		// Dimension mismatches (region/account/engine/instance-type) are expected
 		// operator-scoping choices, not drops worth surfacing in the summary.
-		// Only --min-pool-size is a sizing heuristic that operators may need to
-		// investigate (hence reported separately in passesDimensionFiltersWithReason).
-		_, reason := passesDimensionFiltersWithReason(rec, cfg)
-		return *rec, false, reason
+		// --min-pool-size drops are counted separately in applyFilters before
+		// this function runs, so no drop reason is surfaced here.
+		return *rec, false, ""
 	}
 
 	// Apply engine version filters - adjust instance count by subtracting extended support versions.
@@ -87,30 +86,19 @@ func processRecommendation(rec *common.Recommendation, cfg *Config, instanceVers
 // dimension filters here are pure functions of rec + cfg with no side
 // effects. Pool-size filtering is handled with logging in applyFilters.
 func passesDimensionFilters(rec *common.Recommendation, cfg *Config) bool {
-	ok, _ := passesDimensionFiltersWithReason(rec, cfg)
-	return ok
-}
-
-// passesDimensionFiltersWithReason is the reporting variant of
-// passesDimensionFilters. It returns (false, dropReason) when the rec is
-// excluded, where dropReason is non-empty only for drops that operators
-// should see in the end-of-run drop summary (currently only
-// --min-pool-size). Region, account, engine, and instance-type mismatches
-// are expected operator-scoping choices and return an empty reason.
-func passesDimensionFiltersWithReason(rec *common.Recommendation, cfg *Config) (passes bool, dropReason string) {
 	if !shouldIncludeRegion(rec.Region, cfg) {
-		return false, ""
+		return false
 	}
 	if !shouldIncludeInstanceType(rec.ResourceType, cfg) {
-		return false, ""
+		return false
 	}
 	if !shouldIncludeEngine(rec, cfg) {
-		return false, ""
+		return false
 	}
 	if !shouldIncludeAccount(rec.AccountName, cfg) {
-		return false, ""
+		return false
 	}
-	return true, ""
+	return true
 }
 
 // shouldIncludePoolSize filters out RI recommendations for pools whose
