@@ -55,8 +55,8 @@ func (r *Report) HasFailures() bool {
 	return false
 }
 
-// WriteJSON serializes the report to path with indented JSON and 0600
-// permissions so it can be uploaded as a CI artifact.
+// WriteJSON serializes the report to path with indented JSON, using 0600
+// permissions when creating the CI artifact file.
 func (r *Report) WriteJSON(path string) error {
 	b, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
