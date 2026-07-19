@@ -147,7 +147,6 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	includeDB := shouldIncludeService(params, common.ServiceRelationalDB)
 	includeCache := shouldIncludeService(params, common.ServiceCache)
 	includeCosmos := shouldIncludeService(params, common.ServiceNoSQL)
-	includeSP := shouldIncludeService(params, common.ServiceSavingsPlans)
 
 	// Compute (VM) recommendations — subscription-wide.
 	if includeCompute {
@@ -186,7 +185,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	// The call returns an empty slice so the service appears in the fan-out
 	// and will start returning data once the API stabilizes without requiring
 	// a scheduler change.
-	if includeSP {
+	if shouldIncludeService(params, common.ServiceSavingsPlansAll) {
 		goService(&spErr, func() {
 			spClient := newSavingsPlansClientFn(r.cred, r.subscriptionID, "")
 			spRecs, spErr = spClient.GetRecommendations(gctx, params)

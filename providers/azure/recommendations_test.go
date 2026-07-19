@@ -220,8 +220,8 @@ func TestRecommendationsClientAdapter_GetAllRecommendations(t *testing.T) {
 }
 
 // TestGetRecommendations_SavingsPlansServiceIncluded pins that shouldIncludeService
-// allows ServiceSavingsPlans through both when params.Service is empty (all-services
-// sweep) and when explicitly set to ServiceSavingsPlans, and does not include it
+// allows ServiceSavingsPlansAll through both when params.Service is empty (all-services
+// sweep) and when explicitly set to ServiceSavingsPlansAll, and does not include it
 // when a different service is requested. This ensures the SP goroutine added to the
 // fan-out in GetRecommendations is exercised on every scheduler collection run.
 func TestGetRecommendations_SavingsPlansServiceIncluded(t *testing.T) {
@@ -237,7 +237,7 @@ func TestGetRecommendations_SavingsPlansServiceIncluded(t *testing.T) {
 		},
 		{
 			name:     "explicit savingsplans service is included",
-			params:   common.RecommendationParams{Service: common.ServiceSavingsPlans},
+			params:   common.RecommendationParams{Service: common.ServiceSavingsPlansAll},
 			expected: true,
 		},
 		{
@@ -248,7 +248,7 @@ func TestGetRecommendations_SavingsPlansServiceIncluded(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := shouldIncludeService(tt.params, common.ServiceSavingsPlans)
+			got := shouldIncludeService(tt.params, common.ServiceSavingsPlansAll)
 			assert.Equal(t, tt.expected, got)
 		})
 	}
@@ -433,7 +433,7 @@ func TestMergeServiceResults_OrderIsStable(t *testing.T) {
 	dbRec := mkRec(common.ServiceRelationalDB, "database")
 	cacheRec := mkRec(common.ServiceCache, "cache")
 	cosmosRec := mkRec(common.ServiceNoSQL, "cosmosdb")
-	spRec := mkRec(common.ServiceSavingsPlans, "savingsplans")
+	spRec := mkRec(common.ServiceSavingsPlansAll, "savingsplans")
 	advisorRec := mkRec(common.ServiceCompute, "advisor") // Advisor produces Compute recs
 
 	// Replicate the exact call order from GetRecommendations.
