@@ -2,6 +2,8 @@ package secrets
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
@@ -9,16 +11,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestAzureResolver_DirectMethods tests the actual AzureResolver methods
-// These tests exercise the real code paths but may skip if Azure credentials are unavailable.
+// notFoundHandler simulates the Key Vault response for a missing secret.
+func notFoundHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error": map[string]any{"code": "SecretNotFound", "message": "Secret not found"},
+	})
+}
+
+// TestAzureResolver_DirectMethods tests the real constructor wiring. It makes
+// no requests, and TestMain pins the credential chain to a dummy
+// EnvironmentCredential, so construction is deterministic and offline.
 func TestAzureResolver_DirectMethods(t *testing.T) {
 	ctx := context.Background()
 
-	// Try to create an Azure resolver
 	resolver, err := NewAzureResolver(ctx, "https://test-vault.vault.azure.net/")
-	if err != nil {
-		t.Skipf("Skipping test: Azure config not available: %v", err)
-	}
+	require.NoError(t, err)
 	defer resolver.Close()
 
 	// Test that the resolver is properly configured
@@ -28,89 +37,67 @@ func TestAzureResolver_DirectMethods(t *testing.T) {
 
 // TestAzureResolver_GetSecret_NonExistent tests getting a non-existent secret.
 func TestAzureResolver_GetSecret_NonExistent(t *testing.T) {
-	ctx := context.Background()
+	resolver, server := newTestAzureResolver(t, notFoundHandler)
+	defer server.Close()
 
-	resolver, err := NewAzureResolver(ctx, "https://test-vault.vault.azure.net/")
-	if err != nil {
-		t.Skipf("Skipping test: Azure config not available: %v", err)
-	}
-	defer resolver.Close()
+	_, err := resolver.GetSecret(context.Background(), "cudly-test-nonexistent-secret-12345-xyz")
 
-	// Try to get a secret that definitely doesn't exist
-	_, err = resolver.GetSecret(ctx, "cudly-test-nonexistent-secret-12345-xyz")
-
-	// Should get an error (either not found or permission denied)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get secret")
 }
 
 // TestAzureResolver_GetSecretJSON_NonExistent tests getting a non-existent JSON secret.
 func TestAzureResolver_GetSecretJSON_NonExistent(t *testing.T) {
-	ctx := context.Background()
+	resolver, server := newTestAzureResolver(t, notFoundHandler)
+	defer server.Close()
 
-	resolver, err := NewAzureResolver(ctx, "https://test-vault.vault.azure.net/")
-	if err != nil {
-		t.Skipf("Skipping test: Azure config not available: %v", err)
-	}
-	defer resolver.Close()
+	result, err := resolver.GetSecretJSON(context.Background(), "cudly-test-nonexistent-json-secret-12345-xyz")
 
-	// Try to get a JSON secret that doesn't exist
-	result, err := resolver.GetSecretJSON(ctx, "cudly-test-nonexistent-json-secret-12345-xyz")
-
-	// Should get an error
 	assert.Error(t, err)
 	assert.Nil(t, result)
 }
 
 // TestAzureResolver_ListSecrets tests listing secrets.
 func TestAzureResolver_ListSecrets(t *testing.T) {
-	ctx := context.Background()
+	resolver, server := newTestAzureResolver(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"value": []map[string]any{}})
+	})
+	defer server.Close()
 
-	resolver, err := NewAzureResolver(ctx, "https://test-vault.vault.azure.net/")
-	if err != nil {
-		t.Skipf("Skipping test: Azure config not available: %v", err)
-	}
-	defer resolver.Close()
+	result, err := resolver.ListSecrets(context.Background(), "")
 
-	// List without filter
-	result, err := resolver.ListSecrets(ctx, "")
-
-	// Either succeeds or fails with permission error
-	if err == nil {
-		assert.NotNil(t, result)
-	} else {
-		assert.Contains(t, err.Error(), "failed to list secrets")
-	}
+	require.NoError(t, err)
+	assert.NotNil(t, result)
 }
 
-// TestAzureResolver_ListSecrets_WithFilter_Coverage_Direct tests listing secrets with a filter using direct resolver.
+// TestAzureResolver_ListSecrets_WithFilter_Coverage_Direct tests that the
+// client-side prefix filter is applied while listing.
 func TestAzureResolver_ListSecrets_WithFilter_Coverage_Direct(t *testing.T) {
-	ctx := context.Background()
+	resolver, server := newTestAzureResolver(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"value": []map[string]any{
+				{"id": "https://myvault.vault.azure.net/secrets/prod-db-creds"},
+				{"id": "https://myvault.vault.azure.net/secrets/dev-api-key"},
+			},
+		})
+	})
+	defer server.Close()
 
-	resolver, err := NewAzureResolver(ctx, "https://test-vault.vault.azure.net/")
-	if err != nil {
-		t.Skipf("Skipping test: Azure config not available: %v", err)
-	}
-	defer resolver.Close()
+	result, err := resolver.ListSecrets(context.Background(), "prod")
 
-	// List with filter
-	result, err := resolver.ListSecrets(ctx, "prod")
-
-	// Either succeeds or fails with permission error
-	if err == nil {
-		// Filter is applied client-side in Azure resolver
-		assert.NotNil(t, result)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, []string{"prod-db-creds"}, result)
 }
 
-// TestAzureResolver_Close_Idempotent tests that Close can be called multiple times.
+// TestAzureResolver_Close_Idempotent tests that Close can be called multiple
+// times. Constructor-only: no requests are made.
 func TestAzureResolver_Close_Idempotent(t *testing.T) {
 	ctx := context.Background()
 
 	resolver, err := NewAzureResolver(ctx, "https://test-vault.vault.azure.net/")
-	if err != nil {
-		t.Skipf("Skipping test: Azure config not available: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Close multiple times should not panic
 	err1 := resolver.Close()
@@ -133,9 +120,7 @@ func TestAzureResolver_DifferentVaultURLs(t *testing.T) {
 	for _, vaultURL := range vaultURLs {
 		t.Run(vaultURL, func(t *testing.T) {
 			resolver, err := NewAzureResolver(ctx, vaultURL)
-			if err != nil {
-				t.Skipf("Skipping test: Azure config not available for vault %s: %v", vaultURL, err)
-			}
+			require.NoError(t, err)
 			defer resolver.Close()
 
 			assert.Equal(t, vaultURL, resolver.vaultURL)
@@ -146,48 +131,30 @@ func TestAzureResolver_DifferentVaultURLs(t *testing.T) {
 
 // TestAzureResolver_ContextHandling tests context handling in Azure resolver.
 func TestAzureResolver_ContextHandling(t *testing.T) {
-	ctx := context.Background()
+	resolver, server := newTestAzureResolver(t, notFoundHandler)
+	defer server.Close()
 
-	resolver, err := NewAzureResolver(ctx, "https://test-vault.vault.azure.net/")
-	if err != nil {
-		t.Skipf("Skipping test: Azure config not available: %v", err)
-	}
-	defer resolver.Close()
-
-	// Test with canceled context
 	cancelledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	// GetSecret with canceled context
-	_, err = resolver.GetSecret(cancelledCtx, "test-secret")
-	// Should fail
+	// GetSecret with canceled context should fail before reaching the server.
+	_, err := resolver.GetSecret(cancelledCtx, "test-secret")
 	assert.Error(t, err)
 }
 
 // TestAzureResolver_EmptySecretID tests getting a secret with empty ID.
 func TestAzureResolver_EmptySecretID(t *testing.T) {
-	ctx := context.Background()
+	resolver, server := newTestAzureResolver(t, notFoundHandler)
+	defer server.Close()
 
-	resolver, err := NewAzureResolver(ctx, "https://test-vault.vault.azure.net/")
-	if err != nil {
-		t.Skipf("Skipping test: Azure config not available: %v", err)
-	}
-	defer resolver.Close()
-
-	// Empty secret ID
-	_, err = resolver.GetSecret(ctx, "")
+	_, err := resolver.GetSecret(context.Background(), "")
 	assert.Error(t, err)
 }
 
 // TestAzureResolver_SpecialCharactersInSecretID tests secret IDs with special characters.
 func TestAzureResolver_SpecialCharactersInSecretID(t *testing.T) {
-	ctx := context.Background()
-
-	resolver, err := NewAzureResolver(ctx, "https://test-vault.vault.azure.net/")
-	if err != nil {
-		t.Skipf("Skipping test: Azure config not available: %v", err)
-	}
-	defer resolver.Close()
+	resolver, server := newTestAzureResolver(t, notFoundHandler)
+	defer server.Close()
 
 	// Azure Key Vault secret names can contain alphanumeric and dashes
 	testIDs := []string{
@@ -198,8 +165,8 @@ func TestAzureResolver_SpecialCharactersInSecretID(t *testing.T) {
 
 	for _, id := range testIDs {
 		t.Run(id, func(t *testing.T) {
-			// These will fail since secrets don't exist
-			_, err := resolver.GetSecret(ctx, id)
+			// These fail because the mock vault returns 404 for every secret.
+			_, err := resolver.GetSecret(context.Background(), id)
 			assert.Error(t, err)
 		})
 	}
@@ -207,16 +174,10 @@ func TestAzureResolver_SpecialCharactersInSecretID(t *testing.T) {
 
 // TestAzureResolver_GetSecretJSON_RealMethod tests the GetSecretJSON error propagation.
 func TestAzureResolver_GetSecretJSON_RealMethod(t *testing.T) {
-	ctx := context.Background()
+	resolver, server := newTestAzureResolver(t, notFoundHandler)
+	defer server.Close()
 
-	resolver, err := NewAzureResolver(ctx, "https://test-vault.vault.azure.net/")
-	if err != nil {
-		t.Skipf("Skipping test: Azure config not available: %v", err)
-	}
-	defer resolver.Close()
-
-	// GetSecretJSON should fail because the secret doesn't exist
-	result, err := resolver.GetSecretJSON(ctx, "cudly-test-nonexistent-json-secret-xyz")
+	result, err := resolver.GetSecretJSON(context.Background(), "cudly-test-nonexistent-json-secret-xyz")
 
 	require.Error(t, err)
 	assert.Nil(t, result)
