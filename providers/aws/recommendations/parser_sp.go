@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -192,6 +193,11 @@ func (c *Client) parseSavingsPlansRecommendations(
 //     the same class rather than silently substituting 0. Callers must propagate
 //     this error and drop the recommendation so a corrupt money figure never
 //     reaches the scheduler or frontend.
+//   - non-nil pointer that parses to NaN or ±Inf: returns (0, error). Go's
+//     strconv.ParseFloat accepts "NaN", "Inf", "+Inf", "-Inf" (and Infinity
+//     variants) as valid with a nil error, so without this guard a corrupt
+//     non-finite money value would flow straight through to the scheduler and
+//     frontend. Reject non-finite values the same way as unparseable ones.
 func parseOptionalFloat(field string, s *string) (float64, error) {
 	if s == nil {
 		return 0, nil
@@ -199,6 +205,9 @@ func parseOptionalFloat(field string, s *string) (float64, error) {
 	val, err := strconv.ParseFloat(*s, 64)
 	if err != nil {
 		return 0, fmt.Errorf("failed to parse %s %q: %w", field, *s, err)
+	}
+	if math.IsNaN(val) || math.IsInf(val, 0) {
+		return 0, fmt.Errorf("%s %q is not a finite number", field, *s)
 	}
 	return val, nil
 }
