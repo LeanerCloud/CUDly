@@ -350,15 +350,55 @@ func TestParseSavingsPlanDetail_MoneyFieldUnparseable(t *testing.T) {
 				UpfrontCost:                aws.String("not-a-float"),
 			},
 		},
+		// NaN / ±Inf are accepted by strconv.ParseFloat with a nil error, so
+		// without an explicit non-finite guard these would flow through as a
+		// corrupt money value. They must be rejected like any unparseable field.
+		{
+			name: "NaN HourlyCommitmentToPurchase",
+			detail: &types.SavingsPlansPurchaseRecommendationDetail{
+				HourlyCommitmentToPurchase: aws.String("NaN"),
+			},
+		},
+		{
+			name: "Inf EstimatedMonthlySavingsAmount",
+			detail: &types.SavingsPlansPurchaseRecommendationDetail{
+				HourlyCommitmentToPurchase:    aws.String("1.0"),
+				EstimatedMonthlySavingsAmount: aws.String("+Inf"),
+			},
+		},
+		{
+			name: "negative Inf UpfrontCost",
+			detail: &types.SavingsPlansPurchaseRecommendationDetail{
+				HourlyCommitmentToPurchase: aws.String("1.0"),
+				UpfrontCost:                aws.String("-Inf"),
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec, err := client.parseSavingsPlanDetail(tt.detail, &params, types.SupportedSavingsPlansTypeComputeSp)
 			require.Error(t, err,
-				"present-but-unparseable money field must return an error, not a silently-fabricated $0")
+				"present-but-unparseable or non-finite money field must return an error, not a silently-fabricated value")
 			assert.Nil(t, rec,
-				"rec must be nil when a money field is unparseable")
+				"rec must be nil when a money field is unparseable or non-finite")
 		})
 	}
+}
+
+// TestParseOptionalFloat_RejectsNonFinite is the unit-level guard for the
+// NaN/±Inf money-parsing fix: strconv.ParseFloat accepts these strings with a
+// nil error, so parseOptionalFloat must reject them explicitly.
+func TestParseOptionalFloat_RejectsNonFinite(t *testing.T) {
+	for _, s := range []string{"NaN", "Inf", "+Inf", "-Inf", "Infinity", "-Infinity"} {
+		t.Run(s, func(t *testing.T) {
+			v, err := parseOptionalFloat("TestField", aws.String(s))
+			require.Error(t, err, "non-finite value %q must be rejected", s)
+			assert.Zero(t, v)
+		})
+	}
+	// Sanity: a normal finite value still parses.
+	v, err := parseOptionalFloat("TestField", aws.String("12.5"))
+	require.NoError(t, err)
+	assert.InDelta(t, 12.5, v, 0.0001)
 }
