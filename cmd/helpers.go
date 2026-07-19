@@ -256,8 +256,8 @@ func ApplyTargetCoverage(recs []common.Recommendation, targetPct float64, drops 
 	var skipped int
 	unsupportedSeen := make(map[common.CommitmentType]bool)
 
-	for _, rec := range recs {
-		adjusted, kept, missingSignal, dropReason := applyTargetCoverageOne(rec, targetPct, unsupportedSeen)
+	for i := range recs {
+		adjusted, kept, missingSignal, dropReason := applyTargetCoverageOne(recs[i], targetPct, unsupportedSeen)
 		if missingSignal {
 			skipped++
 		}
@@ -286,7 +286,7 @@ func ApplyTargetCoverage(recs []common.Recommendation, targetPct float64, drops 
 //
 // Split out of ApplyTargetCoverage to keep that function under gocyclo's
 // complexity threshold.
-func applyTargetCoverageOne(rec common.Recommendation, targetPct float64, unsupportedSeen map[common.CommitmentType]bool) (common.Recommendation, bool, bool, string) {
+func applyTargetCoverageOne(rec common.Recommendation, targetPct float64, unsupportedSeen map[common.CommitmentType]bool) (result common.Recommendation, kept bool, missingSignal bool, drop string) {
 	switch {
 	case common.IsSavingsPlan(rec.Service):
 		adjusted, ok := applyTargetCoverageSP(rec, targetPct)
@@ -320,7 +320,7 @@ func applyTargetCoverageOne(rec common.Recommendation, targetPct float64, unsupp
 // should be passed through unscaled (no signal) or dropped (target
 // unreachable). Caller distinguishes no-signal from drop via
 // rec.AverageInstancesUsedPerHour and uses dropReason for the summary.
-func applyTargetCoverageRI(rec common.Recommendation, targetPct float64) (common.Recommendation, bool, string) {
+func applyTargetCoverageRI(rec common.Recommendation, targetPct float64) (result common.Recommendation, ok bool, drop string) {
 	if rec.AverageInstancesUsedPerHour <= 0 {
 		// No signal — caller will pass through and count in the summary.
 		return rec, false, ""

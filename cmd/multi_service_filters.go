@@ -49,7 +49,7 @@ func applyFilters(recs []common.Recommendation, cfg *Config, instanceVersions ma
 // expected exclusions and are not counted). The flat boolean-filter checks
 // are delegated to passesDimensionFilters to keep this function under
 // gocyclo's complexity threshold.
-func processRecommendation(rec *common.Recommendation, cfg *Config, instanceVersions map[string][]InstanceEngineVersion, versionInfo map[string]MajorEngineVersionInfo, currentRegion string) (common.Recommendation, bool, string) {
+func processRecommendation(rec *common.Recommendation, cfg *Config, instanceVersions map[string][]InstanceEngineVersion, versionInfo map[string]MajorEngineVersionInfo, currentRegion string) (result common.Recommendation, include bool, dropReason string) {
 	// Filter to only recommendations for the current region being processed.
 	// This prevents duplicating recommendations across all regions.
 	// Skip for Savings Plans (account-level, not regional). No drop reason:
@@ -97,7 +97,7 @@ func passesDimensionFilters(rec *common.Recommendation, cfg *Config) bool {
 // should see in the end-of-run drop summary (currently only
 // --min-pool-size). Region, account, engine, and instance-type mismatches
 // are expected operator-scoping choices and return an empty reason.
-func passesDimensionFiltersWithReason(rec *common.Recommendation, cfg *Config) (bool, string) {
+func passesDimensionFiltersWithReason(rec *common.Recommendation, cfg *Config) (passes bool, dropReason string) {
 	if !shouldIncludeRegion(rec.Region, cfg) {
 		return false, ""
 	}
