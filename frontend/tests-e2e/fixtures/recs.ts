@@ -178,7 +178,23 @@ export async function mockApi(page: Page): Promise<MockHandle> {
     await jsonRoute(route, {
       id: 'user-smoke',
       email: 'smoke@example.com',
-      role: 'admin',
+      groups: [
+        '00000000-0000-5000-8000-000000000001',
+        '00000000-0000-5000-8000-000000000007',
+      ],
+    });
+  });
+
+  // Effective permissions mirror the Administrator + Purchaser group union.
+  // The purchase verb is deliberately explicit because it is carved out of
+  // admin:* in the production authorization model.
+  await page.route('**/api/auth/me/permissions', async (route) => {
+    record(route);
+    await jsonRoute(route, {
+      permissions: [
+        { action: 'admin', resource: '*' },
+        { action: 'execute', resource: 'purchases' },
+      ],
     });
   });
 
@@ -277,6 +293,10 @@ export async function mockApi(page: Page): Promise<MockHandle> {
     }
     if (method === 'GET') {
       await jsonRoute(route, []);
+      return;
+    }
+    if (method === 'PUT' && new URL(route.request().url()).pathname.endsWith('/accounts')) {
+      await jsonRoute(route, {});
       return;
     }
     await route.fulfill({ status: 405, body: '' });
