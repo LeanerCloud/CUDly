@@ -31,6 +31,23 @@ type AzureKeyVaultSigner struct {
 	once       sync.Once
 }
 
+// newAzureKeyVaultClient builds the real AzureKeyVaultClient using the
+// standard azidentity default credential chain. It is a package-level var
+// (rather than a call baked into NewAzureKeyVaultSigner) so tests can
+// override it with a fake and exercise the fully-configured factory branch
+// without spawning the live credential chain (az/pwsh, macOS keychain, etc).
+var newAzureKeyVaultClient = func(vaultURL string) (AzureKeyVaultClient, error) {
+	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		return nil, fmt.Errorf("oidc: azure default credential: %w", err)
+	}
+	client, err := azkeys.NewClient(vaultURL, cred, nil)
+	if err != nil {
+		return nil, fmt.Errorf("oidc: azkeys client: %w", err)
+	}
+	return client, nil
+}
+
 // NewAzureKeyVaultSigner constructs a signer against a Key Vault using
 // the standard azidentity default credential chain. vaultURL is the
 // full vault URL (e.g. https://cudly-vault.vault.azure.net/); keyName
@@ -39,13 +56,9 @@ func NewAzureKeyVaultSigner(ctx context.Context, vaultURL, keyName string) (*Azu
 	if vaultURL == "" || keyName == "" {
 		return nil, fmt.Errorf("oidc: azure key vault signer requires vaultURL + keyName")
 	}
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	client, err := newAzureKeyVaultClient(vaultURL)
 	if err != nil {
-		return nil, fmt.Errorf("oidc: azure default credential: %w", err)
-	}
-	client, err := azkeys.NewClient(vaultURL, cred, nil)
-	if err != nil {
-		return nil, fmt.Errorf("oidc: azkeys client: %w", err)
+		return nil, err
 	}
 	return NewAzureKeyVaultSignerFromClient(client, keyName, ""), nil
 }

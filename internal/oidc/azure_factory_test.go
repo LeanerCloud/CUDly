@@ -181,3 +181,39 @@ func TestNewSignerFromEnv_AzureHalfConfigured(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// #1464 -- Azure factory branch fully configured (both env vars set)
+// ---------------------------------------------------------------------------
+
+// TestNewSignerFromEnv_AzureFullyConfigured verifies that NewSignerFromEnv
+// reaches NewAzureKeyVaultSigner's client-construction path when both Azure
+// env vars are set. It overrides the package-level newAzureKeyVaultClient
+// factory hook with a fake so the test never spawns the real
+// azidentity.NewDefaultAzureCredential chain (az/pwsh, macOS keychain
+// prompts) that made this branch untestable before #1464.
+func TestNewSignerFromEnv_AzureFullyConfigured(t *testing.T) {
+	t.Setenv(envSourceCloud, "azure")
+	t.Setenv(envAWSSigningKeyID, "")
+	t.Setenv(envGCPKeyResource, "")
+
+	const wantVaultURL = "https://my-vault.vault.azure.net/"
+	t.Setenv(envAzureVaultURL, wantVaultURL)
+	t.Setenv(envAzureKeyName, "my-key")
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	var gotVaultURL string
+	origFactory := newAzureKeyVaultClient
+	newAzureKeyVaultClient = func(vaultURL string) (AzureKeyVaultClient, error) {
+		gotVaultURL = vaultURL
+		return &fakeAzureKeyVaultClient{key: &key.PublicKey}, nil
+	}
+	t.Cleanup(func() { newAzureKeyVaultClient = origFactory })
+
+	signer, err := NewSignerFromEnv(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, signer)
+	assert.Equal(t, wantVaultURL, gotVaultURL, "factory must receive the configured vault URL")
+}
