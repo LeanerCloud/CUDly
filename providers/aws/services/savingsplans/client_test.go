@@ -1303,6 +1303,47 @@ func TestLookupOfferingID_DeterministicSortAcrossPages(t *testing.T) {
 		"findOfferingID must sort across pages before selecting")
 }
 
+// TestLookupOfferingID_CtxCancelledBeforePage asserts that lookupOfferingID
+// returns context.Canceled immediately when the context is already cancelled
+// before the first pagination iteration, without calling the AWS API (issue #515).
+func TestLookupOfferingID_CtxCancelledBeforePage(t *testing.T) {
+	mockSP := &MockSavingsPlansClient{}
+	t.Cleanup(func() { mockSP.AssertExpectations(t) })
+	client := &Client{client: mockSP, region: "us-east-1", planType: types.SavingsPlanTypeCompute}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before the first iteration
+
+	// The mock must not be called: ctx.Err() fires at the top of the loop.
+	_, err := client.findOfferingID(ctx, spRec(), "")
+
+	assert.ErrorIs(t, err, context.Canceled)
+	mockSP.AssertNumberOfCalls(t, "DescribeSavingsPlansOfferings", 0)
+}
+
+// TestLookupOfferingID_EmptyStringTokenEndsPagination asserts that a page whose
+// NextToken is a pointer to an empty string (rather than nil) is treated as the
+// terminal page and does not cause an extra API call (issue #515).
+func TestLookupOfferingID_EmptyStringTokenEndsPagination(t *testing.T) {
+	mockSP := &MockSavingsPlansClient{}
+	t.Cleanup(func() { mockSP.AssertExpectations(t) })
+	client := &Client{client: mockSP, region: "us-east-1", planType: types.SavingsPlanTypeCompute}
+
+	// Single page with zero results and NextToken = ""; must not loop again.
+	mockSP.On("DescribeSavingsPlansOfferings", mock.Anything, mock.Anything).
+		Return(&savingsplans.DescribeSavingsPlansOfferingsOutput{
+			SearchResults: []types.SavingsPlanOffering{},
+			NextToken:     aws.String(""),
+		}, nil).Once()
+
+	_, err := client.findOfferingID(context.Background(), spRec(), "")
+
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "no Savings Plans offerings found")
+	}
+	mockSP.AssertNumberOfCalls(t, "DescribeSavingsPlansOfferings", 1)
+}
+
 // --- C1 adversarial-review regression tests ---
 // These tests pin the fix for the wrong-family purchase defect: an EC2Instance
 // SP recommendation carries InstanceFamily and Region from Cost Explorer, and
