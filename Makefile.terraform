@@ -3,7 +3,7 @@
 
 .PHONY: help deploy plan destroy profile-list profile-show clean clean-locks \
         output aws-dev aws-prod azure-dev gcp-dev quick-plan aws-dev-plan quick-deploy \
-        validate fmt state-list state-show docker-build docker-skip frontend-only frontend-skip
+        validate fmt state-list state-show frontend-only
 
 # Default profile settings
 PROVIDER ?= aws
@@ -119,21 +119,8 @@ state-list: ## List resources in Terraform state
 state-show: ## Show detailed state for a resource
 	@cd terraform/environments/$(PROVIDER)/$(PROFILE) && terraform state show $(RESOURCE)
 
-# Docker operations
-docker-build: ## Build Docker image only
-	@echo "🔨 Building Docker image..."
-	@./scripts/tf-deploy.sh $(PROVIDER) $(PROFILE) apply -var="skip_docker_push=true"
-
-docker-skip: ## Deploy without Docker build
-	@echo "⏭️  Deploying without Docker build..."
-	@./scripts/tf-deploy.sh $(PROVIDER) $(PROFILE) apply -var="skip_docker_build=true"
-
 # Frontend operations
 frontend-only: ## Deploy frontend only
 	@echo "🎨 Deploying frontend..."
 	@cd terraform/environments/$(PROVIDER)/$(PROFILE) && \
 		terraform apply -var-file="../../../profiles/$(PROVIDER)/$(PROFILE).tfvars" -target=module.frontend
-
-frontend-skip: ## Deploy without frontend
-	@echo "⏭️  Deploying without frontend..."
-	@./scripts/tf-deploy.sh $(PROVIDER) $(PROFILE) apply -var="enable_frontend_build=false"
