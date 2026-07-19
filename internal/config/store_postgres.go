@@ -352,7 +352,7 @@ func (s *PostgresStore) GetServiceConfig(ctx context.Context, provider, service 
 
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("service config not found for %s:%s", provider, service)
+			return nil, fmt.Errorf("service config not found for %s:%s: %w", provider, service, ErrNotFound)
 		}
 		return nil, fmt.Errorf("failed to get service config: %w", err)
 	}
@@ -1843,7 +1843,7 @@ func (s *PostgresStore) GetActivePurchaseHistory(ctx context.Context, asOf time.
 // number, unknown provider) matches account_id with no provider gate. Providers
 // are sorted for deterministic SQL. The OR is wrapped in parentheses so it
 // composes with the surrounding AND chain.
-func appendAccountPredicate(conds []string, args []any, accountIDs []string, externalIDsByProvider map[string][]string) ([]string, []any) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
+func appendAccountPredicate(conds []string, args []any, accountIDs []string, externalIDsByProvider map[string][]string) (outConds []string, outArgs []any) {
 	if len(accountIDs) == 0 && len(externalIDsByProvider) == 0 {
 		return conds, args
 	}

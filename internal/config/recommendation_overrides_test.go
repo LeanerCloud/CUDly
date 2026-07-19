@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -253,4 +254,21 @@ func TestResolveAccountConfigsForRecs_OverrideErrorPropagates(t *testing.T) {
 	got, err := ResolveAccountConfigsForRecs(context.Background(), reader, recs)
 	assert.Error(t, err)
 	assert.Empty(t, got)
+}
+
+// TestResolveAccountConfigsForRecs_ErrNotFoundAbsorbed verifies that when
+// GetServiceConfig returns a wrapped ErrNotFound (the no-rows case), the
+// lookup treats it as absent rather than propagating it as an error. This
+// is the root scenario of issue #263: the INFO log firing on every refresh
+// for services that legitimately have no global config row.
+func TestResolveAccountConfigsForRecs_ErrNotFoundAbsorbed(t *testing.T) {
+	reader := &fakeAccountConfigReader{
+		globalErr: fmt.Errorf("service config not found for aws:rds: %w", ErrNotFound),
+	}
+	recs := []RecommendationRecord{acctRec("acct-A", "aws", "rds")}
+
+	got, err := ResolveAccountConfigsForRecs(context.Background(), reader, recs)
+	assert.NoError(t, err, "ErrNotFound from GetServiceConfig must not propagate as an error")
+	assert.Empty(t, got, "triple skipped when global is absent and no override")
+	assert.Equal(t, 1, reader.globalCalls, "global fetched once")
 }

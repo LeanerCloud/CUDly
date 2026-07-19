@@ -131,7 +131,7 @@ func (s *testablePostgresStore) GetServiceConfig(ctx context.Context, provider, 
 
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, errors.New("service config not found")
+			return nil, fmt.Errorf("service config not found for %s:%s: %w", provider, service, ErrNotFound)
 		}
 		return nil, err
 	}
