@@ -332,6 +332,21 @@ func TestValidateOffering_InvalidSKU(t *testing.T) {
 
 // -- GetRecommendations --
 
+// TestRecommendationsListArgs_UsesSubscriptionScope is the regression guard for
+// the pager-construction bug: NewListPager's first argument must be the
+// subscription billing scope, not the ODATA filter (the wrong shape produced a
+// malformed URL that errored on every request, breaking Managed Redis recs).
+// The injected mock pager bypasses NewListPager, so this asserts the args helper.
+func TestRecommendationsListArgs_UsesSubscriptionScope(t *testing.T) {
+	c := NewClient(nil, "sub-123", "eastus")
+	scope, opts := c.recommendationsListArgs()
+	assert.Equal(t, "/subscriptions/sub-123", scope,
+		"first NewListPager arg must be the subscription scope, not the filter")
+	require.NotNil(t, opts)
+	require.NotNil(t, opts.Filter, "the ODATA filter must be passed via options.Filter")
+	assert.Contains(t, *opts.Filter, "resourceType eq 'RedisCache'")
+}
+
 func TestGetRecommendations_EmptyPager(t *testing.T) {
 	c := NewClient(nil, "sub", "eastus")
 	c.SetRecommendationsPager(&mockRecommendationsPager{
