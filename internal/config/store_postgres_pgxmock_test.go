@@ -1046,7 +1046,7 @@ func TestPGXMock_GetActivePurchaseHistory_Unscoped(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	rows := pgxmock.NewRows(purchaseHistoryCols).AddRow(purchaseHistoryRow(now, "aws", "acct-1")...)
 	mock.ExpectQuery(
-		`SELECT account_id, purchase_id, .*revocation_window_closes_at, revoked_at, revoked_via, support_case_id FROM purchase_history WHERE term > 0 AND timestamp \+ make_interval\(hours => term \* 8760\) >= \$1 AND revoked_at IS NULL ORDER BY timestamp DESC$`,
+		`SELECT account_id, purchase_id, .*revocation_window_closes_at, revoked_at, revoked_via, support_case_id, offering_class, listing_id, listing_state FROM purchase_history WHERE term > 0 AND timestamp \+ make_interval\(hours => term \* 8760\) >= \$1 AND revoked_at IS NULL ORDER BY timestamp DESC$`,
 	).WithArgs(now).WillReturnRows(rows)
 
 	records, err := store.GetActivePurchaseHistory(ctx, now, nil, nil)
