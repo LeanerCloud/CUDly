@@ -407,6 +407,16 @@ func TestParseOptionalFloat_RejectsNonFinite(t *testing.T) {
 	assert.Zero(t, z)
 }
 
+// TestUtilizationParseFloat_DegradesNonFinite guards the warn-and-zero
+// utilization parser: NaN/Inf must degrade to 0 so a single non-finite hours
+// value can't poison the utilization aggregates (NaN propagates through sums).
+func TestUtilizationParseFloat_DegradesNonFinite(t *testing.T) {
+	for _, s := range []string{"NaN", "Inf", "+Inf", "-Inf", "not-a-number"} {
+		assert.Zero(t, parseFloat(s), "non-finite/unparseable %q must degrade to 0", s)
+	}
+	assert.InDelta(t, 42.5, parseFloat("42.5"), 0.0001)
+}
+
 // TestRICostParsers_RejectNonFiniteAndNegative verifies the RI money parsers
 // (parseCostInformation, parseAWSCostDetails) reject NaN/Inf/negative CE money
 // values -- the same class the SP path rejects -- since both now route through
