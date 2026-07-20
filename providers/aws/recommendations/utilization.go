@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"strconv"
 	"time"
 
@@ -151,6 +152,14 @@ func parseFloat(s string) float64 {
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil {
 		log.Printf("warning: failed to parse float %q: %v", s, err)
+		return 0
+	}
+	// Degrade non-finite values to 0: strconv.ParseFloat accepts "NaN"/"Inf"
+	// with a nil error, and a single NaN accumulated into purchasedHours /
+	// totalActualHours / unusedHours would poison every downstream utilization
+	// aggregate (NaN propagates through all arithmetic).
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		log.Printf("warning: non-finite float %q treated as 0", s)
 		return 0
 	}
 	return f

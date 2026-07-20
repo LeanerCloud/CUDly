@@ -77,6 +77,38 @@ func TestParseRecommendedQuantity(t *testing.T) {
 			expected:    0,
 			expectError: true,
 		},
+		{
+			name: "NaN quantity rejected",
+			details: &types.ReservationPurchaseRecommendationDetail{
+				RecommendedNumberOfInstancesToPurchase: aws.String("NaN"),
+			},
+			expected:    0,
+			expectError: true,
+		},
+		{
+			name: "Inf quantity rejected",
+			details: &types.ReservationPurchaseRecommendationDetail{
+				RecommendedNumberOfInstancesToPurchase: aws.String("+Inf"),
+			},
+			expected:    0,
+			expectError: true,
+		},
+		{
+			name: "negative float quantity rejected",
+			details: &types.ReservationPurchaseRecommendationDetail{
+				RecommendedNumberOfInstancesToPurchase: aws.String("-3.0"),
+			},
+			expected:    0,
+			expectError: true,
+		},
+		{
+			name: "negative int quantity rejected",
+			details: &types.ReservationPurchaseRecommendationDetail{
+				RecommendedNumberOfInstancesToPurchase: aws.String("-3"),
+			},
+			expected:    0,
+			expectError: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -305,21 +337,21 @@ func TestParseRecommendationDetail_MalformedCostFields(t *testing.T) {
 			mutate: func(d *types.ReservationPurchaseRecommendationDetail) {
 				d.UpfrontCost = aws.String("not-a-number")
 			},
-			errContains: `failed to parse upfront cost "not-a-number"`,
+			errContains: `failed to parse UpfrontCost "not-a-number"`,
 		},
 		{
 			name: "malformed on-demand cost",
 			mutate: func(d *types.ReservationPurchaseRecommendationDetail) {
 				d.EstimatedMonthlyOnDemandCost = aws.String("$650.00")
 			},
-			errContains: `failed to parse estimated monthly on-demand cost "$650.00"`,
+			errContains: `failed to parse EstimatedMonthlyOnDemandCost "$650.00"`,
 		},
 		{
 			name: "malformed recurring monthly cost",
 			mutate: func(d *types.ReservationPurchaseRecommendationDetail) {
 				d.RecurringStandardMonthlyCost = aws.String("")
 			},
-			errContains: `failed to parse recurring standard monthly cost ""`,
+			errContains: `failed to parse RecurringStandardMonthlyCost ""`,
 		},
 	}
 
@@ -537,6 +569,18 @@ func TestParseRIUtilizationSignals(t *testing.T) {
 			details: &types.ReservationPurchaseRecommendationDetail{
 				AverageNumberOfInstancesUsedPerHour: aws.String("0"),
 				AverageUtilization:                  aws.String("0.0"),
+			},
+			wantAvgInstances: 0,
+			wantUtilization:  0,
+		},
+		{
+			// NaN/Inf parse to a nil error under strconv.ParseFloat; they must
+			// degrade to 0, not be stored as a live signal (NaN <= 0 is false,
+			// so a stored NaN would drive NaN purchase counts in sizing).
+			name: "non-finite values degrade to zero",
+			details: &types.ReservationPurchaseRecommendationDetail{
+				AverageNumberOfInstancesUsedPerHour: aws.String("NaN"),
+				AverageUtilization:                  aws.String("+Inf"),
 			},
 			wantAvgInstances: 0,
 			wantUtilization:  0,

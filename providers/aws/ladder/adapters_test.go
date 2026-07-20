@@ -268,6 +268,25 @@ func TestSPLister_InvalidCommitmentFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "cannot parse Commitment")
 }
 
+// TestSPLister_NonFiniteOrNegativeCommitmentFails verifies that a "NaN"/"Inf"
+// or negative Commitment (which strconv.ParseFloat accepts / passes through)
+// fails loud rather than flowing into the ladder layer-state SP-cost totals.
+func TestSPLister_NonFiniteOrNegativeCommitmentFails(t *testing.T) {
+	for _, bad := range []string{"NaN", "Inf", "-Inf", "-1.5"} {
+		t.Run(bad, func(t *testing.T) {
+			sp := makeSPEntry("sp-nonfinite", string(sptypes.SavingsPlanTypeCompute), bad, "", sptypes.SavingsPlanStateActive)
+			mock := &mockDescribeSP{
+				pages: []*sdksp.DescribeSavingsPlansOutput{{SavingsPlans: []sptypes.SavingsPlan{sp}}},
+			}
+			lister := newSPLister(mock)
+
+			_, err := lister.ListActiveSPs(context.Background())
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "is not a finite non-negative number")
+		})
+	}
+}
+
 // TestSPLister_BadDatesFail verifies fail-loud on missing or unparseable
 // Start/End dates: a silently zero EndDate would drop the SP from
 // sumExpiringSPHourlyCost and understate expiring commitment.
