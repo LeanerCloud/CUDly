@@ -379,7 +379,7 @@ func TestHandler_HandleRequest_PutConfig(t *testing.T) {
 	}, nil)
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
-	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
+	mockAuth.On("ValidateCSRFToken", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, apiKey: "test-key"}
 
@@ -975,11 +975,11 @@ func TestHandler_HandleRequest_GetUpcomingPurchases(t *testing.T) {
 		},
 	}
 
-	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
+	mockStore.On("ListPurchasePlans", mock.Anything, config.PurchasePlanFilter{}).Return(plans, nil)
 	// New: handler now enumerates pending executions per PR #213. Fixture
 	// supplies one pending exec for the plan above so the integration test
 	// still observes a single upcoming row.
-	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{
+	mockStore.On("GetPendingExecutions", mock.Anything).Return([]config.PurchaseExecution{
 		{
 			ExecutionID: "exec-int-1",
 			PlanID:      plans[0].ID,
@@ -1034,8 +1034,8 @@ func TestHandler_HandleRequest_GetPlannedPurchases(t *testing.T) {
 		{ID: "11111111-1111-1111-1111-111111111111", Name: "Test Plan", Services: map[string]config.ServiceConfig{"aws/rds": {Provider: "aws", Service: "rds"}}},
 	}
 
-	mockStore.On("GetPlannedExecutions", ctx, mock.Anything, mock.Anything).Return(executions, nil)
-	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
+	mockStore.On("GetPlannedExecutions", mock.Anything, mock.Anything, mock.Anything).Return(executions, nil)
+	mockStore.On("ListPurchasePlans", mock.Anything, config.PurchasePlanFilter{}).Return(plans, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, corsAllowedOrigin: "*", apiKey: "test-key"}
 
@@ -1068,7 +1068,7 @@ func TestHandler_HandleRequest_PausePlannedPurchase(t *testing.T) {
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	paused := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "paused"}
-	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "running"}, "paused", mock.Anything).Return(paused, nil)
+	mockStore.On("TransitionExecutionStatus", mock.Anything, "11111111-1111-1111-1111-111111111111", []string{"pending", "running"}, "paused", mock.Anything).Return(paused, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, corsAllowedOrigin: "*", apiKey: "test-key"}
 
@@ -1103,7 +1103,7 @@ func TestHandler_HandleRequest_ResumePlannedPurchase(t *testing.T) {
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	resumed := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "pending"}
-	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"paused"}, "pending", mock.Anything).Return(resumed, nil)
+	mockStore.On("TransitionExecutionStatus", mock.Anything, "11111111-1111-1111-1111-111111111111", []string{"paused"}, "pending", mock.Anything).Return(resumed, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, corsAllowedOrigin: "*", apiKey: "test-key"}
 
@@ -1138,7 +1138,7 @@ func TestHandler_HandleRequest_RunPlannedPurchase(t *testing.T) {
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	transitioned := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "running"}
-	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "running", mock.Anything).Return(transitioned, nil)
+	mockStore.On("TransitionExecutionStatus", mock.Anything, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "running", mock.Anything).Return(transitioned, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, corsAllowedOrigin: "*", apiKey: "test-key"}
 
@@ -1173,7 +1173,7 @@ func TestHandler_HandleRequest_DeletePlannedPurchase(t *testing.T) {
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	canceled := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "canceled"}
-	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "canceled", mock.Anything).Return(canceled, nil)
+	mockStore.On("TransitionExecutionStatus", mock.Anything, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "canceled", mock.Anything).Return(canceled, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, corsAllowedOrigin: "*", apiKey: "test-key"}
 
@@ -1212,9 +1212,9 @@ func TestHandler_HandleRequest_CreatePlannedPurchases(t *testing.T) {
 		RampSchedule: config.RampSchedule{StepIntervalDays: 7},
 	}
 
-	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(plan, nil)
-	mockStore.On("SavePurchaseExecution", ctx, mock.Anything).Return(nil)
-	mockStore.On("UpdatePurchasePlan", ctx, mock.Anything).Return(nil)
+	mockStore.On("GetPurchasePlan", mock.Anything, "11111111-1111-1111-1111-111111111111").Return(plan, nil)
+	mockStore.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
+	mockStore.On("UpdatePurchasePlan", mock.Anything, mock.Anything).Return(nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, corsAllowedOrigin: "*", apiKey: "test-key"}
 
@@ -1281,7 +1281,7 @@ func TestHandler_HandleRequest_DeleteUser_SelfDeletion(t *testing.T) {
 	adminSession := &Session{UserID: adminUserID, Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
-	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
+	mockAuth.On("ValidateCSRFToken", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	handler := &Handler{auth: mockAuth, apiKey: "test-key"}
 
