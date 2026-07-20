@@ -25,6 +25,23 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
 
+// maxRecsPages caps Consumption API recommendation pagination (matches the
+// sibling Azure service clients, e.g. cache/client.go).
+const maxRecsPages = 10
+
+// recommendationsListArgs builds the (scope, options) for the Consumption
+// ReservationRecommendations pager. NewListPager's first argument is the
+// billing scope (the subscription), NOT the ODATA filter -- passing the filter
+// as the scope produces a malformed URL where every request errors (the exact
+// failure mode documented in compute/client.go). The filter goes in
+// options.Filter. Extracted so a unit test can assert the scope shape without a
+// real Azure client (the injected mock pager bypasses NewListPager entirely).
+func (c *ManagedRedisClient) recommendationsListArgs() (string, *armconsumption.ReservationRecommendationsClientListOptions) {
+	scope := fmt.Sprintf("/subscriptions/%s", c.subscriptionID)
+	filter := "properties/scope eq 'Shared' and properties/resourceType eq 'RedisCache'"
+	return scope, &armconsumption.ReservationRecommendationsClientListOptions{Filter: &filter}
+}
+
 // HTTPClient interface for HTTP operations (enables mocking)
 type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
@@ -126,11 +143,17 @@ func (c *ManagedRedisClient) GetRecommendations(ctx context.Context, params comm
 		if err != nil {
 			return nil, fmt.Errorf("failed to create consumption client: %w", err)
 		}
-		filter := "properties/scope eq 'Shared' and properties/resourceType eq 'RedisCache'"
-		pager = client.NewListPager(filter, &armconsumption.ReservationRecommendationsClientListOptions{})
+		scope, opts := c.recommendationsListArgs()
+		pager = client.NewListPager(scope, opts)
 	}
 
-	for pager.More() {
+	for pageIdx := 0; pager.More(); pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+		}
+		if pageIdx >= maxRecsPages {
+			return nil, fmt.Errorf("managedredis: GetRecommendations pagination cap (%d pages) reached", maxRecsPages)
+		}
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get Redis Cache recommendations: %w", err)
