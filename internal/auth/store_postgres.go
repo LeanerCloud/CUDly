@@ -435,7 +435,11 @@ func (s *PostgresStore) CreateAdminIfNone(ctx context.Context, user *User) (bool
 	// Rollback is a no-op after a successful Commit; on any earlier return
 	// it also releases the advisory lock. Matches the project convention
 	// (e.g. internal/config/store_postgres.go) for deferred rollback.
-	defer tx.Rollback(ctx) //nolint:errcheck
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil {
+			_ = rbErr // rollback error intentionally discarded; Postgres logs rollback failures
+		}
+	}()
 
 	// Serialize against concurrent bootstrap calls and against the
 	// min-one-admin deferred trigger (see adminInvariantAdvisoryLockKey).
