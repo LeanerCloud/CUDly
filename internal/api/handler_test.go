@@ -918,11 +918,11 @@ func TestHandler_HandleRequest_GetDashboardSummary(t *testing.T) {
 		DefaultCoverage: 80.0,
 	}
 
-	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(recommendations, nil)
-	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
+	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return(recommendations, nil)
+	mockStore.On("GetGlobalConfig", mock.Anything).Return(globalCfg, nil)
 	// No account_id / account_ids filter → calculateCommitmentMetrics fetches the
 	// uncapped active set across all accounts via GetActivePurchaseHistory.
-	mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("GetActivePurchaseHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 
 	handler := &Handler{
 		scheduler:         mockScheduler,
