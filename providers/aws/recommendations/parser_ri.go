@@ -94,10 +94,14 @@ func (c *Client) parseRIUtilizationSignals(rec *common.Recommendation, details *
 	// than being stored as a live signal. The downstream --target-coverage
 	// guards are all `<= 0`, and NaN <= 0 is false, so a stored NaN would be
 	// treated as a real signal and produce NaN purchase counts.
+	//
+	// The field label carries service/account context so a warning still
+	// identifies which row was corrupt (the pre-refactor inline logs did).
+	ctx := fmt.Sprintf("service=%s account=%s", rec.Service, rec.Account)
 	rec.AverageInstancesUsedPerHour = parseOptionalFloatOrWarn(
-		"AverageNumberOfInstancesUsedPerHour", details.AverageNumberOfInstancesUsedPerHour)
+		"AverageNumberOfInstancesUsedPerHour ("+ctx+")", details.AverageNumberOfInstancesUsedPerHour)
 	rec.RecommendedUtilization = parseOptionalFloatOrWarn(
-		"AverageUtilization", details.AverageUtilization)
+		"AverageUtilization ("+ctx+")", details.AverageUtilization)
 }
 
 // parseRecommendedQuantity extracts the recommended quantity from details
@@ -112,14 +116,18 @@ func (c *Client) parseRecommendedQuantity(details *types.ReservationPurchaseReco
 	_, err := fmt.Sscanf(qty, "%f", &count)
 	if err != nil {
 		if intCount, atoiErr := strconv.Atoi(qty); atoiErr == nil {
+			if intCount < 0 {
+				return 0, fmt.Errorf("recommended quantity %q is negative", qty)
+			}
 			return intCount, nil
 		}
 		return 0, fmt.Errorf("failed to parse quantity '%s' as float or int", qty)
 	}
 	// Sscanf %f accepts "NaN"/"Inf"; a non-finite quantity would corrupt the
-	// purchase count (int(math.Round(NaN)) is undefined). Fail loud.
-	if math.IsNaN(count) || math.IsInf(count, 0) {
-		return 0, fmt.Errorf("recommended quantity %q is not a finite number", qty)
+	// purchase count (int(math.Round(NaN)) is undefined). A negative count is
+	// likewise invalid for a purchase quantity. Fail loud on both.
+	if math.IsNaN(count) || math.IsInf(count, 0) || count < 0 {
+		return 0, fmt.Errorf("recommended quantity %q is not a finite non-negative number", qty)
 	}
 
 	return int(math.Round(count)), nil

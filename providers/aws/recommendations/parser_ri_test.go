@@ -77,6 +77,38 @@ func TestParseRecommendedQuantity(t *testing.T) {
 			expected:    0,
 			expectError: true,
 		},
+		{
+			name: "NaN quantity rejected",
+			details: &types.ReservationPurchaseRecommendationDetail{
+				RecommendedNumberOfInstancesToPurchase: aws.String("NaN"),
+			},
+			expected:    0,
+			expectError: true,
+		},
+		{
+			name: "Inf quantity rejected",
+			details: &types.ReservationPurchaseRecommendationDetail{
+				RecommendedNumberOfInstancesToPurchase: aws.String("+Inf"),
+			},
+			expected:    0,
+			expectError: true,
+		},
+		{
+			name: "negative float quantity rejected",
+			details: &types.ReservationPurchaseRecommendationDetail{
+				RecommendedNumberOfInstancesToPurchase: aws.String("-3.0"),
+			},
+			expected:    0,
+			expectError: true,
+		},
+		{
+			name: "negative int quantity rejected",
+			details: &types.ReservationPurchaseRecommendationDetail{
+				RecommendedNumberOfInstancesToPurchase: aws.String("-3"),
+			},
+			expected:    0,
+			expectError: true,
+		},
 	}
 
 	for _, tt := range tests {

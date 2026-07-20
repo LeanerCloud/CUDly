@@ -3,6 +3,7 @@ package ladder
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -157,6 +158,14 @@ func mapActiveSP(sp sptypes.SavingsPlan) (ActiveSP, error) {
 	if err != nil {
 		return ActiveSP{}, fmt.Errorf("ListActiveSPs: cannot parse Commitment %q for SP %s: %w",
 			commitment, *sp.SavingsPlanId, err)
+	}
+	// strconv.ParseFloat accepts "NaN"/"Inf" with a nil error; a non-finite or
+	// negative hourly commitment would flow through sumSPHourlyCost /
+	// sumExpiringSPHourlyCost into the ladder layer-state totals the engine
+	// sizes purchases from. Fail loud (a commitment is a non-negative money rate).
+	if math.IsNaN(hourly) || math.IsInf(hourly, 0) || hourly < 0 {
+		return ActiveSP{}, fmt.Errorf("ListActiveSPs: Commitment %q for SP %s is not a finite non-negative number",
+			commitment, *sp.SavingsPlanId)
 	}
 	start, err := parseSPDate("Start", sp.Start, *sp.SavingsPlanId)
 	if err != nil {
