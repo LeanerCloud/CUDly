@@ -198,6 +198,10 @@ func (c *Client) parseSavingsPlansRecommendations(
 //     variants) as valid with a nil error, so without this guard a corrupt
 //     non-finite money value would flow straight through to the scheduler and
 //     frontend. Reject non-finite values the same way as unparseable ones.
+//   - non-nil pointer that parses to a negative value: returns (0, error). Every
+//     field this parses (SP/RI cost, commitment, savings, savings %, utilization)
+//     is non-negative by construction; a negative is corrupt in the same way a
+//     non-finite value is. Mirrors the repo's stricter parseSPFloat helper.
 func parseOptionalFloat(field string, s *string) (float64, error) {
 	if s == nil {
 		return 0, nil
@@ -208,6 +212,9 @@ func parseOptionalFloat(field string, s *string) (float64, error) {
 	}
 	if math.IsNaN(val) || math.IsInf(val, 0) {
 		return 0, fmt.Errorf("%s %q is not a finite number", field, *s)
+	}
+	if val < 0 {
+		return 0, fmt.Errorf("%s %q is negative, which is invalid for a financial metric", field, *s)
 	}
 	return val, nil
 }
