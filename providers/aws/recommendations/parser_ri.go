@@ -89,20 +89,15 @@ func (c *Client) parseRecommendationDetail(ctx context.Context, details *types.R
 // SDK; nil or unparseable values leave the destination at zero, which the
 // --target-coverage sizing path treats as "no signal" and skips.
 func (c *Client) parseRIUtilizationSignals(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) {
-	if details.AverageNumberOfInstancesUsedPerHour != nil {
-		if v, err := strconv.ParseFloat(*details.AverageNumberOfInstancesUsedPerHour, 64); err == nil {
-			rec.AverageInstancesUsedPerHour = v
-		} else {
-			log.Printf("WARNING: failed to parse AverageNumberOfInstancesUsedPerHour %q for RI recommendation (service=%s, account=%s): %v", *details.AverageNumberOfInstancesUsedPerHour, rec.Service, rec.Account, err)
-		}
-	}
-	if details.AverageUtilization != nil {
-		if v, err := strconv.ParseFloat(*details.AverageUtilization, 64); err == nil {
-			rec.RecommendedUtilization = v
-		} else {
-			log.Printf("WARNING: failed to parse AverageUtilization %q for RI recommendation (service=%s, account=%s): %v", *details.AverageUtilization, rec.Service, rec.Account, err)
-		}
-	}
+	// Route through parseOptionalFloatOrWarn so a non-finite/negative value
+	// (which strconv.ParseFloat accepts / passes through) degrades to 0 rather
+	// than being stored as a live signal. The downstream --target-coverage
+	// guards are all `<= 0`, and NaN <= 0 is false, so a stored NaN would be
+	// treated as a real signal and produce NaN purchase counts.
+	rec.AverageInstancesUsedPerHour = parseOptionalFloatOrWarn(
+		"AverageNumberOfInstancesUsedPerHour", details.AverageNumberOfInstancesUsedPerHour)
+	rec.RecommendedUtilization = parseOptionalFloatOrWarn(
+		"AverageUtilization", details.AverageUtilization)
 }
 
 // parseRecommendedQuantity extracts the recommended quantity from details
@@ -120,6 +115,11 @@ func (c *Client) parseRecommendedQuantity(details *types.ReservationPurchaseReco
 			return intCount, nil
 		}
 		return 0, fmt.Errorf("failed to parse quantity '%s' as float or int", qty)
+	}
+	// Sscanf %f accepts "NaN"/"Inf"; a non-finite quantity would corrupt the
+	// purchase count (int(math.Round(NaN)) is undefined). Fail loud.
+	if math.IsNaN(count) || math.IsInf(count, 0) {
+		return 0, fmt.Errorf("recommended quantity %q is not a finite number", qty)
 	}
 
 	return int(math.Round(count)), nil

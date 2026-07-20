@@ -3,6 +3,7 @@ package recommendations
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"time"
@@ -248,6 +249,15 @@ func accumulateDailyResults(byDate map[string]float64, out *costexplorer.GetCost
 		if err != nil {
 			return fmt.Errorf("cannot parse CE amount %q for day %s: %w",
 				aws.ToString(mv.Amount), dateStr, err)
+		}
+		// strconv.ParseFloat accepts "NaN"/"Inf" with a nil error; a non-finite
+		// daily amount would slip past the downstream all-zero fail-loud check
+		// (NaN != 0) and poison the ladder baseline. Fail loud here instead. No
+		// negative guard: CE unblended cost is legitimately negative on
+		// credit/refund days.
+		if math.IsNaN(usd) || math.IsInf(usd, 0) {
+			return fmt.Errorf("CE amount %q for day %s is not a finite number",
+				aws.ToString(mv.Amount), dateStr)
 		}
 		// Divide total daily USD by 24 to get USD/hr. Derived from DAILY
 		// granularity: 1 day = 24 hours; not a magic constant.

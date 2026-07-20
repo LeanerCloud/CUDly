@@ -248,6 +248,26 @@ func TestGetOnDemandSeries_ParseErrorFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "cannot parse CE amount")
 }
 
+// TestGetOnDemandSeries_NonFiniteAmountFails verifies that a "NaN"/"Inf" CE
+// amount (which strconv.ParseFloat accepts with a nil error) fails loud rather
+// than poisoning the daily series that seeds the ladder baseline.
+func TestGetOnDemandSeries_NonFiniteAmountFails(t *testing.T) {
+	for _, bad := range []string{"NaN", "Inf", "-Inf"} {
+		t.Run(bad, func(t *testing.T) {
+			pages := []*costexplorer.GetCostAndUsageOutput{{
+				ResultsByTime: []types.ResultByTime{{
+					TimePeriod: &types.DateInterval{Start: aws.String("2026-01-01")},
+					Total:      map[string]types.MetricValue{onDemandMetric: {Amount: aws.String(bad)}},
+				}},
+			}}
+			client := newOnDemandClient(&mockOnDemandCE{pages: pages})
+			_, err := client.GetOnDemandSeries(context.Background(), "us-east-1", 7)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "is not a finite number")
+		})
+	}
+}
+
 // TestGetOnDemandSeries_BadDateFails verifies that a malformed CE period-start
 // date fails loud instead of being skipped or misdated
 // (feedback_no_silent_fallbacks).

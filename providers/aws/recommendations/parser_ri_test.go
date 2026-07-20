@@ -541,6 +541,18 @@ func TestParseRIUtilizationSignals(t *testing.T) {
 			wantAvgInstances: 0,
 			wantUtilization:  0,
 		},
+		{
+			// NaN/Inf parse to a nil error under strconv.ParseFloat; they must
+			// degrade to 0, not be stored as a live signal (NaN <= 0 is false,
+			// so a stored NaN would drive NaN purchase counts in sizing).
+			name: "non-finite values degrade to zero",
+			details: &types.ReservationPurchaseRecommendationDetail{
+				AverageNumberOfInstancesUsedPerHour: aws.String("NaN"),
+				AverageUtilization:                  aws.String("+Inf"),
+			},
+			wantAvgInstances: 0,
+			wantUtilization:  0,
+		},
 	}
 
 	for _, tt := range tests {
