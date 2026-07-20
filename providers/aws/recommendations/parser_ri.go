@@ -132,22 +132,17 @@ func (c *Client) parseRecommendedQuantity(details *types.ReservationPurchaseReco
 // historical on-demand demand. This is the 100%-coverage baseline the dashboard
 // scaling in summarizeRecommendationsWithCoverage depends on (issue #215 audit).
 func (c *Client) parseCostInformation(details *types.ReservationPurchaseRecommendationDetail) (float64, float64, error) {
-	var estimatedSavings, savingsPercent float64
-
-	if details.EstimatedMonthlySavingsAmount != nil {
-		val, err := strconv.ParseFloat(*details.EstimatedMonthlySavingsAmount, 64)
-		if err != nil {
-			return 0, 0, fmt.Errorf("failed to parse estimated savings %q: %w", *details.EstimatedMonthlySavingsAmount, err)
-		}
-		estimatedSavings = val
+	// Route through parseOptionalFloat so a present-but-non-finite CE money value
+	// (NaN/Inf parse to a nil error under strconv.ParseFloat) is rejected the same
+	// way as on the SP path, keeping this parser and the SP parser at genuine
+	// parity. A nil pointer yields (0, nil).
+	estimatedSavings, err := parseOptionalFloat("EstimatedMonthlySavingsAmount", details.EstimatedMonthlySavingsAmount)
+	if err != nil {
+		return 0, 0, err
 	}
-
-	if details.EstimatedMonthlySavingsPercentage != nil {
-		val, err := strconv.ParseFloat(*details.EstimatedMonthlySavingsPercentage, 64)
-		if err != nil {
-			return 0, 0, fmt.Errorf("failed to parse savings percentage %q: %w", *details.EstimatedMonthlySavingsPercentage, err)
-		}
-		savingsPercent = val
+	savingsPercent, err := parseOptionalFloat("EstimatedMonthlySavingsPercentage", details.EstimatedMonthlySavingsPercentage)
+	if err != nil {
+		return 0, 0, err
 	}
 
 	return estimatedSavings, savingsPercent, nil
@@ -160,17 +155,18 @@ func (c *Client) parseCostInformation(details *types.ReservationPurchaseRecommen
 // wrong money figure (e.g. a $0 upfront on an all-upfront RI) into the
 // effective-savings math and purchase decisions with no signal.
 func (c *Client) parseAWSCostDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
+	// All money fields route through parseOptionalFloat for the non-finite guard.
 	if details.UpfrontCost != nil {
-		upfront, err := strconv.ParseFloat(*details.UpfrontCost, 64)
+		upfront, err := parseOptionalFloat("UpfrontCost", details.UpfrontCost)
 		if err != nil {
-			return fmt.Errorf("failed to parse upfront cost %q: %w", *details.UpfrontCost, err)
+			return err
 		}
 		rec.CommitmentCost = upfront
 	}
 	if details.EstimatedMonthlyOnDemandCost != nil {
-		onDemand, err := strconv.ParseFloat(*details.EstimatedMonthlyOnDemandCost, 64)
+		onDemand, err := parseOptionalFloat("EstimatedMonthlyOnDemandCost", details.EstimatedMonthlyOnDemandCost)
 		if err != nil {
-			return fmt.Errorf("failed to parse estimated monthly on-demand cost %q: %w", *details.EstimatedMonthlyOnDemandCost, err)
+			return err
 		}
 		rec.OnDemandCost = onDemand
 	} else {
@@ -183,9 +179,9 @@ func (c *Client) parseAWSCostDetails(rec *common.Recommendation, details *types.
 	// RecurringStandardMonthlyCost is the recurring charge per month for this RI.
 	// It is distinct from CommitmentCost (upfront) and EstimatedMonthlySavingsAmount.
 	if details.RecurringStandardMonthlyCost != nil {
-		monthly, err := strconv.ParseFloat(*details.RecurringStandardMonthlyCost, 64)
+		monthly, err := parseOptionalFloat("RecurringStandardMonthlyCost", details.RecurringStandardMonthlyCost)
 		if err != nil {
-			return fmt.Errorf("failed to parse recurring standard monthly cost %q: %w", *details.RecurringStandardMonthlyCost, err)
+			return err
 		}
 		rec.RecurringMonthlyCost = &monthly
 	}

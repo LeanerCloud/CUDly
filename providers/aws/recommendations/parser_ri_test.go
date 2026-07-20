@@ -305,21 +305,21 @@ func TestParseRecommendationDetail_MalformedCostFields(t *testing.T) {
 			mutate: func(d *types.ReservationPurchaseRecommendationDetail) {
 				d.UpfrontCost = aws.String("not-a-number")
 			},
-			errContains: `failed to parse upfront cost "not-a-number"`,
+			errContains: `failed to parse UpfrontCost "not-a-number"`,
 		},
 		{
 			name: "malformed on-demand cost",
 			mutate: func(d *types.ReservationPurchaseRecommendationDetail) {
 				d.EstimatedMonthlyOnDemandCost = aws.String("$650.00")
 			},
-			errContains: `failed to parse estimated monthly on-demand cost "$650.00"`,
+			errContains: `failed to parse EstimatedMonthlyOnDemandCost "$650.00"`,
 		},
 		{
 			name: "malformed recurring monthly cost",
 			mutate: func(d *types.ReservationPurchaseRecommendationDetail) {
 				d.RecurringStandardMonthlyCost = aws.String("")
 			},
-			errContains: `failed to parse recurring standard monthly cost ""`,
+			errContains: `failed to parse RecurringStandardMonthlyCost ""`,
 		},
 	}
 
