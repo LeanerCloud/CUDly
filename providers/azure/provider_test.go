@@ -300,14 +300,20 @@ func TestAzureProvider_IsConfigured(t *testing.T) {
 }
 
 func TestAzureProvider_GetCredentials_NotConfigured(t *testing.T) {
-	// Test GetCredentials when Azure is not configured
+	// Test GetCredentials when Azure is not configured. Inject a mock
+	// credential provider that fails so IsConfigured() deterministically
+	// returns false, instead of falling through to the real
+	// DefaultAzureCredential lookup.
 	p := &AzureProvider{}
-	// If IsConfigured returns false, GetCredentials should return error
-	if !p.IsConfigured() {
-		_, err := p.GetCredentials()
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "azure provider is not configured")
-	}
+	p.SetCredentialProvider(&mockCredentialProvider{
+		cred: nil,
+		err:  errors.New("no credentials"),
+	})
+	require.False(t, p.IsConfigured())
+
+	_, err := p.GetCredentials()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "azure provider is not configured")
 }
 
 func TestAzureProvider_ValidateCredentials(t *testing.T) {
@@ -375,13 +381,20 @@ func TestAzureProvider_ValidateCredentials(t *testing.T) {
 }
 
 func TestAzureProvider_GetServiceClient_NotConfigured(t *testing.T) {
-	// Test GetServiceClient when Azure is not configured
+	// Test GetServiceClient when Azure is not configured. Inject a mock
+	// credential provider that fails so IsConfigured() deterministically
+	// returns false, instead of falling through to the real
+	// DefaultAzureCredential lookup.
 	p := &AzureProvider{}
-	if !p.IsConfigured() {
-		_, err := p.GetServiceClient(context.Background(), common.ServiceCompute, "eastus")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "azure provider is not configured")
-	}
+	p.SetCredentialProvider(&mockCredentialProvider{
+		cred: nil,
+		err:  errors.New("no credentials"),
+	})
+	require.False(t, p.IsConfigured())
+
+	_, err := p.GetServiceClient(context.Background(), common.ServiceCompute, "eastus")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "azure provider is not configured")
 }
 
 func TestAzureProvider_GetServiceClient_UnsupportedService(t *testing.T) {
@@ -429,13 +442,20 @@ func TestAzureProvider_GetServiceClient_AllServiceTypes(t *testing.T) {
 }
 
 func TestAzureProvider_GetRecommendationsClient_NotConfigured(t *testing.T) {
-	// Test GetRecommendationsClient when Azure is not configured
+	// Test GetRecommendationsClient when Azure is not configured. Inject a
+	// mock credential provider that fails so IsConfigured() deterministically
+	// returns false, instead of falling through to the real
+	// DefaultAzureCredential lookup.
 	p := &AzureProvider{}
-	if !p.IsConfigured() {
-		_, err := p.GetRecommendationsClient(context.Background())
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "azure provider is not configured")
-	}
+	p.SetCredentialProvider(&mockCredentialProvider{
+		cred: nil,
+		err:  errors.New("no credentials"),
+	})
+	require.False(t, p.IsConfigured())
+
+	_, err := p.GetRecommendationsClient(context.Background())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "azure provider is not configured")
 }
 
 func TestAzureProvider_GetRecommendationsClient(t *testing.T) {
