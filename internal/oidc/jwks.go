@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"encoding/base64"
 	"fmt"
 )
@@ -37,6 +38,14 @@ func PublicJWK(pub crypto.PublicKey, kid string) (JWK, error) {
 	ecPub, ok := pub.(*ecdsa.PublicKey)
 	if !ok || ecPub == nil {
 		return JWK{}, fmt.Errorf("oidc: PublicJWK requires *ecdsa.PublicKey, got %T", pub)
+	}
+	// Fail loud on a wrong-curve key instead of publishing a corrupt JWK:
+	// the Crv/Alg fields below are hardcoded to "P-256"/ES256, so a
+	// misconfigured P-384 (or other) key would otherwise be mislabeled
+	// as P-256 with coordinates of the wrong length, and only surface as
+	// a KMS signing failure far from the actual misconfiguration.
+	if ecPub.Curve != elliptic.P256() {
+		return JWK{}, fmt.Errorf("oidc: PublicJWK requires a P-256 key (ES256), got curve %s", ecPub.Curve.Params().Name)
 	}
 	byteLen := (ecPub.Curve.Params().BitSize + 7) / 8
 	// Derive the fixed-width, already left-padded coordinates from the

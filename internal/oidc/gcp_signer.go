@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -123,6 +124,10 @@ func (s *GCPKMSSigner) resolveOnce(ctx context.Context) {
 		ecPub, ok := pub.(*ecdsa.PublicKey)
 		if !ok {
 			s.err = fmt.Errorf("oidc: gcp kms key is not ECDSA (got %T); key must be EC_SIGN_P256_SHA256", pub)
+			return
+		}
+		if ecPub.Curve != elliptic.P256() {
+			s.err = fmt.Errorf("oidc: gcp kms key curve is %s; key must be EC_SIGN_P256_SHA256 (ES256)", ecPub.Curve.Params().Name)
 			return
 		}
 		kid, err := ComputeKeyID(ecPub)

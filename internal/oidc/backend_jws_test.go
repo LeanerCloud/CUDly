@@ -72,6 +72,24 @@ func TestGCPKMSSignerEmitsRawES256(t *testing.T) {
 	assertRawES256JWS(t, jws, &key.PublicKey)
 }
 
+// TestGCPKMSSignerRejectsWrongCurve guards against a misconfigured KMS
+// key (e.g. EC_SIGN_P384_SHA384 instead of the required
+// EC_SIGN_P256_SHA256) being accepted silently. resolveOnce must fail
+// fast instead of caching a wrong-curve public key.
+func TestGCPKMSSignerRejectsWrongCurve(t *testing.T) {
+	ctx := context.Background()
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("gen p384 key: %v", err)
+	}
+	signer := NewGCPKMSSignerFromClient(&fakeGCPKMSClient{key: key},
+		"projects/p/locations/global/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1")
+
+	if _, err := signer.PublicKey(ctx); err == nil {
+		t.Fatal("PublicKey accepted a P-384 KMS key; want an error rejecting the wrong curve")
+	}
+}
+
 // --- Azure: raw R||S path ---
 
 type fakeAzureKVClient struct {

@@ -75,3 +75,21 @@ func TestAWSKMSSignerRoundTrip(t *testing.T) {
 	// convert it to the RFC 7518 raw R||S form before Mint encodes it.
 	assertRawES256JWS(t, jws, ecPub)
 }
+
+// TestAWSKMSSignerRejectsWrongCurve guards against a misconfigured KMS
+// key (e.g. ECC_NIST_P384 instead of the required ECC_NIST_P256) being
+// accepted silently. resolveOnce must fail fast with a clear error
+// instead of caching a wrong-curve public key that only breaks later
+// at JWKS-publish or signing time.
+func TestAWSKMSSignerRejectsWrongCurve(t *testing.T) {
+	ctx := context.Background()
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("gen p384 key: %v", err)
+	}
+	signer := NewAWSKMSSignerFromClient(&fakeKMSClient{key: key}, "alias/wrong-curve")
+
+	if _, err := signer.PublicKey(ctx); err == nil {
+		t.Fatal("PublicKey accepted a P-384 KMS key; want an error rejecting the wrong curve")
+	}
+}

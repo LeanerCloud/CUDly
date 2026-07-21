@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/x509"
 	"fmt"
 	"sync"
@@ -97,6 +98,10 @@ func (s *AWSKMSSigner) resolveOnce(ctx context.Context) {
 		ecPub, ok := pub.(*ecdsa.PublicKey)
 		if !ok {
 			s.err = fmt.Errorf("oidc: kms key is not ECDSA (got %T); key must be ECC_NIST_P256", pub)
+			return
+		}
+		if ecPub.Curve != elliptic.P256() {
+			s.err = fmt.Errorf("oidc: kms key curve is %s; key must be ECC_NIST_P256 (ES256)", ecPub.Curve.Params().Name)
 			return
 		}
 		kid, err := ComputeKeyID(ecPub)
