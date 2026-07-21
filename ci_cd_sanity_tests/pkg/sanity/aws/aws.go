@@ -1,3 +1,5 @@
+// Package aws implements read-only AWS sanity checks used in CI/CD to verify
+// that deploy credentials have sufficient IAM permissions before a real deploy.
 package aws
 
 import (
@@ -14,6 +16,8 @@ import (
 	"github.com/LeanerCloud/CUDly/ci_cd_sanity_tests/pkg/sanity/report"
 )
 
+// Options controls which AWS region to target and optional safety assertions
+// applied during the sanity run.
 type Options struct {
 	Region          string
 	ExpectedAccount string // optional safety check
@@ -78,6 +82,10 @@ func checkRDS(ctx context.Context, cfg aws.Config, maxList int32) (map[string]st
 	return map[string]string{"db_instances_seen": fmt.Sprintf("%d", len(out.DBInstances))}, nil
 }
 
+// Run executes all AWS sanity checks in sequence and returns a Report
+// summarizing each result. It returns an error only for fatal setup failures
+// (credential load, SDK init); individual check failures are captured inside
+// the Report so callers can surface them all rather than stopping at the first.
 func Run(ctx context.Context, opts Options) (*report.Report, error) {
 	if opts.Region == "" {
 		opts.Region = "us-east-1"

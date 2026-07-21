@@ -19,6 +19,9 @@ func getDomain() string {
 	return defaultDomain
 }
 
+// Response is the Lambda function's return value, reporting how many
+// forgot_password rate-limit rows were deleted and how many rate-limit
+// rows (across all endpoints) remain in the table.
 type Response struct {
 	Message        string `json:"message"`
 	DeletedCount   int    `json:"deleted_count"`
