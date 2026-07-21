@@ -108,6 +108,29 @@ func (app *Application) handleLambdaHTTPEvent(ctx context.Context, rawEvent json
 		}, nil
 	}
 
+	// Lambda Function URL base64-encodes the request body whenever its
+	// Content-Type isn't recognized as text (the inbound mirror of the
+	// isTextContentType decision this file already makes for outbound
+	// responses). Decode it here, once, before anything downstream (OIDC,
+	// static files, the API router) reads request.Body -- otherwise handlers
+	// that parse JSON or form-urlencoded bodies (e.g. resolveApprovalToken)
+	// see a base64 blob instead of plaintext.
+	if request.IsBase64Encoded {
+		decoded, err := base64.StdEncoding.DecodeString(request.Body)
+		if err != nil {
+			log.Printf("Failed to base64-decode request body: %v", err)
+			headers := lambdaSecurityHeaders()
+			headers["Content-Type"] = "application/json"
+			return &events.LambdaFunctionURLResponse{
+				StatusCode: 400,
+				Body:       `{"error": "Invalid request format"}`,
+				Headers:    headers,
+			}, nil
+		}
+		request.Body = string(decoded)
+		request.IsBase64Encoded = false
+	}
+
 	// Intercept OIDC issuer endpoints (discovery + JWKS, served under
 	// /oidc/) before both the static-file fallback and the main API
 	// router. api.HandleOIDC does its own auth-less dispatch so the
