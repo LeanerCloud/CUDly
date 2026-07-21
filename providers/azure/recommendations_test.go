@@ -196,27 +196,73 @@ func TestRecommendationsClientAdapter_Fields(t *testing.T) {
 	assert.Nil(t, adapter.cred)
 }
 
+// overrideServiceClientFns swaps every per-service client constructor for the
+// given fakes and restores the originals on cleanup, so adapter tests never
+// build real ARM clients (which would issue live requests to
+// management.azure.com).
+func overrideServiceClientFns(t *testing.T, compute, database, cache, cosmos, sp serviceRecsGetter) {
+	t.Helper()
+	origCompute := newComputeClientFn
+	origDatabase := newDatabaseClientFn
+	origCache := newCacheClientFn
+	origCosmos := newCosmosDBClientFn
+	origSP := newSavingsPlansClientFn
+	t.Cleanup(func() {
+		newComputeClientFn = origCompute
+		newDatabaseClientFn = origDatabase
+		newCacheClientFn = origCache
+		newCosmosDBClientFn = origCosmos
+		newSavingsPlansClientFn = origSP
+	})
+	newComputeClientFn = newFakeFn(compute)
+	newDatabaseClientFn = newFakeFn(database)
+	newCacheClientFn = newFakeFn(cache)
+	newCosmosDBClientFn = newFakeFn(cosmos)
+	newSavingsPlansClientFn = newFakeFn(sp)
+}
+
 func TestRecommendationsClientAdapter_GetRecommendationsForService(t *testing.T) {
+	computeRec := common.Recommendation{Provider: common.ProviderAzure, Service: common.ServiceCompute}
+	overrideServiceClientFns(t,
+		&fakeServiceClient{recs: []common.Recommendation{computeRec}},
+		&fakeServiceClient{}, &fakeServiceClient{}, &fakeServiceClient{}, &fakeServiceClient{})
+
 	adapter := &RecommendationsClientAdapter{
-		cred:           &mockAzureTokenCredential{},
-		subscriptionID: "test-subscription",
+		cred:             &mockAzureTokenCredential{},
+		subscriptionID:   "test-subscription",
+		getAdvisorRecsFn: noopAdvisorFn,
 	}
 
-	// This will try to make API calls which will fail without real credentials,
-	// but we test the wiring is correct. Error is expected since we don't have
-	// real Azure credentials - the important thing is the function is wired correctly.
-	_, _ = adapter.GetRecommendationsForService(context.Background(), common.ServiceCompute)
+	recs, err := adapter.GetRecommendationsForService(context.Background(), common.ServiceCompute)
+
+	require.NoError(t, err)
+	assert.Equal(t, []common.Recommendation{computeRec}, recs)
 }
 
 func TestRecommendationsClientAdapter_GetAllRecommendations(t *testing.T) {
+	rec := func(svc common.ServiceType) common.Recommendation {
+		return common.Recommendation{Provider: common.ProviderAzure, Service: svc}
+	}
+	overrideServiceClientFns(t,
+		&fakeServiceClient{recs: []common.Recommendation{rec(common.ServiceCompute)}},
+		&fakeServiceClient{recs: []common.Recommendation{rec(common.ServiceRelationalDB)}},
+		&fakeServiceClient{recs: []common.Recommendation{rec(common.ServiceCache)}},
+		&fakeServiceClient{recs: []common.Recommendation{rec(common.ServiceNoSQL)}},
+		&fakeServiceClient{})
+
 	adapter := &RecommendationsClientAdapter{
-		cred:           &mockAzureTokenCredential{},
-		subscriptionID: "test-subscription",
+		cred:             &mockAzureTokenCredential{},
+		subscriptionID:   "test-subscription",
+		getAdvisorRecsFn: noopAdvisorFn,
 	}
 
-	// This will try to make API calls which will fail without real credentials,
-	// but we test the wiring is correct. Error is expected - we just verify the function is callable.
-	_, _ = adapter.GetAllRecommendations(context.Background())
+	recs, err := adapter.GetAllRecommendations(context.Background())
+
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []common.Recommendation{
+		rec(common.ServiceCompute), rec(common.ServiceRelationalDB),
+		rec(common.ServiceCache), rec(common.ServiceNoSQL),
+	}, recs)
 }
 
 // TestGetRecommendations_SavingsPlansServiceIncluded pins that shouldIncludeService
