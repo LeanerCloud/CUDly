@@ -41,26 +41,9 @@ func (m *mockTokenCredential) GetToken(_ context.Context, _ policy.TokenRequestO
 }
 
 // ---- HTTP client mock -------------------------------------------------------
-
-type mockHTTPClient struct {
-	mock.Mock
-}
-
-func (m *mockHTTPClient) Do(req *http.Request) (*http.Response, error) {
-	args := m.Called(req)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*http.Response), args.Error(1)
-}
-
-func newHTTPResponse(statusCode int, body string) *http.Response {
-	return &http.Response{
-		StatusCode: statusCode,
-		Body:       io.NopCloser(bytes.NewBufferString(body)),
-		Header:     make(http.Header),
-	}
-}
+//
+// The mock HTTP client and response helper live in the shared
+// providers/azure/mocks package (mocks.MockHTTPClient, mocks.CreateMockHTTPResponse).
 
 // captureHTTPClient captures the request body on each call.
 type captureHTTPClient struct {
@@ -454,8 +437,8 @@ const sampleSynapsePricingJSON = `{
 }`
 
 func TestGetOfferingDetails_upfront(t *testing.T) {
-	mHTTP := &mockHTTPClient{}
-	mHTTP.On("Do", mock.Anything).Return(newHTTPResponse(http.StatusOK, sampleSynapsePricingJSON), nil)
+	mHTTP := &mocks.MockHTTPClient{}
+	mHTTP.On("Do", mock.Anything).Return(mocks.CreateMockHTTPResponse(http.StatusOK, sampleSynapsePricingJSON), nil)
 
 	c := &SynapseClient{subscriptionID: "sub-123", region: "eastus", httpClient: mHTTP}
 
@@ -470,8 +453,8 @@ func TestGetOfferingDetails_upfront(t *testing.T) {
 }
 
 func TestGetOfferingDetails_monthly(t *testing.T) {
-	mHTTP := &mockHTTPClient{}
-	mHTTP.On("Do", mock.Anything).Return(newHTTPResponse(http.StatusOK, sampleSynapsePricingJSON), nil)
+	mHTTP := &mocks.MockHTTPClient{}
+	mHTTP.On("Do", mock.Anything).Return(mocks.CreateMockHTTPResponse(http.StatusOK, sampleSynapsePricingJSON), nil)
 
 	c := &SynapseClient{subscriptionID: "sub-123", region: "eastus", httpClient: mHTTP}
 
@@ -483,7 +466,7 @@ func TestGetOfferingDetails_monthly(t *testing.T) {
 }
 
 func TestGetOfferingDetails_httpError(t *testing.T) {
-	mHTTP := &mockHTTPClient{}
+	mHTTP := &mocks.MockHTTPClient{}
 	mHTTP.On("Do", mock.Anything).Return(nil, errors.New("network error"))
 
 	c := &SynapseClient{subscriptionID: "sub-123", region: "eastus", httpClient: mHTTP}
@@ -502,14 +485,14 @@ func calcPriceRespJSON(orderID string) string {
 // ---- PurchaseCommitment ---------------------------------------------------
 
 func TestPurchaseCommitment_success(t *testing.T) {
-	mHTTP := &mockHTTPClient{}
+	mHTTP := &mocks.MockHTTPClient{}
 	t.Cleanup(func() { mHTTP.AssertExpectations(t) })
 	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-	})).Return(newHTTPResponse(http.StatusOK, calcPriceRespJSON("syn-order-001")), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("syn-order-001")), nil).Once()
 	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/syn-order-001/purchase"
-	})).Return(newHTTPResponse(http.StatusOK, `{}`), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
 
 	cred := &mockTokenCredential{token: "test-token"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
@@ -528,14 +511,14 @@ func TestPurchaseCommitment_success(t *testing.T) {
 }
 
 func TestPurchaseCommitment_3yrTerm(t *testing.T) {
-	mHTTP := &mockHTTPClient{}
+	mHTTP := &mocks.MockHTTPClient{}
 	t.Cleanup(func() { mHTTP.AssertExpectations(t) })
 	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-	})).Return(newHTTPResponse(http.StatusOK, calcPriceRespJSON("syn-order-3yr")), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("syn-order-3yr")), nil).Once()
 	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/syn-order-3yr/purchase"
-	})).Return(newHTTPResponse(http.StatusAccepted, `{}`), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusAccepted, `{}`), nil).Once()
 
 	cred := &mockTokenCredential{token: "test-token"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
@@ -549,7 +532,7 @@ func TestPurchaseCommitment_3yrTerm(t *testing.T) {
 func TestPurchaseCommitment_withSource(t *testing.T) {
 	// Capture the body sent to calculatePrice to verify the automation tag is present.
 	var capturedBody []byte
-	mHTTP := &mockHTTPClient{}
+	mHTTP := &mocks.MockHTTPClient{}
 	t.Cleanup(func() { mHTTP.AssertExpectations(t) })
 	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
@@ -559,10 +542,10 @@ func TestPurchaseCommitment_withSource(t *testing.T) {
 			capturedBody, _ = io.ReadAll(req.Body)
 			req.Body = io.NopCloser(bytes.NewReader(capturedBody))
 		}
-	}).Return(newHTTPResponse(http.StatusOK, calcPriceRespJSON("syn-order-src")), nil).Once()
+	}).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("syn-order-src")), nil).Once()
 	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/syn-order-src/purchase"
-	})).Return(newHTTPResponse(http.StatusCreated, `{}`), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusCreated, `{}`), nil).Once()
 
 	cred := &mockTokenCredential{token: "test-token"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
@@ -576,14 +559,14 @@ func TestPurchaseCommitment_withSource(t *testing.T) {
 
 func TestPurchaseCommitment_apiError(t *testing.T) {
 	// calculatePrice succeeds; purchase fails with a non-timeout 400.
-	mHTTP := &mockHTTPClient{}
+	mHTTP := &mocks.MockHTTPClient{}
 	t.Cleanup(func() { mHTTP.AssertExpectations(t) })
 	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-	})).Return(newHTTPResponse(http.StatusOK, calcPriceRespJSON("syn-order-err")), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("syn-order-err")), nil).Once()
 	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/syn-order-err/purchase"
-	})).Return(newHTTPResponse(http.StatusBadRequest, `{"error":"bad request"}`), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusBadRequest, `{"error":"bad request"}`), nil).Once()
 
 	cred := &mockTokenCredential{token: "test-token"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
@@ -596,7 +579,7 @@ func TestPurchaseCommitment_apiError(t *testing.T) {
 
 func TestPurchaseCommitment_httpError(t *testing.T) {
 	// calculatePrice network failure.
-	mHTTP := &mockHTTPClient{}
+	mHTTP := &mocks.MockHTTPClient{}
 	t.Cleanup(func() { mHTTP.AssertExpectations(t) })
 	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
@@ -808,7 +791,7 @@ func TestPurchaseCommitment_unsupportedTerm(t *testing.T) {
 // signal CUDly controls -- proceeding without it would allow a re-driven
 // purchase to create a duplicate reservation.
 func TestPurchaseCommitment_requiresSource(t *testing.T) {
-	mHTTP := &mockHTTPClient{}
+	mHTTP := &mocks.MockHTTPClient{}
 	t.Cleanup(func() { mHTTP.AssertExpectations(t) })
 	cred := &mockTokenCredential{token: "tok"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
@@ -837,8 +820,8 @@ func TestGetOfferingDetails_noReservationPrice(t *testing.T) {
 		"NextPageLink": "",
 		"Count": 1
 	}`
-	mHTTP := &mockHTTPClient{}
-	mHTTP.On("Do", mock.Anything).Return(newHTTPResponse(http.StatusOK, onDemandOnlyJSON), nil)
+	mHTTP := &mocks.MockHTTPClient{}
+	mHTTP.On("Do", mock.Anything).Return(mocks.CreateMockHTTPResponse(http.StatusOK, onDemandOnlyJSON), nil)
 	c := &SynapseClient{subscriptionID: "sub-123", region: "eastus", httpClient: mHTTP}
 	rec := common.Recommendation{ResourceType: "DW100c", Term: "1yr"}
 	_, err := c.GetOfferingDetails(context.Background(), rec)
@@ -860,7 +843,7 @@ func TestGetOfferingDetails_noReservationPrice(t *testing.T) {
 // canonical SDK enum value "SqlDataWarehouse", not the hand-written "SqlDW"
 // Azure rejects as an invalid reservedResourceType.
 func TestPurchaseCommitment_canonicalReservedResourceType(t *testing.T) {
-	mHTTP := &mockHTTPClient{}
+	mHTTP := &mocks.MockHTTPClient{}
 	t.Cleanup(func() { mHTTP.AssertExpectations(t) })
 
 	const orderID = "syn-order-rrt"
@@ -883,11 +866,11 @@ func TestPurchaseCommitment_canonicalReservedResourceType(t *testing.T) {
 			}
 		}
 		return true
-	})).Return(newHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once()
 	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost &&
 			r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase"
-	})).Return(newHTTPResponse(http.StatusOK, `{}`), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
 
 	cred := &mockTokenCredential{token: "test-token"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
