@@ -6,8 +6,8 @@
 # without CUDly holding any long-lived secret.
 
 resource "aws_kms_key" "signing" {
-  description              = "CUDly ${var.stack_name} OIDC issuer signing key (RSA_2048, RS256)"
-  customer_master_key_spec = "RSA_2048"
+  description              = "CUDly ${var.stack_name} OIDC issuer signing key (ECC_NIST_P256, ES256)"
+  customer_master_key_spec = "ECC_NIST_P256"
   key_usage                = "SIGN_VERIFY"
   deletion_window_in_days  = 7
   enable_key_rotation      = false # KMS asymmetric keys do not support automatic rotation
