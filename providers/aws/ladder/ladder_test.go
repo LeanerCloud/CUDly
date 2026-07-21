@@ -66,7 +66,7 @@ type fakeUtilizationSource struct {
 	utils []recommendations.RIUtilization
 }
 
-func (f *fakeUtilizationSource) GetRIUtilization(_ context.Context, _ int) ([]recommendations.RIUtilization, error) {
+func (f *fakeUtilizationSource) GetRIUtilization(_ context.Context, _ int, _ string) ([]recommendations.RIUtilization, error) {
 	return f.utils, f.err
 }
 
@@ -507,8 +507,12 @@ func TestGetLayerStates_RILayer_CoverageAndUtilization(t *testing.T) {
 		"us-east-1:m5.large":  {Pct: 80.0, AvgInstancesPerHour: 10.0},
 		"us-east-1:m5.xlarge": {Pct: 60.0, AvgInstancesPerHour: 5.0},
 	}
+	// ReservedInstanceID must match the convertible RI's ID: GetLayerStates
+	// intersects CE utilization entries against the account's convertible
+	// RIs before aggregating, so an entry for an untracked ID would be
+	// dropped (issue #1461).
 	utils := []recommendations.RIUtilization{
-		{PurchasedHours: 100, TotalActualHours: 90},
+		{ReservedInstanceID: "ri-1", PurchasedHours: 100, TotalActualHours: 90},
 	}
 
 	a := newTestLadder(t,
@@ -527,6 +531,44 @@ func TestGetLayerStates_RILayer_CoverageAndUtilization(t *testing.T) {
 
 	require.NotNil(t, ri.UtilizationPct, "UtilizationPct should be non-nil when utilization data is present")
 	assert.InDelta(t, 90.0, *ri.UtilizationPct, 1e-6)
+}
+
+// TestGetLayerStates_RILayer_UtilizationExcludesUnrelatedReservations is the
+// GetLayerStates-side regression test for issue #1461. GetRIUtilization's
+// SERVICE+REGION filter narrows the CE response to EC2 RIs in-region, but a
+// standard (non-convertible) EC2 RI in the same account/region -- or, before
+// the fix, an RDS/ElastiCache/OpenSearch/Redshift reservation blended in by
+// an unfiltered query -- would still land in the utils slice this test
+// fakes. Without the ID intersection, the layer's UtilizationPct would blend
+// in "other-ri"'s poor utilization and trigger a reshape decision that has
+// nothing to do with this account's convertible RIs.
+func TestGetLayerStates_RILayer_UtilizationExcludesUnrelatedReservations(t *testing.T) {
+	ris := []ec2svc.ConvertibleRI{
+		makeRI("ri-1", "m5.large", 1, 0.50, time.Now().Add(365*24*time.Hour)),
+	}
+	utils := []recommendations.RIUtilization{
+		// Tracked convertible RI: well utilized.
+		{ReservedInstanceID: "ri-1", PurchasedHours: 100, TotalActualHours: 90},
+		// Untracked reservation (e.g. RDS, or a standard non-convertible EC2
+		// RI) blended into the same CE response: poorly utilized. Pre-fix,
+		// this drags the aggregate down to (90+5)/(100+100)=47.5%; post-fix
+		// it must be excluded entirely.
+		{ReservedInstanceID: "other-ri", PurchasedHours: 100, TotalActualHours: 5},
+	}
+
+	a := newTestLadder(t,
+		&fakeRILister{ris: ris},
+		&fakeSPLister{},
+		&fakeCoverageSource{},
+		&fakeUtilizationSource{utils: utils},
+	)
+	states, err := a.GetLayerStates(context.Background(), testScope())
+	require.NoError(t, err)
+
+	ri := states[ladder.LayerConvertibleRI]
+	require.NotNil(t, ri.UtilizationPct)
+	assert.InDelta(t, 90.0, *ri.UtilizationPct, 1e-6,
+		"UtilizationPct must reflect only ri-1 (90%%), not the blended 47.5%% from the untracked reservation")
 }
 
 func TestGetLayerStates_CoverageError_DegradesToNil(t *testing.T) {

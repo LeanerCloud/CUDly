@@ -42,7 +42,7 @@ type fakeReshapeRecs struct {
 	calls       atomic.Int32
 }
 
-func (f *fakeReshapeRecs) GetRIUtilization(_ context.Context, _ int) ([]recommendations.RIUtilization, error) {
+func (f *fakeReshapeRecs) GetRIUtilization(_ context.Context, _ int, _ string) ([]recommendations.RIUtilization, error) {
 	f.calls.Add(1)
 	return f.utilization, nil
 }

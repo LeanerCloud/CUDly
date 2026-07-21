@@ -52,7 +52,7 @@ func (a *exchangeRunnerAdapter) RunAutoExchange(ctx context.Context, cfg exchang
 	if err != nil {
 		return nil, fmt.Errorf("exchangeRunnerAdapter: list convertible RIs: %w", err)
 	}
-	utilData, err := recsClient.GetRIUtilization(ctx, cfg.LookbackDays)
+	utilData, err := recsClient.GetRIUtilization(ctx, cfg.LookbackDays, a.region)
 	if err != nil {
 		return nil, fmt.Errorf("exchangeRunnerAdapter: get RI utilization: %w", err)
 	}

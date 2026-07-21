@@ -48,7 +48,7 @@ type reshapeEC2Client interface {
 // adapter that getReshapeRecommendations needs (the utilization
 // fetcher injected into the cache wrapper). Scoped identically.
 type reshapeRecsClient interface {
-	GetRIUtilization(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error)
+	GetRIUtilization(ctx context.Context, lookbackDays int, region string) ([]recommendations.RIUtilization, error)
 }
 
 // buildReshapeEC2Client honors the injected factory when set, falling
@@ -399,9 +399,18 @@ func (h *Handler) getRIUtilization(ctx context.Context, req *events.LambdaFuncti
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
+	// Adopt the resolved region when the caller omits ?region= so the CE
+	// utilization filter and the cache key both scope to the region the
+	// AWS client is actually talking to (mirrors getReshapeRecommendations).
+	if region == "" {
+		region = cfg.Region
+	}
 
 	recsAdapter := awsprovider.NewRecommendationsClientDirect(cfg)
-	utilization, err := h.getRIUtilizationCache().getOrFetch(ctx, region, lookbackDays, riUtilizationCacheTTL, riUtilizationCacheStaleTTL, recsAdapter.GetRIUtilization)
+	fetch := func(fetchCtx context.Context, days int) ([]recommendations.RIUtilization, error) {
+		return recsAdapter.GetRIUtilization(fetchCtx, days, region)
+	}
+	utilization, err := h.getRIUtilizationCache().getOrFetch(ctx, region, lookbackDays, riUtilizationCacheTTL, riUtilizationCacheStaleTTL, fetch)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get RI utilization: %w", err)
 	}
@@ -559,7 +568,10 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 	}
 
 	recsAdapter := h.buildReshapeRecsClient(cfg)
-	utilData, err := h.getRIUtilizationCache().getOrFetch(ctx, p.region, p.lookbackDays, riUtilizationCacheTTL, riUtilizationCacheStaleTTL, recsAdapter.GetRIUtilization)
+	fetch := func(fetchCtx context.Context, days int) ([]recommendations.RIUtilization, error) {
+		return recsAdapter.GetRIUtilization(fetchCtx, days, p.region)
+	}
+	utilData, err := h.getRIUtilizationCache().getOrFetch(ctx, p.region, p.lookbackDays, riUtilizationCacheTTL, riUtilizationCacheStaleTTL, fetch)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get RI utilization: %w", err)
 	}
