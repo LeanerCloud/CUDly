@@ -461,7 +461,11 @@ func (c *Client) buildEC2QueryFromRec(rec common.Recommendation) (ec2OfferingQue
 	if err != nil {
 		return ec2OfferingQuery{}, err
 	}
-	q, err := buildEC2OfferingQuery(rec, details, c.getDurationValue(rec.Term))
+	duration, err := c.getDurationValue(rec.Term)
+	if err != nil {
+		return ec2OfferingQuery{}, err
+	}
+	q, err := buildEC2OfferingQuery(rec, details, duration)
 	if err != nil {
 		return ec2OfferingQuery{}, err
 	}
@@ -661,12 +665,19 @@ const (
 	ThreeYearSeconds = 94608000 // 3 * 365 days in seconds
 )
 
-// getDurationValue converts term string to seconds for EC2 API
-func (c *Client) getDurationValue(term string) int64 {
-	if term == "3yr" || term == "3" {
-		return ThreeYearSeconds
+// getDurationValue converts a term string to seconds for the EC2 API.
+// Returns an error on any unrecognized or empty input so callers fail loud
+// rather than silently buying a 1-year reservation when another commitment
+// length was intended.
+func (c *Client) getDurationValue(term string) (int64, error) {
+	switch term {
+	case "3yr", "3":
+		return ThreeYearSeconds, nil
+	case "1yr", "1":
+		return OneYearSeconds, nil
+	default:
+		return 0, fmt.Errorf("unsupported EC2 reservation term %q: must be one of 1yr, 1, 3yr, 3", term)
 	}
-	return OneYearSeconds
 }
 
 // ConvertibleRI represents an active convertible Reserved Instance.
