@@ -1347,6 +1347,183 @@ func TestRevokePurchase_GetExecutionByIDDBError_Returns500(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
+// --- Issue #1463: injection seam for calculateAzureRevoke / revokeAzurePurchase ---
+//
+// Before this seam, both handlers called azidentity.NewDefaultAzureCredential
+// and the armreservations SDK constructors inline, so no test could reach past
+// that point without walking the live Azure credential chain (spawning az /
+// pwsh, popping macOS keychain prompts). These tests drive both handlers
+// end-to-end through h.azureRevokeFactory using the existing
+// stubCalcRefundClient(WithAmount)/stubReturnClient fakes, proving the
+// previously-unreachable code is now covered without any live client.
+
+// TestCalculateAzureRevoke_Success exercises calculateAzureRevoke through the
+// injected client factory (happy path): session + record load + authorization
+// + window check all pass, and the injected CalculateRefund stub's quote is
+// returned to the caller.
+func TestCalculateAzureRevoke_Success(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() {
+		mockStore.AssertExpectations(t)
+		mockAuth.AssertExpectations(t)
+	})
+
+	mockAuth.On("ValidateSession", ctx, "tok").Return(revokeAdminSession(), nil)
+
+	r := armReservationRecord()
+	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
+
+	calcClient := &stubCalcRefundClientWithAmount{amount: 75.25, currency: "USD", sessID: "s-calc"}
+	credentialCalls := 0
+	calculateClientCalls := 0
+	returnClientCalls := 0
+	h := &Handler{
+		config: mockStore,
+		auth:   mockAuth,
+		azureRevokeFactory: &azureRevokeClientFactory{
+			newCredential: func() (azcore.TokenCredential, error) {
+				credentialCalls++
+				return nil, nil
+			},
+			newCalculateRefundClient: func(azcore.TokenCredential) (azureCalculateRefundClient, error) {
+				calculateClientCalls++
+				return calcClient, nil
+			},
+			newReturnClient: func(azcore.TokenCredential) (azureReturnClient, error) {
+				returnClientCalls++
+				return &stubReturnClient{}, nil
+			},
+		},
+	}
+
+	result, err := h.calculateAzureRevoke(ctx, sessionReq("tok"), r.PurchaseID)
+	require.NoError(t, err)
+	quote, ok := result.(*revokeQuoteResult)
+	require.True(t, ok)
+	assert.InDelta(t, 75.25, quote.RefundAmount, 0.0001)
+	assert.Equal(t, "USD", quote.RefundCurrency)
+	assert.Equal(t, 1, credentialCalls)
+	assert.Equal(t, 1, calculateClientCalls)
+	assert.Zero(t, returnClientCalls, "calculate must not construct an unused Return client")
+}
+
+// TestCalculateAzureRevoke_ClientFactoryError verifies that when the injected
+// factory fails (e.g. credential resolution failure), calculateAzureRevoke
+// propagates the error wrapped with the "revoke/calculate:" prefix (matching
+// the prior inline-construction error shape) rather than as a ClientError.
+func TestCalculateAzureRevoke_ClientFactoryError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() {
+		mockStore.AssertExpectations(t)
+		mockAuth.AssertExpectations(t)
+	})
+
+	mockAuth.On("ValidateSession", ctx, "tok").Return(revokeAdminSession(), nil)
+
+	r := armReservationRecord()
+	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
+
+	factoryErr := errors.New("credential unavailable")
+	h := &Handler{
+		config: mockStore,
+		auth:   mockAuth,
+		azureRevokeFactory: &azureRevokeClientFactory{
+			newCredential: func() (azcore.TokenCredential, error) {
+				return nil, factoryErr
+			},
+		},
+	}
+
+	_, err := h.calculateAzureRevoke(ctx, sessionReq("tok"), r.PurchaseID)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "revoke/calculate:")
+	assert.ErrorIs(t, err, factoryErr)
+	_, isClientErr := IsClientError(err)
+	assert.False(t, isClientErr, "client-factory failures are server-side errors, not a ClientError")
+}
+
+// TestRevokeAzurePurchase_Success exercises revokeAzurePurchase through the
+// injected client factory (happy path): the window check passes, both the
+// injected CalculateRefund and Return stubs are exercised via callAzureReturn,
+// and the purchase is marked revoked.
+func TestRevokeAzurePurchase_Success(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	r := armReservationRecord()
+	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil)
+
+	calcClient := &stubCalcRefundClientWithAmount{amount: 12.34, currency: "USD", sessID: "s-revoke"}
+	returnClient := &stubReturnClient{resp: armreservations.ReturnClientPostResponse{}}
+	credentialCalls := 0
+	calculateClientCalls := 0
+	returnClientCalls := 0
+	h := &Handler{
+		config: mockStore,
+		azureRevokeFactory: &azureRevokeClientFactory{
+			newCredential: func() (azcore.TokenCredential, error) {
+				credentialCalls++
+				return nil, nil
+			},
+			newCalculateRefundClient: func(azcore.TokenCredential) (azureCalculateRefundClient, error) {
+				calculateClientCalls++
+				return calcClient, nil
+			},
+			newReturnClient: func(azcore.TokenCredential) (azureReturnClient, error) {
+				returnClientCalls++
+				return returnClient, nil
+			},
+		},
+	}
+
+	result, err := h.revokeAzurePurchase(ctx, r, nil)
+	require.NoError(t, err)
+	m, ok := result.(*revokePurchaseResult)
+	require.True(t, ok)
+	assert.Equal(t, "revoked", m.Status)
+	assert.Equal(t, 1, returnClient.calls)
+	assert.Equal(t, 1, credentialCalls)
+	assert.Equal(t, 1, calculateClientCalls)
+	assert.Equal(t, 1, returnClientCalls)
+}
+
+// TestRevokeAzurePurchase_ClientFactoryError verifies that when the injected
+// factory fails, revokeAzurePurchase propagates the error wrapped with the
+// "revoke azure:" prefix (matching the prior inline-construction error shape)
+// and never reaches callAzureReturn (no store calls expected).
+func TestRevokeAzurePurchase_ClientFactoryError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	r := armReservationRecord()
+	factoryErr := errors.New("credential unavailable")
+	h := &Handler{
+		config: mockStore,
+		azureRevokeFactory: &azureRevokeClientFactory{
+			newCredential: func() (azcore.TokenCredential, error) {
+				return nil, factoryErr
+			},
+		},
+	}
+
+	_, err := h.revokeAzurePurchase(ctx, r, nil)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "revoke azure:")
+	assert.ErrorIs(t, err, factoryErr)
+	_, isClientErr := IsClientError(err)
+	assert.False(t, isClientErr, "client-factory failures are server-side errors, not a ClientError")
+}
+
 // TestRevokePurchase_ConcurrentScheduledRevoke_OneWinsOneGets410 verifies that
 // two parallel revoke requests for the same scheduled execution produce the
 // correct outcomes: the first CAS wins (canceled), the second CAS loses and

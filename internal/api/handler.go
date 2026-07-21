@@ -131,6 +131,11 @@ type Handler struct {
 	// encryption key. Empty when no credStore is configured. Used by the
 	// /health endpoint only — never logged outside that one place.
 	encryptionKeySource string
+
+	// Optional Azure revoke client factory injected by tests. When nil, the
+	// revoke handlers use the production Azure credential and client
+	// constructors.
+	azureRevokeFactory *azureRevokeClientFactory
 }
 
 // getRIUtilizationCache returns the Postgres-backed TTL cache for Cost

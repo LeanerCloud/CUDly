@@ -93,6 +93,12 @@ type azureCalculateRefundClient interface {
 	Post(ctx context.Context, reservationOrderID string, body armreservations.CalculateRefundRequest, options *armreservations.CalculateRefundClientPostOptions) (armreservations.CalculateRefundClientPostResponse, error)
 }
 
+type azureRevokeClientFactory struct {
+	newCredential            func() (azcore.TokenCredential, error)
+	newCalculateRefundClient func(azcore.TokenCredential) (azureCalculateRefundClient, error)
+	newReturnClient          func(azcore.TokenCredential) (azureReturnClient, error)
+}
+
 // revokePurchaseResult is the JSON body returned on a successful revocation.
 type revokePurchaseResult struct {
 	Status     string `json:"status"`
@@ -409,13 +415,9 @@ func (h *Handler) calculateAzureRevoke(ctx context.Context, req *events.LambdaFu
 		return nil, err
 	}
 
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	calcClient, err := h.buildAzureCalculateRefundClient()
 	if err != nil {
-		return nil, fmt.Errorf("revoke/calculate: obtain credential: %w", err)
-	}
-	calcClient, err := armreservations.NewCalculateRefundClient(cred, nil)
-	if err != nil {
-		return nil, fmt.Errorf("revoke/calculate: create calculate-refund client: %w", err)
+		return nil, fmt.Errorf("revoke/calculate: %w", err)
 	}
 
 	quantity := int32(count) // #nosec G115 -- Azure reservation count bounded by API limits (<<math.MaxInt32) //nolint:gosec
@@ -558,22 +560,61 @@ func (h *Handler) revokeAzurePurchase(ctx context.Context, record *config.Purcha
 		return nil, NewClientError(422, "cannot determine Azure reservation order ID from purchase record; contact Azure Support to request a refund")
 	}
 
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	calcClient, returnClient, err := h.buildAzureRevokeClients()
 	if err != nil {
-		return nil, fmt.Errorf("revoke azure: obtain credential: %w", err)
-	}
-
-	calcClient, err := armreservations.NewCalculateRefundClient(cred, nil)
-	if err != nil {
-		return nil, fmt.Errorf("revoke azure: create calculate-refund client: %w", err)
-	}
-
-	returnClient, err := armreservations.NewReturnClient(cred, nil)
-	if err != nil {
-		return nil, fmt.Errorf("revoke azure: create return client: %w", err)
+		return nil, fmt.Errorf("revoke azure: %w", err)
 	}
 
 	return h.callAzureReturn(ctx, calcClient, returnClient, record, orderID, reservationID, expectedRefundAmount)
+}
+
+func (h *Handler) getAzureRevokeFactory() azureRevokeClientFactory {
+	if h.azureRevokeFactory != nil {
+		return *h.azureRevokeFactory
+	}
+	return azureRevokeClientFactory{
+		newCredential: func() (azcore.TokenCredential, error) {
+			return azidentity.NewDefaultAzureCredential(nil)
+		},
+		newCalculateRefundClient: func(cred azcore.TokenCredential) (azureCalculateRefundClient, error) {
+			return armreservations.NewCalculateRefundClient(cred, nil)
+		},
+		newReturnClient: func(cred azcore.TokenCredential) (azureReturnClient, error) {
+			return armreservations.NewReturnClient(cred, nil)
+		},
+	}
+}
+
+func (h *Handler) buildAzureCalculateRefundClient() (azureCalculateRefundClient, error) {
+	factory := h.getAzureRevokeFactory()
+	cred, err := factory.newCredential()
+	if err != nil {
+		return nil, fmt.Errorf("obtain credential: %w", err)
+	}
+	calcClient, err := factory.newCalculateRefundClient(cred)
+	if err != nil {
+		return nil, fmt.Errorf("create calculate-refund client: %w", err)
+	}
+	return calcClient, nil
+}
+
+// buildAzureRevokeClients constructs both clients from one credential because
+// the revoke flow calls CalculateRefund immediately before Return.
+func (h *Handler) buildAzureRevokeClients() (azureCalculateRefundClient, azureReturnClient, error) {
+	factory := h.getAzureRevokeFactory()
+	cred, err := factory.newCredential()
+	if err != nil {
+		return nil, nil, fmt.Errorf("obtain credential: %w", err)
+	}
+	calcClient, err := factory.newCalculateRefundClient(cred)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create calculate-refund client: %w", err)
+	}
+	returnClient, err := factory.newReturnClient(cred)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create return client: %w", err)
+	}
+	return calcClient, returnClient, nil
 }
 
 // callAzureReturn executes the two-step Azure reservation return:
