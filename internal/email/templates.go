@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
+	"github.com/aws/aws-sdk-go-v2/service/sesv2/types"
 )
 
 // Email templates
@@ -520,21 +522,20 @@ func (s *Sender) SendUserInviteEmail(ctx context.Context, email, setupURL string
 	)
 }
 
-// sendRIExchangePendingApprovalVia composes the plain-text + HTML approval
-// bodies and ships them through s.SendToEmailWithCCMultipart. HTML render
-// failures are non-fatal and degrade to single-part text so a template bug
-// never drops the approval email. Shared by Sender and SMTPSender -- issue #296.
-func sendRIExchangePendingApprovalVia(ctx context.Context, s SenderInterface, recipient string, ccEmails []string, subject string, data RIExchangeNotificationData) error {
-	textBody, err := RenderRIExchangePendingApprovalEmail(data)
+// renderRIExchangePendingApproval composes the plain-text + HTML approval
+// bodies. HTML render failures are non-fatal and degrade to single-part text.
+// Shared by the SES and SMTP delivery paths.
+func renderRIExchangePendingApproval(data RIExchangeNotificationData) (textBody, htmlBody string, err error) {
+	textBody, err = RenderRIExchangePendingApprovalEmail(data)
 	if err != nil {
-		return fmt.Errorf("failed to render ri exchange pending approval email (text): %w", err)
+		return "", "", fmt.Errorf("failed to render ri exchange pending approval email (text): %w", err)
 	}
 	htmlBody, htmlErr := RenderRIExchangePendingApprovalEmailHTML(data)
 	if htmlErr != nil {
 		logging.Warnf("email: HTML ri-exchange-pending render failed, falling back to text-only: %v", htmlErr)
 		htmlBody = ""
 	}
-	return s.SendToEmailWithCCMultipart(ctx, recipient, ccEmails, subject, textBody, htmlBody)
+	return textBody, htmlBody, nil
 }
 
 // SendRIExchangePendingApproval sends an email with RI exchange approval links
@@ -552,8 +553,21 @@ func (s *Sender) SendRIExchangePendingApproval(ctx context.Context, data RIExcha
 	if data.RecipientEmail == "" {
 		return ErrNoRecipient
 	}
+	scope := string(common.ScopeRIExchangeApprovals)
+	filteredCC, unsubHdr, postHdr, muted := prepareMuteAwareDelivery(
+		ctx, s.muteChecker, s.unsubscribeBaseURL, data.RecipientEmail, data.CCEmails, scope,
+	)
+	if muted {
+		logging.Infof("email: RI exchange approval skipped for muted recipient (scope=%s)", scope)
+		return nil
+	}
+	textBody, htmlBody, err := renderRIExchangePendingApproval(data)
+	if err != nil {
+		return err
+	}
 	subject := fmt.Sprintf("CUDly - RI Exchange Approval Required (%d exchanges)", len(data.Exchanges))
-	return sendRIExchangePendingApprovalVia(ctx, s, data.RecipientEmail, data.CCEmails, subject, data)
+	extraHeaders := addListUnsubscribeHeaders(unsubHdr, postHdr)
+	return s.sendToEmailWithCCMultipartHeaders(ctx, data.RecipientEmail, filteredCC, subject, textBody, htmlBody, extraHeaders)
 }
 
 // SendRIExchangeCompleted sends a notification about completed RI exchanges.
@@ -757,30 +771,6 @@ const purchaseApprovalRequestHTMLTemplate = `<!DOCTYPE html>
 </td></tr></table>
 </body></html>`
 
-// sendPurchaseApprovalRequestVia composes the plain-text + HTML approval-request
-// bodies and ships them through s.SendToEmailWithCCMultipart. HTML render
-// failures are non-fatal and degrade to single-part text so a template bug
-// never drops the approval email. Shared by Sender and SMTPSender — see
-// issue #287 / PR #298 dedup follow-up.
-func sendPurchaseApprovalRequestVia(ctx context.Context, s SenderInterface, recipient, subject string, data NotificationData) error {
-	textBody, err := RenderPurchaseApprovalRequestEmail(data)
-	if err != nil {
-		return fmt.Errorf("failed to render purchase approval request email (text): %w", err)
-	}
-	// HTML render failure is non-fatal: degrade to single-part text.
-	// SendToEmailWithCCMultipart already handles htmlBody=="" by delegating
-	// to the single-part path on each transport.
-	htmlBody, htmlErr := RenderPurchaseApprovalRequestEmailHTML(data)
-	if htmlErr != nil {
-		// Surface the render failure for production diagnosis. We deliberately
-		// don't return — text-only delivery is the safer fallback than dropping
-		// the approval email entirely.
-		logging.Warnf("email: HTML approval-request render failed, falling back to text-only: %v", htmlErr)
-		htmlBody = ""
-	}
-	return s.SendToEmailWithCCMultipart(ctx, recipient, data.CCEmails, subject, textBody, htmlBody)
-}
-
 // sendMultipartVia is the generic dual-render send helper used by the
 // invite / password-reset / welcome flows. The two render closures are
 // invoked back-to-back; an HTML render failure is non-fatal and degrades
@@ -812,6 +802,11 @@ func sendMultipartVia(
 // ErrNoRecipient when data.RecipientEmail is empty and ErrNoFromEmail when
 // FROM_EMAIL is unconfigured, so the caller can surface a precise reason in
 // the API response instead of the prior silent no-op.
+//
+// Mute check: if the recipient has opted out of purchase_approvals via the
+// List-Unsubscribe link, the email is silently skipped and nil is returned.
+// A List-Unsubscribe / List-Unsubscribe-Post header pair (RFC 8058) is added
+// to the outbound SES message when an unsubscribe base URL is configured.
 func (s *Sender) SendPurchaseApprovalRequest(ctx context.Context, data NotificationData) error {
 	if data.RecipientEmail == "" {
 		return ErrNoRecipient
@@ -824,8 +819,45 @@ func (s *Sender) SendPurchaseApprovalRequest(ctx context.Context, data Notificat
 	if !isValidFromEmail(s.fromEmail) {
 		return ErrNoFromEmail
 	}
+
+	scope := string(common.ScopePurchaseApprovals)
+
+	filteredCC, unsubHdr, postHdr, muted := prepareMuteAwareDelivery(
+		ctx, s.muteChecker, s.unsubscribeBaseURL, data.RecipientEmail, data.CCEmails, scope,
+	)
+	if muted {
+		logging.Infof("email: purchase approval skipped for muted recipient (scope=%s)", scope)
+		return nil
+	}
+	extraHeaders := addListUnsubscribeHeaders(unsubHdr, postHdr)
+
 	subject := fmt.Sprintf("CUDly - Purchase Approval Required (%d commitment(s))", len(data.Recommendations))
-	return sendPurchaseApprovalRequestVia(ctx, s, data.RecipientEmail, subject, data)
+	return sendPurchaseApprovalRequestWithCC(ctx, s, data.RecipientEmail, filteredCC, subject, data, extraHeaders)
+}
+
+// sendPurchaseApprovalRequestWithCC is the low-level send helper that accepts
+// a pre-filtered CC list and extra message headers. Extracted from
+// sendPurchaseApprovalRequestVia so the mute/unsub path can inject headers
+// without duplicating the render logic.
+func sendPurchaseApprovalRequestWithCC(
+	ctx context.Context,
+	s *Sender,
+	recipient string,
+	ccEmails []string,
+	subject string,
+	data NotificationData,
+	extraHeaders []types.MessageHeader,
+) error {
+	textBody, err := RenderPurchaseApprovalRequestEmail(data)
+	if err != nil {
+		return fmt.Errorf("failed to render purchase approval request email (text): %w", err)
+	}
+	htmlBody, htmlErr := RenderPurchaseApprovalRequestEmailHTML(data)
+	if htmlErr != nil {
+		logging.Warnf("email: HTML approval-request render failed, falling back to text-only: %v", htmlErr)
+		htmlBody = ""
+	}
+	return s.sendToEmailWithCCMultipartHeaders(ctx, recipient, ccEmails, subject, textBody, htmlBody, extraHeaders)
 }
 
 // ---------------------------------------------------------------------------

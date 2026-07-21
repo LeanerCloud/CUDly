@@ -232,6 +232,24 @@ func resolveOIDCIssuerURL(cfg ApplicationConfig) string {
 	return strings.TrimRight(cfg.DashboardURL, "/")
 }
 
+// decorateSenderWithMute wires per-recipient mute suppression and the
+// List-Unsubscribe base URL into the concrete SES (*email.Sender) or SMTP
+// (*email.SMTPSender) sender. Other implementations (e.g. the no-op sender used
+// when EMAIL_ENABLED=false) are returned unchanged. configStore satisfies
+// email.MuteChecker via its IsNotificationMuted method. dashboardURL is the
+// already-trimmed dashboard base URL; an empty value disables the
+// List-Unsubscribe header (the mute checker is still wired in).
+func decorateSenderWithMute(sender email.SenderInterface, mc email.MuteChecker, dashboardURL string) email.SenderInterface {
+	switch s := sender.(type) {
+	case *email.Sender:
+		return s.WithMuteChecker(mc).WithUnsubscribeBaseURL(dashboardURL)
+	case *email.SMTPSender:
+		return s.WithMuteChecker(mc).WithUnsubscribeBaseURL(dashboardURL)
+	default:
+		return sender
+	}
+}
+
 // LoadApplicationConfig reads all configuration from environment variables.
 func LoadApplicationConfig() ApplicationConfig {
 	version := os.Getenv("VERSION")
@@ -530,7 +548,6 @@ func NewApplication(ctx context.Context, version string) (*Application, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize email sender: %w", err)
 	}
-
 	// Initialize AWS config for STS client
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
@@ -699,6 +716,11 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		return fmt.Errorf("failed to create PostgreSQL config store")
 	}
 	app.Config = pgStore
+	// Wire per-recipient mute suppression + List-Unsubscribe now that the config
+	// store (which implements email.MuteChecker via IsNotificationMuted) is live.
+	// Moving this here from NewApplication is correct: mute lookups require DB,
+	// so decorating before the store is available would panic on the first call.
+	app.Email = decorateSenderWithMute(app.Email, pgStore, strings.TrimRight(app.appConfig.DashboardURL, "/"))
 
 	// Initialize auth store with the connection
 	authStore := auth.NewPostgresStore(dbConn)

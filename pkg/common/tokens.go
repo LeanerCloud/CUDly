@@ -1,12 +1,35 @@
 package common
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 )
+
+// muteSecretEnvVar is the environment variable holding the HMAC key used to
+// sign notification mute / List-Unsubscribe tokens.
+const muteSecretEnvVar = "NOTIFICATION_MUTE_SECRET"
+
+// ErrMuteSecretMissing is returned by ResolveMuteSecret when
+// NOTIFICATION_MUTE_SECRET is unset. Falling back to a well-known key in any
+// environment would make unsubscribe tokens forgeable for any (email, scope)
+// tuple, so callers must fail closed.
+var ErrMuteSecretMissing = errors.New("common: NOTIFICATION_MUTE_SECRET is required")
+
+// ResolveMuteSecret returns the HMAC key for notification mute tokens, applying
+// a fail-closed policy in every environment. Local development and tests must
+// provide an explicit test-only value rather than sharing a predictable key.
+func ResolveMuteSecret() ([]byte, error) {
+	if v := os.Getenv(muteSecretEnvVar); v != "" {
+		return []byte(v), nil
+	}
+	return nil, ErrMuteSecretMissing
+}
 
 // GenerateApprovalToken returns a 32-byte cryptographically secure random
 // token, hex-encoded (64 chars). Used for purchase + RI exchange + plan
@@ -71,7 +94,7 @@ func MaskToken(token string) string {
 // It uses the first 32 hex characters (128 bits) of the token, which is itself a
 // SHA-256 hex digest, so the GUID is deterministic and collision-free at any
 // realistic purchase volume. Returns "" when token is shorter than 32 hex chars
-// (e.g. empty) so callers keep their prior non-idempotent ID behaviour.
+// (e.g. empty) so callers keep their prior non-idempotent ID behavior.
 func IdempotencyGUID(token string) string {
 	if len(token) < 32 {
 		return ""
@@ -86,7 +109,7 @@ func IdempotencyGUID(token string) string {
 // ReservationOrderID returns the Azure reservationOrderID to PUT for a purchase:
 // the deterministic GUID derived from token when one is supplied (issue #641, so
 // a re-drive re-PUTs the same idempotent order), otherwise fallback (the caller's
-// prior non-idempotent ID, e.g. a random GUID or a timestamp). Centralising the
+// prior non-idempotent ID, e.g. a random GUID or a timestamp). Centralizing the
 // choice keeps each executor's PurchaseCommitment a single statement and avoids
 // repeating the same empty-token guard across every Azure service.
 func ReservationOrderID(token, fallback string) string {
@@ -94,4 +117,48 @@ func ReservationOrderID(token, fallback string) string {
 		return guid
 	}
 	return fallback
+}
+
+// MuteNotifScope is the set of valid notification scopes for per-recipient
+// muting (issue #297). Each scope corresponds to one category of outbound email;
+// a mute row suppresses only that category for its holder.
+type MuteNotifScope string
+
+const (
+	// ScopePurchaseApprovals suppresses purchase-approval-request emails.
+	ScopePurchaseApprovals MuteNotifScope = "purchase_approvals"
+	// ScopeRIExchangeApprovals suppresses RI-exchange pending-approval emails.
+	ScopeRIExchangeApprovals MuteNotifScope = "ri_exchange_approvals"
+)
+
+// DeriveMuteToken returns a 32-byte HMAC-SHA256 token (hex-encoded) that
+// signs the (email, scope) tuple. The token is embedded in the
+// List-Unsubscribe URL; the handler re-derives it from the query params and
+// compares in constant time, so a forged URL cannot mute a different address.
+//
+// key must be resolved by the caller via ResolveMuteSecret, which applies a
+// fail-closed policy in every environment. An empty key is a configuration
+// error and yields the empty string so the caller emits no usable token (and a
+// later VerifyMuteToken comparison against it fails), rather than silently
+// signing with a well-known fallback.
+func DeriveMuteToken(key []byte, email, scope string) string {
+	if len(key) == 0 {
+		return ""
+	}
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(strings.ToLower(email)))
+	mac.Write([]byte("|"))
+	mac.Write([]byte(scope))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// VerifyMuteToken returns true when token equals the HMAC for (email, scope)
+// under key. Comparison is constant-time to prevent timing attacks. A non-empty
+// token never matches when key is empty, so a missing secret fails closed.
+func VerifyMuteToken(key []byte, email, scope, token string) bool {
+	want := DeriveMuteToken(key, email, scope)
+	if want == "" {
+		return false
+	}
+	return hmac.Equal([]byte(want), []byte(token))
 }

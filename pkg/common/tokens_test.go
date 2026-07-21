@@ -125,3 +125,38 @@ func TestReservationOrderID(t *testing.T) {
 	assert.Equal(t, "fallback-id", ReservationOrderID("", "fallback-id"))
 	assert.Equal(t, "fallback-id", ReservationOrderID("abc", "fallback-id"))
 }
+
+func TestDeriveMuteToken_EmptyKeyReturnsEmpty(t *testing.T) {
+	// An empty key is a configuration error: the function must not silently sign
+	// with a well-known fallback, so it yields the empty string.
+	assert.Empty(t, DeriveMuteToken(nil, "user@example.com", "purchase_approvals"))
+	assert.Empty(t, DeriveMuteToken([]byte{}, "user@example.com", "purchase_approvals"))
+}
+
+func TestVerifyMuteToken_EmptyKeyFailsClosed(t *testing.T) {
+	// With no key, verification of any non-empty token must fail (fail closed) so
+	// a missing secret cannot be exploited to accept a forged token. Crucially,
+	// even passing the empty string DeriveMuteToken(nil,...) returns must NOT
+	// verify true.
+	assert.False(t, VerifyMuteToken(nil, "user@example.com", "purchase_approvals", "anytoken"))
+	assert.False(t, VerifyMuteToken(nil, "user@example.com", "purchase_approvals", ""))
+}
+
+func TestResolveMuteSecret_EnvSetWins(t *testing.T) {
+	t.Setenv("NOTIFICATION_MUTE_SECRET", "the-real-secret")
+	key, err := ResolveMuteSecret()
+	require.NoError(t, err)
+	assert.Equal(t, []byte("the-real-secret"), key)
+}
+
+func TestResolveMuteSecret_MissingFailsClosedInEveryEnvironment(t *testing.T) {
+	t.Setenv("NOTIFICATION_MUTE_SECRET", "")
+	for _, environment := range []string{"", "development", "test", "production"} {
+		t.Run(environment, func(t *testing.T) {
+			t.Setenv("ENVIRONMENT", environment)
+			key, err := ResolveMuteSecret()
+			require.ErrorIs(t, err, ErrMuteSecretMissing)
+			assert.Nil(t, key)
+		})
+	}
+}

@@ -442,4 +442,13 @@ type StoreInterface interface {
 	SaveLadderTranches(ctx context.Context, tranches []LadderTrancheDB) error
 	LatestLadderRunStartedAt(ctx context.Context, configID string) (*time.Time, error)
 	TransitionLadderRunStatus(ctx context.Context, id string, fromStatuses []ladder.RunStatus, toStatus ladder.RunStatus) (*LadderRunDB, error)
+
+	// Notification mutes (issue #297 / migration 000091).
+	// UpsertNotificationMute inserts or updates a mute row for (email, scope).
+	// Idempotent for row existence: calling it again for an already-muted
+	// address refreshes muted_at and replaces unmute_token if the token changes.
+	UpsertNotificationMute(ctx context.Context, recipientEmail, scope, unmuteToken string) error
+	// IsNotificationMuted returns true when (email, scope) has a row in
+	// muted_recipients. The email comparison is case-insensitive.
+	IsNotificationMuted(ctx context.Context, recipientEmail, scope string) (bool, error)
 }

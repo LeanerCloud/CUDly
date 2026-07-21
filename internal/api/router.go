@@ -320,6 +320,11 @@ func (r *Router) registerRoutes() {
 		{ExactPath: "/api/ladder/configs", Method: "GET", Handler: r.getLadderConfigsHandler, Auth: AuthUser},
 		{ExactPath: "/api/ladder/configs", Method: "PUT", Handler: r.upsertLadderConfigHandler, Auth: AuthUser},
 
+		// Notification one-click unsubscribe (RFC 8058). AuthPublic: the signed
+		// token in the query string is the credential (mirrors approve/cancel).
+		{ExactPath: "/api/notifications/unsubscribe", Method: "GET", Handler: r.unsubscribeHandler, Auth: AuthPublic},
+		{ExactPath: "/api/notifications/unsubscribe", Method: "POST", Handler: r.unsubscribeHandler, Auth: AuthPublic},
+
 		// Account self-registration (public, called by Terraform during federation IaC apply)
 		{ExactPath: "/api/register", Method: "POST", Handler: r.submitRegistrationHandler, Auth: AuthPublic},
 		{PathPrefix: "/api/register/", Method: "GET", Handler: r.getRegistrationStatusHandler, Auth: AuthPublic},
@@ -977,4 +982,8 @@ func (r *Router) getLadderConfigsHandler(ctx context.Context, req *events.Lambda
 
 func (r *Router) upsertLadderConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
 	return r.h.upsertLadderConfig(ctx, req)
+}
+
+func (r *Router) unsubscribeHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.unsubscribeHandler(ctx, req, params)
 }
