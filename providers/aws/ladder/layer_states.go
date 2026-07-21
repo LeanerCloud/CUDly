@@ -333,7 +333,7 @@ func computeEC2CoveragePct(coverageMap recommendations.PoolCoverageMap, region s
 // the CE response to EC2 RIs in this region, but a standard (non-convertible)
 // EC2 RI in the same account/region would still pass that filter; the ID
 // intersection restricts the aggregate to exactly the convertible RIs this
-// buffer layer tracks (issue #1461).
+// buffer layer tracks (PR #1361).
 func utilsForConvertibleRIs(utils []recommendations.RIUtilization, ris []ec2svc.ConvertibleRI) []recommendations.RIUtilization {
 	ids := make(map[string]struct{}, len(ris))
 	for i := range ris {

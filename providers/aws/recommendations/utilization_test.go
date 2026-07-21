@@ -14,7 +14,7 @@ import (
 // mockUtilizationCE extends the test mock with a configurable
 // GetReservationUtilization response and captures the Filter from the most
 // recent call so tests can assert the CE query was scoped correctly
-// (issue #1461).
+// (PR #1361).
 type mockUtilizationCE struct {
 	mockCostExplorerAPI
 	utilizationOutput *costexplorer.GetReservationUtilizationOutput
@@ -31,7 +31,7 @@ func (m *mockUtilizationCE) GetReservationUtilization(ctx context.Context, param
 }
 
 // TestGetRIUtilization_ScopesToEC2AndRegion is the primary regression test
-// for issue #1461: without a Filter, GetReservationUtilization blends
+// for PR #1361: without a Filter, GetReservationUtilization blends
 // utilization across every reserved-resource type (RDS, EC2, ...) and every
 // region into one SUBSCRIPTION_ID-grouped number. It replicates the real
 // failing scenario -- an RDS reservation with low utilization and an EC2
@@ -77,7 +77,7 @@ func TestGetRIUtilization_ScopesToEC2AndRegion(t *testing.T) {
 	got, err := client.GetRIUtilization(context.Background(), 30, "us-east-1")
 	require.NoError(t, err)
 
-	require.NotNil(t, mock.lastFilter, "GetRIUtilization must send a Filter (issue #1461: an absent Filter blends every reserved-resource type and region into one number)")
+	require.NotNil(t, mock.lastFilter, "GetRIUtilization must send a Filter (PR #1361: an absent Filter blends every reserved-resource type and region into one number)")
 	require.NotNil(t, mock.lastFilter.And, "Filter must And together SERVICE and REGION dimensions")
 	require.Len(t, mock.lastFilter.And, 2)
 	assert.Equal(t, types.DimensionService, mock.lastFilter.And[0].Dimensions.Key)

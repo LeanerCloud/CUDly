@@ -38,7 +38,7 @@ type riAccumulator struct {
 // SUBSCRIPTION_ID-grouped number. Callers that read this as "EC2
 // convertible-RI utilization for this region" (e.g. the ladder
 // ConvertibleRI layer) would then trigger real reshape/exchange
-// decisions off an unrelated RI's utilization (issue #1461). region
+// decisions off an unrelated RI's utilization (PR #1361). region
 // is optional: an empty string omits the REGION dimension, matching
 // callers that haven't resolved a specific region.
 func (c *Client) GetRIUtilization(ctx context.Context, lookbackDays int, region string) ([]RIUtilization, error) {

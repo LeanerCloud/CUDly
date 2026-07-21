@@ -510,7 +510,7 @@ func TestGetLayerStates_RILayer_CoverageAndUtilization(t *testing.T) {
 	// ReservedInstanceID must match the convertible RI's ID: GetLayerStates
 	// intersects CE utilization entries against the account's convertible
 	// RIs before aggregating, so an entry for an untracked ID would be
-	// dropped (issue #1461).
+	// dropped (PR #1361).
 	utils := []recommendations.RIUtilization{
 		{ReservedInstanceID: "ri-1", PurchasedHours: 100, TotalActualHours: 90},
 	}
@@ -534,7 +534,7 @@ func TestGetLayerStates_RILayer_CoverageAndUtilization(t *testing.T) {
 }
 
 // TestGetLayerStates_RILayer_UtilizationExcludesUnrelatedReservations is the
-// GetLayerStates-side regression test for issue #1461. GetRIUtilization's
+// GetLayerStates-side regression test for PR #1361. GetRIUtilization's
 // SERVICE+REGION filter narrows the CE response to EC2 RIs in-region, but a
 // standard (non-convertible) EC2 RI in the same account/region -- or, before
 // the fix, an RDS/ElastiCache/OpenSearch/Redshift reservation blended in by
