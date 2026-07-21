@@ -3052,6 +3052,13 @@ func buildSessionRetryHandler(failed *config.PurchaseExecution, session *Session
 		mockAuth.On("HasPermissionAPI", mock.Anything, session.UserID, "retry-any", "purchases").Return(hasAny, nil).Maybe()
 		mockAuth.On("HasPermissionAPI", mock.Anything, session.UserID, "retry-own", "purchases").Return(hasOwn, nil).Maybe()
 	}
+	// SEC-01 constraint check (adversarial review follow-up to #1210): the
+	// retry path now re-evaluates the retrying session's execute:purchases
+	// Constraints before persisting a successor. .Maybe() so RBAC/state-gate
+	// tests that reject before reaching the constraint check aren't required
+	// to hit it; success-path tests get an unconstrained "allow" by default,
+	// same as setupDirectExecMocks does for the direct-execute path.
+	mockAuth.allowConstraintChecks()
 
 	return &Handler{config: mockConfig, auth: mockAuth}, mockConfig, mockAuth
 }
@@ -3113,7 +3120,7 @@ func TestHandler_retryPurchase_Admin_AllowsAny(t *testing.T) {
 		Status:          "failed",
 		Error:           "send failed: transient SES throttle",
 		CreatedByUserID: &creator,
-		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1, UpfrontCost: 100}},
 	}
 	session := &Session{UserID: retryCallerID, Email: "admin@example.com"}
 	// Admin (Administrators-group member) modeled as a retry-any holder; the
@@ -3133,7 +3140,7 @@ func TestHandler_retryPurchase_RetryAny_AllowsAny(t *testing.T) {
 		Status:          "failed",
 		Error:           "send failed: transient SES throttle",
 		CreatedByUserID: &creator,
-		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1, UpfrontCost: 100}},
 	}
 	session := &Session{UserID: retryCallerID, Email: "ops@example.com"}
 	runSessionRetryAllowed(t, failed, session, true, false, sessionRetryReq())
@@ -3147,7 +3154,7 @@ func TestHandler_retryPurchase_RetryOwn_AllowsCreator(t *testing.T) {
 		Error:           "send failed: SES recipient mailbox full",
 		CreatedByUserID: &creator,
 		RetryAttemptN:   2, // already retried twice
-		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1, UpfrontCost: 100}},
 	}
 	session := &Session{UserID: retryCallerID, Email: "u1@example.com"}
 	newExec, updated := runSessionRetryAllowed(t, failed, session, false, true, sessionRetryReq())
@@ -3257,7 +3264,7 @@ func TestHandler_retryPurchase_PersistentFailure_NoMatch_AllowsRetry(t *testing.
 		Status:          "failed",
 		Error:           "send failed: SES throttle exceeded, please retry",
 		CreatedByUserID: &creator,
-		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1, UpfrontCost: 100}},
 	}
 	session := &Session{UserID: retryCallerID}
 	// Caller owns the row; retry-own authorizes it (issue #907).
@@ -3271,7 +3278,7 @@ func TestHandler_retryPurchase_Threshold_BlocksAtFive_NoForce(t *testing.T) {
 		Status:          "failed",
 		RetryAttemptN:   5, // already at the threshold
 		CreatedByUserID: &creator,
-		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1, UpfrontCost: 100}},
 	}
 	session := &Session{UserID: retryCallerID}
 	// Caller owns the row; retry-own authorizes it (issue #907).
@@ -3294,7 +3301,7 @@ func TestHandler_retryPurchase_Threshold_AllowsWithForce(t *testing.T) {
 		Status:          "failed",
 		RetryAttemptN:   5,
 		CreatedByUserID: &creator,
-		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1, UpfrontCost: 100}},
 	}
 	session := &Session{UserID: retryCallerID}
 	// Caller owns the row; retry-own authorizes it (issue #907).
@@ -3309,7 +3316,7 @@ func TestHandler_retryPurchase_JustUnderThreshold_AllowsNoForce(t *testing.T) {
 		Status:          "failed",
 		RetryAttemptN:   4, // n=4 < threshold=5 → allowed
 		CreatedByUserID: &creator,
-		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1, UpfrontCost: 100}},
 	}
 	session := &Session{UserID: retryCallerID}
 	// Caller owns the row; retry-own authorizes it (issue #907).
@@ -3366,7 +3373,7 @@ func TestHandler_retryPurchase_PreservesPlanMetadata(t *testing.T) {
 		Status:          "failed",
 		Error:           "send failed: transient SES throttle",
 		CreatedByUserID: &creator,
-		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1, UpfrontCost: 100}},
 	}
 	session := &Session{UserID: retryCallerID}
 	// Caller owns the row; retry-own authorizes it (issue #907).
@@ -3408,6 +3415,64 @@ func TestHandler_retryPurchase_AlreadyRetried_RBACBeforeLeak(t *testing.T) {
 	}
 }
 
+// TestHandler_retryPurchase_PermissionConstraintsDenied is the
+// adversarial-review follow-up to #1210 (bug #3): retryPurchase must
+// re-evaluate the retrying session's execute:purchases Constraints before
+// persisting a successor execution, exactly as executePurchase does. Pre-fix,
+// retryPurchase never called requirePermissionConstraints at all, so a
+// retry-own session could relaunch its OWN over-cap failed purchase even
+// though the SAME constraints would deny it as a fresh executePurchase call
+// -- and a permission tightened after the original submission would never
+// apply to a replay.
+//
+// Fails pre-fix: no HasPermissionForConstraintsAPI expectation is ever
+// consulted and the handler proceeds straight to persisting the retry, so a
+// pre-fix run panics on the unexpected SavePurchaseExecution call (no store
+// expectation is registered for it here) instead of the request succeeding
+// silently past the cap.
+// Passes post-fix: the retry is denied with 403 before any execution is
+// persisted.
+func TestHandler_retryPurchase_PermissionConstraintsDenied(t *testing.T) {
+	creator := retryCallerID
+	failed := &config.PurchaseExecution{
+		ExecutionID:     retryExecID,
+		Status:          "failed",
+		Error:           "send failed: transient SES throttle",
+		CreatedByUserID: &creator,
+		Recommendations: []config.RecommendationRecord{
+			{Provider: "aws", Service: "ec2", Region: "us-east-1", Term: 1, UpfrontCost: 5000},
+		},
+	}
+	session := &Session{UserID: retryCallerID, Email: "capped@example.com"}
+
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("GetExecutionByID", mock.Anything, failed.ExecutionID).Return(failed, nil)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(session, nil)
+	// Caller owns the row; retry-own authorizes it (issue #907).
+	mockAuth.On("HasPermissionAPI", mock.Anything, session.UserID, "retry-any", "purchases").Return(false, nil)
+	mockAuth.On("HasPermissionAPI", mock.Anything, session.UserID, "retry-own", "purchases").Return(true, nil)
+	// The retrying session's execute:purchases permission is capped below
+	// the failed batch's $5,000 total commitment.
+	mockAuth.On("HasPermissionForConstraintsAPI", mock.Anything, session.UserID, "execute", "purchases",
+		mock.MatchedBy(func(sets []auth.PermissionConstraints) bool {
+			return len(sets) == 1 && sets[0].MaxPurchaseAmount == 5000.0
+		})).Return(false, nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	handler := &Handler{config: mockConfig, auth: mockAuth}
+	_, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a clientError, got: %v", err)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.Error(), "constraints")
+	mockConfig.AssertNotCalled(t, "WithTx")
+	mockConfig.AssertNotCalled(t, "SavePurchaseExecution")
+}
+
 // --- Regression tests for issue #408 (crypto/rand token in retry path) ---
 
 // TestPersistRetryExecution_ApprovalTokenNotUUID is the regression guard for
@@ -3423,7 +3488,7 @@ func TestPersistRetryExecution_ApprovalTokenNotUUID(t *testing.T) {
 		Status:          "failed",
 		Error:           "ses throttle",
 		CreatedByUserID: &creator,
-		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1, UpfrontCost: 100}},
 	}
 	session := &Session{UserID: retryCallerID, Email: "admin@example.com"}
 	// Caller owns the row; retry-own authorizes it (issue #907).
@@ -3452,7 +3517,7 @@ func TestPersistRetryExecution_ApprovalTokenExpiresAtSet(t *testing.T) {
 		Status:          "failed",
 		Error:           "ses throttle",
 		CreatedByUserID: &creator,
-		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1, UpfrontCost: 100}},
 	}
 	session := &Session{UserID: retryCallerID, Email: "admin@example.com"}
 
@@ -3697,6 +3762,61 @@ func TestHandler_executePurchase_PermissionConstraintsDenied(t *testing.T) {
 		Body: `{"recommendations": [
 			{"id": "rec-1", "provider": "aws", "service": "ec2", "region": "us-east-1", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": 3000.0, "savings": 50.0},
 			{"id": "rec-2", "provider": "aws", "service": "ec2", "region": "eu-west-1", "count": 2, "term": 1, "payment": "all-upfront", "upfront_cost": 2500.0, "savings": 100.0}
+		]}`,
+	}
+	_, err := handler.executePurchase(ctx, req)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a clientError, got: %v", err)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.Error(), "constraints")
+}
+
+// TestHandler_executePurchase_NoUpfrontBatch_TotalCommitmentEnforced is the
+// adversarial-review follow-up to #1210: a MaxPurchaseAmount cap must bind
+// the batch's TOTAL commitment (upfront plus the recurring charge over the
+// term), not the upfront cost alone. This rec is entirely honest,
+// no-upfront data ($0 upfront, $600/mo recurring, 3-year term = $21,600
+// real commitment) -- exactly the shape that evaded the cap pre-fix,
+// because a no-upfront recurring commitment's UpfrontCost is legitimately
+// $0 regardless of how large the real committed spend is.
+//
+// Fails pre-fix: purchaseConstraintSets summed UpfrontCost only, so the
+// constraint set built here would carry MaxPurchaseAmount=0. The
+// mock.MatchedBy predicate below requires 21600.0, so a pre-fix call
+// wouldn't match any registered expectation and testify would panic on an
+// unexpected call, failing the test loudly instead of silently passing an
+// under-counted amount through to a "true" auth decision.
+// Passes post-fix: the constraint set carries the real $21,600 total, and
+// the mocked auth denial (simulating a permission capped below that) is
+// surfaced as a 403 before any execution is persisted.
+func TestHandler_executePurchase_NoUpfrontBatch_TotalCommitmentEnforced(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	// No store expectations registered: the request must be rejected before
+	// SavePurchaseExecution / GetPendingExecutions are reached.
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	userSession := &Session{
+		UserID: "ffffffff-ffff-ffff-ffff-ffffffffffff",
+		Email:  "capped-noupfront@example.com",
+	}
+	const wantTotalCommitment = 21600.0 // $0 upfront + $600/mo * 36 months
+	mockAuth.On("ValidateSession", ctx, "noupfront-token").Return(userSession, nil)
+	mockAuth.On("HasPermissionAPI", ctx, userSession.UserID, "execute", "purchases").Return(true, nil)
+	mockAuth.On("GetAllowedAccountsAPI", ctx, userSession.UserID).Return([]string{}, nil)
+	mockAuth.On("HasPermissionForConstraintsAPI", ctx, userSession.UserID, "execute", "purchases",
+		mock.MatchedBy(func(sets []auth.PermissionConstraints) bool {
+			return len(sets) == 1 && sets[0].MaxPurchaseAmount == wantTotalCommitment
+		})).Return(false, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer noupfront-token"},
+		Body: `{"recommendations": [
+			{"id": "rec-1", "provider": "aws", "service": "ec2", "region": "us-east-1", "count": 1, "term": 3, "payment": "no-upfront", "upfront_cost": 0.0, "monthly_cost": 600.0, "savings": 50.0}
 		]}`,
 	}
 	_, err := handler.executePurchase(ctx, req)

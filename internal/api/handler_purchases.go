@@ -1523,6 +1523,15 @@ func resolveOpsHint(failureReason string) string {
 //     → may retry their own failed row.
 //   - else → 403.
 //
+// Constraint gate (SEC-01, issue #1141, adversarial review follow-up to
+// #1210): the retried recommendations must ALSO satisfy the retrying
+// session's execute:purchases permission Constraints (MaxPurchaseAmount,
+// Providers, Services, Regions, AccountIDs), exactly as a fresh
+// executePurchase call would enforce. Without this gate a retry-any
+// session could replay another user's over-cap failed purchase, and a
+// permission tightened after the original submission would never apply
+// to a replay.
+//
 // State gate:
 //   - failedExec.Status must be "failed" → 409 otherwise.
 //   - failedExec.Error must NOT match the persistent-failure map →
@@ -1546,6 +1555,18 @@ func (h *Handler) retryPurchase(ctx context.Context, req *events.LambdaFunctionU
 	totalUpfront, totalSavings, err := validateAndTotalRecommendations(failedExec.Recommendations)
 	if err != nil {
 		return nil, err
+	}
+
+	// Enforce the per-permission Constraints (MaxPurchaseAmount, Providers,
+	// Services, Regions, AccountIDs) configured on the retrying session's
+	// execute:purchases permission (SEC-01, issue #1141), mirroring the gate
+	// in validateExecutePurchaseRequest. Without this, retry-any could
+	// relaunch another user's over-cap failed purchase that the retrying
+	// session's OWN constraints would deny, and constraints tightened after
+	// the original submission would never apply on replay (adversarial
+	// review follow-up to #1210).
+	if constraintErr := h.enforcePurchaseConstraints(ctx, session, failedExec.Recommendations); constraintErr != nil {
+		return nil, constraintErr
 	}
 
 	newExecution, err := h.persistRetryExecution(ctx, failedExec, session, totalUpfront, totalSavings)
@@ -1995,12 +2016,30 @@ func (h *Handler) validateExecutePurchaseRequest(ctx context.Context, req *event
 	// execute:purchases permission (SEC-01, issue #1141). Runs after the
 	// per-rec validation above so provider tokens are already normalized.
 	// Each recommendation must individually be granted by a permission; the
-	// amount cap is checked against the batch's total upfront cost so it
-	// cannot be evaded by splitting a large purchase across recs.
-	if err := h.requirePermissionConstraints(ctx, session, "execute", "purchases", purchaseConstraintSets(execReq.Recommendations)); err != nil {
+	// amount cap is checked against the batch's total commitment (upfront
+	// plus recurring, see recTotalCommitment) so it cannot be evaded by
+	// splitting a large purchase across recs or by a no-upfront commitment
+	// whose real cost is entirely recurring.
+	if err := h.enforcePurchaseConstraints(ctx, session, execReq.Recommendations); err != nil {
 		return ExecutePurchaseRequest{}, nil, err
 	}
 	return execReq, session, nil
+}
+
+// enforcePurchaseConstraints builds the per-recommendation
+// auth.PermissionConstraints sets (purchaseConstraintSets) and enforces them
+// against session's execute:purchases permission, first rejecting a batch
+// whose total commitment computes to zero (requireNonZeroCommitment).
+// Shared by the direct-execute request validation and the retry path
+// (retryPurchase) so both re-derive and check the exact same Constraints
+// (SEC-01, issue #1141; adversarial review follow-up to #1210 -- the retry
+// path previously skipped this check entirely).
+func (h *Handler) enforcePurchaseConstraints(ctx context.Context, session *Session, recs []config.RecommendationRecord) error {
+	constraintSets := purchaseConstraintSets(recs)
+	if err := requireNonZeroCommitment(constraintSets); err != nil {
+		return err
+	}
+	return h.requirePermissionConstraints(ctx, session, "execute", "purchases", constraintSets)
 }
 
 // purchaseConstraintSets builds one auth.PermissionConstraints per
@@ -2009,18 +2048,22 @@ func (h *Handler) validateExecutePurchaseRequest(ctx context.Context, req *event
 // Service/Region/AccountIDs lists make the auth service's any-overlap
 // matcher equivalent to strict containment, so a batch cannot pass on the
 // strength of one in-scope rec while another rec is out of scope.
-// MaxPurchaseAmount carries the batch's total upfront cost (the same basis
-// as the global $10M sanity cap in validateAndTotalRecommendations) on
-// every set. AccountIDs is ALWAYS populated: a rec without a CloudAccountID
+// MaxPurchaseAmount carries the batch's TOTAL commitment (upfront cost plus
+// the full recurring obligation over the term, see recTotalCommitment) on
+// every set, not just the upfront cost. A no-upfront or partial-upfront
+// commitment's UpfrontCost is legitimately $0 or small, so capping on
+// upfront alone let a batch with an arbitrarily large recurring commitment
+// evade the cap using entirely honest data (adversarial review follow-up
+// to #1210). AccountIDs is ALWAYS populated: a rec without a CloudAccountID
 // carries unattributedAccountConstraint so an AccountIDs-constrained
 // permission denies it (the auth matcher treats an empty request-side list
 // as satisfied, so omitting the dimension would fail open). Session-level
 // allowed_accounts scoping is independently enforced by
 // validatePurchaseRecommendationScope.
 func purchaseConstraintSets(recs []config.RecommendationRecord) []auth.PermissionConstraints {
-	var totalUpfront float64
+	var totalCommitment float64
 	for i := range recs {
-		totalUpfront += recs[i].UpfrontCost
+		totalCommitment += recTotalCommitment(&recs[i])
 	}
 	sets := make([]auth.PermissionConstraints, 0, len(recs))
 	for i := range recs {
@@ -2034,10 +2077,50 @@ func purchaseConstraintSets(recs []config.RecommendationRecord) []auth.Permissio
 			Services:          []string{rec.Service},
 			Regions:           []string{rec.Region},
 			AccountIDs:        []string{accountID},
-			MaxPurchaseAmount: totalUpfront,
+			MaxPurchaseAmount: totalCommitment,
 		})
 	}
 	return sets
+}
+
+// recTotalCommitment returns a single recommendation's full committed
+// spend: the upfront cost plus the recurring monthly cost multiplied by
+// the term length in months. UpfrontCost and MonthlyCost are both totals
+// for the rec's Count (AWS Cost Explorer reports them per-batch, not
+// per-instance -- see recommendationToOffering), so they sum directly
+// with no per-instance scaling needed. rec.Term is in years (AWS/Azure/GCP
+// RI/SP standard; see exchange_lookup.go), converted to months with the
+// same *12 convention used throughout this package. A nil MonthlyCost
+// (all-upfront commitments have no recurring charge) or a non-positive
+// Term (can't be converted to months) contribute nothing to the recurring
+// leg, matching the Term<=0 handling elsewhere in this package.
+func recTotalCommitment(rec *config.RecommendationRecord) float64 {
+	total := rec.UpfrontCost
+	if rec.Term > 0 && rec.MonthlyCost != nil {
+		total += *rec.MonthlyCost * float64(rec.Term*12)
+	}
+	return total
+}
+
+// requireNonZeroCommitment guards against a purchase batch whose computed
+// total commitment (see recTotalCommitment) is exactly zero even though it
+// targets real, count>0 resources. A genuine RI/Savings Plan/commitment
+// purchase always carries SOME committed spend -- either an upfront cost
+// (all/partial-upfront) or a recurring monthly charge (no-upfront); a batch
+// that totals to exactly $0 is not "unconstrained", it is malformed or
+// adversarial data (e.g. a no-upfront rec submitted with monthly_cost
+// omitted or zeroed out to slip under a MaxPurchaseAmount cap -- the same
+// evasion shape recTotalCommitment was introduced to close). Per this
+// repo's no-silent-fallback-on-money-paths convention, a zero total must
+// fail loud rather than be silently treated as "no constraint applies"
+// (MaxPurchaseAmount==0 reads as uncapped to matchPurchaseAmountConstraint).
+// sets is assumed non-empty whenever recs is (callers already reject empty
+// recommendation batches before reaching this check).
+func requireNonZeroCommitment(sets []auth.PermissionConstraints) error {
+	if len(sets) > 0 && sets[0].MaxPurchaseAmount == 0 {
+		return NewClientError(400, "recommendation batch has zero total commitment (no upfront or recurring cost); refusing to evaluate purchase constraints against it")
+	}
+	return nil
 }
 
 // normalizeCapacityPercent defaults an absent/zero capacity_percent to 100

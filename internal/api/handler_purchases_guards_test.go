@@ -94,6 +94,15 @@ func TestValidatePurchaseRecommendation(t *testing.T) {
 		{"invalid term 0", mutate(func(r *config.RecommendationRecord) { r.Term = 0 }), true},
 		{"invalid payment foo", mutate(func(r *config.RecommendationRecord) { r.Payment = "foo" }), true},
 		{"negative count", mutate(func(r *config.RecommendationRecord) { r.Count = -1 }), true},
+		{"negative monthly cost rejected", mutate(func(r *config.RecommendationRecord) {
+			m := -1.0
+			r.MonthlyCost = &m
+		}), true},
+		{"nil monthly cost accepted", mutate(func(r *config.RecommendationRecord) { r.MonthlyCost = nil }), false},
+		{"zero monthly cost accepted", mutate(func(r *config.RecommendationRecord) {
+			m := 0.0
+			r.MonthlyCost = &m
+		}), false},
 		{"zero count", mutate(func(r *config.RecommendationRecord) { r.Count = 0 }), true},
 		{"empty service", mutate(func(r *config.RecommendationRecord) { r.Service = "" }), true},
 		{"empty provider rejected", mutate(func(r *config.RecommendationRecord) { r.Provider = "" }), true},
