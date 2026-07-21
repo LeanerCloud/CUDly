@@ -525,8 +525,8 @@ func (s *Sender) SendUserInviteEmail(ctx context.Context, email, setupURL string
 // renderRIExchangePendingApproval composes the plain-text + HTML approval
 // bodies. HTML render failures are non-fatal and degrade to single-part text.
 // Shared by the SES and SMTP delivery paths.
-func renderRIExchangePendingApproval(data RIExchangeNotificationData) (string, string, error) {
-	textBody, err := RenderRIExchangePendingApprovalEmail(data)
+func renderRIExchangePendingApproval(data RIExchangeNotificationData) (textBody, htmlBody string, err error) {
+	textBody, err = RenderRIExchangePendingApprovalEmail(data)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to render ri exchange pending approval email (text): %w", err)
 	}

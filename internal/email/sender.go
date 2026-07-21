@@ -154,21 +154,6 @@ func (s *Sender) listUnsubscribeHeaders(email, scope string) (headerValue, postV
 	return unsubscribeHeaderValuesFor(s.unsubscribeBaseURL, email, scope)
 }
 
-// isMuted returns true when the given address is muted for this scope. When the
-// mute checker is nil or returns an error the address is treated as not muted so
-// a transient DB outage doesn't silently block approval emails.
-func (s *Sender) isMuted(ctx context.Context, email, scope string) bool {
-	return isRecipientMuted(ctx, s.muteChecker, email, scope)
-}
-
-// filterMutedAddresses returns a copy of addrs with any muted (for scope)
-// entries removed. The original slice is not modified. Errors from the mute
-// store are treated as "not muted" (fail-open) so a DB hiccup does not
-// silently suppress approval emails.
-func (s *Sender) filterMutedAddresses(ctx context.Context, addrs []string, scope string) []string {
-	return filterMutedRecipients(ctx, s.muteChecker, addrs, scope)
-}
-
 // snsMaxSubjectLen is the maximum byte length SNS accepts for a Subject.
 // Subjects longer than 100 bytes are rejected with InvalidParameter at runtime.
 const snsMaxSubjectLen = 100
