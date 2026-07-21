@@ -1299,15 +1299,21 @@ func (s *Scheduler) convertRecommendations(recs []common.Recommendation, provide
 				providerName, rec.PaymentOption, rec.Account, rec.Service, rec.ResourceType)
 		}
 
-		// Parse term to integer (e.g., "3yr" -> 3)
-		term := 3
-		if rec.Term != "" {
-			termStr := strings.TrimSuffix(rec.Term, "yr")
-			if parsed, err := strconv.Atoi(termStr); err == nil && parsed > 0 {
-				term = parsed
-			} else {
-				logging.Warnf("Invalid term value %q, defaulting to 3 years", rec.Term)
-			}
+		// Parse term to integer (e.g., "3yr" -> 3). An empty or unparseable
+		// term must NOT be coerced to a valid default: rec.Term round-trips
+		// through this int on the purchase path (internal/purchase/execution.go
+		// formats it back as "%dyr"), so silently defaulting here would let a
+		// malformed term launder into a valid, purchasable commitment length
+		// downstream, bypassing the ARCH-04 whitelist checks in the provider
+		// clients entirely, since "3yr" is itself a whitelisted value (issue
+		// #1207 follow-up). Drop the recommendation instead of persisting a
+		// fabricated term.
+		termStr := strings.TrimSuffix(rec.Term, "yr")
+		term, err := strconv.Atoi(termStr)
+		if err != nil || term <= 0 {
+			logging.Errorf("convertRecommendations: dropping %s rec (account=%s service=%s sku=%s region=%s): invalid term %q",
+				providerName, rec.Account, rec.Service, rec.ResourceType, rec.Region, rec.Term)
+			continue
 		}
 
 		// The ID must be unique per logically-distinct rec — otherwise

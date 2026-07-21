@@ -1190,6 +1190,66 @@ func TestScheduler_ConvertRecommendations_Empty(t *testing.T) {
 	assert.Len(t, records, 0)
 }
 
+// TestScheduler_ConvertRecommendations_InvalidTermDropped is the ARCH-04
+// follow-up (issue #1207) regression test: a rec with an empty or
+// unparseable Term must be dropped rather than silently persisted with
+// Term=3. rec.Term round-trips through this int on the purchase path
+// (internal/purchase/execution.go formats it back as "%dyr"), so a
+// fabricated default here would let a malformed term launder into a real
+// 3-year purchase, bypassing every provider client's ARCH-04 whitelist
+// (since "3yr" is itself a valid, purchasable term). This test fails on
+// the pre-fix code (which appends a record with Term=3 for both bad recs)
+// and passes once the invalid-term recs are skipped.
+func TestScheduler_ConvertRecommendations_InvalidTermDropped(t *testing.T) {
+	scheduler := &Scheduler{}
+
+	recommendations := []common.Recommendation{
+		// Empty Term: what a 0/NULL Term DB row produces on the scheduler
+		// purchase path.
+		{
+			Provider:         common.ProviderAWS,
+			Service:          common.ServiceEC2,
+			Region:           "us-east-1",
+			ResourceType:     "m5.large",
+			Count:            1,
+			Term:             "",
+			PaymentOption:    "all-upfront",
+			CommitmentCost:   1000.0,
+			EstimatedSavings: 500.0,
+		},
+		// Garbage Term.
+		{
+			Provider:         common.ProviderAWS,
+			Service:          common.ServiceEC2,
+			Region:           "us-east-1",
+			ResourceType:     "m5.xlarge",
+			Count:            1,
+			Term:             "banana",
+			PaymentOption:    "all-upfront",
+			CommitmentCost:   2000.0,
+			EstimatedSavings: 900.0,
+		},
+		// Valid rec in the same batch must still be persisted.
+		{
+			Provider:         common.ProviderAWS,
+			Service:          common.ServiceEC2,
+			Region:           "us-east-1",
+			ResourceType:     "m5.2xlarge",
+			Count:            1,
+			Term:             "1yr",
+			PaymentOption:    "all-upfront",
+			CommitmentCost:   3000.0,
+			EstimatedSavings: 1400.0,
+		},
+	}
+
+	records := scheduler.convertRecommendations(recommendations, "aws")
+
+	require.Len(t, records, 1, "both invalid-term recs must be dropped, not persisted with a fabricated Term")
+	assert.Equal(t, "m5.2xlarge", records[0].ResourceType)
+	assert.Equal(t, 1, records[0].Term)
+}
+
 // TestScheduler_ConvertRecommendations_OnDemandCost pins #274: the
 // canonical on-demand baseline must round-trip from common.Recommendation
 // through to the persisted RecommendationRecord so the frontend can use
