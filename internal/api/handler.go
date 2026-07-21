@@ -234,6 +234,10 @@ const apiKeyAdminUserID = "admin-api-key"
 // permissions and is denied (fail closed). Returns the session on success so
 // callers can read session.UserID for account filtering.
 func (h *Handler) requirePermission(ctx context.Context, req *events.LambdaFunctionURLRequest, action, resource string) (*Session, error) {
+	if principal, ok := principalFromContext(ctx); ok {
+		return h.requirePrincipalPermission(ctx, req, principal, action, resource)
+	}
+
 	apiKey := extractAPIKey(req)
 	if h.checkAdminAPIKey(apiKey) {
 		return &Session{UserID: apiKeyAdminUserID}, nil
@@ -266,6 +270,33 @@ func (h *Handler) requirePermission(ctx context.Context, req *events.LambdaFunct
 		return nil, NewClientError(401, "invalid session")
 	}
 
+	return h.requireSessionPermission(ctx, session, action, resource)
+}
+
+func (h *Handler) requirePrincipalPermission(ctx context.Context, req *events.LambdaFunctionURLRequest, principal *Principal, action, resource string) (*Session, error) {
+	switch principal.Kind {
+	case PrincipalAdminAPIKey:
+		return &Session{UserID: apiKeyAdminUserID}, nil
+	case PrincipalUserAPIKey:
+		session, err := h.authorizeAPIKey(ctx, extractAPIKey(req), action, resource)
+		if err != nil {
+			return nil, err
+		}
+		if session == nil {
+			return nil, NewClientError(401, "API key permission validation failed")
+		}
+		return session, nil
+	case PrincipalSession:
+		return h.requireSessionPermission(ctx, principal.Session, action, resource)
+	default:
+		return nil, NewClientError(401, "unsupported authentication principal")
+	}
+}
+
+func (h *Handler) requireSessionPermission(ctx context.Context, session *Session, action, resource string) (*Session, error) {
+	if session == nil || session.UserID == "" {
+		return nil, NewClientError(401, "invalid session")
+	}
 	has, err := h.auth.HasPermissionAPI(ctx, session.UserID, action, resource)
 	if err != nil {
 		return nil, fmt.Errorf("permission check failed: %w", err)
@@ -428,12 +459,13 @@ func (h *Handler) HandleRequest(ctx context.Context, req *events.LambdaFunctionU
 	logging.Debugf("API Request: %s %s", method, redactURL(path))
 
 	// Validate request
-	if response := h.validateRequest(ctx, req, method, path, corsHeaders); response != nil {
+	requestCtx, response := h.validateRequestContext(ctx, req, method, path, corsHeaders)
+	if response != nil {
 		return response, nil
 	}
 
 	// Route and execute request
-	return h.executeRequest(ctx, method, path, req, corsHeaders)
+	return h.executeRequest(requestCtx, method, path, req, corsHeaders)
 }
 
 // buildResponseHeaders creates response headers with security and CORS settings.
@@ -456,43 +488,56 @@ func (h *Handler) buildResponseHeaders() map[string]string {
 
 // validateRequest validates the incoming request and returns error response if validation fails.
 func (h *Handler) validateRequest(ctx context.Context, req *events.LambdaFunctionURLRequest, method, path string, corsHeaders map[string]string) *events.LambdaFunctionURLResponse {
+	_, response := h.validateRequestContext(ctx, req, method, path, corsHeaders)
+	return response
+}
+
+func (h *Handler) validateRequestContext(ctx context.Context, req *events.LambdaFunctionURLRequest, method, path string, corsHeaders map[string]string) (context.Context, *events.LambdaFunctionURLResponse) {
 	// Validate request body size
 	if err := validateRequestBodySize(req.Body); err != nil {
 		logging.Warnf("Request body size exceeded: %d bytes", len(req.Body))
-		return h.buildResponse(413, corsHeaders, map[string]string{"error": "Request body too large"}, nil)
+		return ctx, h.buildResponse(413, corsHeaders, map[string]string{"error": "Request body too large"}, nil)
 	}
 
 	// Validate Content-Type
 	if err := validateContentType(req); err != nil {
-		return h.buildResponse(415, corsHeaders, map[string]string{"error": err.Error()}, nil)
+		return ctx, h.buildResponse(415, corsHeaders, map[string]string{"error": err.Error()}, nil)
 	}
 
 	// Validate authentication and CSRF
-	if response := h.validateSecurity(ctx, req, method, path, corsHeaders); response != nil {
-		return response
+	requestCtx, response := h.validateSecurityContext(ctx, req, method, path, corsHeaders)
+	if response != nil {
+		return ctx, response
 	}
 
-	return nil
+	return requestCtx, nil
 }
 
 // validateSecurity validates authentication and CSRF token.
 func (h *Handler) validateSecurity(ctx context.Context, req *events.LambdaFunctionURLRequest, method, path string, corsHeaders map[string]string) *events.LambdaFunctionURLResponse {
+	_, response := h.validateSecurityContext(ctx, req, method, path, corsHeaders)
+	return response
+}
+
+func (h *Handler) validateSecurityContext(ctx context.Context, req *events.LambdaFunctionURLRequest, method, path string, corsHeaders map[string]string) (context.Context, *events.LambdaFunctionURLResponse) {
 	if h.isPublicEndpoint(path) {
-		return nil
+		return ctx, nil
 	}
 
-	if !h.authenticate(ctx, req) {
-		return h.buildResponse(401, corsHeaders, map[string]string{"error": "Unauthorized"}, nil)
+	principal, err := h.authenticatePrincipal(ctx, req)
+	if err != nil {
+		return ctx, h.buildResponse(401, corsHeaders, map[string]string{"error": "Unauthorized"}, nil)
 	}
+	ctx = contextWithPrincipal(ctx, principal)
 
 	if h.requiresCSRFValidation(method, path, req) {
 		if err := h.validateCSRF(ctx, req); err != nil {
 			logging.Warnf("CSRF validation failed: %v", err)
-			return h.buildResponse(403, corsHeaders, map[string]string{"error": "CSRF validation failed"}, nil)
+			return ctx, h.buildResponse(403, corsHeaders, map[string]string{"error": "CSRF validation failed"}, nil)
 		}
 	}
 
-	return nil
+	return ctx, nil
 }
 
 // executeRequest routes and executes the API request.
