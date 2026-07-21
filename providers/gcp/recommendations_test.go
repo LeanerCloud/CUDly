@@ -155,7 +155,7 @@ func TestRecommendationsClientAdapter_GetRecommendations_PropagatesContextCancel
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := adapter.GetRecommendations(ctx, common.RecommendationParams{})
+	_, err := adapter.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.Error(t, err, "expected context.Canceled to propagate from GetRecommendations")
 	assert.ErrorIs(t, err, context.Canceled,
 		"GetRecommendations must propagate the parent ctx error")

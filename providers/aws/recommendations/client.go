@@ -49,20 +49,19 @@ type CostExplorerAPI interface {
 // Client wraps the AWS Cost Explorer client for RI recommendations.
 type Client struct {
 	costExplorerClient CostExplorerAPI
-	region             string
-
-	// newRateLimiter is called once per API call (not shared across goroutines).
-	// Tests can replace it with a factory returning a faster limiter.
-	newRateLimiter func() *RateLimiter
 
 	// ec2API is the EC2 client used to build the DescribeInstanceTypes paginator.
 	// Populated by NewClient from aws.Config; nil when created via NewClientWithAPI.
 	ec2API DescribeInstanceTypesAPI
 
+	rateLimiter *RateLimiter
+
 	// instanceTypePagerFactory creates a new InstanceTypePager on demand.
 	// Set by NewClient to wrap ec2API; overridable via SetInstanceTypePagerFactory
 	// for hermetic tests. When nil, instanceTypeLookup returns (0,0).
 	instanceTypePagerFactory func() InstanceTypePager
+
+	region string
 
 	// skuCatalog caches the per-instance-type vCPU/memory catalog, fetched
 	// lazily once per Client lifetime via sync.Once (one DescribeInstanceTypes
@@ -85,7 +84,7 @@ func NewClient(cfg *aws.Config) *Client {
 	return &Client{
 		costExplorerClient: costexplorer.NewFromConfig(ceConfig),
 		region:             cfg.Region,
-		newRateLimiter:     NewRateLimiter,
+		rateLimiter:        NewRateLimiter(),
 		ec2API:             ec2Client,
 		// Factory wraps the EC2 client so the paginator is created lazily
 		// on the first EC2 recommendation parse (not at construction time).
@@ -100,7 +99,7 @@ func NewClientWithAPI(api CostExplorerAPI, region string) *Client {
 	return &Client{
 		costExplorerClient: api,
 		region:             region,
-		newRateLimiter:     NewRateLimiter,
+		rateLimiter:        NewRateLimiter(),
 		// ec2API left nil: instanceTypeLookup falls back to VCPU=0/MemoryGB=0
 		// unless the caller sets instanceTypePagerFactory.
 	}
@@ -117,7 +116,7 @@ func (c *Client) SetInstanceTypePagerFactory(f func() InstanceTypePager) {
 // instanceTypeLookup returns the cached SKU entry for instanceType.
 // On the first call the catalog is built by calling the pager factory.
 // ok=false when no factory is configured, the catalog fetch failed, or
-// the instance type was not in the catalog - the caller falls back to
+// the instance type was not in the catalog -- the caller falls back to
 // VCPU=0/MemoryGB=0 (graceful-degradation contract from Azure PR #810).
 func (c *Client) instanceTypeLookup(ctx context.Context, instanceType string) (instanceTypeSKUEntry, bool) {
 	if c.instanceTypePagerFactory == nil {
@@ -134,14 +133,17 @@ func (c *Client) SetRecLookbackPeriod(period string) {
 }
 
 // GetRecommendations fetches Reserved Instance recommendations for any service.
-func (c *Client) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *Client) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
+	if params == nil {
+		return nil, fmt.Errorf("params cannot be nil")
+	}
 	// Handle Savings Plans separately — they use a different Cost Explorer API
 	// (GetSavingsPlansPurchaseRecommendation, not GetReservationPurchaseRecommendation).
 	// Match any SP slug — the legacy umbrella plus the four per-plan-type slugs —
 	// via the IsSavingsPlan family predicate so the dispatch keeps working as
 	// callers migrate.
 	if common.IsSavingsPlan(params.Service) {
-		return c.getSavingsPlansRecommendations(ctx, &params)
+		return c.getSavingsPlansRecommendations(ctx, params)
 	}
 
 	input := &costexplorer.GetReservationPurchaseRecommendationInput{
@@ -157,7 +159,7 @@ func (c *Client) GetRecommendations(ctx context.Context, params common.Recommend
 		return nil, err
 	}
 
-	return c.parseRecommendations(ctx, allRecs, params)
+	return c.parseRecommendations(ctx, allRecs, *params)
 }
 
 // fetchRIAllPages paginates over all pages of RI recommendations for a single
@@ -207,12 +209,12 @@ func (c *Client) fetchRIPageWithRetry(
 	ctx context.Context,
 	input *costexplorer.GetReservationPurchaseRecommendationInput,
 ) (*costexplorer.GetReservationPurchaseRecommendationOutput, error) {
-	rl := c.newRateLimiter()
+	rateLimiter := c.rateLimiter.newOperation()
 	var result *costexplorer.GetReservationPurchaseRecommendationOutput
 	var err error
 
 	for {
-		if waitErr := rl.Wait(ctx); waitErr != nil {
+		if waitErr := rateLimiter.Wait(ctx); waitErr != nil {
 			return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
 		}
 
@@ -221,13 +223,13 @@ func (c *Client) fetchRIPageWithRetry(
 		}
 		result, err = c.costExplorerClient.GetReservationPurchaseRecommendation(ctx, input)
 		concurrency.Release(ctx)
-		if !rl.ShouldRetry(err) {
+		if !rateLimiter.ShouldRetry(err) {
 			break
 		}
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to get RI recommendations after %d retries: %w", rl.GetRetryCount(), err)
+		return nil, fmt.Errorf("failed to get RI recommendations after %d retries: %w", rateLimiter.GetRetryCount(), err)
 	}
 
 	return result, nil
@@ -276,7 +278,7 @@ func (c *Client) fetchSingleComboRecs(ctx context.Context, service common.Servic
 		LookbackPeriod: lookback,
 		Region:         "",
 	}
-	recs, err := c.GetRecommendations(ctx, params)
+	recs, err := c.GetRecommendations(ctx, &params)
 	if err != nil {
 		// A canceled / deadline-exceeded ctx is NOT a per-combo
 		// failure to be tolerated -- every subsequent combo
@@ -429,9 +431,9 @@ func (c *Client) GetAllRecommendations(ctx context.Context) ([]common.Recommenda
 // stays under the gocyclo gate (.golangci.yml min-complexity: 15) after the
 // post-Wait ctx.Err() block was added.
 type serviceResult struct {
+	err  error
 	name string
 	recs []common.Recommendation
-	err  error
 }
 
 // mergeServiceResults logs per-service errors at WARN and appends successful
@@ -452,20 +454,20 @@ func mergeServiceResults(results ...serviceResult) ([]common.Recommendation, err
 	total := 0
 	failures := 0
 	var lastErr error
-	for _, r := range results {
-		total += len(r.recs)
-		if r.err != nil {
+	for i := range results {
+		total += len(results[i].recs)
+		if results[i].err != nil {
 			failures++
-			lastErr = r.err
+			lastErr = results[i].err
 		}
 	}
 	out := make([]common.Recommendation, 0, total)
-	for _, r := range results {
-		if r.err != nil {
-			logging.Warnf("AWS %s recommendations: %v", r.name, r.err)
+	for i := range results {
+		if results[i].err != nil {
+			logging.Warnf("AWS %s recommendations: %v", results[i].name, results[i].err)
 			continue
 		}
-		out = append(out, r.recs...)
+		out = append(out, results[i].recs...)
 	}
 	if failures == len(results) && failures > 0 {
 		return nil, fmt.Errorf("all %d AWS recommendation services failed: %w", failures, lastErr)

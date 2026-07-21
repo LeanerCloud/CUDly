@@ -66,7 +66,7 @@ func (c *Client) GetRegion() string {
 }
 
 // GetRecommendations returns empty as EC2 uses centralized Cost Explorer recommendations
-func (c *Client) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *Client) GetRecommendations(_ context.Context, _ *common.RecommendationParams) ([]common.Recommendation, error) {
 	// EC2 recommendations come from Cost Explorer API via RecommendationsClient
 	return []common.Recommendation{}, nil
 }

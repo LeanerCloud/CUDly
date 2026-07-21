@@ -53,6 +53,15 @@ func newTestRecommendationsClient(ce *mockCostExplorerClient) *recommendations.C
 	return recommendations.NewClientWithAPI(ce, "us-east-1")
 }
 
+func TestRecommendationsClientAdapter_GetRecommendations_NilParams(t *testing.T) {
+	adapter := &RecommendationsClientAdapter{client: newTestRecommendationsClient(&mockCostExplorerClient{})}
+
+	recs, err := adapter.GetRecommendations(context.Background(), nil)
+
+	require.EqualError(t, err, "params cannot be nil")
+	assert.Nil(t, recs)
+}
+
 func TestNewEC2Client(t *testing.T) {
 	cfg := aws.Config{Region: "us-east-1"}
 	client := NewEC2Client(cfg)
@@ -146,12 +155,12 @@ func TestRecommendationsClientAdapter_GetRecommendationsForService(t *testing.T)
 // testRecommendationsClientAdapter is a test-only version of RecommendationsClientAdapter
 // that uses an interface for easier mocking
 type testRecommendationsClientAdapter struct {
-	getRecommendationsFunc           func(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error)
+	getRecommendationsFunc           func(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error)
 	getRecommendationsForServiceFunc func(ctx context.Context, service common.ServiceType) ([]common.Recommendation, error)
 	getAllRecommendationsFunc        func(ctx context.Context) ([]common.Recommendation, error)
 }
 
-func (t *testRecommendationsClientAdapter) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (t *testRecommendationsClientAdapter) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	if t.getRecommendationsFunc != nil {
 		return t.getRecommendationsFunc(ctx, params)
 	}
@@ -191,7 +200,7 @@ func TestRecommendationsClientAdapter_GetRecommendations_Integration(t *testing.
 		// This will call the real adapter method which exercises the filtering code
 		// Even though the underlying client returns no recommendations,
 		// this test ensures the adapter's GetRecommendations method is covered
-		_, err := adapter.GetRecommendations(context.Background(), params)
+		_, err := adapter.GetRecommendations(context.Background(), &params)
 		// We expect no error even with empty results
 		require.NoError(t, err)
 	})

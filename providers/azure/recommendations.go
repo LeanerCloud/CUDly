@@ -27,7 +27,7 @@ import (
 // allow tests to substitute fake implementations; production code uses the
 // concrete types via the newXxxClientFn variables below.
 type serviceRecsGetter interface {
-	GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error)
+	GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error)
 }
 
 // newComputeClientFn, newDatabaseClientFn, newCacheClientFn,
@@ -108,7 +108,10 @@ func NewRecommendationsClientAdapter(cred azcore.TokenCredential, subscriptionID
 // its own error and returns nil to the group so that a single service failure
 // does not cancel sibling calls. Results are appended in a deterministic order
 // (compute → database → cache → cosmosdb → savingsplans → advisor) after all goroutines finish.
-func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
+	if params == nil {
+		return nil, fmt.Errorf("params cannot be nil")
+	}
 	var (
 		computeRecs, dbRecs, cacheRecs, cosmosRecs, advisorRecs, spRecs []common.Recommendation
 		computeErr, dbErr, cacheErr, cosmosErr, advisorErr, spErr       error
@@ -143,10 +146,11 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	// Record which services the params filter lets through so the merge can
 	// distinguish "skipped by filter" from "attempted and succeeded with zero
 	// recommendations" when applying the all-attempted-failed guard.
-	includeCompute := shouldIncludeService(params, common.ServiceCompute)
-	includeDB := shouldIncludeService(params, common.ServiceRelationalDB)
-	includeCache := shouldIncludeService(params, common.ServiceCache)
-	includeCosmos := shouldIncludeService(params, common.ServiceNoSQL)
+	includeCompute := shouldIncludeService(*params, common.ServiceCompute)
+	includeDB := shouldIncludeService(*params, common.ServiceRelationalDB)
+	includeCache := shouldIncludeService(*params, common.ServiceCache)
+	includeCosmos := shouldIncludeService(*params, common.ServiceNoSQL)
+	includeSP := shouldIncludeService(*params, common.ServiceSavingsPlansAll)
 
 	// Compute (VM) recommendations — subscription-wide.
 	if includeCompute {
@@ -185,7 +189,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	// The call returns an empty slice so the service appears in the fan-out
 	// and will start returning data once the API stabilizes without requiring
 	// a scheduler change.
-	if shouldIncludeService(params, common.ServiceSavingsPlansAll) {
+	if includeSP {
 		goService(&spErr, func() {
 			spClient := newSavingsPlansClientFn(r.cred, r.subscriptionID, "")
 			spRecs, spErr = spClient.GetRecommendations(gctx, params)
@@ -203,7 +207,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 		advisorFn = r.getAdvisorRecommendations
 	}
 	goService(&advisorErr, func() {
-		advisorRecs, advisorErr = advisorFn(gctx, params)
+		advisorRecs, advisorErr = advisorFn(gctx, *params)
 	})
 
 	// Wait for all goroutines. g.Wait() always returns nil because every
@@ -313,13 +317,13 @@ func (r *RecommendationsClientAdapter) GetRecommendationsForService(ctx context.
 	params := common.RecommendationParams{
 		Service: service,
 	}
-	return r.GetRecommendations(ctx, params)
+	return r.GetRecommendations(ctx, &params)
 }
 
 // GetAllRecommendations retrieves all Azure reservation recommendations across all services
 func (r *RecommendationsClientAdapter) GetAllRecommendations(ctx context.Context) ([]common.Recommendation, error) {
 	params := common.RecommendationParams{}
-	return r.GetRecommendations(ctx, params)
+	return r.GetRecommendations(ctx, &params)
 }
 
 // getAdvisorRecommendations retrieves cost optimization recommendations from Azure Advisor

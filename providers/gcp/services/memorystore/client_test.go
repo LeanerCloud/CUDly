@@ -574,7 +574,7 @@ func TestMemorystoreClient_GetRecommendations_WithMockClient(t *testing.T) {
 			}
 			client.SetRecommenderClient(mockClient)
 
-			recs, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+			recs, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 
 			if tt.wantErr {
 				require.Error(t, err)

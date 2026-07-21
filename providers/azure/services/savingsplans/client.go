@@ -132,7 +132,7 @@ func (c *Client) GetRegion() string {
 // (providers/azure/recommendations.go, COR-03). When this method starts
 // making real API calls, flip that call site's attempted flag back to the
 // params-filter value so its failures count toward the guard.
-func (c *Client) GetRecommendations(_ context.Context, _ common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *Client) GetRecommendations(_ context.Context, _ *common.RecommendationParams) ([]common.Recommendation, error) {
 	return []common.Recommendation{}, nil
 }
 

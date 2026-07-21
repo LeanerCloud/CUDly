@@ -111,21 +111,20 @@ func (c *SearchClient) GetRegion() string {
 	return c.region
 }
 
-// AzureRetailPrice is the response envelope for the Azure Retail Prices API.
-type AzureRetailPrice = pricing.Page[pricing.RetailPriceItem]
+// AzureRetailPrice represents pricing information from Azure Retail Prices API
+type AzureRetailPrice struct {
+	Items        []pricing.RetailPriceItem `json:"Items"`
+	NextPageLink string                    `json:"NextPageLink"`
+	Count        int                       `json:"Count"`
+}
 
-// GetRecommendations returns empty for Azure Search because the Azure Consumption
-// ReservationRecommendations API has no Search-specific resourceType. The
-// valid resourceType values are: VirtualMachines, SQLDatabases, PostgreSQL,
-// ManagedDisk, MySQL, RedHat, MariaDB, RedisCache, CosmosDB, SqlDataWarehouse,
-// SUSELinux, AppService, BlockBlob, AzureDataExplorer, VMwareCloudSimple.
-//
-// Querying without a resourceType filter (or with an invalid value) causes the
-// API to default to VirtualMachines and return VM reservation recommendations,
-// which would be mislabelled as Search recommendations. Returning empty is the
-// correct behaviour until Azure exposes a Search reservation recommendation
-// stream via this API.
-func (c *SearchClient) GetRecommendations(_ context.Context, _ common.RecommendationParams) ([]common.Recommendation, error) {
+// GetRecommendations returns an empty slice for Azure Search. "AzureSearch" is not
+// a valid resourceType in the Consumption ReservationRecommendations API (valid list:
+// VirtualMachines, SQLDatabases, CosmosDB, SqlDataWarehouse, etc.), so any call to
+// that API returns VM recommendations that would be mislabeled as Search recommendations.
+// Until Azure exposes a stable Search reservation recommendations API, this method
+// is intentionally a no-op.
+func (c *SearchClient) GetRecommendations(_ context.Context, _ *common.RecommendationParams) ([]common.Recommendation, error) {
 	return []common.Recommendation{}, nil
 }
 

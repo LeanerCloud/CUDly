@@ -174,13 +174,13 @@ func validateOnDemandSeriesArgs(region string, lookbackDays int) error {
 // utilization.go. Each attempt acquires one rate-limiter slot at the API call
 // site (not at goroutine creation) per feedback_semaphore_at_api_call.
 func (c *Client) fetchOnDemandPage(ctx context.Context, input *costexplorer.GetCostAndUsageInput) (*costexplorer.GetCostAndUsageOutput, error) {
-	rl := c.newRateLimiter()
+	rateLimiter := c.rateLimiter.newOperation()
 	for {
-		if waitErr := rl.Wait(ctx); waitErr != nil {
+		if waitErr := rateLimiter.Wait(ctx); waitErr != nil {
 			return nil, fmt.Errorf("rate limiter wait: %w", waitErr)
 		}
 		out, err := c.costExplorerClient.GetCostAndUsage(ctx, input)
-		if !rl.ShouldRetry(err) {
+		if !rateLimiter.ShouldRetry(err) {
 			if err != nil {
 				return nil, fmt.Errorf("GetCostAndUsage: %w", err)
 			}
