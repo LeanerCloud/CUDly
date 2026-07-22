@@ -30,8 +30,11 @@ func viewerGroup() *Group {
 }
 
 // TestGroupOnlyAuthz_AdminEquivalence proves an Administrators-group member
-// retains every capability the old role == "admin" path allowed: HasPermission
-// returns true for any action/resource, and UserHasAdminCapability is true.
+// retains every capability the old role == "admin" path allowed, EXCEPT the
+// money-spending verbs carved out for separation of duties (issue #923):
+// HasPermission returns true for any other action/resource, and
+// UserHasAdminCapability is true. See TestAdminWildcardCarveOuts in
+// types_test.go for the equivalent AuthContext.HasPermission coverage.
 func TestGroupOnlyAuthz_AdminEquivalence(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
@@ -44,14 +47,22 @@ func TestGroupOnlyAuthz_AdminEquivalence(t *testing.T) {
 	mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(adminGroup(), nil)
 
 	for _, tc := range []struct{ action, resource string }{
-		{ActionExecute, ResourcePurchases},
-		{ActionApproveAny, ResourcePurchases},
 		{ActionDelete, ResourceUsers},
 		{ActionUpdate, ResourceConfig},
 	} {
 		has, err := svc.HasPermission(ctx, "admin-1", tc.action, tc.resource, nil)
 		require.NoError(t, err)
 		assert.Truef(t, has, "admin must hold %s on %s", tc.action, tc.resource)
+	}
+
+	// admin:* must NOT cover the carved-out money-spending verbs (issue #923).
+	for _, tc := range []struct{ action, resource string }{
+		{ActionExecute, ResourcePurchases},
+		{ActionApproveAny, ResourcePurchases},
+	} {
+		has, err := svc.HasPermission(ctx, "admin-1", tc.action, tc.resource, nil)
+		require.NoError(t, err)
+		assert.Falsef(t, has, "admin-only must NOT hold %s on %s (issue #923)", tc.action, tc.resource)
 	}
 
 	isAdmin, err := svc.UserHasAdminCapability(ctx, "admin-1")
