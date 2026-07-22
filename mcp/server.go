@@ -30,6 +30,8 @@ func registrations() []tools.Registration {
 		tools.NewAWSRDSRIPurchaseTool(),
 		tools.NewAWSElastiCacheRIPurchaseTool(),
 		tools.NewAWSSavingsPlansPurchaseTool(),
+		tools.NewAzureComputeRIPurchaseTool(),
+		tools.NewGCPComputeEngineCUDPurchaseTool(),
 	}
 }
 
