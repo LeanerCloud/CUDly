@@ -147,7 +147,7 @@ func (t *simpleAWSRIPurchaseTool) handle(ctx context.Context, _ *mcp.CallToolReq
 	return nil, *resp, nil
 }
 
-func (t *simpleAWSRIPurchaseTool) recommendationFromArgs(args simpleAWSRIPurchaseArgs) (common.Recommendation, bool, bool, error) {
+func (t *simpleAWSRIPurchaseTool) recommendationFromArgs(args simpleAWSRIPurchaseArgs) (rec common.Recommendation, dryRun, confirm bool, err error) {
 	if args.Region == "" {
 		return common.Recommendation{}, false, false, fmt.Errorf("region is required")
 	}
@@ -166,7 +166,7 @@ func (t *simpleAWSRIPurchaseTool) recommendationFromArgs(args simpleAWSRIPurchas
 		return common.Recommendation{}, false, false, err
 	}
 
-	rec := common.Recommendation{
+	rec = common.Recommendation{
 		Provider:       common.ProviderAWS,
 		Service:        t.spec.service,
 		Region:         args.Region,
@@ -177,7 +177,7 @@ func (t *simpleAWSRIPurchaseTool) recommendationFromArgs(args simpleAWSRIPurchas
 		PaymentOption:  string(paymentOption),
 	}
 
-	dryRun, confirm := true, false
+	dryRun, confirm = true, false
 	if args.DryRun != nil {
 		dryRun = *args.DryRun
 	}

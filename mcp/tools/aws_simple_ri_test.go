@@ -12,7 +12,7 @@ import (
 )
 
 // simpleToolConstructors covers every simpleAWSRIPurchaseTool instance so
-// the shared safety-rail behaviour (confirm gate, dry_run gate, boundary
+// the shared safety-rail behavior (confirm gate, dry_run gate, boundary
 // validation, real-purchase wiring) is proven once per product rather than
 // hand-copied three times.
 func simpleToolConstructors() map[string]func() Registration {

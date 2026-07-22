@@ -116,9 +116,9 @@ func rdsRIPurchaseRequiredFields(args rdsRIPurchaseArgs) error {
 // rdsRecommendationFromArgs validates args and builds the
 // common.Recommendation to purchase, plus the effective dry_run/confirm
 // booleans.
-func rdsRecommendationFromArgs(args rdsRIPurchaseArgs) (common.Recommendation, bool, bool, error) {
-	if err := rdsRIPurchaseRequiredFields(args); err != nil {
-		return common.Recommendation{}, false, false, err
+func rdsRecommendationFromArgs(args rdsRIPurchaseArgs) (rec common.Recommendation, dryRun, confirm bool, err error) {
+	if fieldErr := rdsRIPurchaseRequiredFields(args); fieldErr != nil {
+		return common.Recommendation{}, false, false, fieldErr
 	}
 	term, err := ValidateTermYears(args.TermYears)
 	if err != nil {
@@ -133,7 +133,7 @@ func rdsRecommendationFromArgs(args rdsRIPurchaseArgs) (common.Recommendation, b
 		return common.Recommendation{}, false, false, err
 	}
 
-	rec := common.Recommendation{
+	rec = common.Recommendation{
 		Provider:       common.ProviderAWS,
 		Service:        common.ServiceRDS,
 		Region:         args.Region,
@@ -149,7 +149,7 @@ func rdsRecommendationFromArgs(args rdsRIPurchaseArgs) (common.Recommendation, b
 		},
 	}
 
-	dryRun, confirm := true, false
+	dryRun, confirm = true, false
 	if args.DryRun != nil {
 		dryRun = *args.DryRun
 	}

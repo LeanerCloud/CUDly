@@ -158,7 +158,7 @@ func effectiveDryRunConfirm(args ec2RIPurchaseArgs) (dryRun, confirm bool) {
 // ec2RecommendationFromArgs validates every field of args and builds the
 // common.Recommendation to purchase, plus the effective dry_run/confirm
 // booleans.
-func ec2RecommendationFromArgs(args ec2RIPurchaseArgs) (common.Recommendation, bool, bool, error) {
+func ec2RecommendationFromArgs(args ec2RIPurchaseArgs) (rec common.Recommendation, dryRun, confirm bool, err error) {
 	if args.Region == "" {
 		return common.Recommendation{}, false, false, fmt.Errorf("region is required")
 	}
@@ -181,7 +181,7 @@ func ec2RecommendationFromArgs(args ec2RIPurchaseArgs) (common.Recommendation, b
 		return common.Recommendation{}, false, false, err
 	}
 
-	rec := common.Recommendation{
+	rec = common.Recommendation{
 		Provider:       common.ProviderAWS,
 		Service:        common.ServiceEC2,
 		Region:         args.Region,
@@ -198,7 +198,7 @@ func ec2RecommendationFromArgs(args ec2RIPurchaseArgs) (common.Recommendation, b
 		},
 	}
 
-	dryRun, confirm := effectiveDryRunConfirm(args)
+	dryRun, confirm = effectiveDryRunConfirm(args)
 	return rec, dryRun, confirm, nil
 }
 

@@ -74,15 +74,11 @@ func (t *listCommitmentActionsTool) Register(s *mcp.Server) error {
 func (t *listCommitmentActionsTool) handle(_ context.Context, _ *mcp.CallToolRequest, _ listCommitmentActionsArgs) (*mcp.CallToolResult, listCommitmentActionsResult, error) {
 	actions := make([]ActionEntry, 0, len(t.descriptors))
 	for _, d := range t.descriptors {
-		actions = append(actions, ActionEntry{
-			Name:                d.Name,
-			Provider:            d.Provider,
-			Product:             d.Product,
-			Action:              d.Action,
-			Description:         d.Description,
-			RealPurchaseEnabled: d.RealPurchaseEnabled,
-			ExamplePrompts:      d.ExamplePrompts,
-		})
+		// ActionEntry's fields are identical in name, type, and order to
+		// Descriptor's -- only the json tags differ -- so a direct
+		// conversion is equivalent to (and clearer than) a field-by-field
+		// struct literal.
+		actions = append(actions, ActionEntry(d))
 	}
 	return nil, listCommitmentActionsResult{Actions: actions}, nil
 }

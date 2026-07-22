@@ -110,7 +110,7 @@ func (t *awsSavingsPlansPurchaseTool) handle(ctx context.Context, _ *mcp.CallToo
 // savingsPlanRecommendationFromArgs validates args and builds the
 // common.Recommendation to purchase, the effective region to resolve the
 // service client against, and the effective dry_run/confirm booleans.
-func savingsPlanRecommendationFromArgs(args savingsPlansPurchaseArgs) (common.Recommendation, string, bool, bool, error) {
+func savingsPlanRecommendationFromArgs(args savingsPlansPurchaseArgs) (rec common.Recommendation, region string, dryRun, confirm bool, err error) {
 	if args.HourlyCommitment <= 0 {
 		return common.Recommendation{}, "", false, false, fmt.Errorf("hourly_commitment must be > 0, got %v", args.HourlyCommitment)
 	}
@@ -130,7 +130,7 @@ func savingsPlanRecommendationFromArgs(args savingsPlansPurchaseArgs) (common.Re
 		return common.Recommendation{}, "", false, false, fmt.Errorf("region is required for sp_type=%s", SPTypeEC2Instance)
 	}
 
-	region := args.Region
+	region = args.Region
 	if region == "" {
 		region = savingsPlansAccountLevelRegion
 	}
@@ -144,7 +144,7 @@ func savingsPlanRecommendationFromArgs(args savingsPlansPurchaseArgs) (common.Re
 	// depth on top of the ValidateSPType check above).
 	service := savingsplans.ServiceTypeForPlanType(spTypes.SavingsPlanType(spType))
 
-	rec := common.Recommendation{
+	rec = common.Recommendation{
 		Provider:       common.ProviderAWS,
 		Service:        service,
 		Region:         region,
@@ -159,7 +159,7 @@ func savingsPlanRecommendationFromArgs(args savingsPlansPurchaseArgs) (common.Re
 		},
 	}
 
-	dryRun, confirm := true, false
+	dryRun, confirm = true, false
 	if args.DryRun != nil {
 		dryRun = *args.DryRun
 	}
