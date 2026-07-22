@@ -102,7 +102,7 @@ func (t *azureComputeRIPurchaseTool) handle(ctx context.Context, _ *mcp.CallTool
 	return nil, *resp, nil
 }
 
-func azureComputeRecommendationFromArgs(args azureComputeRIPurchaseArgs) (common.Recommendation, bool, bool, error) {
+func azureComputeRecommendationFromArgs(args azureComputeRIPurchaseArgs) (rec common.Recommendation, dryRun, confirm bool, err error) {
 	if args.Region == "" {
 		return common.Recommendation{}, false, false, fmt.Errorf("region is required")
 	}
@@ -121,7 +121,7 @@ func azureComputeRecommendationFromArgs(args azureComputeRIPurchaseArgs) (common
 		return common.Recommendation{}, false, false, err
 	}
 
-	rec := common.Recommendation{
+	rec = common.Recommendation{
 		Provider:       common.ProviderAzure,
 		Service:        common.ServiceCompute,
 		Region:         args.Region,
@@ -132,7 +132,7 @@ func azureComputeRecommendationFromArgs(args azureComputeRIPurchaseArgs) (common
 		PaymentOption:  string(paymentOption),
 	}
 
-	dryRun, confirm := true, false
+	dryRun, confirm = true, false
 	if args.DryRun != nil {
 		dryRun = *args.DryRun
 	}

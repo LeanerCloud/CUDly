@@ -110,9 +110,9 @@ func elasticacheRIPurchaseRequiredFields(args elasticacheRIPurchaseArgs) error {
 // elasticacheRecommendationFromArgs validates args and builds the
 // common.Recommendation to purchase, plus the effective dry_run/confirm
 // booleans.
-func elasticacheRecommendationFromArgs(args elasticacheRIPurchaseArgs) (common.Recommendation, bool, bool, error) {
-	if err := elasticacheRIPurchaseRequiredFields(args); err != nil {
-		return common.Recommendation{}, false, false, err
+func elasticacheRecommendationFromArgs(args elasticacheRIPurchaseArgs) (rec common.Recommendation, dryRun, confirm bool, err error) {
+	if fieldErr := elasticacheRIPurchaseRequiredFields(args); fieldErr != nil {
+		return common.Recommendation{}, false, false, fieldErr
 	}
 	term, err := ValidateTermYears(args.TermYears)
 	if err != nil {
@@ -127,7 +127,7 @@ func elasticacheRecommendationFromArgs(args elasticacheRIPurchaseArgs) (common.R
 		return common.Recommendation{}, false, false, err
 	}
 
-	rec := common.Recommendation{
+	rec = common.Recommendation{
 		Provider:       common.ProviderAWS,
 		Service:        common.ServiceElastiCache,
 		Region:         args.Region,
@@ -142,7 +142,7 @@ func elasticacheRecommendationFromArgs(args elasticacheRIPurchaseArgs) (common.R
 		},
 	}
 
-	dryRun, confirm := true, false
+	dryRun, confirm = true, false
 	if args.DryRun != nil {
 		dryRun = *args.DryRun
 	}
