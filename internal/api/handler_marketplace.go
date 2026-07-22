@@ -628,8 +628,13 @@ func resolveMarketplacePriceSchedule(supplied []MarketplacePriceTier, remainingM
 		remainingMonths = 1 // defensive: should not happen for an active RI
 	}
 	listPrice := marketplaceResidualPerUnit(remainingMonths, originalTerm, count, upfrontCost) * awsMarketplaceBuyerDiscountFactor
-	if listPrice < 0 {
-		listPrice = 0
+	if listPrice <= 0 {
+		// A no-upfront RI (upfrontCost <= 0) or an unknown/elapsed term
+		// (originalTerm <= 0) makes marketplaceResidualPerUnit return 0, which
+		// would otherwise produce a $0 listing sent straight to AWS -- the same
+		// value the supplied-schedule branch above rejects with "price must be
+		// positive". Fail loud instead of silently listing the RI for free.
+		return nil, fmt.Errorf("cannot compute a default listing price for this RI (no upfront cost or unknown term to prorate); supply an explicit price_schedule")
 	}
 	return []MarketplacePriceTier{
 		{TermMonths: int64(remainingMonths), Price: listPrice},

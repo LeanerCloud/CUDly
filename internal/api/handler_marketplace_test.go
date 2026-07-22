@@ -523,6 +523,29 @@ func TestResolveMarketplacePriceSchedule_PerUnitFloor(t *testing.T) {
 	assert.InDelta(t, 21.0, schedule[0].Price, 0.001)
 }
 
+// TestResolveMarketplacePriceSchedule_ZeroDefaultPriceRejected verifies the
+// fix for the $0 default listing bug: a no-upfront RI (upfrontCost <= 0)
+// hitting the default-schedule branch (no supplied price_schedule) must
+// return an error instead of silently computing a $0 listing price.
+// marketplaceResidualPerUnit returns 0 whenever upfrontCost <= 0, and the
+// pre-fix code sent that straight through as {Price: 0} -- the exact value
+// the supplied-schedule branch above rejects with "price must be positive".
+// This FAILS on the pre-fix code (no error, schedule[0].Price == 0) and
+// PASSES after (explicit error, nil schedule).
+func TestResolveMarketplacePriceSchedule_ZeroDefaultPriceRejected(t *testing.T) {
+	schedule, err := resolveMarketplacePriceSchedule(nil, 12, 12, 1, 0)
+	require.Error(t, err, "a no-upfront RI must not silently produce a $0 default listing")
+	assert.Nil(t, schedule)
+	assert.Contains(t, err.Error(), "cannot compute a default listing price")
+
+	// Same failure mode when the term is unknown (originalTerm <= 0), e.g. an
+	// imported/external row where the contract term could not be resolved.
+	schedule, err = resolveMarketplacePriceSchedule(nil, 12, 0, 1, 1200)
+	require.Error(t, err, "an unknown term must not silently produce a $0 default listing")
+	assert.Nil(t, schedule)
+	assert.Contains(t, err.Error(), "cannot compute a default listing price")
+}
+
 // TestResolveMarketplacePriceSchedule_TermExceedsRemainingRejected verifies the
 // Defect A term-range guardrail: a tier whose TermMonths exceeds the RI's
 // remaining months is rejected outright (an out-of-range term would let a

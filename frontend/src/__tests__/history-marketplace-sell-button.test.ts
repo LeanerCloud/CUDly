@@ -303,4 +303,94 @@ describe('Marketplace consent modal residual proration (issue #808 follow-up)', 
     // regression back to the $0 / ~1/3 value.
     expect(text).not.toContain('$0');
   });
+
+  // Regression for the consent-modal math bug (PR follow-up to #808): the
+  // modal used to compute totalValue = upfrontRemaining + monthly *
+  // remainingMonths on the ROW TOTAL, which both (a) includes recurring cost
+  // the backend deliberately excludes, and (b) is not divided by count. The
+  // previous test above pins monthly_cost: 0, count: 1, which hides the bug
+  // entirely (both formulas agree when monthly is 0 and count is 1). These
+  // cases use a nonzero monthly_cost and count > 1 to actually exercise the
+  // divergence and pin the modal to the backend's real per-unit formula.
+  test('shows the backend-matching per-unit price, not the old recurring-inclusive row total', async () => {
+    const JUST_NOW = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(); // ~1 day ago
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({
+          purchase_id: 'ri-multi',
+          offering_class: 'standard',
+          term: 1, // 1 year = 12 months
+          timestamp: JUST_NOW,
+          count: 3,
+          upfront_cost: 1200, // row total across all 3 instances
+          monthly_cost: 50,
+        }),
+      ],
+    });
+
+    await loadHistory();
+
+    const sellBtn = document
+      .getElementById('history-list')!
+      .querySelector<HTMLButtonElement>('.history-marketplace-sell-btn[data-marketplace-sell-id="ri-multi"]');
+    expect(sellBtn).not.toBeNull();
+
+    sellBtn!.click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const arg = (confirmDialog as jest.Mock).mock.calls[0][0] as { body: HTMLElement };
+    const text = arg.body.textContent || '';
+
+    // Backend math (mirrors marketplaceResidualPerUnit): per-unit residual =
+    // 1200 * (12/12) / 3 = 400; default per-unit price = 400 * 0.95 = 380;
+    // total across 3 units = 1140. Monthly cost is excluded entirely.
+    expect(text).toContain('$380/unit');
+    expect(text).toContain('$1140 total for 3 units');
+    // The old buggy formula (upfrontRemaining + monthly*remainingMonths, row
+    // total, no count division) produced totalValue=1800, listPrice=1710 --
+    // a price the backend never actually lists at. Guard against regressing.
+    expect(text).not.toContain('$1710');
+  });
+
+  test('shows default price as unavailable for a no-upfront RI instead of a fabricated price', async () => {
+    const JUST_NOW = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({
+          purchase_id: 'ri-no-upfront',
+          offering_class: 'standard',
+          term: 1,
+          timestamp: JUST_NOW,
+          count: 1,
+          upfront_cost: 0, // No Upfront Standard RI
+          monthly_cost: 200,
+        }),
+      ],
+    });
+
+    await loadHistory();
+
+    const sellBtn = document
+      .getElementById('history-list')!
+      .querySelector<HTMLButtonElement>('.history-marketplace-sell-btn[data-marketplace-sell-id="ri-no-upfront"]');
+    expect(sellBtn).not.toBeNull();
+
+    sellBtn!.click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const arg = (confirmDialog as jest.Mock).mock.calls[0][0] as { body: HTMLElement };
+    const text = arg.body.textContent || '';
+
+    // A no-upfront RI has no residual to prorate; the backend now rejects the
+    // default schedule rather than silently listing at $0, so the modal must
+    // say pricing is unavailable rather than showing a nonzero recurring-cost-
+    // derived price (the old bug) or a misleading "$0" (would look free).
+    expect(text).toContain('Default list price');
+    expect(text).toContain('unavailable');
+    expect(text).not.toContain('$0');
+  });
 });

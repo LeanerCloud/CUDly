@@ -1394,17 +1394,26 @@ function wireRowActionHandlers(container: HTMLElement): void {
           : 0;
         const remainingMonths = Math.max(0, Math.round(termMonths - elapsedMonths));
         const upfront = purchase.upfront_cost ?? 0;
-        const monthly = purchase.monthly_cost ?? 0;
-        // Prorate the upfront cost to its residual value over the remaining
-        // term. Using the full upfront overstates the listing value for a
-        // partially elapsed RI (a 36-month RI at month 6 retains 30/36 of its
-        // upfront value). Mirrors resolveMarketplacePriceSchedule in
-        // internal/api/handler_marketplace.go, which drops the upfront term to
-        // 0 when the original term is unknown (<=0); we do the same here.
-        const upfrontRemaining = termMonths > 0 ? upfront * (remainingMonths / termMonths) : 0;
-        const totalValue = upfrontRemaining + monthly * remainingMonths;
-        const listPrice = totalValue * AWS_MARKETPLACE_BUYER_DISCOUNT;
-        const netProceeds = listPrice * AWS_MARKETPLACE_NET_FACTOR;
+        const count = purchase.count > 0 ? purchase.count : 1;
+        // Mirror marketplaceResidualPerUnit + resolveMarketplacePriceSchedule's
+        // default branch in internal/api/handler_marketplace.go EXACTLY, so
+        // this preview can never diverge from what the backend actually lists:
+        //   - upfront-only: recurring (monthly) cost is deliberately excluded
+        //     because the buyer assumes the recurring obligation post-transfer;
+        //   - per instance: upfront_cost is the row total for `count` instances,
+        //     but the AWS Marketplace price is per instance, so divide by count;
+        //   - prorated: the upfront residual is scaled by remaining/original
+        //     term (a 36-month RI at month 6 retains only 30/36 of its value);
+        //   - zero when unpriceable: a no-upfront RI (upfront <= 0) or an
+        //     unknown term (termMonths <= 0) has no residual to prorate, which
+        //     is exactly when the backend now rejects the default schedule
+        //     with an error instead of silently listing at $0.
+        const perUnitResidual = termMonths > 0 && upfront > 0
+          ? (upfront * (remainingMonths / termMonths)) / count
+          : 0;
+        const listPricePerUnit = perUnitResidual * AWS_MARKETPLACE_BUYER_DISCOUNT;
+        const listPriceTotal = listPricePerUnit * count;
+        const netProceedsTotal = listPriceTotal * AWS_MARKETPLACE_NET_FACTOR;
 
         const summaryEl = document.createElement('dl');
         summaryEl.className = 'marketplace-pricing-summary';
@@ -1420,9 +1429,19 @@ function wireRowActionHandlers(container: HTMLElement): void {
         addRow('Region', purchase.region || '-');
         addRow('Resource type', purchase.resource_type || '-');
         addRow('Remaining term', remainingMonths === 1 ? '1 month' : `${remainingMonths} months`);
-        addRow('Default list price', formatCurrency(listPrice));
-        addRow(`AWS fee (${AWS_MARKETPLACE_FEE_PERCENT}%)`, formatCurrency(listPrice * (AWS_MARKETPLACE_FEE_PERCENT / 100)));
-        addRow('Estimated net proceeds', formatCurrency(netProceeds));
+        if (listPricePerUnit > 0) {
+          addRow('Default list price', count > 1
+            ? `${formatCurrency(listPricePerUnit)}/unit (${formatCurrency(listPriceTotal)} total for ${count} units)`
+            : formatCurrency(listPriceTotal));
+          addRow(`AWS fee (${AWS_MARKETPLACE_FEE_PERCENT}%)`, formatCurrency(listPriceTotal * (AWS_MARKETPLACE_FEE_PERCENT / 100)));
+          addRow('Estimated net proceeds', formatCurrency(netProceedsTotal));
+        } else {
+          // No default price can be computed (no upfront cost or unknown
+          // term) -- listing will be rejected server-side unless a custom
+          // price_schedule is supplied. Say so instead of showing a
+          // misleading $0 or fabricated price.
+          addRow('Default list price', 'unavailable (no upfront cost or unknown term)');
+        }
         bodyEl.appendChild(summaryEl);
       }
 
