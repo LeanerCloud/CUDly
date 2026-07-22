@@ -134,7 +134,7 @@ func init() {
 
 	// Purchase pipeline flags
 	rootCmd.Flags().StringVar(&toolCfg.AuditLog, "audit-log", "./cudly-audit.jsonl", "Path to JSONL audit log file")
-	rootCmd.Flags().BoolVar(&toolCfg.DryRun, "dry-run", true, "Dry-run mode: show what would be purchased without actually buying")
+	rootCmd.Flags().BoolVar(&toolCfg.DryRun, "dry-run", false, "Force dry-run even when --purchase is set (runs are already dry-run unless --purchase is given)")
 	rootCmd.Flags().StringVar(&toolCfg.IdempotencyWindow, "idempotency-window", "24h", "Lookback window for duplicate purchase detection")
 	rootCmd.Flags().Float64Var(&toolCfg.MinSavingsPct, "min-savings-pct", 0, "Minimum savings percentage to include a recommendation (0 = no filter)")
 	rootCmd.Flags().IntVar(&toolCfg.MaxBreakEvenMonths, "max-break-even-months", 0, "Maximum break-even period in months (0 = no filter)")
