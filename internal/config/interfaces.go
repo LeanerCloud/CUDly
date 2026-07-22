@@ -93,32 +93,34 @@ type StoreInterface interface {
 	// When non-nil the actor is stamped onto transitioned_by + transitioned_at; when nil,
 	// transitioned_by is set to NULL and transitioned_at is still set to NOW() for ordering.
 	TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string) (*PurchaseExecution, error)
-	// SetCancelledBy stamps a cancelled_by / revoked_by email on an execution
-	// without overwriting any other columns. Used after TransitionExecutionStatus
-	// to fold the actor attribution into the same logical write without the
-	// full-row SavePurchaseExecution clobber risk (Finding #5 / PR #889).
+	// SetCancelledBy stamps canceled_by and the legacy cancelled_by column on
+	// an execution without overwriting any other columns. Used after
+	// TransitionExecutionStatus to fold the actor attribution into the same
+	// logical write without the full-row SavePurchaseExecution clobber risk
+	// (Finding #5 / PR #889).
 	SetCancelledBy(ctx context.Context, executionID string, cancelledBy string) error
 	// CancelExecutionAtomic atomically flips status from pending / notified
-	// to 'cancelled', setting cancelled_by. The 'scheduled' status is NOT
-	// accepted here; scheduled rows are revoked via
+	// to 'canceled' (canonical US spelling), setting canceled_by. The
+	// 'scheduled' status is NOT accepted here; scheduled rows are revoked via
 	// CancelScheduledExecutionAtomic (Gmail-style pre-fire delay revoke
 	// path, issue #291 wave-2) so the two flows surface distinct CAS race
-	// outcomes. Returns (true, "cancelled", nil) on success and (false,
+	// outcomes. Returns (true, "canceled", nil) on success and (false,
 	// currentStatus, nil) when zero rows were affected (the execution had
 	// already been approved or otherwise transitioned). Must be called
 	// inside a WithTx block so the suppression cleanup and the status flip
 	// commit atomically.
 	CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (canceled bool, currentStatus string, err error)
 	// CancelScheduledExecutionAtomic atomically flips status from 'scheduled' to
-	// 'cancelled', setting cancelled_by. Used by the Gmail-style pre-fire delay
-	// revoke path (issue #291 wave-2) to cancel a scheduled execution at $0 before
-	// the scheduler fires the SDK call. The 'pending'/'notified' set accepted by
-	// CancelExecutionAtomic is intentionally not extended here so the two revoke
-	// flows surface distinct CAS race outcomes -- a scheduled row that the
-	// scheduler has already transitioned to 'approved' / 'running' must surface as
-	// a 410 ("window closed") rather than a 409 ("not pending"). Returns
-	// (true, "cancelled", nil) on success and (false, currentStatus, nil) when
-	// zero rows were affected. Must be called inside a WithTx block.
+	// 'canceled' (canonical US spelling), setting canceled_by. Used by the
+	// Gmail-style pre-fire delay revoke path (issue #291 wave-2) to cancel a
+	// scheduled execution at $0 before the scheduler fires the SDK call. The
+	// 'pending'/'notified' set accepted by CancelExecutionAtomic is
+	// intentionally not extended here so the two revoke flows surface distinct
+	// CAS race outcomes -- a scheduled row that the scheduler has already
+	// transitioned to 'approved' / 'running' must surface as a 410 ("window
+	// closed") rather than a 409 ("not pending"). Returns (true, "canceled",
+	// nil) on success and (false, currentStatus, nil) when zero rows were
+	// affected. Must be called inside a WithTx block.
 	CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (canceled bool, currentStatus string, err error)
 	// ListStuckExecutions returns executions in any of the given statuses
 	// whose updated_at is older than the given duration. Used by the
