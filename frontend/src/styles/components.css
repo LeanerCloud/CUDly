@@ -986,7 +986,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     background: white;
     border-radius: 8px;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
-    max-width: 480px;
+    max-width: min(480px, calc(100vw - 2rem));
     min-width: 320px;
     padding: 1.5rem;
 }
@@ -995,13 +995,18 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     position: absolute;
     top: 0.5rem;
     right: 0.75rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
     background: none;
     border: none;
     font-size: 1.5rem;
     line-height: 1;
     cursor: pointer;
     color: var(--cudly-text-muted);
-    padding: 0 0.25rem;
+    padding: 0;
 }
 
 .modal-confirm-close:hover {
@@ -1025,6 +1030,22 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     display: flex;
     justify-content: flex-end;
     gap: 0.5rem;
+}
+
+/* Bottom-sheet layout on narrow viewports (issue #985): modals slide up
+ * from the bottom edge instead of floating centered, so there's no
+ * side margin to lose on small screens. */
+@media (max-width: 480px) {
+    .modal, .modal-confirm-backdrop {
+        align-items: flex-end;
+    }
+
+    .modal-content, .modal-confirm {
+        border-radius: 12px 12px 0 0;
+        width: 100%;
+        max-width: 100%;
+        margin: 0;
+    }
 }
 
 /* Approval-details modal (issue #374): when the confirmDialog body

@@ -301,6 +301,19 @@ describe('CSS Styles', () => {
     test('has modal-wide variant', () => {
       expect(css).toMatch(/\.modal-wide\s*\{/);
     });
+
+    test('has a vw cap on modal-confirm', () => {
+      expect(css).toMatch(/\.modal-confirm\s*\{[^}]*max-width:\s*min\(480px,\s*calc\(100vw - 2rem\)\)/);
+    });
+
+    test('has a 44px minimum tap target on modal-confirm-close', () => {
+      expect(css).toMatch(/\.modal-confirm-close\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/);
+    });
+
+    test('flips modals to a bottom sheet at 480px', () => {
+      const bottomSheetQuery = /@media \(max-width: 480px\)\s*\{[^]*?\.modal,\s*\.modal-confirm-backdrop\s*\{[^}]*align-items:\s*flex-end[^}]*\}[^]*?\.modal-content,\s*\.modal-confirm\s*\{[^}]*width:\s*100%[^}]*\}/;
+      expect(css).toMatch(bottomSheetQuery);
+    });
   });
 
   describe('CLI Command Styles', () => {
