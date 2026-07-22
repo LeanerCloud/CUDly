@@ -29,6 +29,7 @@ func registrations() []tools.Registration {
 		tools.NewAWSMemoryDBRIPurchaseTool(),
 		tools.NewAWSRDSRIPurchaseTool(),
 		tools.NewAWSElastiCacheRIPurchaseTool(),
+		tools.NewAWSSavingsPlansPurchaseTool(),
 	}
 }
 
