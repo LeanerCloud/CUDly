@@ -178,6 +178,32 @@ func TestValidateTenancy(t *testing.T) {
 	}
 }
 
+func TestValidateCacheEngine(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		in      string
+		want    CacheEngine
+		wantErr bool
+	}{
+		{"redis", "redis", CacheEngineRedis, false},
+		{"memcached", "memcached", CacheEngineMemcached, false},
+		{"empty", "", "", true},
+		{"unknown", "postgres", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ValidateCacheEngine(tc.in)
+			if tc.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestValidateScope(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
