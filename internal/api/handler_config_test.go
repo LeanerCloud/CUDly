@@ -1236,6 +1236,7 @@ func TestHandler_updateConfig_RequiresUpdateConfigPermission(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t); mockAuth.AssertExpectations(t) })
 
 	// A non-admin user who was granted view:config (by migration 000088) but
 	// not update:config. This mirrors the Standard-Users permission set after
