@@ -154,6 +154,14 @@
 
             <!-- History Tab -->
             <div id="purchases-tab" class="tab-content" role="tabpanel" aria-labelledby="purchases-tab-btn">
+                <!-- 4-eyes approval mode banner (issue #1005): shown when
+                     require_different_approver is enabled in global config.
+                     Hidden by default; history.ts toggles the 'hidden'
+                     class on each load. -->
+                <div id="four-eyes-banner" class="info-banner hidden" role="status" aria-live="polite">
+                    4-eyes approval enforced: purchases must be approved by a different user than the one who created them.
+                </div>
+
                 <!-- Approval Queue Card (issue #340 sub-task): surfaces
                      pending-approval purchases at the top of the Purchases
                      tab so users don't have to scan the full Purchase
@@ -509,6 +517,19 @@
                                     <option value="convertible" selected>Convertible (default -- exchangeable for different families/sizes/OS later)</option>
                                     <option value="standard">Standard (~5% cheaper, locked to the exact instance for the full term)</option>
                                 </select>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <fieldset class="settings-category" id="purchasing-four-eyes">
+                        <legend>Approval Controls</legend>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="setting-require-different-approver">Require different approver (4-eyes mode)</label>
+                                <p class="help-text">When enabled, a purchase execution cannot be approved by the user who created it. A different person with approval rights must approve. Recommended for SOX / SOC2 compliance -- ensures no single employee can both request and authorize a cloud commitment purchase. Applies to all users including admins.</p>
+                            </div>
+                            <div class="setting-input">
+                                <input type="checkbox" id="setting-require-different-approver">
                             </div>
                         </div>
                     </fieldset>

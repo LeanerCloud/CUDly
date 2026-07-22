@@ -26,6 +26,7 @@ jest.mock('../utils', () => {
 
 jest.mock('../api', () => ({
   getHistory: jest.fn(),
+  getConfig: jest.fn().mockResolvedValue({ global: {} }),
 }));
 
 jest.mock('../navigation', () => ({

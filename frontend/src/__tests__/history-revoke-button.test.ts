@@ -24,6 +24,7 @@ import { loadHistory } from '../history';
 
 jest.mock('../api', () => ({
   getHistory: jest.fn(),
+  getConfig: jest.fn().mockResolvedValue({ global: {} }),
   revokePurchase: jest.fn(),
 }));
 

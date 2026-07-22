@@ -386,6 +386,10 @@ export interface GlobalConfig {
   // per-account LadderConfig settings. Set to true to allow per-account
   // configs to activate individually.
   laddering_enabled?: boolean;
+  // When true, a purchase execution cannot be approved by the user who created
+  // it -- a different user with approve-any:purchases must approve (4-eyes /
+  // dual-control rule). Defaults to false (feature is opt-in).
+  require_different_approver?: boolean;
 }
 
 // API Keys types

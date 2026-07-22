@@ -35,6 +35,7 @@ jest.mock('../api', () => ({
   // a backend-filtered subset.
   listAccountsMinimal: jest.fn(),
   getHistory: jest.fn(),
+  getConfig: jest.fn().mockResolvedValue({ global: {} }),
   cancelPurchase: jest.fn(),
 }));
 

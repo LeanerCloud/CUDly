@@ -42,6 +42,11 @@ type StatusFilter = 'all' | 'pending' | 'completed' | 'failed' | 'expired' | 'ca
 let lastPurchases: HistoryPurchase[] = [];
 let activeStatusFilter: StatusFilter = 'all';
 
+// _fourEyesMode mirrors GlobalConfig.require_different_approver (issue #1005),
+// refreshed on every loadHistory() call. Gates the inline Approve button so a
+// creator can't approve their own pending purchase when dual-control is on.
+let _fourEyesMode = false;
+
 function normalizeStatus(p: HistoryPurchase): string {
   // Absent status → legacy DB row → counts as completed for filtering.
   return p.status || 'completed';
@@ -307,7 +312,18 @@ export async function loadHistory(): Promise<void> {
       provider,
       account_ids: accountIDs
     };
-    const data = await api.getHistory(filters) as unknown as HistoryResponse;
+    const [data, cfgResponse] = await Promise.all([
+      api.getHistory(filters) as unknown as Promise<HistoryResponse>,
+      // 4-eyes mode (issue #1005) lives on GlobalConfig; a failed fetch must
+      // not block the history render, so this leg fails closed to "no config"
+      // rather than throwing, and _fourEyesMode falls back to its last value.
+      api.getConfig().catch(() => null),
+    ]);
+    if (cfgResponse?.global) {
+      _fourEyesMode = cfgResponse.global.require_different_approver === true;
+    }
+    const banner = document.getElementById('four-eyes-banner');
+    if (banner) banner.classList.toggle('hidden', !_fourEyesMode);
     renderHistorySummary(data.summary ?? null);
     const purchases = data.purchases || [];
     renderApprovalQueue(purchases);
@@ -506,6 +522,38 @@ function canCancelPendingRow(p: HistoryPurchase): boolean {
   return canAccess('cancel-own', 'purchases') && p.created_by_user_id === user.id;
 }
 
+// canApproveUnder4Eyes returns true when the 4-eyes dual-control policy
+// (issue #1005, GlobalConfig.require_different_approver) allows sessionUserId
+// to approve a row created by row.created_by_user_id. Mirrors the backend's
+// requireDifferentApprover in internal/api/handler_purchases.go: mode off →
+// always allowed; mode on → allowed only when the row has a recorded,
+// different creator (a NULL/legacy creator is denied, matching the backend's
+// fail-closed 403 for rows that predate dual-control).
+function canApproveUnder4Eyes(row: HistoryPurchase, sessionUserId: string): boolean {
+  return _fourEyesMode === false || (row.created_by_user_id != null && row.created_by_user_id !== sessionUserId);
+}
+
+// rbacAllowsApprove is the approve-permission decision (issue #286 /
+// #1407) WITHOUT the 4-eyes overlay, so renderPendingActionButtons can
+// distinguish "no permission at all" (no button, no badge) from
+// "permission would allow it but 4-eyes blocks it" (badge instead of button).
+function rbacAllowsApprove(p: HistoryPurchase, user: { id: string }): boolean {
+  const status = (p.status || '').toLowerCase();
+  if (status !== 'pending' && status !== 'notified') return false;
+  // approve-any:purchases is carved out of admin:* (issue #923) and is
+  // granted by the seeded Purchaser group OR any custom group that
+  // explicitly lists the verb in effectivePermissions. Gate on the
+  // verb directly so a non-seeded role with the same grant still
+  // approves rows the backend would also let through.
+  if (canAccess('approve-any', 'purchases')) return true;
+  // Four-eyes RBAC (issue #1407): the session must hold an explicit
+  // approve-own grant before ownership is consulted. Ownership alone never
+  // grants approve.
+  if (!canAccess('approve-own', 'purchases')) return false;
+  if (!p.created_by_user_id) return false;
+  return p.created_by_user_id === user.id;
+}
+
 // canApprovePendingRow returns true when the current session is permitted
 // to approve the given pending history row via the inline Approve button
 // (issue #286). UX gate only — the backend authorizeSessionApprove in
@@ -513,7 +561,7 @@ function canCancelPendingRow(p: HistoryPurchase): boolean {
 // false-positive here surfaces as a 403 toast on click rather than a
 // successful approve.
 //
-// Heuristic (four-eyes — issue #1407):
+// Heuristic (four-eyes RBAC — issue #1407; 4-eyes dual-control — issue #1005):
 //   * status must be "pending" or "notified";
 //   * any session with approve-any:purchases (carved-out admin verb,
 //     seeded on Purchaser group; can also come from a custom group via
@@ -522,23 +570,14 @@ function canCancelPendingRow(p: HistoryPurchase): boolean {
 //     even evaluated (four-eyes: ownership alone does NOT grant approve);
 //   * only then: the row's created_by_user_id must match the current user;
 //   * legacy rows with NULL created_by_user_id → no (the email-token
-//     path remains the escape hatch).
+//     path remains the escape hatch);
+//   * finally, canApproveUnder4Eyes must allow it: when dual-control mode is
+//     on, the session cannot approve a row it created itself.
 function canApprovePendingRow(p: HistoryPurchase): boolean {
-  const status = (p.status || '').toLowerCase();
-  if (status !== 'pending' && status !== 'notified') return false;
   const user = getCurrentUser();
   if (!user) return false;
-  // approve-any:purchases is carved out of admin:* (issue #923) and is
-  // granted by the seeded Purchaser group OR any custom group that
-  // explicitly lists the verb in effectivePermissions. Gate on the
-  // verb directly so a non-seeded role with the same grant still
-  // approves rows the backend would also let through.
-  if (canAccess('approve-any', 'purchases')) return true;
-  // Four-eyes (issue #1407): the session must hold an explicit approve-own
-  // grant before ownership is consulted. Ownership alone never grants approve.
-  if (!canAccess('approve-own', 'purchases')) return false;
-  if (!p.created_by_user_id) return false;
-  return p.created_by_user_id === user.id;
+  if (!rbacAllowsApprove(p, user)) return false;
+  return canApproveUnder4Eyes(p, user.id);
 }
 
 // canRetryFailedRow returns true when the current session is permitted
@@ -748,8 +787,14 @@ function sameRowActions(btn: HTMLButtonElement): HTMLButtonElement[] {
 function renderPendingActionButtons(p: HistoryPurchase): string {
   if (!p.purchase_id) return '';
   const buttons: string[] = [];
+  const user = getCurrentUser();
   if (canApprovePendingRow(p)) {
     buttons.push(`<button type="button" class="btn-link history-approve-btn" data-approve-id="${escapeHtmlAttr(p.purchase_id)}">Approve</button>`);
+  } else if (user && rbacAllowsApprove(p, user) && !canApproveUnder4Eyes(p, user.id)) {
+    // RBAC would allow Approve, but 4-eyes dual-control (issue #1005) blocks
+    // this session from approving its own row. Surface the reason inline
+    // instead of silently hiding the action.
+    buttons.push('<span class="badge badge-muted">Awaiting different approver</span>');
   }
   if (canCancelPendingRow(p)) {
     buttons.push(`<button type="button" class="btn-link history-cancel-btn" data-cancel-id="${escapeHtmlAttr(p.purchase_id)}">Cancel</button>`);

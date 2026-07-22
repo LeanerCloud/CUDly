@@ -154,6 +154,8 @@ const TRACKED_FIELDS = [
   'setting-grace-aws', 'setting-grace-azure', 'setting-grace-gcp',
   // Recommendations cycle params
   'setting-recs-stale-hours', 'setting-recs-lookback-days',
+  // 4-eyes approval mode (issue #1005)
+  'setting-require-different-approver',
   // Per-service fields
   ...SERVICE_FIELDS.map(f => f.termId),
   ...SERVICE_FIELDS.filter(f => f.paymentId !== null).map(f => f.paymentId as string),
@@ -3222,6 +3224,12 @@ export async function loadGlobalSettings(): Promise<void> {
         lookbackSelect.value = String(data.global.recommendations_lookback_days ?? 7);
       }
 
+      // 4-eyes approval mode (issue #1005)
+      const requireDiffApproverEl = byId<HTMLInputElement>('setting-require-different-approver');
+      if (requireDiffApproverEl) {
+        requireDiffApproverEl.checked = data.global.require_different_approver === true;
+      }
+
       // Update visibility based on loaded settings
       updateProviderSettingsVisibility();
       updateCollectionScheduleVisibility();
@@ -3502,6 +3510,7 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     recommendations_cache_stale_hours: rawStaleHours,
     recommendations_lookback_days: parseInt(byId<HTMLSelectElement>('setting-recs-lookback-days')?.value || '7', 10),
     offering_class: offeringClass,
+    require_different_approver: byId<HTMLInputElement>('setting-require-different-approver')?.checked ?? false,
   };
 
   // Include laddering_enabled in the payload when the Purchasing panel's
@@ -3646,6 +3655,10 @@ export async function resetSettings(): Promise<void> {
   if (staleHoursInput) staleHoursInput.value = '24';
   const lookbackSelect = byId<HTMLSelectElement>('setting-recs-lookback-days');
   if (lookbackSelect) lookbackSelect.value = '7';
+
+  // Reset 4-eyes mode to off (default).
+  const requireDiffApproverResetEl = byId<HTMLInputElement>('setting-require-different-approver');
+  if (requireDiffApproverResetEl) requireDiffApproverResetEl.checked = false;
 
   // Issue #466: setting el.value / .checked via JS does not fire
   // 'change'/'input', so none of the change-event-driven visibility

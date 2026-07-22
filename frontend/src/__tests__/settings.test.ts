@@ -546,6 +546,9 @@ describe('Settings Module', () => {
         // offering_class select is absent in this test harness (no DOM element);
         // saveGlobalSettings falls back to 'convertible'.
         offering_class: 'convertible',
+        // setting-require-different-approver checkbox is absent in this test
+        // harness (no DOM element); saveGlobalSettings falls back to false.
+        require_different_approver: false,
       });
     });
 
