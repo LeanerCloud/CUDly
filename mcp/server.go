@@ -23,6 +23,7 @@ const ServerName = "cudly-mcp"
 func registrations() []tools.Registration {
 	return []tools.Registration{
 		tools.NewSearchRecommendationsTool(),
+		tools.NewAWSEC2RIPurchaseTool(),
 	}
 }
 
