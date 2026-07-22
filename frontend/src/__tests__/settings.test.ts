@@ -340,6 +340,29 @@ describe('Settings Module', () => {
       expect((document.getElementById('setting-notification-days') as HTMLInputElement).value).toBe('5');
     });
 
+    test('populates 4-eyes checkbox from config.global.require_different_approver (issue #1005)', async () => {
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.id = 'setting-require-different-approver';
+      document.getElementById('global-settings-form')?.appendChild(checkbox);
+
+      (api.getConfig as jest.Mock).mockResolvedValue({
+        global: {
+          enabled_providers: [],
+          default_term: 3,
+          default_payment: 'all-upfront',
+          default_coverage: 80,
+          notification_days_before: 3,
+          require_different_approver: true
+        },
+        credentials: {}
+      });
+
+      await loadGlobalSettings();
+
+      expect(checkbox.checked).toBe(true);
+    });
+
     test('populates collection schedule from config', async () => {
       (api.getConfig as jest.Mock).mockResolvedValue({
         global: {
@@ -562,6 +585,24 @@ describe('Settings Module', () => {
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
         message: 'Settings saved successfully',
         kind: 'success',
+      }));
+    });
+
+    test('sends require_different_approver: true when the 4-eyes checkbox is checked (issue #1005)', async () => {
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.id = 'setting-require-different-approver';
+      checkbox.checked = true;
+      document.getElementById('global-settings-form')?.appendChild(checkbox);
+
+      (api.updateConfig as jest.Mock).mockResolvedValue({});
+      window.alert = jest.fn();
+
+      const event = { preventDefault: jest.fn() } as unknown as Event;
+      await saveGlobalSettings(event);
+
+      expect(api.updateConfig).toHaveBeenCalledWith(expect.objectContaining({
+        require_different_approver: true,
       }));
     });
 
