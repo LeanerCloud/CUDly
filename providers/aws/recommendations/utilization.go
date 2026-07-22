@@ -29,8 +29,19 @@ type riAccumulator struct {
 	unusedHours      float64
 }
 
-// GetRIUtilization fetches per-RI utilization from Cost Explorer for the last N days.
-func (c *Client) GetRIUtilization(ctx context.Context, lookbackDays int) ([]RIUtilization, error) {
+// GetRIUtilization fetches per-RI utilization from Cost Explorer for the
+// last N days, scoped to EC2 RIs in region.
+//
+// Without a Filter, GetReservationUtilization blends utilization across
+// every reserved-resource type in the account (RDS, ElastiCache,
+// OpenSearch, Redshift, standard EC2 RIs) and every region into one
+// SUBSCRIPTION_ID-grouped number. Callers that read this as "EC2
+// convertible-RI utilization for this region" (e.g. the ladder
+// ConvertibleRI layer) would then trigger real reshape/exchange
+// decisions off an unrelated RI's utilization (PR #1361). region
+// is optional: an empty string omits the REGION dimension, matching
+// callers that haven't resolved a specific region.
+func (c *Client) GetRIUtilization(ctx context.Context, lookbackDays int, region string) ([]RIUtilization, error) {
 	if lookbackDays <= 0 {
 		lookbackDays = 30
 	}
@@ -49,6 +60,7 @@ func (c *Client) GetRIUtilization(ctx context.Context, lookbackDays int) ([]RIUt
 				Key:  aws.String("SUBSCRIPTION_ID"),
 			},
 		},
+		Filter: ec2UtilizationFilter(region),
 	}
 
 	agg := make(map[string]*riAccumulator)
@@ -78,6 +90,23 @@ func (c *Client) GetRIUtilization(ctx context.Context, lookbackDays int) ([]RIUt
 	}
 
 	return buildUtilizations(agg), nil
+}
+
+// ec2UtilizationFilter builds the CE Filter expression scoping
+// GetReservationUtilization to EC2 RIs, optionally narrowed to one
+// region. Mirrors serviceRegionFilter in coverage.go so both CE
+// query paths agree on how a (service, region) scope is expressed.
+func ec2UtilizationFilter(region string) *types.Expression {
+	svc := types.Expression{Dimensions: &types.DimensionValues{Key: types.DimensionService, Values: []string{ec2ComputeService}}}
+	if region == "" {
+		return &svc
+	}
+	return &types.Expression{
+		And: []types.Expression{
+			svc,
+			{Dimensions: &types.DimensionValues{Key: types.DimensionRegion, Values: []string{region}}},
+		},
+	}
 }
 
 func buildUtilizations(agg map[string]*riAccumulator) []RIUtilization {

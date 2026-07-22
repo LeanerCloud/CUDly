@@ -585,7 +585,7 @@ type fakeReshapeRecsStub struct {
 	utilization []recommendations.RIUtilization
 }
 
-func (f *fakeReshapeRecsStub) GetRIUtilization(_ context.Context, _ int) ([]recommendations.RIUtilization, error) {
+func (f *fakeReshapeRecsStub) GetRIUtilization(_ context.Context, _ int, _ string) ([]recommendations.RIUtilization, error) {
 	return f.utilization, nil
 }
 

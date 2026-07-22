@@ -54,7 +54,7 @@ func (a *AWSLadder) GetLayerStates(ctx context.Context, scope ladder.Scope) (map
 	// covErr is checked per-layer below; a coverage failure does not fail the
 	// whole snapshot — it degrades CoveragePct to nil.
 
-	utils, utilErr := a.utilization.GetRIUtilization(ctx, a.cfg.lookbackDays())
+	utils, utilErr := a.utilization.GetRIUtilization(ctx, a.cfg.lookbackDays(), a.cfg.Region)
 	// utilErr is handled the same way: degrade UtilizationPct to nil.
 
 	now := time.Now()
@@ -105,7 +105,12 @@ func (a *AWSLadder) riLayerState(
 		log.Printf("WARNING: AWSLadder GetLayerStates: RI utilization degraded to nil (layer=%s, source=GetRIUtilization, region=%s): %v",
 			ladder.LayerConvertibleRI, a.cfg.Region, utilErr)
 	} else {
-		state.UtilizationPct = computeRIUtilizationPct(utils)
+		// GetRIUtilization is already scoped to EC2+region, but that still
+		// blends in standard (non-convertible) EC2 RIs alongside the
+		// convertible RIs this buffer layer tracks. Intersect by ID so
+		// UtilizationPct reflects only the reservations riLayerState
+		// reasons about.
+		state.UtilizationPct = computeRIUtilizationPct(utilsForConvertibleRIs(utils, ris))
 	}
 
 	return state
@@ -321,6 +326,27 @@ func computeEC2CoveragePct(coverageMap recommendations.PoolCoverageMap, region s
 		result = simpleSum / float64(count)
 	}
 	return ptr(result)
+}
+
+// utilsForConvertibleRIs filters CE utilization entries down to the IDs
+// present in ris. GetRIUtilization's SERVICE+REGION filter already narrows
+// the CE response to EC2 RIs in this region, but a standard (non-convertible)
+// EC2 RI in the same account/region would still pass that filter; the ID
+// intersection restricts the aggregate to exactly the convertible RIs this
+// buffer layer tracks (PR #1361).
+func utilsForConvertibleRIs(utils []recommendations.RIUtilization, ris []ec2svc.ConvertibleRI) []recommendations.RIUtilization {
+	ids := make(map[string]struct{}, len(ris))
+	for i := range ris {
+		ids[ris[i].ReservedInstanceID] = struct{}{}
+	}
+	filtered := make([]recommendations.RIUtilization, 0, len(utils))
+	for i := range utils {
+		u := utils[i]
+		if _, ok := ids[u.ReservedInstanceID]; ok {
+			filtered = append(filtered, u)
+		}
+	}
+	return filtered
 }
 
 // computeRIUtilizationPct aggregates per-RI utilization data from the CE

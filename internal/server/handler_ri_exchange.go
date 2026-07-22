@@ -56,7 +56,7 @@ func (app *Application) handleRIExchangeReshape(ctx context.Context) (*exchange.
 		},
 		getRIUtilization: func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
 			recsClient := awsprovider.NewRecommendationsClientDirect(awsCfg)
-			return recsClient.GetRIUtilization(ctx, lookbackDays)
+			return recsClient.GetRIUtilization(ctx, lookbackDays, awsCfg.Region)
 		},
 		exchangeClient: exchange.NewExchangeClient(awsCfg),
 		lookupOffering: func(ctx context.Context, instanceType, productDesc, tenancy, scope string, duration int64) (string, error) {

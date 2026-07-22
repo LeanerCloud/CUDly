@@ -163,9 +163,10 @@ func (r *RecommendationsClientAdapter) GetAllRecommendations(ctx context.Context
 	return r.client.GetAllRecommendations(ctx)
 }
 
-// GetRIUtilization gets per-RI utilization from Cost Explorer.
-func (r *RecommendationsClientAdapter) GetRIUtilization(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
-	return r.client.GetRIUtilization(ctx, lookbackDays)
+// GetRIUtilization gets per-RI utilization from Cost Explorer, scoped to
+// EC2 RIs in region.
+func (r *RecommendationsClientAdapter) GetRIUtilization(ctx context.Context, lookbackDays int, region string) ([]recommendations.RIUtilization, error) {
+	return r.client.GetRIUtilization(ctx, lookbackDays, region)
 }
 
 // GetRICoverageMap returns the per-pool RI coverage % over the last

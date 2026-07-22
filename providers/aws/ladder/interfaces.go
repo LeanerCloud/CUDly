@@ -104,7 +104,7 @@ type onDemandSeriesSource interface {
 // utilizationSource is the narrow interface for RI utilization data.
 // The real implementation is RecommendationsClientAdapter.GetRIUtilization.
 type utilizationSource interface {
-	GetRIUtilization(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error)
+	GetRIUtilization(ctx context.Context, lookbackDays int, region string) ([]recommendations.RIUtilization, error)
 }
 
 // SPCoverageSummary carries the Savings Plans coverage result from the CE API.
