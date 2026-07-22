@@ -553,6 +553,14 @@ func validatePurchaseRecommendation(rec *config.RecommendationRecord, idx int) e
 	if !purchaseTermWhitelist[provider][rec.Term] {
 		return NewClientError(400, fmt.Sprintf("recommendation %d has invalid term %d for provider %s: must be 1 or 3", idx, rec.Term, provider))
 	}
+	// A negative MonthlyCost would let recTotalCommitment's recurring leg
+	// subtract from the batch's total commitment, offsetting or masking a
+	// real upfront cost and evading a MaxPurchaseAmount cap (adversarial
+	// review follow-up to #1210). Nil is fine (no recurring charge); only a
+	// present-and-negative value is rejected.
+	if rec.MonthlyCost != nil && *rec.MonthlyCost < 0 {
+		return NewClientError(400, fmt.Sprintf("recommendation %d has negative monthly cost: %.2f", idx, *rec.MonthlyCost))
+	}
 	payment := strings.ToLower(strings.TrimSpace(rec.Payment))
 	// Coerce any legacy/cross-provider alias before the whitelist check so
 	// that callers using old AWS-style tokens are transparently redirected to
