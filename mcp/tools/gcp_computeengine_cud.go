@@ -116,16 +116,16 @@ func gcpCUDPurchaseRequiredFields(args gcpComputeEngineCUDPurchaseArgs) error {
 // booleans. Details is set as a value (common.ComputeDetails{}), not a
 // pointer, to match the value type assertion in
 // providers/gcp/services/computeengine/client.go's memoryMBFromDetails.
-func gcpComputeEngineRecommendationFromArgs(args gcpComputeEngineCUDPurchaseArgs) (common.Recommendation, bool, bool, error) {
-	if err := gcpCUDPurchaseRequiredFields(args); err != nil {
-		return common.Recommendation{}, false, false, err
+func gcpComputeEngineRecommendationFromArgs(args gcpComputeEngineCUDPurchaseArgs) (rec common.Recommendation, dryRun, confirm bool, err error) {
+	if fieldErr := gcpCUDPurchaseRequiredFields(args); fieldErr != nil {
+		return common.Recommendation{}, false, false, fieldErr
 	}
 	term, err := ValidateTermYears(args.TermYears)
 	if err != nil {
 		return common.Recommendation{}, false, false, err
 	}
 
-	rec := common.Recommendation{
+	rec = common.Recommendation{
 		Provider:       common.ProviderGCP,
 		Service:        common.ServiceCompute,
 		Region:         args.Region,
@@ -139,7 +139,7 @@ func gcpComputeEngineRecommendationFromArgs(args gcpComputeEngineCUDPurchaseArgs
 		},
 	}
 
-	dryRun, confirm := true, false
+	dryRun, confirm = true, false
 	if args.DryRun != nil {
 		dryRun = *args.DryRun
 	}

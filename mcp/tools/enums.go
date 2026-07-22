@@ -13,7 +13,7 @@ import (
 // schedule. It is validated at the MCP tool boundary before being copied
 // onto common.Recommendation.PaymentOption (which stays a bare string there
 // for backward compatibility with existing CSV/DB rows -- see
-// pkg/common/types.go) so a caller can never smuggle an unrecognised payment
+// pkg/common/types.go) so a caller can never smuggle an unrecognized payment
 // term into a purchase.
 type PaymentOption string
 
@@ -87,7 +87,7 @@ func ValidateSPType(s string) (SPType, error) {
 }
 
 // AZConfig is the RDS deployment topology (single-AZ vs multi-AZ), which
-// carries a different price and offering catalogue per
+// carries a different price and offering catalog per
 // providers/aws/services/rds/client.go:314-322.
 type AZConfig string
 
@@ -115,7 +115,7 @@ func ValidateAZConfig(s string) (AZConfig, error) {
 // ProductDescription (providers/aws/services/ec2/client.go:419). Reusing the
 // SDK's own enum constants -- rather than inventing a "linux"/"windows"
 // vocabulary -- means an outbound offering lookup can never carry a bare
-// string literal that drifts from what the SDK actually recognises
+// string literal that drifts from what the SDK actually recognizes
 // (feedback_sdk_enum_string_literals).
 func ValidatePlatform(s string) (ec2types.RIProductDescription, error) {
 	switch ec2types.RIProductDescription(s) {
@@ -132,7 +132,7 @@ func ValidatePlatform(s string) (ec2types.RIProductDescription, error) {
 }
 
 // Tenancy is the EC2 RI tenancy dimension. Values match ec2types.Tenancy
-// (providers/aws/services/ec2/client.go:309-318 canonicalises them further,
+// (providers/aws/services/ec2/client.go:309-318 canonicalizes them further,
 // but "default"/"dedicated" already pass through unchanged).
 type Tenancy string
 
@@ -154,7 +154,7 @@ func ValidateTenancy(s string) (Tenancy, error) {
 
 // Scope is the EC2 RI applicability dimension. Values are the lowercase,
 // hyphenated form that providers/aws/services/ec2/client.go:330-339
-// (canonicalizeEC2Scope) recognises and normalises to the SDK's
+// (canonicalizeEC2Scope) recognizes and normalizes to the SDK's
 // ec2types.Scope casing ("Region" / "Availability Zone").
 type Scope string
 
