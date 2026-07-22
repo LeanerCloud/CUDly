@@ -739,6 +739,67 @@ func TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestPGXMock_GetExecutionByID_ProjectsCoalescedCancelledBy guards the #1277 /
+// #1453 read-side follow-up: CancelExecutionAtomic and
+// CancelScheduledExecutionAtomic write the canceling actor to the NEW
+// canceled_by column, but migration 000089's expand-contract contract states
+// every SELECT must read back COALESCE(canceled_by, cancelled_by) so a row
+// written by either the old or the new column is attributed correctly. Before
+// this fix GetExecutionByID selected the bare legacy cancelled_by, so an
+// actor written only to canceled_by (the atomic-cancel paths) scanned back as
+// NULL and the History page lost the attribution.
+//
+// The mock uses regexp query matching, so ExpectQuery requires the issued
+// SELECT to contain the COALESCE expression; a bare `cancelled_by` projection
+// (the pre-fix query) does not match, the mock returns no rows, and
+// GetExecutionByID surfaces ErrNotFound instead of the expected execution --
+// that is how this test fails against the pre-fix code and passes once the
+// projection is fixed.
+func TestPGXMock_GetExecutionByID_ProjectsCoalescedCancelledBy(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	recsJSON, _ := json.Marshal([]RecommendationRecord{})
+	now := time.Now().Truncate(time.Second)
+	cols := []string{
+		"plan_id", "execution_id", "status", "step_number", "scheduled_date",
+		"notification_sent", "approval_token", "recommendations",
+		"total_upfront_cost", "estimated_savings", "completed_at", "error", "expires_at",
+		"cloud_account_id", "source", "approved_by", "cancelled_by", "capacity_percent",
+		"created_by_user_id", "retry_execution_id", "retry_attempt_n",
+		"approval_token_expires_at",
+		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
+		"idempotency_key",
+		"scheduled_execution_at",
+	}
+	// Simulates the exact row shape the atomic-cancel paths produce: the
+	// actor lives only in canceled_by (legacy cancelled_by is NULL). What
+	// Postgres would actually return for COALESCE(canceled_by, cancelled_by)
+	// is the canceled_by value, so the mocked "cancelled_by" scan slot below
+	// carries that same value to stand in for the server-side COALESCE result.
+	rows := pgxmock.NewRows(cols).AddRow(
+		"plan-1", "exec-1", "canceled", 1, now,
+		sql.NullTime{}, "tok-123", recsJSON,
+		100.0, 200.0, sql.NullTime{}, "", sql.NullTime{},
+		nil, "", nil, strPtr("cancelling-actor@example.com"), 100,
+		nil, nil, 0,
+		sql.NullTime{},
+		nil, sql.NullTime{}, nil,
+		nil,
+		sql.NullTime{},
+	)
+	mock.ExpectQuery(`COALESCE\(canceled_by,\s*cancelled_by\)`).
+		WithArgs(pgxmock.AnyArg()).
+		WillReturnRows(rows)
+
+	exec, err := store.GetExecutionByID(ctx, "exec-1")
+	require.NoError(t, err)
+	require.NotNil(t, exec.CancelledBy, "actor written to canceled_by must round-trip via the COALESCE read projection")
+	assert.Equal(t, "cancelling-actor@example.com", *exec.CancelledBy)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // ─── queryPurchaseHistory (via GetPurchaseHistory) ────────────────────────────
 
 func TestPGXMock_GetPurchaseHistory_Success(t *testing.T) {

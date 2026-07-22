@@ -261,7 +261,7 @@ func (h *Handler) revokeScheduledExecution(ctx context.Context, session *Session
 	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
 		var err error
 		// The scheduled-revoke path uses its own CAS variant that flips ONLY
-		// status='scheduled' -> 'cancelled'. CancelExecutionAtomic accepts
+		// status='scheduled' -> 'canceled'. CancelExecutionAtomic accepts
 		// only ('pending','notified') and would always return zero rows on
 		// a scheduled row, miscoded as "race lost" -> a misleading 410 even
 		// during the happy path. Issue #290 wave-2: keep the two CAS contracts
