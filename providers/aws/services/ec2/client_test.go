@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockEC2Client implements EC2API for testing
@@ -516,19 +517,35 @@ func TestClient_GetDurationValue(t *testing.T) {
 	client := &Client{}
 
 	tests := []struct {
-		name     string
-		term     string
-		expected int64
+		name      string
+		term      string
+		expected  int64
+		expectErr bool
 	}{
-		{"1 year", "1yr", 31536000},
-		{"3 years", "3yr", 94608000},
-		{"3 numeric", "3", 94608000},
-		{"default", "invalid", 31536000},
+		{"1 year", "1yr", 31536000, false},
+		{"1 numeric", "1", 31536000, false},
+		{"3 years", "3yr", 94608000, false},
+		{"3 numeric", "3", 94608000, false},
+		// Regression for ARCH-04 follow-up (issue #1207): unrecognized or
+		// empty terms must error instead of silently mapping to a 1-year
+		// purchase. An empty term is what a 0/NULL Term DB row produces on
+		// the scheduler purchase path.
+		{"invalid term errors", "invalid", 0, true},
+		{"empty term errors", "", 0, true},
+		{"zero term errors", "0", 0, true},
+		{"2yr term errors", "2yr", 0, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := client.getDurationValue(tt.term)
+			result, err := client.getDurationValue(tt.term)
+			if tt.expectErr {
+				if assert.Error(t, err) {
+					assert.Contains(t, err.Error(), "unsupported EC2 reservation term")
+				}
+				return
+			}
+			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -708,6 +725,36 @@ func TestFindOfferingID_HappyPath(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, "offering-ok", id)
+}
+
+// TestFindOfferingID_InvalidTerm_ErrorsBeforeAPICall is the ARCH-04
+// follow-up (issue #1207) call-path regression test: an unrecognized or
+// empty term must abort the offering lookup before any
+// DescribeReservedInstancesOfferings call, rather than silently matching
+// (and buying) a 1-year offering. A "0" term is what a 0/NULL Term DB row
+// produces on the scheduler purchase path.
+func TestFindOfferingID_InvalidTerm_ErrorsBeforeAPICall(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	t.Cleanup(func() { mockEC2.AssertExpectations(t) })
+	client := &Client{client: mockEC2, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "t4g.nano",
+		PaymentOption: "no-upfront",
+		Term:          "0",
+		Details: &common.ComputeDetails{
+			Platform: "Linux/UNIX",
+			Tenancy:  "default",
+			Scope:    "Region",
+		},
+	}
+
+	_, err := client.findOfferingID(context.Background(), rec, "", "")
+
+	require.Error(t, err, "findOfferingID must error on an unrecognized term (ARCH-04)")
+	assert.Contains(t, err.Error(), "unsupported EC2 reservation term")
+	mockEC2.AssertNotCalled(t, "DescribeReservedInstancesOfferings", mock.Anything, mock.Anything)
 }
 
 // TestClient_tagReservedInstance_NameTagPresent asserts that a purchase on the
