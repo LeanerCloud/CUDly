@@ -710,7 +710,11 @@ func TestService_HasPermissionForConstraintsAPI(t *testing.T) {
 		mockStore.AssertExpectations(t)
 	})
 
-	t.Run("admin passes any constraint set", func(t *testing.T) {
+	t.Run("admin-only user is denied execute:purchases regardless of constraints", func(t *testing.T) {
+		// execute:purchases is one of the three money-spending verbs carved
+		// out of admin:* for separation of duties (issue #923). An admin
+		// with no explicit Purchaser-equivalent grant must be denied here
+		// even when every constraint set would otherwise be satisfied.
 		mockStore := new(MockStore)
 		service := createTestService(mockStore, new(MockEmailSender))
 
@@ -722,6 +726,25 @@ func TestService_HasPermissionForConstraintsAPI(t *testing.T) {
 		}, nil).Once()
 
 		has, err := service.HasPermissionForConstraintsAPI(ctx, "admin-123", ActionExecute, ResourcePurchases, []PermissionConstraints{
+			{Providers: []string{"gcp"}, Regions: []string{"europe-west1"}, MaxPurchaseAmount: 9_999_999},
+		})
+		require.NoError(t, err)
+		assert.False(t, has, "admin:* must not cover execute:purchases (issue #923)")
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("admin passes any constraint set for a non-carved-out verb", func(t *testing.T) {
+		mockStore := new(MockStore)
+		service := createTestService(mockStore, new(MockEmailSender))
+
+		adminUser := &User{ID: "admin-123", GroupIDs: []string{DefaultAdminGroupID}}
+		mockStore.On("GetUserByID", ctx, "admin-123").Return(adminUser, nil).Once()
+		mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(&Group{
+			ID:          DefaultAdminGroupID,
+			Permissions: []Permission{{Action: ActionAdmin, Resource: ResourceAll}},
+		}, nil).Once()
+
+		has, err := service.HasPermissionForConstraintsAPI(ctx, "admin-123", ActionView, ResourcePlans, []PermissionConstraints{
 			{Providers: []string{"gcp"}, Regions: []string{"europe-west1"}, MaxPurchaseAmount: 9_999_999},
 		})
 		require.NoError(t, err)

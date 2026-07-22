@@ -101,6 +101,70 @@ func TestService_HasPermission(t *testing.T) {
 
 		mockStore.AssertExpectations(t)
 	})
+
+	// Regression for the follow-up to #1454/#923: this is the bearer-session
+	// auth path (Service.HasPermission -> permissionsAllow), which previously
+	// granted the three carved-out money-spending verbs to ANY admin:* holder
+	// via checkAdminPermission's unconditional true, completely bypassing the
+	// separation-of-duties carve-out that AuthContext.HasPermission already
+	// enforced. Confirmed to fail against the pre-fix code (returned true with
+	// no fall-through) and pass after wiring permissionsAllow through
+	// adminCarvedOuts.
+	t.Run("admin-only user is denied the carved-out purchase verb", func(t *testing.T) {
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		adminUser := &User{
+			ID:       "admin-123",
+			GroupIDs: []string{DefaultAdminGroupID},
+		}
+		adminGrp := &Group{
+			ID:          DefaultAdminGroupID,
+			Name:        "Administrators",
+			Permissions: []Permission{{Action: ActionAdmin, Resource: ResourceAll}},
+		}
+
+		mockStore.On("GetUserByID", ctx, "admin-123").Return(adminUser, nil).Once()
+		mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(adminGrp, nil).Once()
+
+		has, err := service.HasPermission(ctx, "admin-123", ActionExecute, ResourcePurchases, nil)
+		require.NoError(t, err)
+		assert.False(t, has, "admin:* alone must not cover execute:purchases (issue #923)")
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("admin with explicit purchaser grant can execute purchases", func(t *testing.T) {
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		purchasingAdmin := &User{
+			ID:       "admin-purchaser-123",
+			GroupIDs: []string{DefaultAdminGroupID, DefaultPurchaserGroupID},
+		}
+		adminGrp := &Group{
+			ID:          DefaultAdminGroupID,
+			Name:        "Administrators",
+			Permissions: []Permission{{Action: ActionAdmin, Resource: ResourceAll}},
+		}
+		purchaserGrp := &Group{
+			ID:          DefaultPurchaserGroupID,
+			Name:        "Purchasers",
+			Permissions: DefaultPurchaserPermissions(),
+		}
+
+		mockStore.On("GetUserByID", ctx, "admin-purchaser-123").Return(purchasingAdmin, nil).Once()
+		mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(adminGrp, nil).Once()
+		mockStore.On("GetGroup", ctx, DefaultPurchaserGroupID).Return(purchaserGrp, nil).Once()
+
+		has, err := service.HasPermission(ctx, "admin-purchaser-123", ActionExecute, ResourcePurchases, nil)
+		require.NoError(t, err)
+		assert.True(t, has, "explicit Purchaser-group membership still grants execute:purchases")
+
+		mockStore.AssertExpectations(t)
+	})
 }
 
 func TestService_ListGroups(t *testing.T) {

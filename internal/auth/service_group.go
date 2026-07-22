@@ -168,9 +168,17 @@ func (s *Service) HasPermission(ctx context.Context, userID, action, resource st
 // action on resource under the given request-side constraints. Extracted from
 // HasPermission so batch callers (HasPermissionForConstraintsAPI) can evaluate
 // several constraint sets against a single permission fetch.
+//
+// Mirrors AuthContext.HasPermission's carve-out handling (types.go): the
+// admin:* wildcard grants everything EXCEPT the money-spending verbs in
+// adminCarvedOuts (separation of duties, issue #923). For those, admin falls
+// through to the explicit-permission check below instead of short-circuiting.
 func (s *Service) permissionsAllow(permissions []Permission, action, resource string, constraints *PermissionConstraints) bool {
 	for _, perm := range permissions {
 		if checkAdminPermission(perm) {
+			if adminCarvedOuts[[2]string{action, resource}] {
+				continue
+			}
 			return true
 		}
 
