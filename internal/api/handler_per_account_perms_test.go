@@ -23,6 +23,7 @@ package api
 //  10.  GET /ri-exchange/instances    (getAllowedAccounts scope, issue #1030)
 //  11.  GET /ri-exchange/utilization  (getAllowedAccounts scope, issue #1030)
 //  12.  GET /ri-exchange/reshape      (getAllowedAccounts scope, issue #1030)
+//  13.  GET /ladder/configs           (filterLadderConfigsByAllowedAccounts, issue #1428 follow-up)
 
 import (
 	"context"
@@ -1366,4 +1367,77 @@ func TestPerAccountPerms_GetReshapeRecommendations_AdminSeesAll(t *testing.T) {
 	// We only assert no error and correct type — proving the admin path
 	// proceeded past the scope gate into the actual reshape logic.
 	_ = typed
+}
+
+// ─── 13. GET /ladder/configs ──────────────────────────────────────────────────
+
+// TestPerAccountPerms_GetLadderConfigs_ScopedUserSeesOnlyOwnAccount is the
+// real failing scenario from the cross-account data leak: migration 000088
+// grants view:config to non-admin groups, but getLadderConfigs previously
+// returned every account's LadderConfigDB (spend caps, ramp schedules)
+// unconditionally. A scoped user (allowed_accounts: [permsAccA]) must see
+// only permsAccA's config when configs exist for both accounts.
+//
+// Regression: without filterLadderConfigsByAllowedAccounts, this test fails
+// because the account-B config is included in the response.
+func TestPerAccountPerms_GetLadderConfigs_ScopedUserSeesOnlyOwnAccount(t *testing.T) {
+	ctx := context.Background()
+
+	cfgA := config.LadderConfigDB{ID: "cfg-a", CloudAccountID: permsAccA, Provider: "aws"}
+	cfgB := config.LadderConfigDB{ID: "cfg-b", CloudAccountID: permsAccB, Provider: "aws"}
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetLadderConfigs", ctx).Return([]config.LadderConfigDB{cfgA, cfgB}, nil)
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return permsAccountList(), nil
+	}
+
+	handler := &Handler{
+		auth:   scopedAuthMock(ctx),
+		config: mockStore,
+	}
+
+	resp, err := handler.getLadderConfigs(ctx, scopedReq())
+	require.NoError(t, err)
+	body, ok := resp.(map[string]any)
+	require.True(t, ok, "expected map[string]any, got %T", resp)
+	configs, ok := body["configs"].([]config.LadderConfigDB)
+	require.True(t, ok, "expected []config.LadderConfigDB, got %T", body["configs"])
+
+	ids := make([]string, len(configs))
+	for i, c := range configs {
+		ids[i] = c.ID
+	}
+	assert.ElementsMatch(t, []string{"cfg-a"}, ids,
+		"scoped user must see only account-A's ladder config; account-B config must be filtered out")
+}
+
+// TestPerAccountPerms_GetLadderConfigs_AdminSeesAll verifies that an admin
+// (unrestricted) session bypasses the allowed_accounts gate and receives
+// every account's ladder config.
+func TestPerAccountPerms_GetLadderConfigs_AdminSeesAll(t *testing.T) {
+	ctx := context.Background()
+
+	cfgA := config.LadderConfigDB{ID: "cfg-a", CloudAccountID: permsAccA, Provider: "aws"}
+	cfgB := config.LadderConfigDB{ID: "cfg-b", CloudAccountID: permsAccB, Provider: "aws"}
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetLadderConfigs", ctx).Return([]config.LadderConfigDB{cfgA, cfgB}, nil)
+
+	mockAuth, req := adminDashboardReq(ctx)
+	handler := &Handler{auth: mockAuth, config: mockStore}
+
+	resp, err := handler.getLadderConfigs(ctx, req)
+	require.NoError(t, err)
+	body, ok := resp.(map[string]any)
+	require.True(t, ok, "expected map[string]any, got %T", resp)
+	configs, ok := body["configs"].([]config.LadderConfigDB)
+	require.True(t, ok, "expected []config.LadderConfigDB, got %T", body["configs"])
+
+	ids := make([]string, len(configs))
+	for i, c := range configs {
+		ids[i] = c.ID
+	}
+	assert.ElementsMatch(t, []string{"cfg-a", "cfg-b"}, ids,
+		"admin must see every account's ladder config")
 }

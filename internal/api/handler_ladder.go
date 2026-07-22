@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 )
@@ -14,10 +15,18 @@ import (
 // LADDER CONFIG HANDLERS
 // ==========================================
 
-// getLadderConfigs returns all per-account ladder configurations.
-// Requires view:config permission.
+// getLadderConfigs returns the ladder configurations for accounts the caller
+// is allowed to see. Requires view:config permission.
+//
+// Migration 000088 granted view:config to the Standard User and Read-Only
+// User groups (previously admin-only), so this handler can no longer return
+// every account's config unconditionally -- a scoped non-admin user would
+// otherwise enumerate other accounts' spend caps and ramp schedules. Filter
+// through filterLadderConfigsByAllowedAccounts before returning, mirroring
+// filterPurchaseHistoryByAllowedAccounts (issue #1030 scoping pattern).
 func (h *Handler) getLadderConfigs(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requirePermission(ctx, req, "view", "config"); err != nil {
+	session, err := h.requirePermission(ctx, req, "view", "config")
+	if err != nil {
 		return nil, err
 	}
 
@@ -26,7 +35,34 @@ func (h *Handler) getLadderConfigs(ctx context.Context, req *events.LambdaFuncti
 		return nil, fmt.Errorf("failed to list ladder configs: %w", err)
 	}
 
+	configs, err = h.filterLadderConfigsByAllowedAccounts(ctx, session, configs)
+	if err != nil {
+		return nil, err
+	}
+
 	return map[string]any{"configs": configs}, nil
+}
+
+// filterLadderConfigsByAllowedAccounts drops configs whose CloudAccountID is
+// outside the session's allowed_accounts. Admin/unrestricted sessions pass
+// through unchanged.
+func (h *Handler) filterLadderConfigsByAllowedAccounts(ctx context.Context, session *Session, configs []config.LadderConfigDB) ([]config.LadderConfigDB, error) {
+	allowed, err := h.getAllowedAccounts(ctx, session)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	if auth.IsUnrestrictedAccess(allowed) {
+		return configs, nil
+	}
+	nameByID := h.resolveAccountNamesByID(ctx)
+	filtered := make([]config.LadderConfigDB, 0, len(configs))
+	for _rvc := range configs {
+		c := configs[_rvc]
+		if auth.MatchesAccount(allowed, c.CloudAccountID, nameByID[c.CloudAccountID]) {
+			filtered = append(filtered, c)
+		}
+	}
+	return filtered, nil
 }
 
 // upsertLadderConfig inserts or updates the per-account ladder configuration
