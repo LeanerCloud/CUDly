@@ -28,6 +28,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -1410,6 +1411,40 @@ func TestPerAccountPerms_GetLadderConfigs_ScopedUserSeesOnlyOwnAccount(t *testin
 	}
 	assert.ElementsMatch(t, []string{"cfg-a"}, ids,
 		"scoped user must see only account-A's ladder config; account-B config must be filtered out")
+}
+
+// TestPerAccountPerms_GetLadderConfigs_AllowedAccountsLookupError verifies
+// that when GetAllowedAccountsAPI returns an error, getLadderConfigs fails
+// closed (returns the error, not unfiltered configs).
+func TestPerAccountPerms_GetLadderConfigs_AllowedAccountsLookupError(t *testing.T) {
+	ctx := context.Background()
+
+	cfgA := config.LadderConfigDB{ID: "cfg-a", CloudAccountID: permsAccA, Provider: "aws"}
+	cfgB := config.LadderConfigDB{ID: "cfg-b", CloudAccountID: permsAccB, Provider: "aws"}
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetLadderConfigs", ctx).Return([]config.LadderConfigDB{cfgA, cfgB}, nil)
+
+	// Scoped auth mock, but GetAllowedAccountsAPI fails
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, permsScopedToken).Return(&Session{
+		UserID: permsScopedUserID,
+		Email:  "scoped@example.com",
+	}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, permsScopedUserID, mock.Anything, mock.Anything).Return(true, nil)
+	injectedErr := errors.New("allowed accounts lookup failed")
+	mockAuth.On("GetAllowedAccountsAPI", ctx, permsScopedUserID).Return(nil, injectedErr)
+
+	handler := &Handler{
+		auth:   mockAuth,
+		config: mockStore,
+	}
+
+	resp, err := handler.getLadderConfigs(ctx, scopedReq())
+	require.Error(t, err, "expected getLadderConfigs to return an error when allowed-accounts lookup fails")
+	assert.ErrorContains(t, err, "failed to get allowed accounts",
+		"error should wrap the allowed-accounts lookup failure")
+	assert.Nil(t, resp, "response must be nil when allowed-accounts lookup fails (fail-closed)")
 }
 
 // TestPerAccountPerms_GetLadderConfigs_AdminSeesAll verifies that an admin
