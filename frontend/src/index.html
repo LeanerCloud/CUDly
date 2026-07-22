@@ -349,7 +349,7 @@
                                     <span class="info-icon">&#9432;<span class="tooltip-text">Email address for purchase notifications and approval requests.</span></span>
                                 </div>
                                 <div class="setting-input">
-                                    <input type="email" id="setting-notification-email" placeholder="admin@example.com" required aria-label="Notification email address" autocomplete="email">
+                                    <input type="email" id="setting-notification-email" placeholder="admin@example.com" required aria-label="Notification email address" autocomplete="email" autocapitalize="none" autocorrect="off">
                                 </div>
                             </div>
                             <div class="setting-row">
@@ -387,7 +387,7 @@
                                     <span class="info-icon">&#9432;<span class="tooltip-text">How many days before a scheduled purchase to send email notification.</span></span>
                                 </div>
                                 <div class="setting-input">
-                                    <input type="number" id="setting-notification-days" value="3" min="1" max="30" inputmode="numeric" pattern="[0-9]*">
+                                    <input type="number" id="setting-notification-days" value="3" min="1" max="30" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
                                 </div>
                             </div>
                             <div class="setting-row">
@@ -396,7 +396,7 @@
                                     <span class="info-icon">&#9432;<span class="tooltip-text">Age (in hours) at which the recommendations cache is considered stale and a background refresh fires automatically. Set to 0 to disable automatic background refresh (the cron scheduler and manual Refresh button still work). Valid range: 0&ndash;8760 (up to one year). Default: 24.</span></span>
                                 </div>
                                 <div class="setting-input">
-                                    <input type="number" id="setting-recs-stale-hours" value="24" min="0" max="8760" step="1" inputmode="numeric" pattern="[0-9]*">
+                                    <input type="number" id="setting-recs-stale-hours" value="24" min="0" max="8760" step="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
                                 </div>
                             </div>
                         </fieldset>
@@ -445,7 +445,7 @@
                                 <label for="setting-default-coverage">Target Coverage (%)</label>
                             </div>
                             <div class="setting-input">
-                                <input type="number" id="setting-default-coverage" value="80" min="0" max="100" inputmode="numeric" pattern="[0-9]*">
+                                <input type="number" id="setting-default-coverage" value="80" min="0" max="100" inputmode="decimal" autocomplete="off">
                             </div>
                         </div>
                     </fieldset>
@@ -476,7 +476,7 @@
                                 <label for="setting-grace-aws"><span class="provider-badge aws">AWS</span> grace period (days)</label>
                             </div>
                             <div class="setting-input">
-                                <input type="number" id="setting-grace-aws" value="7" min="0" max="30" step="1" inputmode="numeric" pattern="[0-9]*">
+                                <input type="number" id="setting-grace-aws" value="7" min="0" max="30" step="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
                             </div>
                         </div>
                         <div class="setting-row">
@@ -484,7 +484,7 @@
                                 <label for="setting-grace-azure"><span class="provider-badge azure">Azure</span> grace period (days)</label>
                             </div>
                             <div class="setting-input">
-                                <input type="number" id="setting-grace-azure" value="7" min="0" max="30" step="1" inputmode="numeric" pattern="[0-9]*">
+                                <input type="number" id="setting-grace-azure" value="7" min="0" max="30" step="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
                             </div>
                         </div>
                         <div class="setting-row">
@@ -492,7 +492,7 @@
                                 <label for="setting-grace-gcp"><span class="provider-badge gcp">GCP</span> grace period (days)</label>
                             </div>
                             <div class="setting-input">
-                                <input type="number" id="setting-grace-gcp" value="7" min="0" max="30" step="1" inputmode="numeric" pattern="[0-9]*">
+                                <input type="number" id="setting-grace-gcp" value="7" min="0" max="30" step="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
                             </div>
                         </div>
                     </fieldset>
@@ -556,7 +556,7 @@
                                 <p class="service-default-hint">EC2, Fargate, Lambda — most flexible</p>
                                 <label>Term: <select id="aws-savings-plans-compute-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
                                 <label>Payment: <select id="aws-savings-plans-compute-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
-                                <label>Coverage %: <input type="number" id="aws-savings-plans-compute-coverage" min="0" max="100" value="80" inputmode="numeric" pattern="[0-9]*"></label>
+                                <label>Coverage %: <input type="number" id="aws-savings-plans-compute-coverage" min="0" max="100" value="80" inputmode="decimal" autocomplete="off"></label>
                                 <label class="toggle-label"><input type="checkbox" id="aws-savings-plans-compute-enabled" checked> Enabled</label>
                             </div>
                             <div class="service-default-card">
@@ -564,7 +564,7 @@
                                 <p class="service-default-hint">EC2 only, region-locked — deepest discount</p>
                                 <label>Term: <select id="aws-savings-plans-ec2instance-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
                                 <label>Payment: <select id="aws-savings-plans-ec2instance-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
-                                <label>Coverage %: <input type="number" id="aws-savings-plans-ec2instance-coverage" min="0" max="100" value="80" inputmode="numeric" pattern="[0-9]*"></label>
+                                <label>Coverage %: <input type="number" id="aws-savings-plans-ec2instance-coverage" min="0" max="100" value="80" inputmode="decimal" autocomplete="off"></label>
                                 <label class="toggle-label"><input type="checkbox" id="aws-savings-plans-ec2instance-enabled" checked> Enabled</label>
                             </div>
                             <div class="service-default-card">
@@ -572,7 +572,7 @@
                                 <p class="service-default-hint">SageMaker training/inference</p>
                                 <label>Term: <select id="aws-savings-plans-sagemaker-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
                                 <label>Payment: <select id="aws-savings-plans-sagemaker-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
-                                <label>Coverage %: <input type="number" id="aws-savings-plans-sagemaker-coverage" min="0" max="100" value="80" inputmode="numeric" pattern="[0-9]*"></label>
+                                <label>Coverage %: <input type="number" id="aws-savings-plans-sagemaker-coverage" min="0" max="100" value="80" inputmode="decimal" autocomplete="off"></label>
                                 <label class="toggle-label"><input type="checkbox" id="aws-savings-plans-sagemaker-enabled" checked> Enabled</label>
                             </div>
                             <div class="service-default-card">
@@ -580,7 +580,7 @@
                                 <p class="service-default-hint">Reserved for future AWS Database Savings Plans (currently not GA; defaults stored for forward-compatibility)</p>
                                 <label>Term: <select id="aws-savings-plans-database-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
                                 <label>Payment: <select id="aws-savings-plans-database-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
-                                <label>Coverage %: <input type="number" id="aws-savings-plans-database-coverage" min="0" max="100" value="80" inputmode="numeric" pattern="[0-9]*"></label>
+                                <label>Coverage %: <input type="number" id="aws-savings-plans-database-coverage" min="0" max="100" value="80" inputmode="decimal" autocomplete="off"></label>
                                 <label class="toggle-label"><input type="checkbox" id="aws-savings-plans-database-enabled" checked> Enabled</label>
                             </div>
                         </div>
@@ -856,7 +856,7 @@
                                 </select>
                             </label>
                         </div>
-                        <label>Target Coverage (%): <input type="number" id="plan-coverage" value="80" min="0" max="100" inputmode="numeric" pattern="[0-9]*"></label>
+                        <label>Target Coverage (%): <input type="number" id="plan-coverage" value="80" min="0" max="100" inputmode="decimal" autocomplete="off"></label>
                     </div>
 
                     <div class="form-section">
@@ -886,8 +886,8 @@
                         </div>
                         <div id="custom-ramp-config" class="hidden">
                             <div class="form-row">
-                                <label>Coverage Per Step (%): <input type="number" id="ramp-step-percent" value="20" min="1" max="100" inputmode="numeric" pattern="[0-9]*"></label>
-                                <label>Interval (Days): <input type="number" id="ramp-interval-days" value="7" min="1" max="365" inputmode="numeric" pattern="[0-9]*"></label>
+                                <label>Coverage Per Step (%): <input type="number" id="ramp-step-percent" value="20" min="1" max="100" inputmode="decimal" autocomplete="off"></label>
+                                <label>Interval (Days): <input type="number" id="ramp-interval-days" value="7" min="1" max="365" inputmode="numeric" pattern="[0-9]*" autocomplete="off"></label>
                             </div>
                         </div>
                     </div>
@@ -912,7 +912,7 @@
                                 <span class="info-icon">&#9432;<span class="tooltip-text">Send email notification this many days before each scheduled purchase.</span></span>
                             </div>
                             <div class="setting-input">
-                                <input type="number" id="plan-notify-days" value="3" min="1" max="30" inputmode="numeric" pattern="[0-9]*">
+                                <input type="number" id="plan-notify-days" value="3" min="1" max="30" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
                             </div>
                         </div>
                         <div class="setting-row">
@@ -1017,11 +1017,11 @@
                     <input type="hidden" id="user-id">
                     <div class="form-group">
                         <label for="user-email">Email</label>
-                        <input type="email" id="user-email" required>
+                        <input type="email" id="user-email" autocomplete="email" autocapitalize="none" autocorrect="off" required>
                     </div>
                     <div id="password-fields" class="form-group">
                         <label for="user-password">Password</label>
-                        <input type="password" id="user-password" minlength="12" placeholder="Leave blank to email an invitation">
+                        <input type="password" id="user-password" minlength="12" placeholder="Leave blank to email an invitation" autocomplete="new-password">
                         <small class="form-help">Leave blank to send the user an invitation email; they will set their own password on first login. If you enter a password it must be at least 12 characters and include upper / lower / number / special.</small>
                     </div>
                     <div class="form-group">
@@ -1162,7 +1162,7 @@
                         </select>
                     </label>
                     <label>Coverage (%):
-                        <input type="number" id="override-coverage" min="0" max="100" step="1" placeholder="Inherit (use global default)" inputmode="numeric" pattern="[0-9]*">
+                        <input type="number" id="override-coverage" min="0" max="100" step="1" placeholder="Inherit (use global default)" inputmode="decimal" autocomplete="off">
                     </label>
 
                     <p class="help-text" id="override-form-error" role="alert"></p>
@@ -1185,7 +1185,7 @@
                     <div class="form-section">
                         <label>Name: <input type="text" id="account-name" required placeholder="Production AWS"></label>
                         <label>Description: <textarea id="account-description" placeholder="Optional description"></textarea></label>
-                        <label>Contact Email: <input type="email" id="account-contact-email" placeholder="team@example.com"></label>
+                        <label>Contact Email: <input type="email" id="account-contact-email" placeholder="team@example.com" autocomplete="email" autocapitalize="none" autocorrect="off"></label>
                         <label>Account / Subscription / Project ID: <input type="text" id="account-external-id" required placeholder="123456789012"></label>
                         <div class="toggle-row">
                             <span id="account-enabled-label">Enabled:</span>
@@ -1205,11 +1205,11 @@
                             </select>
                         </label>
                         <div id="account-aws-keys-fields" class="hidden">
-                            <label>Access Key ID: <input type="text" id="account-aws-access-key-id" placeholder="AKIAIOSFODNN7EXAMPLE"></label>
-                            <label>Secret Access Key: <input type="password" id="account-aws-secret-access-key" placeholder="Secret key"></label>
+                            <label>Access Key ID: <input type="text" id="account-aws-access-key-id" placeholder="AKIAIOSFODNN7EXAMPLE" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+                            <label>Secret Access Key: <input type="password" id="account-aws-secret-access-key" placeholder="Secret key" autocomplete="off" autocapitalize="none" autocorrect="off"></label>
                         </div>
                         <div id="account-aws-role-fields" class="hidden">
-                            <label>Role ARN: <input type="text" id="account-aws-role-arn" placeholder="arn:aws:iam::123456789012:role/CUDly"></label>
+                            <label>Role ARN: <input type="text" id="account-aws-role-arn" placeholder="arn:aws:iam::123456789012:role/CUDly" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
                             <label>External ID:
                                 <span class="input-with-copy">
                                     <input type="text" id="account-aws-external-id" readonly>
@@ -1229,7 +1229,7 @@
                         </div>
                         <div id="account-aws-bastion-fields" class="hidden">
                             <label>Bastion Account: <select id="account-aws-bastion-id"><option value="">Select bastion account...</option></select></label>
-                            <label>Role ARN in target: <input type="text" id="account-aws-bastion-role-arn" placeholder="arn:aws:iam::123456789012:role/CUDly"></label>
+                            <label>Role ARN in target: <input type="text" id="account-aws-bastion-role-arn" placeholder="arn:aws:iam::123456789012:role/CUDly" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
                             <label>External ID:
                                 <span class="input-with-copy">
                                     <input type="text" id="account-aws-external-id-bastion" readonly>
@@ -1247,7 +1247,7 @@
                             </div>
                         </div>
                         <div id="account-aws-wif-fields" class="hidden">
-                            <label>Role ARN: <input type="text" id="account-aws-wif-role-arn" placeholder="arn:aws:iam::123456789012:role/CUDly"></label>
+                            <label>Role ARN: <input type="text" id="account-aws-wif-role-arn" placeholder="arn:aws:iam::123456789012:role/CUDly" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
                             <label>Token File Path: <input type="text" id="account-aws-wif-token-file" placeholder="/var/run/secrets/token"></label>
                             <small>Path to the OIDC token file (Azure/GCP projected token). Leave blank to use AWS_WEB_IDENTITY_TOKEN_FILE env var.</small>
                         </div>
@@ -1268,10 +1268,10 @@
                             </select>
                         </label>
                         <label>Tenant ID: <input type="text" id="account-azure-tenant-id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></label>
-                        <label>Client ID: <input type="text" id="account-azure-client-id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></label>
+                        <label>Client ID: <input type="text" id="account-azure-client-id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
                         <!-- client_secret mode -->
                         <div id="account-azure-secret-fields" class="hidden">
-                            <label>Client Secret: <input type="password" id="account-azure-client-secret" placeholder="Client secret value"></label>
+                            <label>Client Secret: <input type="password" id="account-azure-client-secret" placeholder="Client secret value" autocomplete="off" autocapitalize="none" autocorrect="off"></label>
                             <small>Long-lived credential stored in CUDly. Prefer Workload Identity Federation (above) when possible &mdash; it uses CUDly's OIDC issuer so no secret is stored. If you keep this mode, rotate the client secret before its Azure expiry date to avoid authentication failures.</small>
                         </div>
                     </div>
@@ -1287,7 +1287,7 @@
                             </select>
                         </label>
                         <label>Service Account Email (optional):
-                            <input type="email" id="account-gcp-client-email" placeholder="name@project.iam.gserviceaccount.com">
+                            <input type="email" id="account-gcp-client-email" placeholder="name@project.iam.gserviceaccount.com" autocomplete="email" autocapitalize="none" autocorrect="off">
                         </label>
                         <!-- service_account_key mode -->
                         <div id="account-gcp-key-fields" class="hidden">
