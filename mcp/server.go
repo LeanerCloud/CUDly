@@ -27,6 +27,8 @@ func registrations() []tools.Registration {
 		tools.NewAWSOpenSearchRIPurchaseTool(),
 		tools.NewAWSRedshiftRIPurchaseTool(),
 		tools.NewAWSMemoryDBRIPurchaseTool(),
+		tools.NewAWSRDSRIPurchaseTool(),
+		tools.NewAWSElastiCacheRIPurchaseTool(),
 	}
 }
 

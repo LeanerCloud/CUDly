@@ -173,3 +173,22 @@ func ValidateScope(s string) (Scope, error) {
 		return "", fmt.Errorf("invalid scope %q: must be %s or %s", s, ScopeRegion, ScopeAvailabilityZone)
 	}
 }
+
+// CacheEngine is the ElastiCache engine dimension (common.CacheDetails.Engine).
+type CacheEngine string
+
+const (
+	CacheEngineRedis     CacheEngine = "redis"
+	CacheEngineMemcached CacheEngine = "memcached"
+)
+
+// ValidateCacheEngine returns the typed CacheEngine for s, or an explicit
+// error when s is neither redis nor memcached.
+func ValidateCacheEngine(s string) (CacheEngine, error) {
+	switch CacheEngine(s) {
+	case CacheEngineRedis, CacheEngineMemcached:
+		return CacheEngine(s), nil
+	default:
+		return "", fmt.Errorf("invalid engine %q: must be %s or %s", s, CacheEngineRedis, CacheEngineMemcached)
+	}
+}
