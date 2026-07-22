@@ -330,30 +330,24 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 
 // requireDeleteOrCancelPurchasePermission validates the request session and
 // returns it when the caller holds any of: delete:purchases (management),
-// cancel-any:purchases (operator-scope cancel), or cancel-own:purchases
-// (creator-scope cancel, issue #1400). Ownership is enforced separately by
+// update-any:purchases (full-scope management), cancel-any:purchases
+// (operator-scope cancel), or cancel-own:purchases (creator-scope cancel,
+// issue #1400). update-any is included here (not just in
+// authorizePlannedPurchaseCancel) so a custom group holding ONLY update-any
+// still passes this entry gate instead of 403ing before ownership is even
+// checked; it widens nothing semantically since update-any already grants
+// full-scope cancel one step later. Ownership is enforced separately by
 // authorizePlannedPurchaseCancel; this gate is the minimum-verb check.
+//
+// Delegates to the shared requireAnyPermission dispatch (admin API key ->
+// user API key -> bearer-token session) so this multi-verb gate cannot drift
+// from the single-verb requirePermission path used by every other endpoint.
+// A prior hand-rolled version of this gate skipped the user-API-key branch
+// entirely, 401-ing scoped API-key automation clients on delete (follow-up to
+// #1421).
 func (h *Handler) requireDeleteOrCancelPurchasePermission(ctx context.Context, req *events.LambdaFunctionURLRequest) (*Session, error) {
-	if principal, ok := principalFromContext(ctx); ok && principal.Kind == PrincipalAdminAPIKey {
-		return &Session{UserID: apiKeyAdminUserID}, nil
-	}
-	if h.checkAdminAPIKey(extractAPIKey(req)) {
-		return &Session{UserID: apiKeyAdminUserID}, nil
-	}
-	session, err := h.requireSessionPrincipal(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	for _, verb := range []string{auth.ActionDelete, auth.ActionCancelAny, auth.ActionCancelOwn} {
-		has, checkErr := h.auth.HasPermissionAPI(ctx, session.UserID, verb, auth.ResourcePurchases)
-		if checkErr != nil {
-			return nil, fmt.Errorf("permission check failed: %w", checkErr)
-		}
-		if has {
-			return session, nil
-		}
-	}
-	return nil, NewClientError(403, "permission denied: requires delete, cancel-any, or cancel-own on purchases")
+	verbs := []string{auth.ActionDelete, auth.ActionUpdateAny, auth.ActionCancelAny, auth.ActionCancelOwn}
+	return h.requireAnyPermission(ctx, req, verbs, auth.ResourcePurchases)
 }
 
 // authorizePlannedPurchaseCancel enforces the ownership + cancel permission

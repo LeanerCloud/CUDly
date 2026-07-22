@@ -339,6 +339,114 @@ func (h *Handler) authorizeAPIKey(ctx context.Context, apiKey, action, resource 
 	return &Session{UserID: userID, UserAPIKeyID: keyID}, nil
 }
 
+// requireAnyPermission is the multi-verb counterpart to requirePermission: it
+// grants access when the caller holds ANY of verbs on resource, returning the
+// session for the first verb that matches. It mirrors requirePermission's
+// auth-dispatch order (principal-in-context fast path, then admin API key,
+// then user API key, then bearer-token session) so a multi-verb gate (e.g.
+// "delete OR cancel-any OR cancel-own") cannot drift from the single-verb
+// dispatch order every other endpoint relies on (follow-up to #1421, which
+// hand-rolled a gate that dropped the user-API-key branch entirely).
+func (h *Handler) requireAnyPermission(ctx context.Context, req *events.LambdaFunctionURLRequest, verbs []string, resource string) (*Session, error) {
+	if principal, ok := principalFromContext(ctx); ok {
+		return h.requireAnyPrincipalPermission(ctx, req, principal, verbs, resource)
+	}
+
+	apiKey := extractAPIKey(req)
+	if h.checkAdminAPIKey(apiKey) {
+		return &Session{UserID: apiKeyAdminUserID}, nil
+	}
+
+	if h.auth == nil {
+		return nil, fmt.Errorf("authentication service not configured")
+	}
+
+	session, apiKeyErr := h.authorizeAPIKeyAny(ctx, apiKey, verbs, resource)
+	if apiKeyErr != nil {
+		return nil, apiKeyErr
+	}
+	if session != nil {
+		return session, nil
+	}
+
+	token := h.extractBearerToken(req)
+	if token == "" {
+		return nil, NewClientError(401, "no authorization token provided")
+	}
+
+	session, err := h.auth.ValidateSession(ctx, token)
+	if err != nil {
+		return nil, NewClientError(401, "invalid session")
+	}
+
+	return h.requireAnySessionPermission(ctx, session, verbs, resource)
+}
+
+func (h *Handler) requireAnyPrincipalPermission(ctx context.Context, req *events.LambdaFunctionURLRequest, principal *Principal, verbs []string, resource string) (*Session, error) {
+	switch principal.Kind {
+	case PrincipalAdminAPIKey:
+		return &Session{UserID: apiKeyAdminUserID}, nil
+	case PrincipalUserAPIKey:
+		session, err := h.authorizeAPIKeyAny(ctx, extractAPIKey(req), verbs, resource)
+		if err != nil {
+			return nil, err
+		}
+		if session == nil {
+			return nil, NewClientError(401, "API key permission validation failed")
+		}
+		return session, nil
+	case PrincipalSession:
+		return h.requireAnySessionPermission(ctx, principal.Session, verbs, resource)
+	default:
+		return nil, NewClientError(401, "unsupported authentication principal")
+	}
+}
+
+func (h *Handler) requireAnySessionPermission(ctx context.Context, session *Session, verbs []string, resource string) (*Session, error) {
+	if session == nil || session.UserID == "" {
+		return nil, NewClientError(401, "invalid session")
+	}
+	for _, verb := range verbs {
+		has, err := h.auth.HasPermissionAPI(ctx, session.UserID, verb, resource)
+		if err != nil {
+			return nil, fmt.Errorf("permission check failed: %w", err)
+		}
+		if has {
+			return session, nil
+		}
+	}
+	return nil, NewClientError(403, fmt.Sprintf("permission denied: requires one of %v on %s", verbs, resource))
+}
+
+// authorizeAPIKeyAny is the multi-verb counterpart to authorizeAPIKey: it
+// grants access on the first verb the key holds. Same fail-closed contract as
+// authorizeAPIKey, evaluated across the whole verb set: (nil, nil) when the
+// key is absent or fails validation (fall through to bearer-token auth),
+// (session, nil) when any verb is granted, (nil, 403) when the key is present
+// and valid but denies every verb.
+func (h *Handler) authorizeAPIKeyAny(ctx context.Context, apiKey string, verbs []string, resource string) (*Session, error) {
+	if apiKey == "" {
+		return nil, nil
+	}
+	for _, verb := range verbs {
+		userID, keyID, has, err := h.auth.HasAPIKeyPermissionAPI(ctx, apiKey, verb, resource)
+		if err != nil {
+			logging.Debugf("User API key permission check failed: %v", err)
+			return nil, nil // validation error: fall through to bearer-token auth
+		}
+		if !has {
+			continue
+		}
+		if userID == "" || keyID == "" {
+			return nil, fmt.Errorf("API key permission check returned incomplete identity")
+		}
+		// Thread the key's database ID so requirePermissionConstraints can
+		// evaluate constraints against the key's effective permissions.
+		return &Session{UserID: userID, UserAPIKeyID: keyID}, nil
+	}
+	return nil, NewClientError(403, fmt.Sprintf("permission denied: requires one of %v on %s", verbs, resource))
+}
+
 // unattributedAccountConstraint is the request-side AccountIDs value passed
 // to requirePermissionConstraints when a request cannot be attributed to a
 // registered cloud account (a recommendation without a cloud_account_id, or

@@ -377,8 +377,9 @@ func TestDeletePlannedPurchase_PermissionGate(t *testing.T) {
 	})
 
 	t.Run("user without delete:purchases is rejected with 403", func(t *testing.T) {
-		// Without delete, cancel-any, or cancel-own the first gate rejects.
+		// Without delete, update-any, cancel-any, or cancel-own the first gate rejects.
 		mockAuth := authForUserWith(ctx, t, userID, "delete", "purchases", false)
+		mockAuth.On("HasPermissionAPI", ctx, userID, "update-any", "purchases").Return(false, nil)
 		mockAuth.On("HasPermissionAPI", ctx, userID, "cancel-any", "purchases").Return(false, nil)
 		mockAuth.On("HasPermissionAPI", ctx, userID, "cancel-own", "purchases").Return(false, nil)
 		h := &Handler{auth: mockAuth, config: new(MockConfigStore)}

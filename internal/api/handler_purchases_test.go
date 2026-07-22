@@ -4220,6 +4220,54 @@ func TestHandler_deletePlannedPurchase_CancelOwn_NonCreator_Rejected(t *testing.
 	mockConfig.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
+// TestHandler_deletePlannedPurchase_UserAPIKey_Allowed is the regression test
+// for a follow-up bug introduced by #1421: requireDeleteOrCancelPurchasePermission
+// hand-rolled its own auth dispatch and dropped the user-API-key branch that
+// requirePermission's shared path relies on, so a scoped API-key automation
+// client (x-api-key header only, no bearer token) presenting a key with
+// delete:purchases got 401 "no authorization token provided" instead of being
+// authorized. Fails pre-fix with a 401 ClientError; passes post-fix with the
+// execution canceled.
+func TestHandler_deletePlannedPurchase_UserAPIKey_Allowed(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	const ownerUserID = "cccc3333-3333-3333-3333-333333333333"
+	const keyID = "key-id-delete-purchases"
+	const execID = "13131313-1313-1313-1313-131313131313"
+
+	// requireDeleteOrCancelPurchasePermission routes to HasAPIKeyPermissionAPI
+	// for x-api-key-only requests; the key holds delete:purchases, the first
+	// verb tried, so no other verb is checked.
+	mockAuth.On("HasAPIKeyPermissionAPI", ctx, "user-key-value", auth.ActionDelete, auth.ResourcePurchases).
+		Return(ownerUserID, keyID, true, nil)
+	mockAuth.On("GetAllowedAccountsAPI", ctx, ownerUserID).Return([]string{}, nil)
+	// authorizePlannedPurchaseCancel falls through to the ownership check
+	// since the owning user holds neither update-any nor cancel-any.
+	mockAuth.On("HasPermissionAPI", ctx, ownerUserID, auth.ActionUpdateAny, auth.ResourcePurchases).Return(false, nil)
+	mockAuth.On("HasPermissionAPI", ctx, ownerUserID, auth.ActionCancelAny, auth.ResourcePurchases).Return(false, nil)
+
+	creator := ownerUserID
+	execution := &config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &creator}
+	mockStore.On("GetExecutionByID", ctx, execID).Return(execution, nil)
+
+	canceled := &config.PurchaseExecution{ExecutionID: execID, Status: "canceled"}
+	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "canceled", mock.Anything).
+		Return(canceled, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"x-api-key": "user-key-value"},
+	}
+
+	result, err := handler.deletePlannedPurchase(ctx, req, execID)
+	require.NoError(t, err)
+	assert.Equal(t, "canceled", result.Status)
+}
+
 func TestHandler_runPlannedPurchase_NonOwner_Rejected(t *testing.T) {
 	handler, mockConfig, _ := buildManageHandler(ownUserA, ownUserB, false)
 
