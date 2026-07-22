@@ -12,13 +12,13 @@ resource "azurerm_role_assignment" "current_user_crypto_officer" {
 resource "azurerm_key_vault_key" "signing" {
   name         = "cudly-oidc-signing"
   key_vault_id = azurerm_key_vault.main.id
-  key_type     = "RSA"
-  key_size     = 2048
+  key_type     = "EC"
+  curve        = "P-256"
 
   # Only the operations the Signer actually needs. Sign covers the
   # kms-equivalent signing op; get is consulted at Signer startup to
   # derive the JWK. verify is a no-op for CUDly but is conventional
-  # for RSA signing keys.
+  # for EC signing keys.
   key_opts = [
     "sign",
     "verify",

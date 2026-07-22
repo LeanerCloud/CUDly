@@ -28,7 +28,7 @@ resource "google_kms_crypto_key" "signing" {
   destroy_scheduled_duration = "86400s" # 1 day — tests redeploy often
 
   version_template {
-    algorithm        = "RSA_SIGN_PKCS1_2048_SHA256"
+    algorithm        = "EC_SIGN_P256_SHA256"
     protection_level = "SOFTWARE"
   }
 

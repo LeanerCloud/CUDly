@@ -3,6 +3,8 @@ package oidc
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -155,6 +157,23 @@ func TestBuildJWKS(t *testing.T) {
 		t.Errorf("y not base64url: %v", err)
 	}
 	// RSA fields are structurally absent from the EC JWK type.
+}
+
+// TestPublicJWKRejectsWrongCurve guards against a misconfigured
+// non-P-256 KMS/Key Vault key (e.g. P-384) silently producing a
+// corrupt JWK: pre-fix, PublicJWK hardcoded Crv/Alg to "P-256"/ES256
+// regardless of ecPub.Curve, so a P-384 key would be published as a
+// mislabeled P-256 JWK with 48-byte (not 32-byte) coordinates, and the
+// misconfiguration would only surface later as an opaque KMS signing
+// failure. Post-fix, PublicJWK must reject it immediately.
+func TestPublicJWKRejectsWrongCurve(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("gen p384 key: %v", err)
+	}
+	if _, err := PublicJWK(&key.PublicKey, "some-kid"); err == nil {
+		t.Fatal("PublicJWK accepted a P-384 key; want an error rejecting the wrong curve")
+	}
 }
 
 func TestBuildDiscovery(t *testing.T) {

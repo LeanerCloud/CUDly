@@ -37,7 +37,7 @@ True Azure federation, where CUDly stores **no** Azure-specific secret:
 1. CUDly's own AWS Lambda exposes OIDC discovery + JWKS endpoints
    (`/.well-known/openid-configuration`, `/.well-known/jwks.json`) on its
    Function URL. The JWKS publishes the public half of an AWS KMS asymmetric
-   signing key (RSA_2048, SIGN_VERIFY). The private half never leaves KMS.
+   signing key (ECC_NIST_P256, SIGN_VERIFY). The private half never leaves KMS.
 2. The Azure AD App Registration gets a **federated identity credential**
    (`az ad app federated-credential create`) pointing at CUDly's OIDC issuer
    with `subject=cudly-controller` and `audience=api://AzureADTokenExchange`.
@@ -57,7 +57,7 @@ No PEMs, no passwords, no symmetric secrets.
  │                                                                      │
  │  ┌────────────────────┐   kms:Sign    ┌────────────────────────┐     │
  │  │ CUDly Lambda       │◀─────────────▶│ KMS asymmetric         │     │
- │  │ (api handler)      │  GetPublicKey │ (RSA_2048 SIGN_VERIFY) │     │
+ │  │ (api handler)      │  GetPublicKey │ (ECC_NIST_P256 SIGN)   │     │
  │  └────────────────────┘               └────────────────────────┘     │
  │          │                                                           │
  │          │  serves on Function URL:                                  │
@@ -92,19 +92,20 @@ One commit per layer, each independently reviewable.
    asymmetric key, alias, IAM policy on the Lambda role for `kms:Sign` /
    `kms:GetPublicKey`, new Lambda env var `CUDLY_SIGNING_KEY_ID`. **DONE**.
 3. **`internal/oidc/signer.go`** — cloud-agnostic `Signer` interface:
-   - `Sign(ctx, digest []byte) ([]byte, error)` — raw RSA-PKCS1v15 over
-     SHA-256 digest. Called by the JWT minter.
-   - `PublicKey(ctx) (*rsa.PublicKey, error)` — used to build the JWK and
-     to compute a stable `kid`.
-   - `Algorithm() string` — currently always `RS256`.
+   - `Sign(ctx, digest []byte) ([]byte, error)` — raw ECDSA over a
+     SHA-256 digest, converted to the RFC 7518 section 3.4 raw R||S
+     form. Called by the JWT minter.
+   - `PublicKey(ctx) (*ecdsa.PublicKey, error)` — used to build the JWK
+     and to compute a stable `kid`.
+   - `Algorithm() string` — currently always `ES256`.
    Backed by three implementations:
    - `AWSKMSSigner` — `aws-sdk-go-v2/service/kms`, `kms:Sign` with
-     `RSASSA_PKCS1_V1_5_SHA_256`, `kms:GetPublicKey` once at startup.
-   - `AzureKeyVaultSigner` — `azkeys.Client.Sign` with `RS256`,
+     `ECDSA_SHA_256`, `kms:GetPublicKey` once at startup.
+   - `AzureKeyVaultSigner` — `azkeys.Client.Sign` with `ES256`,
      `GetKey` to read the public half.
    - `GCPKMSSigner` — `cloud.google.com/go/kms/apiv1`, `AsymmetricSign`
      with digest SHA-256, `GetPublicKey` once at startup.
-   Plus a `LocalSigner` (in-process RSA key) used only in tests.
+   Plus a `LocalSigner` (in-process P-256 ECDSA key) used only in tests.
 4. **`internal/oidc/jwt.go`** — cloud-agnostic JWT minter that takes a
    `Signer` and a `jwt.MapClaims`, builds the header (with the Signer's
    `kid`), composes `base64url(header).base64url(claims)`, hashes it,
