@@ -21,7 +21,9 @@ const ServerName = "cudly-mcp"
 // last, once it has every other tool's Descriptor to build the catalog
 // from).
 func registrations() []tools.Registration {
-	return []tools.Registration{}
+	return []tools.Registration{
+		tools.NewSearchRecommendationsTool(),
+	}
 }
 
 // NewServer builds the CUDly MCP server with every tool registered. version
