@@ -570,9 +570,10 @@ func TestSaveGlobalConfig_OfferingClassBindsAt23(t *testing.T) {
 		OfferingClass:       "standard",
 	}
 
-	// Expect exactly 23 args; pgxmock validates arg count and types.
+	// Expect exactly 24 args; pgxmock validates arg count and types.
 	// The 21st arg is laddering_enabled; the 22nd is ladder_execution_enabled;
-	// the 23rd arg must be "standard" (offering_class).
+	// the 23rd arg must be "standard" (offering_class); the 24th is
+	// require_different_approver (issue #1005).
 	// If the real query regresses to a different arg count, pgxmock
 	// will return an unexpected-call error and the test will fail.
 	mock.ExpectExec(`INSERT INTO global_config`).
@@ -600,11 +601,12 @@ func TestSaveGlobalConfig_OfferingClassBindsAt23(t *testing.T) {
 			pgxmock.AnyArg(), // $21 laddering_enabled
 			pgxmock.AnyArg(), // $22 ladder_execution_enabled
 			"standard",       // $23 offering_class -- the field this test guards
+			pgxmock.AnyArg(), // $24 require_different_approver
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err = store.SaveGlobalConfig(ctx, cfg)
-	require.NoError(t, err, "SaveGlobalConfig must succeed when the DB accepts all 23 args")
+	require.NoError(t, err, "SaveGlobalConfig must succeed when the DB accepts all 24 args")
 
 	require.NoError(t, mock.ExpectationsWereMet(),
 		"offering_class must be bound as the 23rd argument to SaveGlobalConfig")

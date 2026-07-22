@@ -416,7 +416,10 @@ func TestHandler_approveViaToken_GlobalConfigError_FailsClosed(t *testing.T) {
 
 	_, err := handler.approvePurchase(ctx, req, execID, "valid-token")
 	require.Error(t, err, "config error must propagate; must not execute immediately (F3 token path)")
-	assert.Contains(t, err.Error(), "failed to read global config")
+	// requireDifferentApprover (issue #1005) now runs before the purchase-delay
+	// config read, so the failure surfaces there first; assert on the
+	// underlying cause rather than the specific wrapping call site.
+	assert.Contains(t, err.Error(), "db transient error")
 	mockPurchase.AssertNotCalled(t, "ApproveExecution",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockPurchase.AssertNotCalled(t, "ApproveAndExecute",
@@ -459,7 +462,10 @@ func TestHandler_approvePurchaseViaSession_GlobalConfigError_FailsClosed(t *test
 
 	_, err := handler.approvePurchase(ctx, req, execID, "")
 	require.Error(t, err, "config error must propagate; must not execute immediately (F3 session path)")
-	assert.Contains(t, err.Error(), "failed to read global config")
+	// requireDifferentApprover (issue #1005) now runs before the purchase-delay
+	// config read, so the failure surfaces there first; assert on the
+	// underlying cause rather than the specific wrapping call site.
+	assert.Contains(t, err.Error(), "db transient error")
 	mockPurchase.AssertNotCalled(t, "ApproveAndExecute",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
