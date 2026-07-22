@@ -928,7 +928,7 @@ func (h *Handler) sendPurchaseScheduledEmail(ctx context.Context, execution *con
 // the standard RBAC gate. Returns nil when the policy allows the approval.
 //
 // Decision logic:
-//   - mode off (RequireDifferentApprover == false): always returns nil (default behaviour preserved).
+//   - mode off (RequireDifferentApprover == false): always returns nil (default behavior preserved).
 //   - session == nil AND mode on: returns 500 (fail-closed; we cannot determine
 //     identity without a session; the email-token path should always carry a
 //     session when mode is on because the deep-link flow forces a login).
