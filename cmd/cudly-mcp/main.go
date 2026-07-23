@@ -15,6 +15,9 @@ import (
 	gosdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	cudlymcp "github.com/LeanerCloud/CUDly/mcp"
+	_ "github.com/LeanerCloud/CUDly/providers/aws"
+	_ "github.com/LeanerCloud/CUDly/providers/azure"
+	_ "github.com/LeanerCloud/CUDly/providers/gcp"
 )
 
 // version is overridable at build time via:
