@@ -190,6 +190,46 @@ func TestExecutePurchasePreviewOmitsUnknownCostFields(t *testing.T) {
 	assert.NotContains(t, body, `"savings_percentage"`)
 }
 
+// TestExecutePurchasePreviewPopulatesTermYears is the regression guard for
+// the CodeRabbit finding that PurchaseResponse.TermYears was declared in the
+// JSON contract but never set in either ExecutePurchase branch, so it was
+// always zero/omitted even though the term is known from the recommendation.
+// testRecommendation() carries Term: "3yr", the same "<N>yr" format every
+// *FromArgs constructor in this package writes.
+func TestExecutePurchasePreviewPopulatesTermYears(t *testing.T) {
+	t.Parallel()
+	resp, err := ExecutePurchase(context.Background(), PurchaseRequest{
+		Region:         "us-east-1",
+		Recommendation: testRecommendation(),
+		DryRun:         true,
+		Confirm:        false,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, 3, resp.TermYears, "a preview response must carry the term the caller specified")
+}
+
+// TestExecutePurchaseRealPurchasePopulatesTermYears is the real-purchase
+// counterpart of TestExecutePurchasePreviewPopulatesTermYears: the term must
+// be populated on the modeExecute branch too, not only the preview branch.
+func TestExecutePurchaseRealPurchasePopulatesTermYears(t *testing.T) {
+	t.Parallel()
+	fake := &fakeServiceClient{
+		purchaseResult: common.PurchaseResult{Success: true, CommitmentID: "ri-term-test"},
+	}
+
+	resp, err := ExecutePurchase(context.Background(), PurchaseRequest{
+		Region:         "us-east-1",
+		Recommendation: testRecommendation(),
+		DryRun:         false,
+		Confirm:        true,
+		ResolveClient:  func(_ context.Context) (provider.ServiceClient, error) { return fake, nil },
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, 3, resp.TermYears, "a real-purchase response must carry the term the caller specified")
+}
+
 // TestExecutePurchaseUnconfirmedRealPurchaseRefused proves confirm=false
 // refuses a real purchase (dry_run=false) with a structured error rather
 // than a silent no-op, and that ResolveClient is never invoked either.
