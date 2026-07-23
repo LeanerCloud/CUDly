@@ -582,6 +582,7 @@ func TestPurchaseCommitment_Success(t *testing.T) {
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
 		ResourceType: "Premium_P1", Term: "1yr", Count: 1, CommitmentCost: 500.0,
+		PaymentOption: "no-upfront",
 	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
@@ -602,6 +603,7 @@ func TestPurchaseCommitment_3yr(t *testing.T) {
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
 		ResourceType: "Premium_P2", Term: "3yr", Count: 2, CommitmentCost: 1200.0,
+		PaymentOption: "no-upfront",
 	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
@@ -621,6 +623,7 @@ func TestPurchaseCommitment_Accepted(t *testing.T) {
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
 		ResourceType: "Premium_P1", Term: "1yr", Count: 1,
+		PaymentOption: "no-upfront",
 	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
@@ -633,6 +636,7 @@ func TestPurchaseCommitment_TokenError(t *testing.T) {
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
 		ResourceType: "Premium_P1", Term: "1yr", Count: 1,
+		PaymentOption: "no-upfront",
 	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
@@ -649,6 +653,7 @@ func TestPurchaseCommitment_HTTPError(t *testing.T) {
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
 		ResourceType: "Premium_P1", Term: "1yr", Count: 1,
+		PaymentOption: "no-upfront",
 	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
@@ -668,6 +673,7 @@ func TestPurchaseCommitment_BadStatus(t *testing.T) {
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
 		ResourceType: "Premium_P1", Term: "1yr", Count: 1,
+		PaymentOption: "no-upfront",
 	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
@@ -684,6 +690,71 @@ func TestPurchaseCommitment_InvalidTerm(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "unsupported reservation term")
+}
+
+// TestPurchaseCommitment_BillingPlan pins the billingPlan wiring (issue
+// #1502, mirroring PR #1495's fix for compute): Azure Managed Redis
+// reservations support both Upfront and Monthly billing frequency
+// (learn.microsoft.com/azure/redis/reserved-pricing), so rec.PaymentOption
+// must map onto the correct armreservations ReservationBillingPlan value in
+// the purchase body rather than silently defaulting to Azure's Upfront
+// behavior for a no-upfront/monthly rec.
+func TestPurchaseCommitment_BillingPlan(t *testing.T) {
+	cases := []struct {
+		name          string
+		paymentOption string
+		wantPlan      string
+		wantErrSub    string
+	}{
+		{name: "all-upfront maps to Upfront", paymentOption: "all-upfront", wantPlan: "Upfront"},
+		{name: "no-upfront maps to Monthly", paymentOption: "no-upfront", wantPlan: "Monthly"},
+		{name: "partial-upfront is rejected", paymentOption: "partial-upfront", wantErrSub: "partial-upfront has no azure equivalent"},
+		{name: "empty payment option is rejected", paymentOption: "", wantErrSub: "azure reservations support only upfront or monthly billing"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &mocks.MockHTTPClient{}
+			t.Cleanup(func() { h.AssertExpectations(t) })
+			cred := &mockTokenCredential{token: "tok"}
+			c := NewClientWithHTTP(cred, "sub", "eastus", h)
+
+			rec := common.Recommendation{ResourceType: "Premium_P1", Term: "1yr", Count: 1, PaymentOption: tc.paymentOption}
+
+			if tc.wantErrSub != "" {
+				result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+				require.Error(t, err)
+				assert.False(t, result.Success)
+				assert.Contains(t, err.Error(), tc.wantErrSub)
+				h.AssertNotCalled(t, "Do", mock.Anything)
+				return
+			}
+
+			const orderID = "mr-billingplan-test"
+			h.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+				return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+			})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once()
+
+			var capturedBody []byte
+			h.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+				if r.URL.Path != "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase" {
+					return false
+				}
+				capturedBody, _ = io.ReadAll(r.Body)
+				r.Body = io.NopCloser(bytes.NewReader(capturedBody))
+				return true
+			})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+
+			result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+			require.NoError(t, err)
+			assert.True(t, result.Success)
+
+			var body map[string]interface{}
+			require.NoError(t, json.Unmarshal(capturedBody, &body))
+			props, ok := body["properties"].(map[string]interface{})
+			require.True(t, ok, "properties map missing from reservation body")
+			assert.Equal(t, tc.wantPlan, props["billingPlan"])
+		})
+	}
 }
 
 // TestPurchaseCommitment_RequiresSource pins the dedupe guard:
@@ -824,6 +895,7 @@ func TestPurchaseCommitment_TagInjection(t *testing.T) {
 
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
 		ResourceType: "Premium_P1", Term: "1yr", Count: 1, CommitmentCost: 500.0,
+		PaymentOption: "no-upfront",
 	}, common.PurchaseOptions{Source: source})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
