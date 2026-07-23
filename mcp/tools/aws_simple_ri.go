@@ -29,14 +29,15 @@ type simpleAWSRIPurchaseSpec struct {
 // simpleAWSRIPurchaseArgs is the input schema shared by every
 // simpleAWSRIPurchaseTool instance.
 type simpleAWSRIPurchaseArgs struct {
-	Region        string `json:"region" jsonschema:"AWS region, e.g. us-east-1"`
-	ResourceType  string `json:"resource_type" jsonschema:"resource/node type to reserve"`
-	Count         int    `json:"count" jsonschema:"number of nodes/instances to reserve, must be > 0"`
-	TermYears     int    `json:"term_years" jsonschema:"commitment length in years"`
-	PaymentOption string `json:"payment_option" jsonschema:"payment schedule"`
-	AWSProfile    string `json:"aws_profile,omitempty" jsonschema:"AWS named profile override (~/.aws/config); default uses ambient credentials"`
-	DryRun        *bool  `json:"dry_run,omitempty" jsonschema:"preview only, no purchase; defaults to true"`
-	Confirm       *bool  `json:"confirm,omitempty" jsonschema:"required (with dry_run=false) to execute a real purchase; defaults to false"`
+	Region           string `json:"region" jsonschema:"AWS region, e.g. us-east-1"`
+	ResourceType     string `json:"resource_type" jsonschema:"resource/node type to reserve"`
+	Count            int    `json:"count" jsonschema:"number of nodes/instances to reserve, must be > 0"`
+	TermYears        int    `json:"term_years" jsonschema:"commitment length in years"`
+	PaymentOption    string `json:"payment_option" jsonschema:"payment schedule"`
+	AWSProfile       string `json:"aws_profile,omitempty" jsonschema:"AWS named profile override (~/.aws/config); default uses ambient credentials"`
+	DryRun           *bool  `json:"dry_run,omitempty" jsonschema:"preview only, no purchase; defaults to true"`
+	Confirm          *bool  `json:"confirm,omitempty" jsonschema:"required (with dry_run=false) to execute a real purchase; defaults to false"`
+	IdempotencyNonce string `json:"idempotency_nonce,omitempty" jsonschema:"optional caller-chosen token; passing the SAME value on a retry of this exact call forces the same idempotency key so the provider dedupes it as a retry (e.g. after a network timeout); omitting it (the default) means two calls with otherwise-identical parameters are treated as genuinely separate purchases and get distinct keys"`
 }
 
 type simpleAWSRIPurchaseTool struct {
@@ -144,6 +145,7 @@ func (t *simpleAWSRIPurchaseTool) handle(ctx context.Context, _ *mcp.CallToolReq
 		DryRun:         dryRun,
 		Confirm:        confirm,
 		ResolveClient:  t.resolveClient(args),
+		Nonce:          args.IdempotencyNonce,
 	})
 	if err != nil {
 		return nil, PurchaseResponse{}, err
