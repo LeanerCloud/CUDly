@@ -57,6 +57,59 @@ func TestSavingsPlanRecommendationFromArgsEC2InstanceRequiresRegion(t *testing.T
 	assert.Equal(t, "us-east-1", details.Region)
 }
 
+// TestSavingsPlanRecommendationFromArgsEC2InstanceRequiresInstanceFamily is
+// the regression guard for the CodeRabbit money-path finding: omitting
+// instance_family for sp_type=EC2Instance lets DescribeSavingsPlansOfferings
+// resolve across every instance family in the region instead of the one
+// Cost Explorer actually recommended, risking a real purchase for the wrong
+// workload. instance_family must be required exactly like region already is.
+func TestSavingsPlanRecommendationFromArgsEC2InstanceRequiresInstanceFamily(t *testing.T) {
+	t.Parallel()
+	args := validSavingsPlansArgs()
+	args.SPType = "EC2Instance"
+	args.Region = "us-east-1"
+
+	_, _, _, _, err := savingsPlanRecommendationFromArgs(args)
+	require.Error(t, err, "EC2Instance sp_type without instance_family must be rejected")
+	assert.Contains(t, err.Error(), "instance_family is required")
+
+	args.InstanceFamily = "m5"
+	rec, _, _, _, err := savingsPlanRecommendationFromArgs(args)
+	require.NoError(t, err, "EC2Instance sp_type with instance_family set must succeed")
+	details, ok := rec.Details.(*common.SavingsPlanDetails)
+	require.True(t, ok)
+	assert.Equal(t, "m5", details.InstanceFamily)
+}
+
+// TestSavingsPlanRecommendationFromArgsInstanceFamilyOptionalForOtherTypes
+// proves the new instance_family requirement is scoped to sp_type=EC2Instance
+// only: Compute, SageMaker, and Database plans are family-agnostic and
+// account-level, so instance_family stays optional (and ignored) for them.
+func TestSavingsPlanRecommendationFromArgsInstanceFamilyOptionalForOtherTypes(t *testing.T) {
+	t.Parallel()
+	for _, spType := range []string{"Compute", "SageMaker"} {
+		t.Run(spType, func(t *testing.T) {
+			args := validSavingsPlansArgs()
+			args.SPType = spType
+			args.InstanceFamily = ""
+
+			_, _, _, _, err := savingsPlanRecommendationFromArgs(args)
+			require.NoError(t, err, "instance_family must remain optional for sp_type=%s", spType)
+		})
+	}
+
+	t.Run("Database", func(t *testing.T) {
+		args := validSavingsPlansArgs()
+		args.SPType = "Database"
+		args.TermYears = 1
+		args.PaymentOption = "no-upfront"
+		args.InstanceFamily = ""
+
+		_, _, _, _, err := savingsPlanRecommendationFromArgs(args)
+		require.NoError(t, err, "instance_family must remain optional for sp_type=Database")
+	})
+}
+
 func TestSavingsPlanRecommendationFromArgsInvalid(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

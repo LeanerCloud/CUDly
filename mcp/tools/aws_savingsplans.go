@@ -135,6 +135,16 @@ func validateSavingsPlanArgs(args savingsPlansPurchaseArgs) (spType SPType, term
 	if spType == SPTypeEC2Instance && args.Region == "" {
 		return "", 0, "", fmt.Errorf("region is required for sp_type=%s", SPTypeEC2Instance)
 	}
+	// instance_family is the filter that stops DescribeSavingsPlansOfferings
+	// from resolving to an arbitrary EC2Instance offering across every family
+	// in the region. providers/aws/services/savingsplans/client.go's
+	// lookupEC2OfferingIDStrict does fail loud when the resulting offerings
+	// span more than one family, but that is defense in depth at the API
+	// boundary; requiring the family here, at the tool boundary, catches the
+	// missing value before a real purchase attempt is even made.
+	if spType == SPTypeEC2Instance && args.InstanceFamily == "" {
+		return "", 0, "", fmt.Errorf("instance_family is required for sp_type=%s", SPTypeEC2Instance)
+	}
 	if err := validateDatabaseSPConstraints(spType, term, paymentOption); err != nil {
 		return "", 0, "", err
 	}
