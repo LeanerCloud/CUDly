@@ -26,6 +26,8 @@ type searchRecommendationsArgs struct {
 	Provider            string   `json:"provider" jsonschema:"cloud provider to search"`
 	Service             string   `json:"service" jsonschema:"service to search, e.g. ec2, rds, elasticache, compute, computeengine"`
 	Region              string   `json:"region,omitempty" jsonschema:"region to search; omit for account/global-level services such as Savings Plans"`
+	IncludeRegions      []string `json:"include_regions,omitempty" jsonschema:"restrict the search to these regions, in addition to (or instead of) region"`
+	ExcludeRegions      []string `json:"exclude_regions,omitempty" jsonschema:"exclude these regions from the search"`
 	LookbackPeriod      string   `json:"lookback_period,omitempty" jsonschema:"cost/usage lookback window backing the recommendation"`
 	TermYears           int      `json:"term_years,omitempty" jsonschema:"filter to a specific commitment term; omit to search all terms"`
 	PaymentOption       string   `json:"payment_option,omitempty" jsonschema:"filter to a specific payment schedule; omit to search all"`
@@ -184,6 +186,8 @@ func recommendationParamsFromArgs(service common.ServiceType, term string, args 
 		Term:           term,
 		PaymentOption:  args.PaymentOption,
 		AccountFilter:  args.AccountFilter,
+		IncludeRegions: args.IncludeRegions,
+		ExcludeRegions: args.ExcludeRegions,
 		IncludeSPTypes: args.IncludeSPTypes,
 		ExcludeSPTypes: args.ExcludeSPTypes,
 	}
