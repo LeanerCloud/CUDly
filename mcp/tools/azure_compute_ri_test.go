@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,11 +12,11 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/provider"
 )
 
-// validAzureComputeArgs uses payment_option=all-upfront, the only schedule
-// Azure Reserved Instances actually honor (see
-// TestAzureComputeRecommendationFromArgsRejectsUnhonoredPaymentOption):
-// azure_compute_ri.go rejects any other value rather than silently
-// purchasing under a mismatched billing schedule.
+// validAzureComputeArgs uses payment_option=all-upfront. Azure Reserved
+// Instances honor both all-upfront and no-upfront (see
+// TestAzureComputeRecommendationFromArgsAcceptsNoUpfront); all-upfront is
+// used here just to keep the baseline args deterministic across tests that
+// don't care which honored schedule they exercise.
 func validAzureComputeArgs() azureComputeRIPurchaseArgs {
 	return azureComputeRIPurchaseArgs{
 		Region:        "eastus",
@@ -64,61 +65,73 @@ func TestAzureComputeRecommendationFromArgsInvalid(t *testing.T) {
 	}
 }
 
-// TestAzureComputeRecommendationFromArgsRejectsUnhonoredPaymentOption proves
-// finding 3 of the adversarial review: azure_compute_ri.go used to validate
-// payment_option against the shared AWS/Azure/GCP enum and then silently
-// ignore it -- Azure's purchase API has no billing-plan parameter and always
-// bills upfront, so a caller requesting no-upfront or partial-upfront got a
-// real purchase billed upfront, under a payment schedule they never chose.
-// A call that would actually execute (dry_run=false, confirm=true) must
-// reject any payment_option other than all-upfront with an explicit error
-// instead of silently mismatching.
-func TestAzureComputeRecommendationFromArgsRejectsUnhonoredPaymentOption(t *testing.T) {
+// TestAzureComputeRecommendationFromArgsRejectsPartialUpfront proves Azure's
+// billing-plan contract has exactly two members (Upfront, Monthly -- see
+// providers/azure/services/internal/reservations.BillingPlanForPaymentOption):
+// partial-upfront has no Azure equivalent at any layer, so it must be
+// rejected with an explicit error rather than silently purchased under
+// all-upfront or no-upfront instead. Unlike the former all-upfront-only gate
+// (removed once billingPlan wiring landed), this rejection is unconditional:
+// it fires for a dry_run preview too, because Azure can never honor
+// partial-upfront for real, not just a gap in this tool's own behavior.
+func TestAzureComputeRecommendationFromArgsRejectsPartialUpfront(t *testing.T) {
 	t.Parallel()
-	for _, po := range []string{"no-upfront", "partial-upfront"} {
-		t.Run(po, func(t *testing.T) {
+	for _, dryRun := range []bool{true, false} {
+		t.Run(fmt.Sprintf("dry_run=%v", dryRun), func(t *testing.T) {
 			args := validAzureComputeArgs()
-			args.PaymentOption = po
-			args.DryRun = boolPtr(false)
+			args.PaymentOption = "partial-upfront"
+			args.DryRun = boolPtr(dryRun)
 			args.Confirm = boolPtr(true)
 			_, _, _, err := azureComputeRecommendationFromArgs(args)
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "all-upfront")
+			assert.Contains(t, err.Error(), "partial-upfront")
+			assert.Contains(t, err.Error(), "no-upfront")
 		})
 	}
 }
 
-// TestAzureComputeRecommendationFromArgsPreviewAllowsUnhonoredPaymentOption
-// proves the CodeRabbit-requested scoping: a dry_run=true preview never
-// spends money, so it must still validate a no-upfront/partial-upfront
-// payment_option instead of rejecting it outright -- the caller learns
-// about the all-upfront-only constraint from the tool description and the
-// real-purchase rejection, not from being blocked at preview time.
-func TestAzureComputeRecommendationFromArgsPreviewAllowsUnhonoredPaymentOption(t *testing.T) {
-	t.Parallel()
-	for _, po := range []string{"no-upfront", "partial-upfront"} {
-		t.Run(po, func(t *testing.T) {
-			args := validAzureComputeArgs()
-			args.PaymentOption = po
-			args.DryRun = boolPtr(true)
-			rec, dryRun, confirm, err := azureComputeRecommendationFromArgs(args)
-			require.NoError(t, err)
-			assert.True(t, dryRun)
-			assert.False(t, confirm)
-			assert.Equal(t, po, rec.PaymentOption)
-		})
-	}
-}
-
-// TestAzureComputeRecommendationFromArgsAcceptsAllUpfront proves the one
-// payment_option Azure actually honors still succeeds.
+// TestAzureComputeRecommendationFromArgsAcceptsAllUpfront proves the
+// all-upfront billing plan is honored for real (dry_run=false, confirm=true).
 func TestAzureComputeRecommendationFromArgsAcceptsAllUpfront(t *testing.T) {
 	t.Parallel()
 	args := validAzureComputeArgs()
 	args.PaymentOption = "all-upfront"
+	args.DryRun = boolPtr(false)
+	args.Confirm = boolPtr(true)
+	rec, dryRun, confirm, err := azureComputeRecommendationFromArgs(args)
+	require.NoError(t, err)
+	assert.False(t, dryRun)
+	assert.True(t, confirm)
+	assert.Equal(t, "all-upfront", rec.PaymentOption)
+}
+
+// TestAzureComputeRecommendationFromArgsAcceptsNoUpfront proves the
+// no-upfront billing plan (armreservations.ReservationBillingPlanMonthly) is
+// honored for real, not just at preview time -- the gap this PR closes.
+func TestAzureComputeRecommendationFromArgsAcceptsNoUpfront(t *testing.T) {
+	t.Parallel()
+	args := validAzureComputeArgs()
+	args.PaymentOption = "no-upfront"
+	args.DryRun = boolPtr(false)
+	args.Confirm = boolPtr(true)
+	rec, dryRun, confirm, err := azureComputeRecommendationFromArgs(args)
+	require.NoError(t, err)
+	assert.False(t, dryRun)
+	assert.True(t, confirm)
+	assert.Equal(t, "no-upfront", rec.PaymentOption)
+}
+
+// TestAzureComputeRecommendationFromArgsDefaultsToNoUpfront proves omitting
+// payment_option defaults to no-upfront (matching the CLI's --payment
+// default, cmd/main.go), not to Azure's raw API default (all-upfront) and
+// not to an error.
+func TestAzureComputeRecommendationFromArgsDefaultsToNoUpfront(t *testing.T) {
+	t.Parallel()
+	args := validAzureComputeArgs()
+	args.PaymentOption = ""
 	rec, _, _, err := azureComputeRecommendationFromArgs(args)
 	require.NoError(t, err)
-	assert.Equal(t, "all-upfront", rec.PaymentOption)
+	assert.Equal(t, "no-upfront", rec.PaymentOption)
 }
 
 func TestAzureComputeRIPurchaseHandleConfirmFalseRefuses(t *testing.T) {
@@ -140,7 +153,10 @@ func TestAzureComputeRIPurchaseHandleConfirmFalseRefuses(t *testing.T) {
 	assert.Contains(t, err.Error(), "confirm=true")
 }
 
-func TestAzureComputeRIPurchaseHandleDryRunAllowsUnhonoredPaymentOption(t *testing.T) {
+// TestAzureComputeRIPurchaseHandleDryRunAcceptsNoUpfront proves a preview
+// validates and accepts no-upfront (it is now an honored billing plan, not
+// merely tolerated at preview time).
+func TestAzureComputeRIPurchaseHandleDryRunAcceptsNoUpfront(t *testing.T) {
 	t.Parallel()
 	resolveCalled := false
 	tool := &azureComputeRIPurchaseTool{
@@ -159,7 +175,10 @@ func TestAzureComputeRIPurchaseHandleDryRunAllowsUnhonoredPaymentOption(t *testi
 	assert.True(t, resp.DryRun)
 }
 
-func TestAzureComputeRIPurchaseHandleRealPurchaseRejectsUnhonoredPaymentOption(t *testing.T) {
+// TestAzureComputeRIPurchaseHandleRealPurchaseRejectsPartialUpfront proves
+// the one payment_option Azure cannot express (partial-upfront) is still
+// rejected for a real purchase after the billingPlan wiring landed.
+func TestAzureComputeRIPurchaseHandleRealPurchaseRejectsPartialUpfront(t *testing.T) {
 	t.Parallel()
 	resolveCalled := false
 	tool := &azureComputeRIPurchaseTool{
@@ -176,7 +195,62 @@ func TestAzureComputeRIPurchaseHandleRealPurchaseRejectsUnhonoredPaymentOption(t
 	_, _, err := tool.handle(context.Background(), nil, args)
 	require.Error(t, err)
 	assert.False(t, resolveCalled)
-	assert.Contains(t, err.Error(), "all-upfront")
+	assert.Contains(t, err.Error(), "partial-upfront")
+}
+
+// TestAzureComputeRIPurchaseHandleRealPurchaseNoUpfront proves a real
+// purchase (dry_run=false, confirm=true) with payment_option=no-upfront
+// reaches the provider -- the core gap this PR closes: before billingPlan
+// wiring, only all-upfront could execute for real.
+func TestAzureComputeRIPurchaseHandleRealPurchaseNoUpfront(t *testing.T) {
+	t.Parallel()
+	fake := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true, CommitmentID: "azure-res-monthly"}}
+	tool := &azureComputeRIPurchaseTool{
+		createProvider: func(_ string, _ *provider.ProviderConfig) (provider.Provider, error) {
+			return &recordingProvider{
+				fakeProvider: &fakeProvider{name: "azure"},
+				client:       fake,
+				gotService:   new(common.ServiceType),
+				gotRegion:    new(string),
+			}, nil
+		},
+	}
+	args := validAzureComputeArgs()
+	args.PaymentOption = "no-upfront"
+	args.DryRun = boolPtr(false)
+	args.Confirm = boolPtr(true)
+
+	_, resp, err := tool.handle(context.Background(), nil, args)
+	require.NoError(t, err)
+	assert.True(t, resp.Success)
+	assert.Equal(t, "no-upfront", fake.purchaseResult.Recommendation.PaymentOption)
+}
+
+// TestAzureComputeRIPurchaseHandleOmittedPaymentOptionDefaultsToNoUpfront
+// proves the tool-level default (payment_option omitted from the request)
+// flows through the handler the same way an explicit no-upfront does.
+func TestAzureComputeRIPurchaseHandleOmittedPaymentOptionDefaultsToNoUpfront(t *testing.T) {
+	t.Parallel()
+	fake := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true, CommitmentID: "azure-res-default"}}
+	tool := &azureComputeRIPurchaseTool{
+		createProvider: func(_ string, _ *provider.ProviderConfig) (provider.Provider, error) {
+			return &recordingProvider{
+				fakeProvider: &fakeProvider{name: "azure"},
+				client:       fake,
+				gotService:   new(common.ServiceType),
+				gotRegion:    new(string),
+			}, nil
+		},
+	}
+	args := validAzureComputeArgs()
+	args.PaymentOption = ""
+	args.DryRun = boolPtr(false)
+	args.Confirm = boolPtr(true)
+
+	_, resp, err := tool.handle(context.Background(), nil, args)
+	require.NoError(t, err)
+	assert.True(t, resp.Success)
+	assert.Equal(t, "no-upfront", fake.purchaseResult.Recommendation.PaymentOption)
 }
 
 func TestAzureComputeRIPurchaseHandleDryRunNeverCallsProvider(t *testing.T) {
