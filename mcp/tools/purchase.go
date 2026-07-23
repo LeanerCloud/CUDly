@@ -58,13 +58,11 @@ type PurchaseRequest struct {
 	Confirm        bool
 	ResolveClient  ResolveClientFunc
 
-	// Nonce is optional; when non-empty it is used verbatim as the
-	// idempotency discriminator instead of the automatic time bucket,
-	// letting a caller force two calls to dedupe as the same purchase
-	// regardless of elapsed time. When empty (the default), the
-	// discriminator is derived automatically from the current time bucket
-	// so identical-looking-but-actually-separate purchases don't silently
-	// collide. See idempotencyKeyFor.
+	// Nonce is optional. When non-empty, this call is treated as a
+	// DISTINCT purchase from an otherwise-identical one (authorizes a
+	// deliberate repeat, e.g. "buy 3 more RIs" on top of an earlier "buy 3
+	// RIs" with the same parameters). When empty (the default), identical
+	// purchases dedupe so retries never double-buy. See idempotencyKeyFor.
 	Nonce string
 }
 
@@ -125,22 +123,6 @@ func nonZeroCostPtr(v float64) *float64 {
 	return &v
 }
 
-// idempotencyBucket is the width of the automatic time-based discriminator
-// folded into the idempotency key when the caller does not supply an
-// explicit idempotency_nonce (see idempotencyKeyFor). Wide enough that a
-// caller's own rapid retry of a recent call (e.g. after a network timeout --
-// this guard's original purpose) still lands in the same bucket and dedupes
-// as before; narrow enough that two genuinely separate purchases made hours
-// or days apart (e.g. "buy 3 RIs now, buy 3 more next week" -- the
-// adversarial review finding this constant fixes) never collide by
-// accident.
-const idempotencyBucket = time.Hour
-
-// idempotencyClock is a seam so tests can freeze "now" and assert exact
-// bucket-boundary behavior deterministically instead of depending on
-// wall-clock timing.
-var idempotencyClock = time.Now
-
 // idempotencyKeyFor derives a stable per-request key from every field that
 // identifies what is being bought: provider, region, service, resource type,
 // count, term, payment option, plus every service-specific dimension held in
@@ -163,27 +145,28 @@ var idempotencyClock = time.Now
 // package populates it today, so folding it in would add an always-empty,
 // misleading key component rather than real discrimination.
 //
-// A second issue found in adversarial review: every field above identifies
-// WHAT is being bought, not WHEN -- so two genuinely distinct purchases with
-// identical parameters (a $5/hr Compute Savings Plan followed a week later
-// by a genuinely separate $5/hr purchase) previously collided on the same
-// token, and providers/aws/services/ec2/client.go's findRIByIdempotencyToken
-// silently treated the second, real purchase as a retry of the first and
-// skipped it. nonce and idempotencyBucket fix this: an explicit
-// caller-supplied nonce is used verbatim as the discriminator when present
-// (letting a caller force strict, long-lived dedup across an arbitrary gap);
-// otherwise the discriminator falls back to the current idempotencyBucket-
-// wide time bucket, so a rapid retry within the same bucket still dedupes as
-// before, but two calls separated by more than a bucket width derive
-// different keys and both purchases go through.
+// This function is deliberately fail-safe with respect to time: it folds in
+// no clock reading of any kind. When nonce is empty (the default), two calls
+// with identical dimensions ALWAYS derive the same key, no matter how far
+// apart in time they happen -- so a retry that straddles any time boundary
+// still dedupes at the provider instead of risking a double purchase. An
+// earlier version of this function instead folded in an automatic hourly
+// time bucket to distinguish "buy 3 RIs now" from a genuinely separate "buy
+// 3 more next week" with identical parameters; that inverted the safety
+// direction of this money path, because a retry that happened to straddle
+// an hour boundary (e.g. a slow request issued at 12:59:58 retried at
+// 13:00:02) derived a different key and could double-buy. The worst case of
+// the current, fail-safe default is a skipped intentional repeat -- a
+// caller who genuinely wants a second, identical purchase must say so
+// explicitly. nonce is that explicit opt-in: when the caller supplies a
+// non-empty nonce, it is folded into the key so an otherwise-identical
+// purchase becomes a distinct one (e.g. "buy 3 now" then "buy 3 more next
+// week" by passing a fresh nonce on the second call); the same nonce plus
+// the same dimensions still dedupes a nonce'd retry.
 func idempotencyKeyFor(region string, rec common.Recommendation, nonce string) string {
-	discriminator := nonce
-	if discriminator == "" {
-		discriminator = idempotencyClock().UTC().Truncate(idempotencyBucket).Format(time.RFC3339)
-	}
 	return fmt.Sprintf("mcp:%s:%s:%s:%s:%d:%s:%s:%s:%s",
 		rec.Provider, region, rec.Service, rec.ResourceType, rec.Count, rec.Term, rec.PaymentOption,
-		detailsKeyComponent(rec.Details), discriminator)
+		detailsKeyComponent(rec.Details), nonce)
 }
 
 // detailsKeyComponent returns a canonical, deterministic encoding of every
