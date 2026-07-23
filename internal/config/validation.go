@@ -93,8 +93,13 @@ func validPaymentOptionsFor(provider string) []string {
 //
 //   - AWS  : passthrough (AWS already speaks the three-tier set).
 //   - Azure: all-upfront → upfront, no-upfront → monthly,
-//     partial-upfront → upfront (no semantic equivalent — coerce to the
-//     all-upfront tier rather than drop the rec; caller may log).
+//     partial-upfront → monthly (no semantic equivalent — coerce to the
+//     no-upfront tier, CUDly's default billing schedule for Azure, rather
+//     than drop the rec; caller may log). Coercing to upfront here would
+//     silently bill an all-upfront schedule the caller never chose, since
+//     the web/API path wires billingPlan directly from this normalized
+//     payment option (see providers/azure billingPlan construction);
+//     landing on monthly keeps the rec on the default schedule instead.
 //   - GCP  : all-upfront → monthly, no-upfront → monthly,
 //     partial-upfront → monthly, upfront → monthly (GCP CUDs are
 //     inherently monthly-billed — every non-monthly token collapses to the
@@ -106,9 +111,11 @@ func validPaymentOptionsFor(provider string) []string {
 //
 // The partial-upfront coercion is deliberate on both Azure and GCP: dropping
 // the rec would be a silent data loss for the user, while coercing to the
-// closest billing model the provider offers preserves the rec. The caller is
-// expected to log a warning when raw != canonical so an operator notices the
-// upstream input bug.
+// closest billing model the provider offers preserves the rec without
+// changing the money the caller committed to (Azure's no-upfront/monthly
+// schedule bills the same total as upfront, just spread monthly). The caller
+// is expected to log a warning when raw != canonical so an operator notices
+// the upstream input bug.
 //
 // Empty raw passes through as ("", true) — callers that distinguish "unset"
 // from "invalid" can check the returned bool only when raw is non-empty.
@@ -146,12 +153,16 @@ func crossProviderPaymentAlias(provider, raw string) (string, bool) {
 	case "azure":
 		// Azure reservations model both billing plans; coerce AWS-style tokens
 		// to the Azure-canonical spelling. partial-upfront has no Azure
-		// equivalent — coerce to the all-upfront tier so the rec survives
-		// validation rather than dropping silently (caller WARN-logs).
+		// equivalent — coerce to the no-upfront (monthly) tier, CUDly's
+		// default billing schedule, so the rec survives validation rather
+		// than dropping silently (caller WARN-logs). Coercing to "upfront"
+		// would silently bill an upfront schedule the caller never chose,
+		// since the web/API path wires Azure's billingPlan straight from
+		// this normalized payment option.
 		switch raw {
-		case "all-upfront", "partial-upfront":
+		case "all-upfront":
 			return "upfront", true
-		case "no-upfront":
+		case "no-upfront", "partial-upfront":
 			return "monthly", true
 		}
 	case "gcp":
