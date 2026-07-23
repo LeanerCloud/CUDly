@@ -986,7 +986,7 @@ func TestNormalizePaymentOption(t *testing.T) {
 		// Azure: AWS-style aliases coerced to canonical.
 		{"azure all-upfront → upfront", "azure", "all-upfront", "upfront", true},
 		{"azure no-upfront → monthly", "azure", "no-upfront", "monthly", true},
-		{"azure partial-upfront → upfront (nearest)", "azure", "partial-upfront", "upfront", true},
+		{"azure partial-upfront → monthly (default, not upfront)", "azure", "partial-upfront", "monthly", true},
 
 		// GCP: canonical passthrough (monthly-only — every non-monthly token
 		// collapses to monthly because GCP CUDs only model one billing plan).
