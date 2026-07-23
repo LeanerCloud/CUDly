@@ -947,6 +947,29 @@ func TestComputeClient_PurchaseCommitment_RejectsInvalidPaymentOptionBeforeSideE
 	mockHTTP.AssertNotCalled(t, "Do", mock.Anything)
 }
 
+// TestComputeClient_PurchaseCommitment_RejectsInvalidTermBeforeSideEffects
+// pins the same guarantee as the invalid-payment-option test above but for
+// rec.Term: buildReservationBody parses the term via
+// reservations.ParseTermYears, and that parse must be rejected before
+// ensureCapacityProviderRegistered's real ARM GET/POST ever fires. Regression
+// test for a prior fix that reordered PaymentOption validation ahead of
+// registration but left Term parsing (inside buildReservationBody) running
+// after it, so an invalid term still triggered the provider-registration
+// side effect before the purchase was rejected.
+func TestComputeClient_PurchaseCommitment_RejectsInvalidTermBeforeSideEffects(t *testing.T) {
+	ctx := context.Background()
+	mockHTTP := &mocks.MockHTTPClient{}
+	mockCred := &MockTokenCredential{token: "test-token"}
+	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
+
+	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Term: "5yr", Count: 1, PaymentOption: "no-upfront"}
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	require.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), "unsupported reservation term")
+	mockHTTP.AssertNotCalled(t, "Do", mock.Anything)
+}
+
 // TestComputeClient_ConvertAzureVMRecommendation_NilGuards pins the new
 // contract: unusable SDK payloads (nil, wrong concrete type, nil Properties)
 // produce a nil *Recommendation so the caller can filter it out. Before
