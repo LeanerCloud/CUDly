@@ -57,6 +57,36 @@ func TestSavingsPlanRecommendationFromArgsEC2InstanceRequiresRegion(t *testing.T
 	assert.Equal(t, "us-east-1", details.Region)
 }
 
+// TestSavingsPlanRecommendationFromArgsEC2InstanceRejectsWhitespaceOnly
+// proves region and instance_family are rejected when they contain only
+// whitespace, not just when they are the empty string: a bare `== ""` check
+// would let "   " through to a real EC2Instance Savings Plan purchase.
+func TestSavingsPlanRecommendationFromArgsEC2InstanceRejectsWhitespaceOnly(t *testing.T) {
+	t.Parallel()
+
+	t.Run("whitespace-only region", func(t *testing.T) {
+		args := validSavingsPlansArgs()
+		args.SPType = "EC2Instance"
+		args.InstanceFamily = "m5"
+		args.Region = "   "
+
+		_, _, _, _, err := savingsPlanRecommendationFromArgs(args)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "region is required")
+	})
+
+	t.Run("whitespace-only instance_family", func(t *testing.T) {
+		args := validSavingsPlansArgs()
+		args.SPType = "EC2Instance"
+		args.Region = "us-east-1"
+		args.InstanceFamily = "\t "
+
+		_, _, _, _, err := savingsPlanRecommendationFromArgs(args)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "instance_family is required")
+	})
+}
+
 // TestSavingsPlanRecommendationFromArgsEC2InstanceRequiresInstanceFamily is
 // the regression guard for the CodeRabbit money-path finding: omitting
 // instance_family for sp_type=EC2Instance lets DescribeSavingsPlansOfferings

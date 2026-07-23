@@ -49,7 +49,9 @@ func TestAzureComputeRecommendationFromArgsInvalid(t *testing.T) {
 		errSub string
 	}{
 		{"missing region", func(a *azureComputeRIPurchaseArgs) { a.Region = "" }, "region is required"},
+		{"whitespace-only region", func(a *azureComputeRIPurchaseArgs) { a.Region = "   " }, "region is required"},
 		{"missing vm_size", func(a *azureComputeRIPurchaseArgs) { a.VMSize = "" }, "vm_size is required"},
+		{"whitespace-only vm_size", func(a *azureComputeRIPurchaseArgs) { a.VMSize = "\t\n " }, "vm_size is required"},
 		{"zero count", func(a *azureComputeRIPurchaseArgs) { a.Count = 0 }, "count must be"},
 		{"invalid term", func(a *azureComputeRIPurchaseArgs) { a.TermYears = 2 }, "invalid term_years"},
 		{"invalid payment option", func(a *azureComputeRIPurchaseArgs) { a.PaymentOption = "bogus" }, "invalid payment_option"},

@@ -100,17 +100,17 @@ func (t *awsRDSRIPurchaseTool) handle(ctx context.Context, _ *mcp.CallToolReques
 }
 
 func rdsRIPurchaseRequiredFields(args rdsRIPurchaseArgs) error {
-	if args.Region == "" {
-		return fmt.Errorf("region is required")
+	if err := requireNonBlank("region", args.Region); err != nil {
+		return err
 	}
-	if args.InstanceClass == "" {
-		return fmt.Errorf("instance_class is required")
+	if err := requireNonBlank("instance_class", args.InstanceClass); err != nil {
+		return err
 	}
 	if args.Count <= 0 {
 		return fmt.Errorf("count must be > 0, got %d", args.Count)
 	}
-	if args.Engine == "" {
-		return fmt.Errorf("engine is required")
+	if err := requireNonBlank("engine", args.Engine); err != nil {
+		return err
 	}
 	return nil
 }

@@ -43,7 +43,9 @@ func TestElastiCacheRecommendationFromArgsInvalid(t *testing.T) {
 		errSub string
 	}{
 		{"missing region", func(a *elasticacheRIPurchaseArgs) { a.Region = "" }, "region is required"},
+		{"whitespace-only region", func(a *elasticacheRIPurchaseArgs) { a.Region = "   " }, "region is required"},
 		{"missing node_type", func(a *elasticacheRIPurchaseArgs) { a.NodeType = "" }, "node_type is required"},
+		{"whitespace-only node_type", func(a *elasticacheRIPurchaseArgs) { a.NodeType = "\t " }, "node_type is required"},
 		{"zero count", func(a *elasticacheRIPurchaseArgs) { a.Count = 0 }, "count must be"},
 		{"invalid term", func(a *elasticacheRIPurchaseArgs) { a.TermYears = 5 }, "invalid term_years"},
 		{"invalid payment option", func(a *elasticacheRIPurchaseArgs) { a.PaymentOption = "bogus" }, "invalid payment_option"},
