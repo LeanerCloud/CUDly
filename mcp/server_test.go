@@ -107,6 +107,54 @@ func TestEndToEndSearchThenDryRunPurchase(t *testing.T) {
 	assert.Empty(t, resp.Error)
 }
 
+// TestListCommitmentActionsIncludesItself is the regression guard for the
+// CodeRabbit finding that NewServer built the descriptors slice passed to
+// cudly_list_commitment_actions before appending the list tool itself to
+// regs, so the catalog the tool actually returns at runtime never included
+// its own entry despite its description claiming to list "every" tool.
+// Unlike TestRegistryNonEmpty (which builds its own descriptors slice by
+// hand) this drives the real NewServer wiring and calls the live tool over
+// the protocol, so it fails if NewServer regresses even if the manual
+// helper above stays correct.
+func TestListCommitmentActionsIncludesItself(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	server, err := NewServer("test")
+	require.NoError(t, err)
+
+	clientTransport, serverTransport := gosdk.NewInMemoryTransports()
+	go func() {
+		_ = server.Run(ctx, serverTransport)
+	}()
+
+	client := gosdk.NewClient(&gosdk.Implementation{Name: "test-client"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	require.NoError(t, err)
+	defer session.Close()
+
+	result, err := session.CallTool(ctx, &gosdk.CallToolParams{
+		Name:      "cudly_list_commitment_actions",
+		Arguments: map[string]any{},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "cudly_list_commitment_actions must not itself error")
+
+	structured, err := json.Marshal(result.StructuredContent)
+	require.NoError(t, err)
+	var catalog struct {
+		Actions []tools.ActionEntry `json:"actions"`
+	}
+	require.NoError(t, json.Unmarshal(structured, &catalog))
+
+	var names []string
+	for _, a := range catalog.Actions {
+		names = append(names, a.Name)
+	}
+	assert.Contains(t, names, "cudly_list_commitment_actions",
+		"the catalog cudly_list_commitment_actions returns must include its own entry, got: %v", names)
+}
+
 func TestRealPurchaseToolsDocumentMoneyImpactAndDryRun(t *testing.T) {
 	t.Parallel()
 	for _, r := range registrations() {

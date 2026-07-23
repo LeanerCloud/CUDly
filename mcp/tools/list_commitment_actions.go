@@ -46,7 +46,13 @@ func NewListCommitmentActions(descriptors []Descriptor) Registration {
 	return &listCommitmentActionsTool{descriptors: descriptors}
 }
 
-func (t *listCommitmentActionsTool) Descriptor() Descriptor {
+// ListCommitmentActionsDescriptor returns the static Descriptor for
+// cudly_list_commitment_actions itself. It is exported so mcp/server.go can
+// include this tool in its own catalog: the descriptors slice passed to
+// NewListCommitmentActions must be assembled (and thus known) before the
+// tool exists, so its own entry can't come from calling Descriptor() on an
+// already-constructed instance the way every other tool's entry does.
+func ListCommitmentActionsDescriptor() Descriptor {
 	return Descriptor{
 		Name:        listCommitmentActionsName,
 		Description: listCommitmentActionsDescription,
@@ -56,6 +62,10 @@ func (t *listCommitmentActionsTool) Descriptor() Descriptor {
 			"How do I buy AWS EC2 Reserved Instances through CUDly?",
 		},
 	}
+}
+
+func (t *listCommitmentActionsTool) Descriptor() Descriptor {
+	return ListCommitmentActionsDescriptor()
 }
 
 func (t *listCommitmentActionsTool) Register(s *mcp.Server) error {
