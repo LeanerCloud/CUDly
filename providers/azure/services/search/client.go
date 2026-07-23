@@ -242,6 +242,11 @@ func (c *SearchClient) PurchaseCommitment(ctx context.Context, rec common.Recomm
 		result.Error = termErr
 		return result, result.Error
 	}
+	billingPlan, billingPlanErr := reservations.BillingPlanForPaymentOption(rec.PaymentOption)
+	if billingPlanErr != nil {
+		result.Error = billingPlanErr
+		return result, result.Error
+	}
 
 	requestBody := map[string]interface{}{
 		"sku": map[string]string{
@@ -256,6 +261,7 @@ func (c *SearchClient) PurchaseCommitment(ctx context.Context, rec common.Recomm
 			// live reservation catalog (see issue #1189).
 			"reservedResourceType": "SearchService",
 			"billingScopeId":       fmt.Sprintf("/subscriptions/%s", c.subscriptionID),
+			"billingPlan":          string(billingPlan),
 			"term":                 fmt.Sprintf("P%dY", termYears),
 			"quantity":             rec.Count,
 			"displayName": reservations.BuildDisplayName(reservations.DisplayNameFields{
