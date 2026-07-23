@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,6 +13,18 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
 )
+
+// freezeIdempotencyClock overrides idempotencyClock for the duration of a
+// test so idempotencyKeyFor's automatic time-bucket discriminator is
+// deterministic rather than depending on wall-clock timing. Returns a
+// restore func; callers should defer it (or call it explicitly if freezing
+// multiple distinct instants within one test).
+func freezeIdempotencyClock(t *testing.T, at time.Time) func() {
+	t.Helper()
+	orig := idempotencyClock
+	idempotencyClock = func() time.Time { return at }
+	return func() { idempotencyClock = orig }
+}
 
 // fakeServiceClient is a minimal provider.ServiceClient test double. Only
 // PurchaseCommitment is exercised by these tests; the rest of the interface
@@ -325,7 +338,14 @@ func TestExecutePurchaseResolveClientErrorSurfaced(t *testing.T) {
 // have silently deduped the second call as a "retry" of the first instead
 // of buying a second, larger plan.
 func TestIdempotencyKeyDistinguishesSavingsPlanHourlyCommitment(t *testing.T) {
-	t.Parallel()
+	// Not t.Parallel(): this test freezes the package-level idempotencyClock,
+	// which several other tests in this file read (via idempotencyKeyFor /
+	// ExecutePurchase) while running in the parallel batch. Staying in the
+	// serial phase means the freeze/restore cycle completes before any
+	// parallel test's body executes, so there is no concurrent access to the
+	// shared var.
+	defer freezeIdempotencyClock(t, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))()
+
 	cheapArgs := validSavingsPlansArgs()
 	cheapArgs.HourlyCommitment = 5
 	expensiveArgs := validSavingsPlansArgs()
@@ -336,8 +356,8 @@ func TestIdempotencyKeyDistinguishesSavingsPlanHourlyCommitment(t *testing.T) {
 	expensiveRec, _, _, _, err := savingsPlanRecommendationFromArgs(expensiveArgs)
 	require.NoError(t, err)
 
-	cheapKey := idempotencyKeyFor(region, cheapRec)
-	expensiveKey := idempotencyKeyFor(region, expensiveRec)
+	cheapKey := idempotencyKeyFor(region, cheapRec, "")
+	expensiveKey := idempotencyKeyFor(region, expensiveRec, "")
 	assert.NotEqual(t, cheapKey, expensiveKey,
 		"a $5/hr and a $50/hr Compute Savings Plan must not derive the same idempotency key")
 }
@@ -349,7 +369,9 @@ func TestIdempotencyKeyDistinguishesSavingsPlanHourlyCommitment(t *testing.T) {
 // product-affecting dimension carried in rec.Details, and the pre-fix key
 // derivation ignored Details entirely.
 func TestIdempotencyKeyDistinguishesEC2Platform(t *testing.T) {
-	t.Parallel()
+	// Not t.Parallel(): see TestIdempotencyKeyDistinguishesSavingsPlanHourlyCommitment.
+	defer freezeIdempotencyClock(t, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))()
+
 	linuxArgs := validEC2Args()
 	linuxArgs.Platform = "Linux/UNIX"
 	windowsArgs := validEC2Args()
@@ -360,8 +382,82 @@ func TestIdempotencyKeyDistinguishesEC2Platform(t *testing.T) {
 	windowsRec, _, _, err := ec2RecommendationFromArgs(windowsArgs)
 	require.NoError(t, err)
 
-	linuxKey := idempotencyKeyFor(linuxArgs.Region, linuxRec)
-	windowsKey := idempotencyKeyFor(windowsArgs.Region, windowsRec)
+	linuxKey := idempotencyKeyFor(linuxArgs.Region, linuxRec, "")
+	windowsKey := idempotencyKeyFor(windowsArgs.Region, windowsRec, "")
 	assert.NotEqual(t, linuxKey, windowsKey,
 		"a Linux and a Windows EC2 RI purchase must not derive the same idempotency key")
+}
+
+// TestIdempotencyKeyNonceOverridesTimeBucket proves the three scenarios the
+// nonce/time-bucket design must satisfy: an explicit nonce always wins over
+// elapsed time (strict caller-controlled dedup); with no nonce, two calls
+// separated by more than idempotencyBucket derive different keys (genuinely
+// separate purchases don't collide); with no nonce, two calls in the same
+// instant (the same bucket) derive the same key (a rapid retry still
+// dedupes, preserving this guard's original purpose).
+func TestIdempotencyKeyNonceOverridesTimeBucket(t *testing.T) {
+	// Not t.Parallel(): see TestIdempotencyKeyDistinguishesSavingsPlanHourlyCommitment.
+	rec := testRecommendation()
+	region := "us-east-1"
+	weekApart1 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	weekApart2 := weekApart1.Add(7 * 24 * time.Hour)
+
+	t.Run("same explicit nonce wins over a week apart", func(t *testing.T) {
+		defer freezeIdempotencyClock(t, weekApart1)()
+		key1 := idempotencyKeyFor(region, rec, "retry-abc")
+		freezeIdempotencyClock(t, weekApart2)
+		key2 := idempotencyKeyFor(region, rec, "retry-abc")
+		assert.Equal(t, key1, key2, "an explicit shared nonce must dedupe regardless of elapsed time")
+	})
+
+	t.Run("no nonce and a week apart derives different keys", func(t *testing.T) {
+		defer freezeIdempotencyClock(t, weekApart1)()
+		key1 := idempotencyKeyFor(region, rec, "")
+		freezeIdempotencyClock(t, weekApart2)
+		key2 := idempotencyKeyFor(region, rec, "")
+		assert.NotEqual(t, key1, key2,
+			"two genuinely separate purchases a week apart must not collide when no nonce is supplied")
+	})
+
+	t.Run("no nonce and the same instant derives the same key", func(t *testing.T) {
+		defer freezeIdempotencyClock(t, weekApart1)()
+		key1 := idempotencyKeyFor(region, rec, "")
+		key2 := idempotencyKeyFor(region, rec, "")
+		assert.Equal(t, key1, key2, "a rapid retry within the same time bucket must still dedupe")
+	})
+}
+
+// TestExecutePurchaseNonceThreadedThroughToToken proves PurchaseRequest.Nonce
+// is actually wired end to end into ExecutePurchase's derived token, not
+// just exercised at the idempotencyKeyFor level in isolation.
+func TestExecutePurchaseNonceThreadedThroughToToken(t *testing.T) {
+	t.Parallel()
+	rec := testRecommendation()
+
+	fake1 := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true}}
+	_, err := ExecutePurchase(context.Background(), PurchaseRequest{
+		Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true, Nonce: "call-1",
+		ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake1, nil },
+	})
+	require.NoError(t, err)
+
+	fake2 := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true}}
+	_, err = ExecutePurchase(context.Background(), PurchaseRequest{
+		Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true, Nonce: "call-2",
+		ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake2, nil },
+	})
+	require.NoError(t, err)
+
+	assert.NotEqual(t, fake1.lastOpts.IdempotencyToken, fake2.lastOpts.IdempotencyToken,
+		"different nonces must derive different idempotency tokens")
+
+	fake3 := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true}}
+	_, err = ExecutePurchase(context.Background(), PurchaseRequest{
+		Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true, Nonce: "call-1",
+		ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake3, nil },
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, fake1.lastOpts.IdempotencyToken, fake3.lastOpts.IdempotencyToken,
+		"the same nonce must derive the same idempotency token")
 }

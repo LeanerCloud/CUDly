@@ -55,6 +55,15 @@ type PurchaseRequest struct {
 	DryRun         bool
 	Confirm        bool
 	ResolveClient  ResolveClientFunc
+
+	// Nonce is optional; when non-empty it is used verbatim as the
+	// idempotency discriminator instead of the automatic time bucket,
+	// letting a caller force two calls to dedupe as the same purchase
+	// regardless of elapsed time. When empty (the default), the
+	// discriminator is derived automatically from the current time bucket
+	// so identical-looking-but-actually-separate purchases don't silently
+	// collide. See idempotencyKeyFor.
+	Nonce string
 }
 
 // PurchaseResponse is the structured result returned to the MCP caller for
@@ -99,6 +108,22 @@ func nonZeroCostPtr(v float64) *float64 {
 	return &v
 }
 
+// idempotencyBucket is the width of the automatic time-based discriminator
+// folded into the idempotency key when the caller does not supply an
+// explicit idempotency_nonce (see idempotencyKeyFor). Wide enough that a
+// caller's own rapid retry of a recent call (e.g. after a network timeout --
+// this guard's original purpose) still lands in the same bucket and dedupes
+// as before; narrow enough that two genuinely separate purchases made hours
+// or days apart (e.g. "buy 3 RIs now, buy 3 more next week" -- the
+// adversarial review finding this constant fixes) never collide by
+// accident.
+const idempotencyBucket = time.Hour
+
+// idempotencyClock is a seam so tests can freeze "now" and assert exact
+// bucket-boundary behavior deterministically instead of depending on
+// wall-clock timing.
+var idempotencyClock = time.Now
+
 // idempotencyKeyFor derives a stable per-request key from every field that
 // identifies what is being bought: provider, region, service, resource type,
 // count, term, payment option, plus every service-specific dimension held in
@@ -120,10 +145,28 @@ func nonZeroCostPtr(v float64) *float64 {
 // rec.Account is deliberately excluded: no *FromArgs constructor in this
 // package populates it today, so folding it in would add an always-empty,
 // misleading key component rather than real discrimination.
-func idempotencyKeyFor(region string, rec common.Recommendation) string {
-	return fmt.Sprintf("mcp:%s:%s:%s:%s:%d:%s:%s:%s",
+//
+// A second issue found in adversarial review: every field above identifies
+// WHAT is being bought, not WHEN -- so two genuinely distinct purchases with
+// identical parameters (a $5/hr Compute Savings Plan followed a week later
+// by a genuinely separate $5/hr purchase) previously collided on the same
+// token, and providers/aws/services/ec2/client.go's findRIByIdempotencyToken
+// silently treated the second, real purchase as a retry of the first and
+// skipped it. nonce and idempotencyBucket fix this: an explicit
+// caller-supplied nonce is used verbatim as the discriminator when present
+// (letting a caller force strict, long-lived dedup across an arbitrary gap);
+// otherwise the discriminator falls back to the current idempotencyBucket-
+// wide time bucket, so a rapid retry within the same bucket still dedupes as
+// before, but two calls separated by more than a bucket width derive
+// different keys and both purchases go through.
+func idempotencyKeyFor(region string, rec common.Recommendation, nonce string) string {
+	discriminator := nonce
+	if discriminator == "" {
+		discriminator = idempotencyClock().UTC().Truncate(idempotencyBucket).Format(time.RFC3339)
+	}
+	return fmt.Sprintf("mcp:%s:%s:%s:%s:%d:%s:%s:%s:%s",
 		rec.Provider, region, rec.Service, rec.ResourceType, rec.Count, rec.Term, rec.PaymentOption,
-		detailsKeyComponent(rec.Details))
+		detailsKeyComponent(rec.Details), discriminator)
 }
 
 // detailsKeyComponent returns a canonical, deterministic encoding of every
@@ -213,7 +256,7 @@ func ExecutePurchase(ctx context.Context, req PurchaseRequest) (*PurchaseRespons
 		return nil, fmt.Errorf("resolve %s service client: %w", rec.Provider, err)
 	}
 
-	token := common.DeriveIdempotencyToken(idempotencyKeyFor(req.Region, rec), 0)
+	token := common.DeriveIdempotencyToken(idempotencyKeyFor(req.Region, rec, req.Nonce), 0)
 	opts := common.PurchaseOptions{
 		Source:           common.PurchaseSourceMCP,
 		IdempotencyToken: token,
