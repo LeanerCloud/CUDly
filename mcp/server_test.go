@@ -147,7 +147,7 @@ func TestListCommitmentActionsIncludesItself(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(structured, &catalog))
 
-	var names []string
+	names := make([]string, 0, len(catalog.Actions))
 	for _, a := range catalog.Actions {
 		names = append(names, a.Name)
 	}
