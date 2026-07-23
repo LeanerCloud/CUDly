@@ -161,11 +161,11 @@ func effectiveDryRunConfirm(args ec2RIPurchaseArgs) (dryRun, confirm bool) {
 // common.Recommendation to purchase, plus the effective dry_run/confirm
 // booleans.
 func ec2RecommendationFromArgs(args ec2RIPurchaseArgs) (rec common.Recommendation, dryRun, confirm bool, err error) {
-	if err := requireNonBlank("region", args.Region); err != nil {
-		return common.Recommendation{}, false, false, err
+	if fieldErr := requireNonBlank("region", args.Region); fieldErr != nil {
+		return common.Recommendation{}, false, false, fieldErr
 	}
-	if err := requireNonBlank("instance_type", args.InstanceType); err != nil {
-		return common.Recommendation{}, false, false, err
+	if fieldErr := requireNonBlank("instance_type", args.InstanceType); fieldErr != nil {
+		return common.Recommendation{}, false, false, fieldErr
 	}
 	if args.Count <= 0 {
 		return common.Recommendation{}, false, false, fmt.Errorf("count must be > 0, got %d", args.Count)

@@ -108,11 +108,11 @@ func (t *azureComputeRIPurchaseTool) handle(ctx context.Context, _ *mcp.CallTool
 }
 
 func azureComputeRecommendationFromArgs(args azureComputeRIPurchaseArgs) (rec common.Recommendation, dryRun, confirm bool, err error) {
-	if err := requireNonBlank("region", args.Region); err != nil {
-		return common.Recommendation{}, false, false, err
+	if fieldErr := requireNonBlank("region", args.Region); fieldErr != nil {
+		return common.Recommendation{}, false, false, fieldErr
 	}
-	if err := requireNonBlank("vm_size", args.VMSize); err != nil {
-		return common.Recommendation{}, false, false, err
+	if fieldErr := requireNonBlank("vm_size", args.VMSize); fieldErr != nil {
+		return common.Recommendation{}, false, false, fieldErr
 	}
 	if args.Count <= 0 {
 		return common.Recommendation{}, false, false, fmt.Errorf("count must be > 0, got %d", args.Count)
