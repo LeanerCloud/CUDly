@@ -96,6 +96,31 @@ func TestSearchRecommendationsHappyPath(t *testing.T) {
 	assert.Equal(t, "us-east-1", client.lastParams.Region)
 }
 
+// TestSearchRecommendationsForwardsRegionFilters proves finding B of the
+// CodeRabbit review: common.RecommendationParams has IncludeRegions and
+// ExcludeRegions, but the tool neither accepted nor forwarded them, so a
+// caller could not restrict a search to (or exclude) specific regions the
+// way the CLI's config supports. include_regions/exclude_regions must reach
+// the underlying RecommendationsClient call unchanged.
+func TestSearchRecommendationsForwardsRegionFilters(t *testing.T) {
+	t.Parallel()
+	client := &fakeRecommendationsClient{}
+	fp := &fakeProvider{name: "aws", services: []common.ServiceType{common.ServiceEC2}, recClient: client}
+	tool := newTestSearchTool(fp)
+
+	_, _, err := tool.handle(context.Background(), nil, searchRecommendationsArgs{
+		Provider:       "aws",
+		Service:        "ec2",
+		IncludeRegions: []string{"us-east-1", "us-west-2"},
+		ExcludeRegions: []string{"eu-west-1"},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, client.lastParams)
+	assert.Equal(t, []string{"us-east-1", "us-west-2"}, client.lastParams.IncludeRegions)
+	assert.Equal(t, []string{"eu-west-1"}, client.lastParams.ExcludeRegions)
+}
+
 func TestSearchRecommendationsInvalidProvider(t *testing.T) {
 	t.Parallel()
 	tool := newTestSearchTool(&fakeProvider{})
