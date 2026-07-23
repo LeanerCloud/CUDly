@@ -121,6 +121,45 @@ func TestSearchRecommendationsForwardsRegionFilters(t *testing.T) {
 	assert.Equal(t, []string{"eu-west-1"}, client.lastParams.ExcludeRegions)
 }
 
+// TestSearchRecommendationsTrimsRegionFilters is the regression guard for
+// the CodeRabbit finding: region (and include_regions/exclude_regions/
+// account_filter) were passed straight through to ProviderConfig.Region and
+// RecommendationParams with no trim, unlike the purchase tools'
+// requireNonBlank. " us-east-1 " must forward as "us-east-1" to both the
+// provider config used to resolve the client and the params sent to the
+// recommendations client -- region is optional here, so trimming (not
+// rejecting) surrounding whitespace is the correct behavior.
+func TestSearchRecommendationsTrimsRegionFilters(t *testing.T) {
+	t.Parallel()
+	client := &fakeRecommendationsClient{}
+	fp := &fakeProvider{name: "aws", services: []common.ServiceType{common.ServiceEC2}, recClient: client}
+	var gotCfg *provider.ProviderConfig
+	tool := &searchRecommendationsTool{
+		createProvider: func(_ string, cfg *provider.ProviderConfig) (provider.Provider, error) {
+			gotCfg = cfg
+			return fp, nil
+		},
+	}
+
+	_, _, err := tool.handle(context.Background(), nil, searchRecommendationsArgs{
+		Provider:       "aws",
+		Service:        "ec2",
+		Region:         " us-east-1 ",
+		IncludeRegions: []string{" us-east-1 ", " us-west-2 "},
+		ExcludeRegions: []string{" eu-west-1 "},
+		AccountFilter:  []string{" 123456789012 "},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, gotCfg)
+	assert.Equal(t, "us-east-1", gotCfg.Region, "ProviderConfig.Region must be trimmed")
+	require.NotNil(t, client.lastParams)
+	assert.Equal(t, "us-east-1", client.lastParams.Region, "RecommendationParams.Region must be trimmed")
+	assert.Equal(t, []string{"us-east-1", "us-west-2"}, client.lastParams.IncludeRegions, "IncludeRegions entries must be trimmed")
+	assert.Equal(t, []string{"eu-west-1"}, client.lastParams.ExcludeRegions, "ExcludeRegions entries must be trimmed")
+	assert.Equal(t, []string{"123456789012"}, client.lastParams.AccountFilter, "AccountFilter entries must be trimmed")
+}
+
 func TestSearchRecommendationsInvalidProvider(t *testing.T) {
 	t.Parallel()
 	tool := newTestSearchTool(&fakeProvider{})
