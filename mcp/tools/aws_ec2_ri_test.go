@@ -70,7 +70,9 @@ func TestEC2RecommendationFromArgsMissingRequiredFields(t *testing.T) {
 		errSub string
 	}{
 		{"missing region", func(a *ec2RIPurchaseArgs) { a.Region = "" }, "region is required"},
+		{"whitespace-only region", func(a *ec2RIPurchaseArgs) { a.Region = "   " }, "region is required"},
 		{"missing instance_type", func(a *ec2RIPurchaseArgs) { a.InstanceType = "" }, "instance_type is required"},
+		{"whitespace-only instance_type", func(a *ec2RIPurchaseArgs) { a.InstanceType = "\t " }, "instance_type is required"},
 		{"zero count", func(a *ec2RIPurchaseArgs) { a.Count = 0 }, "count must be"},
 		{"negative count", func(a *ec2RIPurchaseArgs) { a.Count = -1 }, "count must be"},
 		{"invalid term", func(a *ec2RIPurchaseArgs) { a.TermYears = 2 }, "invalid term_years"},

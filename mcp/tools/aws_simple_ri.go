@@ -154,11 +154,11 @@ func (t *simpleAWSRIPurchaseTool) handle(ctx context.Context, _ *mcp.CallToolReq
 }
 
 func (t *simpleAWSRIPurchaseTool) recommendationFromArgs(args simpleAWSRIPurchaseArgs) (rec common.Recommendation, dryRun, confirm bool, err error) {
-	if args.Region == "" {
-		return common.Recommendation{}, false, false, fmt.Errorf("region is required")
+	if err := requireNonBlank("region", args.Region); err != nil {
+		return common.Recommendation{}, false, false, err
 	}
-	if args.ResourceType == "" {
-		return common.Recommendation{}, false, false, fmt.Errorf("resource_type is required")
+	if err := requireNonBlank("resource_type", args.ResourceType); err != nil {
+		return common.Recommendation{}, false, false, err
 	}
 	if args.Count <= 0 {
 		return common.Recommendation{}, false, false, fmt.Errorf("count must be > 0, got %d", args.Count)

@@ -5,9 +5,23 @@ package tools
 
 import (
 	"fmt"
+	"strings"
 
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 )
+
+// requireNonBlank returns an explicit "<field> is required" error when val is
+// empty or contains only whitespace. A whitespace-only value (e.g. "   ")
+// passes a bare `== ""` check but carries no real region/instance-type/etc
+// information, and on a real-purchase path could still reach provider
+// resolution instead of being rejected at the MCP tool boundary like an
+// actually-empty value already is.
+func requireNonBlank(field, val string) error {
+	if strings.TrimSpace(val) == "" {
+		return fmt.Errorf("%s is required", field)
+	}
+	return nil
+}
 
 // PaymentOption is the AWS/Azure/GCP-agnostic reserved-capacity payment
 // schedule. It is validated at the MCP tool boundary before being copied

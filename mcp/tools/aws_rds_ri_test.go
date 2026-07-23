@@ -45,8 +45,11 @@ func TestRDSRecommendationFromArgsInvalid(t *testing.T) {
 		errSub string
 	}{
 		{"missing region", func(a *rdsRIPurchaseArgs) { a.Region = "" }, "region is required"},
+		{"whitespace-only region", func(a *rdsRIPurchaseArgs) { a.Region = "   " }, "region is required"},
 		{"missing instance_class", func(a *rdsRIPurchaseArgs) { a.InstanceClass = "" }, "instance_class is required"},
+		{"whitespace-only instance_class", func(a *rdsRIPurchaseArgs) { a.InstanceClass = "\t " }, "instance_class is required"},
 		{"missing engine", func(a *rdsRIPurchaseArgs) { a.Engine = "" }, "engine is required"},
+		{"whitespace-only engine", func(a *rdsRIPurchaseArgs) { a.Engine = "\t " }, "engine is required"},
 		{"zero count", func(a *rdsRIPurchaseArgs) { a.Count = 0 }, "count must be"},
 		{"invalid term", func(a *rdsRIPurchaseArgs) { a.TermYears = 2 }, "invalid term_years"},
 		{"invalid payment option", func(a *rdsRIPurchaseArgs) { a.PaymentOption = "bogus" }, "invalid payment_option"},

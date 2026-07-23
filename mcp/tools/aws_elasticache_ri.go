@@ -97,11 +97,11 @@ func (t *awsElastiCacheRIPurchaseTool) handle(ctx context.Context, _ *mcp.CallTo
 }
 
 func elasticacheRIPurchaseRequiredFields(args elasticacheRIPurchaseArgs) error {
-	if args.Region == "" {
-		return fmt.Errorf("region is required")
+	if err := requireNonBlank("region", args.Region); err != nil {
+		return err
 	}
-	if args.NodeType == "" {
-		return fmt.Errorf("node_type is required")
+	if err := requireNonBlank("node_type", args.NodeType); err != nil {
+		return err
 	}
 	if args.Count <= 0 {
 		return fmt.Errorf("count must be > 0, got %d", args.Count)
