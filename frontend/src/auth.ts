@@ -402,10 +402,10 @@ export async function showAdminSetupModal(apiKeyHint?: string): Promise<void> {
 
         <form id="admin-setup-form">
           <label>API Key:
-            <input type="password" id="setup-api-key" placeholder="Enter your API key" autocomplete="off" required>
+            <input type="password" id="setup-api-key" placeholder="Enter your API key" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" required>
           </label>
           <label>Admin Email:
-            <input type="email" id="setup-email" placeholder="admin@example.com" autocomplete="email" required>
+            <input type="email" id="setup-email" placeholder="admin@example.com" autocomplete="email" autocapitalize="none" autocorrect="off" required>
           </label>
           <label>Password:
             <div class="password-input-wrapper">
@@ -556,7 +556,7 @@ export async function showLoginModal(): Promise<void> {
 
         <form id="login-form">
           <label>Email:
-            <input type="email" id="login-email" placeholder="admin@example.com" autocomplete="email">
+            <input type="email" id="login-email" placeholder="admin@example.com" autocomplete="email" autocapitalize="none" autocorrect="off">
           </label>
           <label>Password:
             <div class="password-input-wrapper">
@@ -819,7 +819,7 @@ function showForgotPasswordForm(modal: HTMLElement): void {
   form.innerHTML = `
     <h3>Reset Password</h3>
     <label>Email:
-      <input type="email" id="reset-email" placeholder="Your email address" required>
+      <input type="email" id="reset-email" placeholder="Your email address" autocomplete="email" autocapitalize="none" autocorrect="off" required>
     </label>
     <p class="help-text">We'll send you a link to reset your password.</p>
     <div id="login-error" class="error-message hidden"></div>
@@ -979,12 +979,12 @@ async function openProfileModal(): Promise<void> {
         <form id="profile-form">
           <label>
             Email
-            <input type="email" id="profile-email" required>
+            <input type="email" id="profile-email" autocomplete="email" autocapitalize="none" autocorrect="off" required>
           </label>
           <label>
             Current Password (required to save changes)
             <div class="password-input-wrapper">
-              <input type="password" id="profile-current-password" placeholder="Enter current password">
+              <input type="password" id="profile-current-password" placeholder="Enter current password" autocomplete="current-password">
               <button type="button" class="toggle-password" data-target="profile-current-password" aria-label="Show password">
                 <svg class="eye-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
