@@ -45,6 +45,31 @@ func TestSimpleAWSRIPurchaseDescriptorsAreDistinctAndRealPurchaseEnabled(t *test
 	}
 }
 
+// TestSimpleAWSRIPurchaseDescriptorUsesProperlyCasedDisplayName proves the
+// CodeRabbit finding: t.spec.product ("opensearch", "redshift", "memorydb")
+// used to be interpolated raw into the human-readable description,
+// producing "AWS opensearch Reserved Instances" instead of the properly
+// cased "AWS OpenSearch Reserved Instances". The identifier used in API
+// calls (spec.product) must stay lowercase; only the description text uses
+// the display name.
+func TestSimpleAWSRIPurchaseDescriptorUsesProperlyCasedDisplayName(t *testing.T) {
+	t.Parallel()
+	wantDisplayName := map[string]string{
+		"opensearch": "OpenSearch",
+		"redshift":   "Redshift",
+		"memorydb":   "MemoryDB",
+	}
+	for product, ctor := range simpleToolConstructors() {
+		t.Run(product, func(t *testing.T) {
+			d := ctor().Descriptor()
+			want := wantDisplayName[product]
+			require.NotEmpty(t, want, "test table missing a display name for %s", product)
+			assert.Contains(t, d.Description, want)
+			assert.NotContains(t, d.Description, "AWS "+product+" ", "description must not use the raw lowercase identifier")
+		})
+	}
+}
+
 func TestSimpleAWSRIPurchaseRecommendationFromArgs(t *testing.T) {
 	t.Parallel()
 	for product, ctor := range simpleToolConstructors() {
