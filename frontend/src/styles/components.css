@@ -1032,22 +1032,6 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     gap: 0.5rem;
 }
 
-/* Bottom-sheet layout on narrow viewports (issue #985): modals slide up
- * from the bottom edge instead of floating centered, so there's no
- * side margin to lose on small screens. */
-@media (max-width: 480px) {
-    .modal, .modal-confirm-backdrop {
-        align-items: flex-end;
-    }
-
-    .modal-content, .modal-confirm {
-        border-radius: 12px 12px 0 0;
-        width: 100%;
-        max-width: 100%;
-        margin: 0;
-    }
-}
-
 /* Approval-details modal (issue #374): when the confirmDialog body
  * carries an .approval-details element, widen the dialog so the 12-col
  * per-rec table can breathe. The selector targets the parent modal via

@@ -7,6 +7,8 @@ import path from 'path';
 
 describe('CSS Styles', () => {
   let css: string;
+  let responsiveCss: string;
+  let componentsCss: string;
 
   beforeAll(() => {
     // Read all CSS files from the styles directory
@@ -15,6 +17,8 @@ describe('CSS Styles', () => {
       .filter(file => file.endsWith('.css'))
       .map(file => fs.readFileSync(path.join(stylesDir, file), 'utf8'));
     css = cssFiles.join('\n');
+    responsiveCss = fs.readFileSync(path.join(stylesDir, 'responsive.css'), 'utf8');
+    componentsCss = fs.readFileSync(path.join(stylesDir, 'components.css'), 'utf8');
   });
 
   describe('Required CSS Rules', () => {
@@ -310,9 +314,27 @@ describe('CSS Styles', () => {
       expect(css).toMatch(/\.modal-confirm-close\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/);
     });
 
-    test('flips modals to a bottom sheet at 480px', () => {
+    test('flips modals to a bottom sheet at 480px, winning the cascade', () => {
+      // The bottom-sheet rule must live in responsive.css (imported last in
+      // index.css), not components.css (imported 3rd). components.css is
+      // imported before modals.css and responsive.css, so an equal-specificity
+      // .modal-content rule placed there would always lose to the
+      // .modal-content{width:95%} 768px rule in responsive.css -- only
+      // .modal-confirm would actually flip, leaving every real modal
+      // (#user-modal, #purchase-modal, etc.) centered instead of bottom-sheet.
       const bottomSheetQuery = /@media \(max-width: 480px\)\s*\{[^]*?\.modal,\s*\.modal-confirm-backdrop\s*\{[^}]*align-items:\s*flex-end[^}]*\}[^]*?\.modal-content,\s*\.modal-confirm\s*\{[^}]*width:\s*100%[^}]*\}/;
-      expect(css).toMatch(bottomSheetQuery);
+
+      expect(responsiveCss).toMatch(bottomSheetQuery);
+      expect(componentsCss).not.toMatch(bottomSheetQuery);
+
+      // Source-order check: the 480px bottom-sheet block must appear after
+      // the existing 768px block within responsive.css, so at <=480px it
+      // wins the cascade over the 768px .modal-content{width:95%} rule
+      // (equal selector specificity -> later declaration wins).
+      const idx768 = responsiveCss.search(/@media \(max-width: 768px\)/);
+      const idx480 = responsiveCss.search(/@media \(max-width: 480px\)/);
+      expect(idx768).toBeGreaterThan(-1);
+      expect(idx480).toBeGreaterThan(idx768);
     });
   });
 
