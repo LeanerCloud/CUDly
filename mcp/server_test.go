@@ -169,3 +169,55 @@ func TestRealPurchaseToolsDocumentMoneyImpactAndDryRun(t *testing.T) {
 			"tool %q description must recommend dry_run first: %q", d.Name, d.Description)
 	}
 }
+
+// TestAzureComputeRIPurchaseSchemaExcludesPartialUpfront proves the
+// cudly_azure_compute_ri_purchase tool's advertised payment_option enum
+// never offers partial-upfront: Azure has no partial-upfront billing plan
+// (mcp/tools/azure_compute_ri.go rejects it at runtime as defense in depth),
+// so the schema itself must not invite a caller to pick a value the tool
+// can only ever refuse. Drives the real MCP protocol (ListTools), not a
+// bare Go function call, so it catches a regression in what a real client
+// actually sees, not just in the tool's internal validation.
+func TestAzureComputeRIPurchaseSchemaExcludesPartialUpfront(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	server, err := NewServer("test")
+	require.NoError(t, err)
+
+	clientTransport, serverTransport := gosdk.NewInMemoryTransports()
+	go func() {
+		_ = server.Run(ctx, serverTransport)
+	}()
+
+	client := gosdk.NewClient(&gosdk.Implementation{Name: "test-client"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	require.NoError(t, err)
+	defer session.Close()
+
+	toolsList, err := session.ListTools(ctx, nil)
+	require.NoError(t, err)
+
+	var azureTool *gosdk.Tool
+	for _, tl := range toolsList.Tools {
+		if tl.Name == "cudly_azure_compute_ri_purchase" {
+			azureTool = tl
+			break
+		}
+	}
+	require.NotNil(t, azureTool, "cudly_azure_compute_ri_purchase must be registered")
+
+	schema, ok := azureTool.InputSchema.(map[string]any)
+	require.True(t, ok, "client-side InputSchema must be the default JSON marshaling (map[string]any)")
+	properties, ok := schema["properties"].(map[string]any)
+	require.True(t, ok)
+	paymentOption, ok := properties["payment_option"].(map[string]any)
+	require.True(t, ok)
+	enum, ok := paymentOption["enum"].([]any)
+	require.True(t, ok)
+
+	assert.NotContains(t, enum, "partial-upfront",
+		"Azure schema must not advertise partial-upfront: Azure has no such billing plan")
+	assert.Contains(t, enum, "all-upfront")
+	assert.Contains(t, enum, "no-upfront")
+}
