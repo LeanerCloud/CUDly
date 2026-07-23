@@ -104,7 +104,7 @@ Every other provider's purchase tool (`cudly_aws_savingsplans_purchase`, `cudly_
 
 These are pre-existing behaviours in the underlying purchase clients, not something introduced by or specific to the MCP server -- flagged here so you know what to expect:
 
-- **Azure VM Reservations always bill upfront.** Azure's purchase API has no billing-plan parameter and always bills upfront, so `cudly_azure_compute_ri_purchase` requires `payment_option=all-upfront` and rejects any other value with an explicit error rather than silently purchasing under a schedule Azure would not honor.
+- **Azure VM Reservations have no partial-upfront billing plan.** Azure honors exactly two billing plans, all-upfront and no-upfront (billed monthly, same total price -- Azure charges no premium for spreading payments), and `cudly_azure_compute_ri_purchase` defaults `payment_option` to no-upfront when omitted. `payment_option=partial-upfront` has no Azure equivalent and is rejected with an explicit error rather than silently purchased under all-upfront or no-upfront instead.
 - **GCP Compute Engine CUDs commit resources, not instances.** `cudly_gcp_computeengine_cud_purchase` takes `vcpu_count` and `memory_gb` directly (a CUD is a vCPU+memory commitment), not an instance count -- there is no implicit vCPU-per-instance conversion.
 
 ## Deployment model
