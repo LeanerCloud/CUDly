@@ -175,6 +175,20 @@ func savingsPlanRecommendationFromArgs(args savingsPlansPurchaseArgs) (rec commo
 	// depth on top of the ValidateSPType check above).
 	service := savingsplans.ServiceTypeForPlanType(spTypes.SavingsPlanType(spType))
 
+	details := &common.SavingsPlanDetails{
+		PlanType:         string(spType),
+		HourlyCommitment: args.HourlyCommitment,
+	}
+	// InstanceFamily and Region are only meaningful for EC2Instance plans
+	// (common.SavingsPlanDetails documents both as "only populated for
+	// EC2Instance"); leaving them unset for Compute/SageMaker/Database keeps
+	// that contract instead of leaking a caller-supplied region/family into
+	// an account-level, family-agnostic plan's Details.
+	if spType == SPTypeEC2Instance {
+		details.InstanceFamily = args.InstanceFamily
+		details.Region = args.Region
+	}
+
 	rec = common.Recommendation{
 		Provider:       common.ProviderAWS,
 		Service:        service,
@@ -182,12 +196,7 @@ func savingsPlanRecommendationFromArgs(args savingsPlansPurchaseArgs) (rec commo
 		CommitmentType: common.CommitmentSavingsPlan,
 		Term:           term.RecommendationTerm(),
 		PaymentOption:  string(paymentOption),
-		Details: &common.SavingsPlanDetails{
-			PlanType:         string(spType),
-			HourlyCommitment: args.HourlyCommitment,
-			InstanceFamily:   args.InstanceFamily,
-			Region:           args.Region,
-		},
+		Details:        details,
 	}
 
 	dryRun, confirm = true, false
