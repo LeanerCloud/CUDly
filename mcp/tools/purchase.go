@@ -62,17 +62,41 @@ type PurchaseRequest struct {
 // error) because it crosses the MCP JSON-RPC boundary as tool output, not a
 // protocol-level error -- ExecutePurchase itself still returns a Go error
 // for gate refusals and provider-call failures.
+//
+// Cost/OnDemandCost/EstimatedSavings/SavingsPercentage are pointers with
+// omitempty: none of the *FromArgs constructors in this package populate
+// Recommendation's cost fields (they build a fresh Recommendation from the
+// caller's typed args, not from a priced search result), and some provider
+// clients (e.g. AWS EC2 RIs, Savings Plans) never populate
+// PurchaseResult.Cost either. A plain float64 could not distinguish "not
+// known" from "genuinely $0", so every response reported 0 for money fields
+// it never actually priced. A pointer that's nil (and omitted from the JSON
+// payload entirely) when no real value exists lets a caller tell "unknown"
+// apart from "confirmed zero" (feedback_nullable_not_zero).
 type PurchaseResponse struct {
-	Success           bool    `json:"success"`
-	DryRun            bool    `json:"dry_run"`
-	CommitmentID      string  `json:"commitment_id,omitempty"`
-	Cost              float64 `json:"cost"`
-	OnDemandCost      float64 `json:"on_demand_cost"`
-	EstimatedSavings  float64 `json:"estimated_savings"`
-	SavingsPercentage float64 `json:"savings_percentage"`
-	EffectiveDate     string  `json:"effective_date,omitempty"`
-	TermYears         int     `json:"term_years,omitempty"`
-	Error             string  `json:"error,omitempty"`
+	Success           bool     `json:"success"`
+	DryRun            bool     `json:"dry_run"`
+	CommitmentID      string   `json:"commitment_id,omitempty"`
+	Cost              *float64 `json:"cost,omitempty"`
+	OnDemandCost      *float64 `json:"on_demand_cost,omitempty"`
+	EstimatedSavings  *float64 `json:"estimated_savings,omitempty"`
+	SavingsPercentage *float64 `json:"savings_percentage,omitempty"`
+	EffectiveDate     string   `json:"effective_date,omitempty"`
+	TermYears         int      `json:"term_years,omitempty"`
+	Error             string   `json:"error,omitempty"`
+}
+
+// nonZeroCostPtr returns a pointer to v, or nil when v is exactly zero. Cost
+// and savings fields on common.Recommendation and common.PurchaseResult are
+// plain (unpointered) float64s that upstream code sometimes never populates
+// (see the PurchaseResponse doc comment above); this treats an unpopulated
+// zero as "unknown" rather than fabricating a real $0 figure the caller
+// never priced.
+func nonZeroCostPtr(v float64) *float64 {
+	if v == 0 {
+		return nil
+	}
+	return &v
 }
 
 // idempotencyKeyFor derives a stable per-request key from every field that
@@ -174,10 +198,10 @@ func ExecutePurchase(ctx context.Context, req PurchaseRequest) (*PurchaseRespons
 		return &PurchaseResponse{
 			Success:           true,
 			DryRun:            true,
-			Cost:              rec.CommitmentCost,
-			OnDemandCost:      rec.OnDemandCost,
-			EstimatedSavings:  rec.EstimatedSavings,
-			SavingsPercentage: rec.SavingsPercentage,
+			Cost:              nonZeroCostPtr(rec.CommitmentCost),
+			OnDemandCost:      nonZeroCostPtr(rec.OnDemandCost),
+			EstimatedSavings:  nonZeroCostPtr(rec.EstimatedSavings),
+			SavingsPercentage: nonZeroCostPtr(rec.SavingsPercentage),
 		}, nil
 	}
 
@@ -206,10 +230,10 @@ func ExecutePurchase(ctx context.Context, req PurchaseRequest) (*PurchaseRespons
 		Success:           result.Success,
 		DryRun:            result.DryRun,
 		CommitmentID:      result.CommitmentID,
-		Cost:              result.Cost,
-		OnDemandCost:      rec.OnDemandCost,
-		EstimatedSavings:  rec.EstimatedSavings,
-		SavingsPercentage: rec.SavingsPercentage,
+		Cost:              nonZeroCostPtr(result.Cost),
+		OnDemandCost:      nonZeroCostPtr(rec.OnDemandCost),
+		EstimatedSavings:  nonZeroCostPtr(rec.EstimatedSavings),
+		SavingsPercentage: nonZeroCostPtr(rec.SavingsPercentage),
 		EffectiveDate:     result.Timestamp.Format(time.RFC3339),
 	}
 	if result.Error != nil {
