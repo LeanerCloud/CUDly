@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -707,6 +708,43 @@ func TestParseTermYears(t *testing.T) {
 		} else {
 			require.NoError(t, err, "term=%q should not error", tc.term)
 			assert.Equal(t, tc.want, got, "term=%q", tc.term)
+		}
+	}
+}
+
+// TestBillingPlanForPaymentOption pins the two-billing-plan Azure contract:
+// Upfront and Monthly are the only members of armreservations.
+// ReservationBillingPlan (constants.go), and Monthly costs the same total
+// as Upfront (no partial-upfront exists). Both the converter's
+// "upfront"/"monthly" vocabulary and the CLI/MCP's "all-upfront"/
+// "no-upfront" vocabulary must map onto the same two SDK enum values; every
+// other input (including "partial-upfront", empty, and unrecognized
+// strings) must be a hard error, never a silent default
+// (feedback_no_silent_fallbacks).
+func TestBillingPlanForPaymentOption(t *testing.T) {
+	tests := []struct {
+		paymentOption string
+		want          armreservations.ReservationBillingPlan
+		wantErr       bool
+	}{
+		{"all-upfront", armreservations.ReservationBillingPlanUpfront, false},
+		{"upfront", armreservations.ReservationBillingPlanUpfront, false},
+		{"ALL-UPFRONT", armreservations.ReservationBillingPlanUpfront, false}, // case-insensitive
+		{" upfront ", armreservations.ReservationBillingPlanUpfront, false},   // whitespace-tolerant
+		{"no-upfront", armreservations.ReservationBillingPlanMonthly, false},
+		{"monthly", armreservations.ReservationBillingPlanMonthly, false},
+		{"partial-upfront", "", true}, // Azure has no partial-upfront equivalent
+		{"", "", true},                // empty must error, never silently default to Upfront
+		{"bogus", "", true},
+	}
+	for _, tc := range tests {
+		got, err := BillingPlanForPaymentOption(tc.paymentOption)
+		if tc.wantErr {
+			assert.Error(t, err, "payment_option=%q should be an error", tc.paymentOption)
+			assert.Empty(t, got, "payment_option=%q error return should be empty", tc.paymentOption)
+		} else {
+			require.NoError(t, err, "payment_option=%q should not error", tc.paymentOption)
+			assert.Equal(t, tc.want, got, "payment_option=%q", tc.paymentOption)
 		}
 	}
 }

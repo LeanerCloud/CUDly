@@ -480,8 +480,10 @@ func TestNormalizeSource(t *testing.T) {
 	}{
 		{"cli lowercase", "cudly-cli", "cudly-cli", false},
 		{"web lowercase", "cudly-web", "cudly-web", false},
+		{"mcp lowercase", "cudly-mcp", "cudly-mcp", false},
 		{"cli mixed case", "CUDly-CLI", "cudly-cli", false},
 		{"web mixed case", "CUDly-Web", "cudly-web", false},
+		{"mcp mixed case", "CUDly-MCP", "cudly-mcp", false},
 		{"cli with whitespace", "  cudly-cli\n", "cudly-cli", false},
 		{"empty string", "", "", true},
 		{"whitespace only", "   ", "", true},

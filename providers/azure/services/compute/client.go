@@ -407,11 +407,14 @@ func (c *ComputeClient) triggerCapacityProviderRegistration(ctx context.Context,
 
 // buildReservationBody builds the JSON body for a reservation purchase request.
 // The same body is sent to both calculatePrice and purchase endpoints (issue #677).
+// billingPlan is resolved by the caller (PurchaseCommitment) via
+// reservations.BillingPlanForPaymentOption before any side-effecting call is
+// made, so it is threaded in here rather than re-derived from rec.PaymentOption.
 // The purchase-automation and cudly-idempotency-token tags are attached via
 // reservations.ApplyPurchaseTags so the resulting reservation is identifiable
 // in the portal AND a re-driven purchase can find it via tag lookup before
 // buying a duplicate (issue #721).
-func (c *ComputeClient) buildReservationBody(rec common.Recommendation, source, idempotencyToken string) ([]byte, error) {
+func (c *ComputeClient) buildReservationBody(rec common.Recommendation, billingPlan armreservations.ReservationBillingPlan, source, idempotencyToken string) ([]byte, error) {
 	termYears, err := reservations.ParseTermYears(rec.Term)
 	if err != nil {
 		return nil, err
@@ -422,6 +425,7 @@ func (c *ComputeClient) buildReservationBody(rec common.Recommendation, source, 
 		"properties": map[string]interface{}{
 			"reservedResourceType": string(armreservations.ReservedResourceTypeVirtualMachines),
 			"billingScopeId":       fmt.Sprintf("/subscriptions/%s", c.subscriptionID),
+			"billingPlan":          string(billingPlan),
 			"term":                 fmt.Sprintf("P%dY", termYears),
 			"quantity":             rec.Count,
 			"displayName": reservations.BuildDisplayName(reservations.DisplayNameFields{
@@ -478,14 +482,26 @@ func (c *ComputeClient) PurchaseCommitment(ctx context.Context, rec common.Recom
 		return result, result.Error
 	}
 
-	// Ensure Microsoft.Capacity provider is registered (cached after first call).
-	c.ensureCapacityProviderRegistered(ctx)
+	// Validate the payment option and build the request body BEFORE any
+	// side-effecting call. Microsoft.Capacity provider registration below is
+	// a real ARM operation (a GET, and a POST to register when unregistered);
+	// every fallible local parse -- payment option AND term (buildReservationBody
+	// calls reservations.ParseTermYears) -- must be rejected here first so a
+	// doomed purchase never triggers it.
+	billingPlan, err := reservations.BillingPlanForPaymentOption(rec.PaymentOption)
+	if err != nil {
+		result.Error = err
+		return result, result.Error
+	}
 
-	bodyBytes, err := c.buildReservationBody(rec, opts.Source, opts.IdempotencyToken)
+	bodyBytes, err := c.buildReservationBody(rec, billingPlan, opts.Source, opts.IdempotencyToken)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to marshal request: %w", err)
 		return result, result.Error
 	}
+
+	// Ensure Microsoft.Capacity provider is registered (cached after first call).
+	c.ensureCapacityProviderRegistered(ctx)
 
 	token, err := c.cred.GetToken(ctx, policy.TokenRequestOptions{
 		Scopes: []string{"https://management.azure.com/.default"},
