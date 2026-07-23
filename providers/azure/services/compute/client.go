@@ -482,24 +482,26 @@ func (c *ComputeClient) PurchaseCommitment(ctx context.Context, rec common.Recom
 		return result, result.Error
 	}
 
-	// Validate the payment option BEFORE any side-effecting call. Microsoft.Capacity
-	// provider registration below is a real ARM operation (a GET, and a POST to
-	// register when unregistered); an invalid/empty PaymentOption must be rejected
-	// here first so a doomed purchase never triggers it.
+	// Validate the payment option and build the request body BEFORE any
+	// side-effecting call. Microsoft.Capacity provider registration below is
+	// a real ARM operation (a GET, and a POST to register when unregistered);
+	// every fallible local parse -- payment option AND term (buildReservationBody
+	// calls reservations.ParseTermYears) -- must be rejected here first so a
+	// doomed purchase never triggers it.
 	billingPlan, err := reservations.BillingPlanForPaymentOption(rec.PaymentOption)
 	if err != nil {
 		result.Error = err
 		return result, result.Error
 	}
 
-	// Ensure Microsoft.Capacity provider is registered (cached after first call).
-	c.ensureCapacityProviderRegistered(ctx)
-
 	bodyBytes, err := c.buildReservationBody(rec, billingPlan, opts.Source, opts.IdempotencyToken)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to marshal request: %w", err)
 		return result, result.Error
 	}
+
+	// Ensure Microsoft.Capacity provider is registered (cached after first call).
+	c.ensureCapacityProviderRegistered(ctx)
 
 	token, err := c.cred.GetToken(ctx, policy.TokenRequestOptions{
 		Scopes: []string{"https://management.azure.com/.default"},
