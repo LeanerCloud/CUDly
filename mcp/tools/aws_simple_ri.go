@@ -20,6 +20,7 @@ import (
 type simpleAWSRIPurchaseSpec struct {
 	name             string
 	product          string
+	displayName      string // human-readable product name for the tool description, e.g. "OpenSearch"
 	service          common.ServiceType
 	resourceTypeDesc string // jsonschema description for the resource_type field
 	examplePrompts   []string
@@ -53,6 +54,7 @@ func NewAWSOpenSearchRIPurchaseTool() Registration {
 	return newSimpleAWSRIPurchaseTool(simpleAWSRIPurchaseSpec{
 		name:             "cudly_aws_opensearch_ri_purchase",
 		product:          "opensearch",
+		displayName:      "OpenSearch",
 		service:          common.ServiceOpenSearch,
 		resourceTypeDesc: "OpenSearch instance type, e.g. r6g.large.search",
 		examplePrompts: []string{
@@ -67,6 +69,7 @@ func NewAWSRedshiftRIPurchaseTool() Registration {
 	return newSimpleAWSRIPurchaseTool(simpleAWSRIPurchaseSpec{
 		name:             "cudly_aws_redshift_ri_purchase",
 		product:          "redshift",
+		displayName:      "Redshift",
 		service:          common.ServiceRedshift,
 		resourceTypeDesc: "Redshift node type, e.g. dc2.large",
 		examplePrompts: []string{
@@ -80,6 +83,7 @@ func NewAWSMemoryDBRIPurchaseTool() Registration {
 	return newSimpleAWSRIPurchaseTool(simpleAWSRIPurchaseSpec{
 		name:             "cudly_aws_memorydb_ri_purchase",
 		product:          "memorydb",
+		displayName:      "MemoryDB",
 		service:          common.ServiceMemoryDB,
 		resourceTypeDesc: "MemoryDB node type, e.g. db.r6g.large",
 		examplePrompts: []string{
@@ -98,7 +102,7 @@ func (t *simpleAWSRIPurchaseTool) Descriptor() Descriptor {
 			"Purchase AWS %s Reserved Instances. THIS SPENDS REAL MONEY when dry_run=false and confirm=true. "+
 				"Always call with dry_run=true first (the default) to validate your parameters before "+
 				"committing; a dry_run response never contacts AWS and never spends money.",
-			t.spec.product),
+			t.spec.displayName),
 		RealPurchaseEnabled: true,
 		ExamplePrompts:      t.spec.examplePrompts,
 	}
