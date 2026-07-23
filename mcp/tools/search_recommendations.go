@@ -90,6 +90,7 @@ func (t *searchRecommendationsTool) handle(ctx context.Context, _ *mcp.CallToolR
 	if err != nil {
 		return nil, searchRecommendationsResult{}, err
 	}
+	args = trimSearchArgsIdentifiers(args)
 
 	prov, err := t.createProvider(string(providerType), providerConfigFromArgs(providerType, args))
 	if err != nil {
@@ -166,6 +167,35 @@ func validateSPTypeFilters(include, exclude []string) error {
 		}
 	}
 	return nil
+}
+
+// trimSearchArgsIdentifiers returns args with surrounding whitespace
+// stripped from every free-text identifier field that flows into
+// providerConfigFromArgs/recommendationParamsFromArgs (region,
+// include_regions, exclude_regions, account_filter). Unlike the purchase
+// tools' requireNonBlank, region is optional here, so trimming rather than
+// rejecting a blank/whitespace value is correct: " us-east-1 " must resolve
+// and search the same region as "us-east-1" instead of silently searching
+// the wrong (or account-default) region.
+func trimSearchArgsIdentifiers(args searchRecommendationsArgs) searchRecommendationsArgs {
+	args.Region = strings.TrimSpace(args.Region)
+	args.IncludeRegions = trimAll(args.IncludeRegions)
+	args.ExcludeRegions = trimAll(args.ExcludeRegions)
+	args.AccountFilter = trimAll(args.AccountFilter)
+	return args
+}
+
+// trimAll returns a copy of ss with strings.TrimSpace applied to every
+// entry, preserving a nil input as nil.
+func trimAll(ss []string) []string {
+	if ss == nil {
+		return nil
+	}
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = strings.TrimSpace(s)
+	}
+	return out
 }
 
 // providerConfigFromArgs builds the provider.ProviderConfig for the given
