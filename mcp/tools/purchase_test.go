@@ -261,3 +261,53 @@ func TestExecutePurchaseResolveClientErrorSurfaced(t *testing.T) {
 	assert.Nil(t, resp)
 	assert.Contains(t, err.Error(), "no AWS credentials found")
 }
+
+// TestIdempotencyKeyDistinguishesSavingsPlanHourlyCommitment proves finding
+// 1 of the adversarial review of the purchase feature: two Savings Plans
+// requests that differ only in hourly_commitment (a $5/hr vs a $50/hr
+// Compute Savings Plan) must derive different idempotency tokens. Before the
+// fix, idempotencyKeyFor never consulted rec.Details at all, so these two
+// materially different purchases collided on the same token and AWS would
+// have silently deduped the second call as a "retry" of the first instead
+// of buying a second, larger plan.
+func TestIdempotencyKeyDistinguishesSavingsPlanHourlyCommitment(t *testing.T) {
+	t.Parallel()
+	cheapArgs := validSavingsPlansArgs()
+	cheapArgs.HourlyCommitment = 5
+	expensiveArgs := validSavingsPlansArgs()
+	expensiveArgs.HourlyCommitment = 50
+
+	cheapRec, region, _, _, err := savingsPlanRecommendationFromArgs(cheapArgs)
+	require.NoError(t, err)
+	expensiveRec, _, _, _, err := savingsPlanRecommendationFromArgs(expensiveArgs)
+	require.NoError(t, err)
+
+	cheapKey := idempotencyKeyFor(region, cheapRec)
+	expensiveKey := idempotencyKeyFor(region, expensiveRec)
+	assert.NotEqual(t, cheapKey, expensiveKey,
+		"a $5/hr and a $50/hr Compute Savings Plan must not derive the same idempotency key")
+}
+
+// TestIdempotencyKeyDistinguishesEC2Platform proves the second half of
+// finding 1: an EC2 RI purchase for Linux vs Windows, with every other field
+// (region/instance_type/count/term/payment_option) identical, must not
+// collide on the same idempotency key -- Platform is a price- and
+// product-affecting dimension carried in rec.Details, and the pre-fix key
+// derivation ignored Details entirely.
+func TestIdempotencyKeyDistinguishesEC2Platform(t *testing.T) {
+	t.Parallel()
+	linuxArgs := validEC2Args()
+	linuxArgs.Platform = "Linux/UNIX"
+	windowsArgs := validEC2Args()
+	windowsArgs.Platform = "Windows"
+
+	linuxRec, _, _, err := ec2RecommendationFromArgs(linuxArgs)
+	require.NoError(t, err)
+	windowsRec, _, _, err := ec2RecommendationFromArgs(windowsArgs)
+	require.NoError(t, err)
+
+	linuxKey := idempotencyKeyFor(linuxArgs.Region, linuxRec)
+	windowsKey := idempotencyKeyFor(windowsArgs.Region, windowsRec)
+	assert.NotEqual(t, linuxKey, windowsKey,
+		"a Linux and a Windows EC2 RI purchase must not derive the same idempotency key")
+}

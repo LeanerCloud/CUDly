@@ -75,19 +75,88 @@ type PurchaseResponse struct {
 	Error             string  `json:"error,omitempty"`
 }
 
-// idempotencyKeyFor derives a stable per-request key from the fields that
-// identify what is being bought, so a caller re-driving the exact same tool
-// call (e.g. after a network timeout) reuses the same
-// common.DeriveIdempotencyToken output and the provider dedupes the retry
-// instead of double-purchasing. A materially different request (different
-// count, region, term, ...) always derives a different key. This is a
+// idempotencyKeyFor derives a stable per-request key from every field that
+// identifies what is being bought: provider, region, service, resource type,
+// count, term, payment option, plus every service-specific dimension held in
+// rec.Details (see detailsKeyComponent) -- platform/tenancy/scope for EC2
+// RIs, engine/az_config for RDS RIs, engine for ElastiCache RIs, hourly
+// commitment/instance family for Savings Plans, memory for GCP CUDs. A
+// caller re-driving the exact same tool call (e.g. after a network timeout)
+// reuses the same common.DeriveIdempotencyToken output and the provider
+// dedupes the retry instead of double-purchasing; a request that differs in
+// ANY price- or identity-affecting dimension derives a different key instead
+// of silently colliding with an unrelated purchase (issue found in review:
+// a $5/hr and $50/hr Compute Savings Plan previously shared a token because
+// only HourlyCommitment differed and Details was never consulted). This is a
 // request-scoped substitute for the purchase_executions row that the CLI/web
 // paths use as their idempotency anchor (pkg/common/tokens.go) -- the MCP
 // server has no such row, so the request's own identifying fields play that
 // role.
+//
+// rec.Account is deliberately excluded: no *FromArgs constructor in this
+// package populates it today, so folding it in would add an always-empty,
+// misleading key component rather than real discrimination.
 func idempotencyKeyFor(region string, rec common.Recommendation) string {
-	return fmt.Sprintf("mcp:%s:%s:%s:%s:%s:%d:%s:%s",
-		rec.Provider, rec.Account, region, rec.Service, rec.ResourceType, rec.Count, rec.Term, rec.PaymentOption)
+	return fmt.Sprintf("mcp:%s:%s:%s:%s:%d:%s:%s:%s",
+		rec.Provider, region, rec.Service, rec.ResourceType, rec.Count, rec.Term, rec.PaymentOption,
+		detailsKeyComponent(rec.Details))
+}
+
+// detailsKeyComponent returns a canonical, deterministic encoding of every
+// field in rec.Details that the purchase tools in this package populate, so
+// idempotencyKeyFor can fold service-specific price-affecting dimensions
+// into the token. Each case lists every field of its concrete Details type
+// explicitly (not a hand-picked subset) so a field added to one of these
+// types later shows up here as a visible diff rather than a silent key gap.
+// Returns "" for nil or an unrecognized Details (e.g.
+// azure_compute_ri.go's tool, whose recommendation carries no Details at
+// all).
+func detailsKeyComponent(details common.ServiceDetails) string {
+	switch d := details.(type) {
+	case *common.ComputeDetails:
+		return computeDetailsKey(d)
+	case common.ComputeDetails:
+		return computeDetailsKey(&d)
+	case *common.DatabaseDetails:
+		return databaseDetailsKey(d)
+	case *common.CacheDetails:
+		return cacheDetailsKey(d)
+	case *common.SavingsPlanDetails:
+		return savingsPlanDetailsKey(d)
+	default:
+		return ""
+	}
+}
+
+func computeDetailsKey(d *common.ComputeDetails) string {
+	if d == nil {
+		return ""
+	}
+	return fmt.Sprintf("instance_type=%s;platform=%s;tenancy=%s;scope=%s;vcpu=%d;memory_gb=%g",
+		d.InstanceType, d.Platform, d.Tenancy, d.Scope, d.VCPU, d.MemoryGB)
+}
+
+func databaseDetailsKey(d *common.DatabaseDetails) string {
+	if d == nil {
+		return ""
+	}
+	return fmt.Sprintf("engine=%s;engine_version=%s;az_config=%s;instance_class=%s;deployment=%s",
+		d.Engine, d.EngineVersion, d.AZConfig, d.InstanceClass, d.Deployment)
+}
+
+func cacheDetailsKey(d *common.CacheDetails) string {
+	if d == nil {
+		return ""
+	}
+	return fmt.Sprintf("engine=%s;node_type=%s;shards=%d", d.Engine, d.NodeType, d.Shards)
+}
+
+func savingsPlanDetailsKey(d *common.SavingsPlanDetails) string {
+	if d == nil {
+		return ""
+	}
+	return fmt.Sprintf("plan_type=%s;hourly_commitment=%g;coverage=%s;instance_family=%s;region=%s;offering_id=%s",
+		d.PlanType, d.HourlyCommitment, d.Coverage, d.InstanceFamily, d.Region, d.OfferingID)
 }
 
 // ExecutePurchase runs the shared dry_run/confirm safety gate and, for a
