@@ -270,6 +270,11 @@ func (c *SynapseClient) PurchaseCommitment(ctx context.Context, rec common.Recom
 		result.Error = err
 		return result, result.Error
 	}
+	billingPlan, err := reservations.BillingPlanForPaymentOption(rec.PaymentOption)
+	if err != nil {
+		result.Error = err
+		return result, result.Error
+	}
 
 	requestBody := map[string]interface{}{
 		"sku": map[string]string{
@@ -279,6 +284,7 @@ func (c *SynapseClient) PurchaseCommitment(ctx context.Context, rec common.Recom
 		"properties": map[string]interface{}{
 			"reservedResourceType": string(armreservations.ReservedResourceTypeSQLDataWarehouse),
 			"billingScopeId":       fmt.Sprintf("/subscriptions/%s", c.subscriptionID),
+			"billingPlan":          string(billingPlan),
 			"term":                 fmt.Sprintf("P%dY", termYears),
 			"quantity":             rec.Count,
 			"displayName":          fmt.Sprintf("Synapse SQL Pool Reservation - %s", rec.ResourceType),

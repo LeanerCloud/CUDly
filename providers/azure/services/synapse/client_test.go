@@ -502,6 +502,7 @@ func TestPurchaseCommitment_success(t *testing.T) {
 		Term:           "1yr",
 		Count:          1,
 		CommitmentCost: 5000.0,
+		PaymentOption:  "no-upfront",
 	}
 	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
@@ -523,7 +524,7 @@ func TestPurchaseCommitment_3yrTerm(t *testing.T) {
 	cred := &mockTokenCredential{token: "test-token"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
 
-	rec := common.Recommendation{ResourceType: "DW500c", Term: "3yr", Count: 2, CommitmentCost: 9000.0}
+	rec := common.Recommendation{ResourceType: "DW500c", Term: "3yr", Count: 2, CommitmentCost: 9000.0, PaymentOption: "no-upfront"}
 	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
@@ -550,7 +551,7 @@ func TestPurchaseCommitment_withSource(t *testing.T) {
 	cred := &mockTokenCredential{token: "test-token"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
 
-	rec := common.Recommendation{ResourceType: "DW500c", Term: "1yr", Count: 1}
+	rec := common.Recommendation{ResourceType: "DW500c", Term: "1yr", Count: 1, PaymentOption: "no-upfront"}
 	_, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: "automation"})
 	require.NoError(t, err)
 	assert.Contains(t, string(capturedBody), "purchase-automation")
@@ -571,7 +572,7 @@ func TestPurchaseCommitment_apiError(t *testing.T) {
 	cred := &mockTokenCredential{token: "test-token"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
 
-	rec := common.Recommendation{ResourceType: "DW1000c", Term: "1yr", Count: 1}
+	rec := common.Recommendation{ResourceType: "DW1000c", Term: "1yr", Count: 1, PaymentOption: "no-upfront"}
 	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
@@ -588,7 +589,7 @@ func TestPurchaseCommitment_httpError(t *testing.T) {
 	cred := &mockTokenCredential{token: "test-token"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
 
-	rec := common.Recommendation{ResourceType: "DW1000c", Term: "1yr", Count: 1}
+	rec := common.Recommendation{ResourceType: "DW1000c", Term: "1yr", Count: 1, PaymentOption: "no-upfront"}
 	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
@@ -784,6 +785,72 @@ func TestPurchaseCommitment_unsupportedTerm(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported reservation term")
 }
 
+// TestPurchaseCommitment_billingPlan pins the billingPlan wiring (issue
+// #1502, mirroring PR #1495's fix for compute): Azure Synapse Analytics
+// Dedicated SQL pool (SQL DW) reserved capacity supports both Upfront and
+// Monthly billing (learn.microsoft.com/azure/cost-management-billing/
+// reservations/prepay-sql-data-warehouse-charges), so rec.PaymentOption must
+// map onto the correct armreservations ReservationBillingPlan value in the
+// purchase body rather than silently defaulting to Azure's Upfront behavior
+// for a no-upfront/monthly rec.
+func TestPurchaseCommitment_billingPlan(t *testing.T) {
+	cases := []struct {
+		name          string
+		paymentOption string
+		wantPlan      string
+		wantErrSub    string
+	}{
+		{name: "all-upfront maps to Upfront", paymentOption: "all-upfront", wantPlan: "Upfront"},
+		{name: "no-upfront maps to Monthly", paymentOption: "no-upfront", wantPlan: "Monthly"},
+		{name: "partial-upfront is rejected", paymentOption: "partial-upfront", wantErrSub: "partial-upfront has no azure equivalent"},
+		{name: "empty payment option is rejected", paymentOption: "", wantErrSub: "azure reservations support only upfront or monthly billing"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mHTTP := &mocks.MockHTTPClient{}
+			t.Cleanup(func() { mHTTP.AssertExpectations(t) })
+			cred := &mockTokenCredential{token: "test-token"}
+			c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
+
+			rec := common.Recommendation{ResourceType: "DW1000c", Term: "1yr", Count: 1, PaymentOption: tc.paymentOption}
+
+			if tc.wantErrSub != "" {
+				result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+				require.Error(t, err)
+				assert.False(t, result.Success)
+				assert.Contains(t, err.Error(), tc.wantErrSub)
+				mHTTP.AssertNotCalled(t, "Do", mock.Anything)
+				return
+			}
+
+			const orderID = "syn-billingplan-test"
+			mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+				return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+			})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once()
+
+			var capturedBody []byte
+			mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+				if r.URL.Path != "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase" {
+					return false
+				}
+				capturedBody, _ = io.ReadAll(r.Body)
+				r.Body = io.NopCloser(bytes.NewReader(capturedBody))
+				return true
+			})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+
+			result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+			require.NoError(t, err)
+			assert.True(t, result.Success)
+
+			var body map[string]interface{}
+			require.NoError(t, json.Unmarshal(capturedBody, &body))
+			props, ok := body["properties"].(map[string]interface{})
+			require.True(t, ok, "properties map missing from reservation body")
+			assert.Equal(t, tc.wantPlan, props["billingPlan"])
+		})
+	}
+}
+
 // TestPurchaseCommitment_requiresSource pins the dedupe guard:
 // PurchaseCommitment must reject an empty opts.Source before issuing any HTTP
 // call. Azure mints the reservation order ID server-side, so the
@@ -880,6 +947,7 @@ func TestPurchaseCommitment_canonicalReservedResourceType(t *testing.T) {
 		Term:           "1yr",
 		Count:          1,
 		CommitmentCost: 5000.0,
+		PaymentOption:  "no-upfront",
 	}
 	_, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
