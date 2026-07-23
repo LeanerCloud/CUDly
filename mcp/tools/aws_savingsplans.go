@@ -18,7 +18,9 @@ const awsSavingsPlansPurchaseDescription = "Purchase an AWS Savings Plan (Comput
 	"Database). THIS SPENDS REAL MONEY when dry_run=false and confirm=true. Always call with dry_run=true " +
 	"first (the default) to validate your parameters before committing; a dry_run response never contacts AWS " +
 	"and never spends money. Unlike RI purchases this is dollar-denominated: you specify hourly_commitment " +
-	"(USD/hour), not an instance count."
+	"(USD/hour), not an instance count. CAVEAT: sp_type=Database only supports term_years=1 and " +
+	"payment_option=no-upfront; AWS does not offer a 3-year Database Savings Plan or all-upfront/" +
+	"partial-upfront billing for it."
 
 // savingsPlansAccountLevelRegion is the region used to resolve the account-
 // level Savings Plans service client when the caller omits region -- Compute,
@@ -107,27 +109,43 @@ func (t *awsSavingsPlansPurchaseTool) handle(ctx context.Context, _ *mcp.CallToo
 	return nil, *resp, nil
 }
 
+// validateSavingsPlanArgs validates every field of args that does not
+// depend on the effective region, returning the typed sp_type, term, and
+// payment_option. Split out of savingsPlanRecommendationFromArgs so that
+// function's cyclomatic complexity stays under the repo's gocyclo gate as
+// validation branches (e.g. validateDatabaseSPConstraints) are added.
+func validateSavingsPlanArgs(args savingsPlansPurchaseArgs) (spType SPType, term TermYears, paymentOption PaymentOption, err error) {
+	if args.HourlyCommitment <= 0 {
+		return "", 0, "", fmt.Errorf("hourly_commitment must be > 0, got %v", args.HourlyCommitment)
+	}
+	spType, err = ValidateSPType(args.SPType)
+	if err != nil {
+		return "", 0, "", err
+	}
+	term, err = ValidateTermYears(args.TermYears)
+	if err != nil {
+		return "", 0, "", err
+	}
+	paymentOption, err = ValidatePaymentOption(args.PaymentOption)
+	if err != nil {
+		return "", 0, "", err
+	}
+	if spType == SPTypeEC2Instance && args.Region == "" {
+		return "", 0, "", fmt.Errorf("region is required for sp_type=%s", SPTypeEC2Instance)
+	}
+	if err := validateDatabaseSPConstraints(spType, term, paymentOption); err != nil {
+		return "", 0, "", err
+	}
+	return spType, term, paymentOption, nil
+}
+
 // savingsPlanRecommendationFromArgs validates args and builds the
 // common.Recommendation to purchase, the effective region to resolve the
 // service client against, and the effective dry_run/confirm booleans.
 func savingsPlanRecommendationFromArgs(args savingsPlansPurchaseArgs) (rec common.Recommendation, region string, dryRun, confirm bool, err error) {
-	if args.HourlyCommitment <= 0 {
-		return common.Recommendation{}, "", false, false, fmt.Errorf("hourly_commitment must be > 0, got %v", args.HourlyCommitment)
-	}
-	spType, err := ValidateSPType(args.SPType)
+	spType, term, paymentOption, err := validateSavingsPlanArgs(args)
 	if err != nil {
 		return common.Recommendation{}, "", false, false, err
-	}
-	term, err := ValidateTermYears(args.TermYears)
-	if err != nil {
-		return common.Recommendation{}, "", false, false, err
-	}
-	paymentOption, err := ValidatePaymentOption(args.PaymentOption)
-	if err != nil {
-		return common.Recommendation{}, "", false, false, err
-	}
-	if spType == SPTypeEC2Instance && args.Region == "" {
-		return common.Recommendation{}, "", false, false, fmt.Errorf("region is required for sp_type=%s", SPTypeEC2Instance)
 	}
 
 	region = args.Region
@@ -167,6 +185,31 @@ func savingsPlanRecommendationFromArgs(args savingsPlansPurchaseArgs) (rec commo
 		confirm = *args.Confirm
 	}
 	return rec, region, dryRun, confirm, nil
+}
+
+// validateDatabaseSPConstraints rejects a Database Savings Plan request
+// AWS's purchase API would itself reject: per AWS's Database Savings Plans
+// announcement (aws.amazon.com/about-aws/whats-new/2025/12/database-savings-plans-savings),
+// Database Savings Plans support only a one-year term billed no-upfront --
+// unlike Compute, EC2Instance, and SageMaker plans, there is no three-year
+// term and no all-upfront/partial-upfront option. Failing loud here, before
+// building the recommendation, surfaces AWS's real constraint instead of
+// letting a real purchase reach AWS only to be rejected there.
+func validateDatabaseSPConstraints(spType SPType, term TermYears, paymentOption PaymentOption) error {
+	if spType != SPTypeDatabase {
+		return nil
+	}
+	if term != TermOneYear {
+		return fmt.Errorf("sp_type=%s only supports a %d-year term (got term_years=%d): "+
+			"AWS Database Savings Plans do not offer a %d-year term",
+			SPTypeDatabase, TermOneYear, term, TermThreeYear)
+	}
+	if paymentOption != PaymentOptionNoUpfront {
+		return fmt.Errorf("sp_type=%s only supports payment_option=%s (got %q): "+
+			"AWS Database Savings Plans do not offer all-upfront or partial-upfront billing",
+			SPTypeDatabase, PaymentOptionNoUpfront, paymentOption)
+	}
+	return nil
 }
 
 func (t *awsSavingsPlansPurchaseTool) resolveClient(args savingsPlansPurchaseArgs, region string, service common.ServiceType) ResolveClientFunc {

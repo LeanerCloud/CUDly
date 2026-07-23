@@ -81,6 +81,70 @@ func TestSavingsPlanRecommendationFromArgsInvalid(t *testing.T) {
 	}
 }
 
+// TestSavingsPlanRecommendationFromArgsDatabaseConstraints proves the
+// CodeRabbit-requested up-front validation: per AWS's Database Savings
+// Plans announcement, sp_type=Database only supports a one-year term
+// billed no-upfront -- unlike Compute/EC2Instance/SageMaker, there is no
+// 3-year term and no all-upfront/partial-upfront option. A mismatched
+// term_years or payment_option must be rejected before building the
+// recommendation, not left for AWS's purchase API to reject.
+func TestSavingsPlanRecommendationFromArgsDatabaseConstraints(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		mutate func(*savingsPlansPurchaseArgs)
+		errSub string
+	}{
+		{"3yr term rejected", func(a *savingsPlansPurchaseArgs) { a.TermYears = 3 }, "only supports a 1-year term"},
+		{"all-upfront rejected", func(a *savingsPlansPurchaseArgs) { a.PaymentOption = "all-upfront" }, "only supports payment_option=no-upfront"},
+		{"partial-upfront rejected", func(a *savingsPlansPurchaseArgs) { a.PaymentOption = "partial-upfront" }, "only supports payment_option=no-upfront"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args := validSavingsPlansArgs()
+			args.SPType = "Database"
+			args.TermYears = 1
+			args.PaymentOption = "no-upfront"
+			tc.mutate(&args)
+			_, _, _, _, err := savingsPlanRecommendationFromArgs(args)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.errSub)
+		})
+	}
+}
+
+// TestSavingsPlanRecommendationFromArgsDatabaseAllowedCombo proves the one
+// term/payment_option combination Database Savings Plans actually support
+// still succeeds.
+func TestSavingsPlanRecommendationFromArgsDatabaseAllowedCombo(t *testing.T) {
+	t.Parallel()
+	args := validSavingsPlansArgs()
+	args.SPType = "Database"
+	args.TermYears = 1
+	args.PaymentOption = "no-upfront"
+
+	rec, _, _, _, err := savingsPlanRecommendationFromArgs(args)
+	require.NoError(t, err)
+	assert.Equal(t, common.ServiceSavingsPlansDatabase, rec.Service)
+	assert.Equal(t, "1yr", rec.Term)
+}
+
+// TestSavingsPlanRecommendationFromArgsNonDatabaseUnaffected proves the
+// Database-only constraint does not leak onto other sp_types: Compute keeps
+// supporting 3-year all-upfront, the combo Database rejects.
+func TestSavingsPlanRecommendationFromArgsNonDatabaseUnaffected(t *testing.T) {
+	t.Parallel()
+	args := validSavingsPlansArgs()
+	args.SPType = "Compute"
+	args.TermYears = 3
+	args.PaymentOption = "all-upfront"
+
+	rec, _, _, _, err := savingsPlanRecommendationFromArgs(args)
+	require.NoError(t, err)
+	assert.Equal(t, "3yr", rec.Term)
+	assert.Equal(t, "all-upfront", rec.PaymentOption)
+}
+
 func TestAWSSavingsPlansPurchaseHandleConfirmFalseRefuses(t *testing.T) {
 	t.Parallel()
 	resolveCalled := false
