@@ -33,7 +33,7 @@ type gcpComputeEngineCUDPurchaseArgs struct {
 	GCPProjectID     string  `json:"gcp_project_id,omitempty" jsonschema:"GCP project ID override; default uses ambient project"`
 	DryRun           *bool   `json:"dry_run,omitempty" jsonschema:"preview only, no purchase; defaults to true"`
 	Confirm          *bool   `json:"confirm,omitempty" jsonschema:"required (with dry_run=false) to execute a real purchase; defaults to false"`
-	IdempotencyNonce string  `json:"idempotency_nonce,omitempty" jsonschema:"optional caller-chosen token; passing the SAME value on a retry of this exact call forces the same idempotency key so the provider dedupes it as a retry (e.g. after a network timeout); omitting it (the default) means two calls with otherwise-identical parameters are treated as genuinely separate purchases and get distinct keys"`
+	IdempotencyNonce string  `json:"idempotency_nonce,omitempty" jsonschema:"optional; set to a fresh value to authorize a purchase that is otherwise identical to a previous one (e.g. buy 3 more RIs with the same parameters); leave empty (the default) so retries with identical parameters dedupe and never double-buy"`
 }
 
 type gcpComputeEngineCUDPurchaseTool struct {
