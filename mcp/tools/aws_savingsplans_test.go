@@ -216,6 +216,67 @@ func TestSavingsPlanRecommendationFromArgsDetailsRegionFamilyOnlyForEC2Instance(
 	})
 }
 
+// TestSavingsPlanRecommendationFromArgsTrimsSurroundingWhitespace is the
+// regression guard for the CodeRabbit money-path finding:
+// validateSavingsPlanArgs only trims region/instance_family for the
+// blank-check (its `strings.TrimSpace(args.Region) == ""` guards), but
+// savingsPlanRecommendationFromArgs then stored the RAW args.Region and
+// args.InstanceFamily into the resolved region, rec.Region, and
+// Details.Region/Details.InstanceFamily -- which flow into
+// ProviderConfig/GetServiceClient and the DescribeSavingsPlansOfferings
+// lookup for a real EC2Instance Savings Plan purchase. Before the fix,
+// " us-east-1 " passed validation but reached a real purchase with the
+// surrounding whitespace intact.
+func TestSavingsPlanRecommendationFromArgsTrimsSurroundingWhitespace(t *testing.T) {
+	t.Parallel()
+	args := validSavingsPlansArgs()
+	args.SPType = "EC2Instance"
+	args.Region = " us-east-1 "
+	args.InstanceFamily = " m5 "
+
+	rec, region, _, _, err := savingsPlanRecommendationFromArgs(args)
+	require.NoError(t, err)
+	assert.Equal(t, "us-east-1", region, "returned region must be trimmed")
+	assert.Equal(t, "us-east-1", rec.Region, "rec.Region must be trimmed")
+	details, ok := rec.Details.(*common.SavingsPlanDetails)
+	require.True(t, ok)
+	assert.Equal(t, "us-east-1", details.Region, "Details.Region must be trimmed")
+	assert.Equal(t, "m5", details.InstanceFamily, "Details.InstanceFamily must be trimmed")
+}
+
+// TestAWSSavingsPlansPurchaseHandleForwardsTrimmedRegionToServiceClient
+// proves the trimmed region -- not the raw, whitespace-padded args.Region --
+// is what actually reaches GetServiceClient on a real EC2Instance Savings
+// Plan purchase, i.e. the fix holds through the full handle() path, not just
+// the recommendation-building helper.
+func TestAWSSavingsPlansPurchaseHandleForwardsTrimmedRegionToServiceClient(t *testing.T) {
+	t.Parallel()
+	fake := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true, CommitmentID: "sp-2"}}
+	var gotService common.ServiceType
+	var gotRegion string
+	tool := &awsSavingsPlansPurchaseTool{
+		createProvider: func(_ string, _ *provider.ProviderConfig) (provider.Provider, error) {
+			return &recordingProvider{
+				fakeProvider: &fakeProvider{name: "aws"},
+				client:       fake,
+				gotService:   &gotService,
+				gotRegion:    &gotRegion,
+			}, nil
+		},
+	}
+	args := validSavingsPlansArgs()
+	args.SPType = "EC2Instance"
+	args.Region = " us-east-1 "
+	args.InstanceFamily = " m5 "
+	args.DryRun = boolPtr(false)
+	args.Confirm = boolPtr(true)
+
+	_, resp, err := tool.handle(context.Background(), nil, args)
+	require.NoError(t, err)
+	assert.True(t, resp.Success)
+	assert.Equal(t, "us-east-1", gotRegion, "GetServiceClient must receive the trimmed region, not raw whitespace")
+}
+
 func TestSavingsPlanRecommendationFromArgsInvalid(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

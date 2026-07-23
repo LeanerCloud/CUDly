@@ -161,8 +161,17 @@ func savingsPlanRecommendationFromArgs(args savingsPlansPurchaseArgs) (rec commo
 		return common.Recommendation{}, "", false, false, err
 	}
 
-	region = args.Region
-	if strings.TrimSpace(region) == "" {
+	// Trim once and use the trimmed value everywhere region/instance_family
+	// are stored or forwarded (resolved region, rec.Region, Details.Region,
+	// Details.InstanceFamily): validateSavingsPlanArgs above only trims for
+	// the blank-check, so a caller-supplied " us-east-1 " would otherwise
+	// flow raw into ProviderConfig/GetServiceClient and the real
+	// DescribeSavingsPlansOfferings lookup for an EC2Instance purchase.
+	trimmedRegion := strings.TrimSpace(args.Region)
+	trimmedInstanceFamily := strings.TrimSpace(args.InstanceFamily)
+
+	region = trimmedRegion
+	if region == "" {
 		region = savingsPlansAccountLevelRegion
 	}
 
@@ -185,8 +194,8 @@ func savingsPlanRecommendationFromArgs(args savingsPlansPurchaseArgs) (rec commo
 	// that contract instead of leaking a caller-supplied region/family into
 	// an account-level, family-agnostic plan's Details.
 	if spType == SPTypeEC2Instance {
-		details.InstanceFamily = args.InstanceFamily
-		details.Region = args.Region
+		details.InstanceFamily = trimmedInstanceFamily
+		details.Region = trimmedRegion
 	}
 
 	rec = common.Recommendation{
