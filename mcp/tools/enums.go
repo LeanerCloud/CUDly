@@ -193,6 +193,34 @@ func ValidateScope(s string) (Scope, error) {
 	}
 }
 
+// LookbackPeriod is the cost/usage lookback window backing a
+// cudly_search_recommendations call. Values match the enum
+// search_recommendations.go's Register advertises in the tool's JSON schema
+// (BuildInputSchema's "lookback_period" FieldOverride); re-validated here so
+// a caller invoking the tool directly -- bypassing MCP schema enforcement --
+// cannot pass an unsupported window through to the provider.
+type LookbackPeriod string
+
+const (
+	LookbackPeriod7Days  LookbackPeriod = "7d"
+	LookbackPeriod30Days LookbackPeriod = "30d"
+	LookbackPeriod60Days LookbackPeriod = "60d"
+)
+
+// ValidateLookbackPeriod returns the typed LookbackPeriod for s, or an
+// explicit error when s is non-empty and not one of the three supported
+// windows. An empty s is valid: lookback_period is optional
+// (json:"...,omitempty"), meaning "let the provider apply its own default".
+func ValidateLookbackPeriod(s string) (LookbackPeriod, error) {
+	switch LookbackPeriod(s) {
+	case "", LookbackPeriod7Days, LookbackPeriod30Days, LookbackPeriod60Days:
+		return LookbackPeriod(s), nil
+	default:
+		return "", fmt.Errorf("invalid lookback_period %q: must be one of %s, %s, %s",
+			s, LookbackPeriod7Days, LookbackPeriod30Days, LookbackPeriod60Days)
+	}
+}
+
 // CacheEngine is the ElastiCache engine dimension (common.CacheDetails.Engine).
 type CacheEngine string
 

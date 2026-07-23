@@ -116,9 +116,9 @@ func (t *searchRecommendationsTool) handle(ctx context.Context, _ *mcp.CallToolR
 
 // validateSearchArgs validates every money-neutral-but-still-typed field on
 // args that does not require a live provider (provider name, payment
-// option, term, Savings Plans type filters), returning the typed provider
-// name and the normalised Recommendation term string ("1yr"/"3yr", or ""
-// when args.TermYears was omitted).
+// option, lookback_period, term, Savings Plans type filters), returning the
+// typed provider name and the normalised Recommendation term string
+// ("1yr"/"3yr", or "" when args.TermYears was omitted).
 func validateSearchArgs(args searchRecommendationsArgs) (common.ProviderType, string, error) {
 	providerType, err := validateProviderName(args.Provider)
 	if err != nil {
@@ -129,6 +129,10 @@ func validateSearchArgs(args searchRecommendationsArgs) (common.ProviderType, st
 		if _, err := ValidatePaymentOption(args.PaymentOption); err != nil {
 			return "", "", err
 		}
+	}
+
+	if _, err := ValidateLookbackPeriod(args.LookbackPeriod); err != nil {
+		return "", "", err
 	}
 
 	term := ""
