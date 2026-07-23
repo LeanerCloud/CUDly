@@ -29,8 +29,9 @@ func validAzureComputeArgs() azureComputeRIPurchaseArgs {
 
 func TestAzureComputeRecommendationFromArgs(t *testing.T) {
 	t.Parallel()
-	rec, dryRun, confirm, err := azureComputeRecommendationFromArgs(validAzureComputeArgs())
+	rec, region, dryRun, confirm, err := azureComputeRecommendationFromArgs(validAzureComputeArgs())
 	require.NoError(t, err)
+	assert.Equal(t, "eastus", region)
 	assert.True(t, dryRun)
 	assert.False(t, confirm)
 	assert.Equal(t, common.ProviderAzure, rec.Provider)
@@ -39,6 +40,25 @@ func TestAzureComputeRecommendationFromArgs(t *testing.T) {
 	assert.Equal(t, 2, rec.Count)
 	assert.Equal(t, "3yr", rec.Term)
 	assert.Nil(t, rec.Details, "Azure VM purchase reads no Recommendation.Details")
+}
+
+// TestAzureComputeRecommendationFromArgsTrimsSurroundingWhitespace is the
+// regression guard for the CodeRabbit finding: requireNonBlank rejected an
+// all-whitespace value but let a value with surrounding whitespace (e.g.
+// " eastus ") pass through unchanged into rec.Region/rec.ResourceType and the
+// returned region (which resolveClient uses for ProviderConfig.Region and
+// GetServiceClient).
+func TestAzureComputeRecommendationFromArgsTrimsSurroundingWhitespace(t *testing.T) {
+	t.Parallel()
+	args := validAzureComputeArgs()
+	args.Region = " eastus "
+	args.VMSize = " Standard_D2s_v3 "
+
+	rec, region, _, _, err := azureComputeRecommendationFromArgs(args)
+	require.NoError(t, err)
+	assert.Equal(t, "eastus", region, "returned region must be trimmed")
+	assert.Equal(t, "eastus", rec.Region, "rec.Region must be trimmed")
+	assert.Equal(t, "Standard_D2s_v3", rec.ResourceType, "rec.ResourceType must be trimmed")
 }
 
 func TestAzureComputeRecommendationFromArgsInvalid(t *testing.T) {
@@ -60,7 +80,7 @@ func TestAzureComputeRecommendationFromArgsInvalid(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			args := validAzureComputeArgs()
 			tc.mutate(&args)
-			_, _, _, err := azureComputeRecommendationFromArgs(args)
+			_, _, _, _, err := azureComputeRecommendationFromArgs(args)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.errSub)
 		})
@@ -84,7 +104,7 @@ func TestAzureComputeRecommendationFromArgsRejectsPartialUpfront(t *testing.T) {
 			args.PaymentOption = "partial-upfront"
 			args.DryRun = boolPtr(dryRun)
 			args.Confirm = boolPtr(true)
-			_, _, _, err := azureComputeRecommendationFromArgs(args)
+			_, _, _, _, err := azureComputeRecommendationFromArgs(args)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "partial-upfront")
 			assert.Contains(t, err.Error(), "no-upfront")
@@ -100,7 +120,7 @@ func TestAzureComputeRecommendationFromArgsAcceptsAllUpfront(t *testing.T) {
 	args.PaymentOption = "all-upfront"
 	args.DryRun = boolPtr(false)
 	args.Confirm = boolPtr(true)
-	rec, dryRun, confirm, err := azureComputeRecommendationFromArgs(args)
+	rec, _, dryRun, confirm, err := azureComputeRecommendationFromArgs(args)
 	require.NoError(t, err)
 	assert.False(t, dryRun)
 	assert.True(t, confirm)
@@ -116,7 +136,7 @@ func TestAzureComputeRecommendationFromArgsAcceptsNoUpfront(t *testing.T) {
 	args.PaymentOption = "no-upfront"
 	args.DryRun = boolPtr(false)
 	args.Confirm = boolPtr(true)
-	rec, dryRun, confirm, err := azureComputeRecommendationFromArgs(args)
+	rec, _, dryRun, confirm, err := azureComputeRecommendationFromArgs(args)
 	require.NoError(t, err)
 	assert.False(t, dryRun)
 	assert.True(t, confirm)
@@ -131,7 +151,7 @@ func TestAzureComputeRecommendationFromArgsDefaultsToNoUpfront(t *testing.T) {
 	t.Parallel()
 	args := validAzureComputeArgs()
 	args.PaymentOption = ""
-	rec, _, _, err := azureComputeRecommendationFromArgs(args)
+	rec, _, _, _, err := azureComputeRecommendationFromArgs(args)
 	require.NoError(t, err)
 	assert.Equal(t, "no-upfront", rec.PaymentOption)
 }

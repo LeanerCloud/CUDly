@@ -10,17 +10,22 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 )
 
-// requireNonBlank returns an explicit "<field> is required" error when val is
-// empty or contains only whitespace. A whitespace-only value (e.g. "   ")
-// passes a bare `== ""` check but carries no real region/instance-type/etc
-// information, and on a real-purchase path could still reach provider
-// resolution instead of being rejected at the MCP tool boundary like an
-// actually-empty value already is.
-func requireNonBlank(field, val string) error {
-	if strings.TrimSpace(val) == "" {
-		return fmt.Errorf("%s is required", field)
+// requireNonBlank returns the trimmed form of val, or an explicit
+// "<field> is required" error when val is empty or contains only whitespace.
+// A whitespace-only value (e.g. "   ") passes a bare `== ""` check but
+// carries no real region/instance-type/etc information, and on a
+// real-purchase path could still reach provider resolution instead of being
+// rejected at the MCP tool boundary like an actually-empty value already
+// is. Callers must store the returned trimmed value (not the raw val) back
+// onto the field so surrounding whitespace (e.g. " us-east-1 ") is
+// normalized before it reaches a provider call rather than passed through
+// raw.
+func requireNonBlank(field, val string) (string, error) {
+	trimmed := strings.TrimSpace(val)
+	if trimmed == "" {
+		return "", fmt.Errorf("%s is required", field)
 	}
-	return nil
+	return trimmed, nil
 }
 
 // PaymentOption is the AWS/Azure/GCP-agnostic reserved-capacity payment

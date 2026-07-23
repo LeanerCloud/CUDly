@@ -24,8 +24,9 @@ func validElastiCacheArgs() elasticacheRIPurchaseArgs {
 
 func TestElastiCacheRecommendationFromArgs(t *testing.T) {
 	t.Parallel()
-	rec, dryRun, confirm, err := elasticacheRecommendationFromArgs(validElastiCacheArgs())
+	rec, region, dryRun, confirm, err := elasticacheRecommendationFromArgs(validElastiCacheArgs())
 	require.NoError(t, err)
+	assert.Equal(t, "us-east-1", region)
 	assert.True(t, dryRun)
 	assert.False(t, confirm)
 	assert.Equal(t, common.ServiceElastiCache, rec.Service)
@@ -56,11 +57,33 @@ func TestElastiCacheRecommendationFromArgsInvalid(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			args := validElastiCacheArgs()
 			tc.mutate(&args)
-			_, _, _, err := elasticacheRecommendationFromArgs(args)
+			_, _, _, _, err := elasticacheRecommendationFromArgs(args)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.errSub)
 		})
 	}
+}
+
+// TestElastiCacheRecommendationFromArgsTrimsSurroundingWhitespace is the
+// regression guard for the CodeRabbit finding: requireNonBlank rejected an
+// all-whitespace value but let a value with surrounding whitespace (e.g.
+// " us-east-1 ") pass through unchanged into rec.Region/rec.ResourceType/
+// Details and the returned region (which resolveClient uses for
+// ProviderConfig.Region and GetServiceClient).
+func TestElastiCacheRecommendationFromArgsTrimsSurroundingWhitespace(t *testing.T) {
+	t.Parallel()
+	args := validElastiCacheArgs()
+	args.Region = " us-east-1 "
+	args.NodeType = " cache.r6g.large "
+
+	rec, region, _, _, err := elasticacheRecommendationFromArgs(args)
+	require.NoError(t, err)
+	assert.Equal(t, "us-east-1", region, "returned region must be trimmed")
+	assert.Equal(t, "us-east-1", rec.Region, "rec.Region must be trimmed")
+	assert.Equal(t, "cache.r6g.large", rec.ResourceType, "rec.ResourceType must be trimmed")
+	details, ok := rec.Details.(*common.CacheDetails)
+	require.True(t, ok)
+	assert.Equal(t, "cache.r6g.large", details.NodeType, "Details.NodeType must be trimmed")
 }
 
 func TestAWSElastiCacheRIPurchaseHandleConfirmFalseRefuses(t *testing.T) {

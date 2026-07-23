@@ -397,13 +397,13 @@ func TestIdempotencyKeyDistinguishesEC2Platform(t *testing.T) {
 	windowsArgs := validEC2Args()
 	windowsArgs.Platform = "Windows"
 
-	linuxRec, _, _, err := ec2RecommendationFromArgs(linuxArgs)
+	linuxRec, linuxRegion, _, _, err := ec2RecommendationFromArgs(linuxArgs)
 	require.NoError(t, err)
-	windowsRec, _, _, err := ec2RecommendationFromArgs(windowsArgs)
+	windowsRec, windowsRegion, _, _, err := ec2RecommendationFromArgs(windowsArgs)
 	require.NoError(t, err)
 
-	linuxKey := idempotencyKeyFor(linuxArgs.Region, linuxRec, "")
-	windowsKey := idempotencyKeyFor(windowsArgs.Region, windowsRec, "")
+	linuxKey := idempotencyKeyFor(linuxRegion, linuxRec, "")
+	windowsKey := idempotencyKeyFor(windowsRegion, windowsRec, "")
 	assert.NotEqual(t, linuxKey, windowsKey,
 		"a Linux and a Windows EC2 RI purchase must not derive the same idempotency key")
 }
