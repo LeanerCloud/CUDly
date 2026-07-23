@@ -431,11 +431,15 @@ describe('Touch Target Minimums (issue #983 / PR #989)', () => {
 
   test('coarse-pointer media query sets a 44x44 minimum on generic button selectors', () => {
     // PR #989 added this rule so touch devices get HIG/WCAG-compliant tap
-    // targets. .btn-small, .toggle-password and .modal-confirm-close all
-    // render as plain <button> elements (recommendations.ts, auth.ts,
-    // confirmDialog.ts), so they inherit the minimum from `button` here
-    // rather than needing a class-specific rule (verified: no rule for
-    // any of the three sets its own min-height/min-width, see below).
+    // targets. .btn-small and .toggle-password render as plain <button>
+    // elements (recommendations.ts, auth.ts), so they inherit the minimum
+    // from `button` here rather than needing a class-specific rule
+    // (verified: neither declares its own min-height/min-width, see below).
+    // .modal-confirm-close is deliberately excluded from that guarantee:
+    // PR #985 (bottom-sheet modal, issue #985) gives it an explicit
+    // min-width/min-height: 44px of its own (needed because it is
+    // absolutely positioned, not sized by content), which is a stronger
+    // guarantee than the generic coarse-pointer rule, not a regression.
     const media = css.match(/@media\s*\(pointer:\s*coarse\)\s*\{([\s\S]*?)\n\}/);
     expect(media).not.toBeNull();
     const block = media?.[1] ?? '';
@@ -445,7 +449,7 @@ describe('Touch Target Minimums (issue #983 / PR #989)', () => {
     expect(block).toMatch(/min-width:\s*44px/);
   });
 
-  test.each(['.btn-small', '.toggle-password', '.modal-confirm-close'])(
+  test.each(['.btn-small', '.toggle-password'])(
     '%s does not declare its own min-height/height (would override the coarse-pointer 44px minimum by specificity)',
     (selector) => {
       const escaped = selector.replace('.', '\\.');
