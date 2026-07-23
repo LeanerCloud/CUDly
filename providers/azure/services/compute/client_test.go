@@ -22,6 +22,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/providers/azure/mocks"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
 
 func TestNewClient(t *testing.T) {
@@ -922,6 +923,30 @@ func TestComputeClient_PurchaseCommitment_RequiresSource(t *testing.T) {
 	mockHTTP.AssertNotCalled(t, "Do", mock.Anything)
 }
 
+// TestComputeClient_PurchaseCommitment_RejectsInvalidPaymentOptionBeforeSideEffects
+// pins the fix ordering: an invalid/empty PaymentOption must be rejected
+// BEFORE PurchaseCommitment ever calls ensureCapacityProviderRegistered, which
+// issues a real ARM GET (and potentially a POST to register) against
+// Microsoft.Capacity. Before this fix, the provider-registration check ran
+// first, so a doomed purchase (bad payment option) still triggered that
+// side-effecting ARM call. mockHTTP.AssertNotCalled proves zero HTTP calls
+// were made -- this test fails pre-fix, because the old code issued the
+// Microsoft.Capacity GET before buildReservationBody ever validated
+// PaymentOption.
+func TestComputeClient_PurchaseCommitment_RejectsInvalidPaymentOptionBeforeSideEffects(t *testing.T) {
+	ctx := context.Background()
+	mockHTTP := &mocks.MockHTTPClient{}
+	mockCred := &MockTokenCredential{token: "test-token"}
+	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
+
+	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Term: "1yr", Count: 1, PaymentOption: "partial-upfront"}
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	require.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), "partial-upfront has no azure equivalent")
+	mockHTTP.AssertNotCalled(t, "Do", mock.Anything)
+}
+
 // TestComputeClient_ConvertAzureVMRecommendation_NilGuards pins the new
 // contract: unusable SDK payloads (nil, wrong concrete type, nil Properties)
 // produce a nil *Recommendation so the caller can filter it out. Before
@@ -1004,9 +1029,14 @@ func TestFetchAzurePricing_WrapperSmokeTest(t *testing.T) {
 // "upfront"/"monthly" or the CLI/MCP's "all-upfront"/"no-upfront"). An empty
 // or unrecognized value (including "partial-upfront", which Azure cannot
 // express) must fail loud rather than silently defaulting to Upfront
-// (feedback_no_silent_fallbacks) -- before this fix, buildReservationBody
-// never set billingPlan at all, so every purchase silently defaulted to
-// Azure's Upfront behavior regardless of what the caller requested.
+// (feedback_no_silent_fallbacks).
+//
+// buildReservationBody itself no longer resolves the billing plan: the
+// caller (PurchaseCommitment) validates rec.PaymentOption via
+// reservations.BillingPlanForPaymentOption before any side-effecting call
+// (Microsoft.Capacity provider registration) and threads the result in, so
+// this test mirrors that same call order rather than duplicating validation
+// inside buildReservationBody.
 func TestBuildReservationBody_BillingPlan(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -1024,17 +1054,18 @@ func TestBuildReservationBody_BillingPlan(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c := &ComputeClient{region: "eastus", subscriptionID: "sub-abc"}
-			rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Count: 1, Term: "1yr", PaymentOption: tc.paymentOption}
-
-			body, err := c.buildReservationBody(rec, common.PurchaseSourceWeb, "")
-
+			billingPlan, err := reservations.BillingPlanForPaymentOption(tc.paymentOption)
 			if tc.wantErrSub != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tc.wantErrSub)
-				assert.Nil(t, body)
 				return
 			}
+			require.NoError(t, err)
+
+			c := &ComputeClient{region: "eastus", subscriptionID: "sub-abc"}
+			rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Count: 1, Term: "1yr", PaymentOption: tc.paymentOption}
+
+			body, err := c.buildReservationBody(rec, billingPlan, common.PurchaseSourceWeb, "")
 			require.NoError(t, err)
 			var got map[string]interface{}
 			require.NoError(t, json.Unmarshal(body, &got))
@@ -1048,8 +1079,10 @@ func TestBuildReservationBody_BillingPlan(t *testing.T) {
 func TestBuildReservationBody_IncludesPurchaseAutomationTag(t *testing.T) {
 	c := &ComputeClient{region: "eastus", subscriptionID: "sub-abc"}
 	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Count: 1, Term: "1yr", PaymentOption: "no-upfront"}
+	billingPlan, err := reservations.BillingPlanForPaymentOption(rec.PaymentOption)
+	require.NoError(t, err)
 
-	body, err := c.buildReservationBody(rec, common.PurchaseSourceWeb, "")
+	body, err := c.buildReservationBody(rec, billingPlan, common.PurchaseSourceWeb, "")
 	require.NoError(t, err)
 
 	var got map[string]interface{}
@@ -1062,8 +1095,10 @@ func TestBuildReservationBody_IncludesPurchaseAutomationTag(t *testing.T) {
 func TestBuildReservationBody_OmitsTagsWhenSourceAndTokenEmpty(t *testing.T) {
 	c := &ComputeClient{region: "eastus", subscriptionID: "sub-abc"}
 	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Count: 1, Term: "1yr", PaymentOption: "no-upfront"}
+	billingPlan, err := reservations.BillingPlanForPaymentOption(rec.PaymentOption)
+	require.NoError(t, err)
 
-	body, err := c.buildReservationBody(rec, "", "")
+	body, err := c.buildReservationBody(rec, billingPlan, "", "")
 	require.NoError(t, err)
 
 	var got map[string]interface{}
@@ -1081,8 +1116,10 @@ func TestBuildReservationBody_IncludesIdempotencyTokenTag(t *testing.T) {
 	c := &ComputeClient{region: "eastus", subscriptionID: "sub-abc"}
 	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Count: 1, Term: "1yr", PaymentOption: "no-upfront"}
 	token := common.DeriveIdempotencyToken("exec-721-compute", 0)
+	billingPlan, err := reservations.BillingPlanForPaymentOption(rec.PaymentOption)
+	require.NoError(t, err)
 
-	body, err := c.buildReservationBody(rec, common.PurchaseSourceWeb, token)
+	body, err := c.buildReservationBody(rec, billingPlan, common.PurchaseSourceWeb, token)
 	require.NoError(t, err)
 
 	var got map[string]interface{}
