@@ -134,17 +134,17 @@ func (t *simpleAWSRIPurchaseTool) Register(s *mcp.Server) error {
 }
 
 func (t *simpleAWSRIPurchaseTool) handle(ctx context.Context, _ *mcp.CallToolRequest, args simpleAWSRIPurchaseArgs) (*mcp.CallToolResult, PurchaseResponse, error) {
-	rec, dryRun, confirm, err := t.recommendationFromArgs(args)
+	rec, region, dryRun, confirm, err := t.recommendationFromArgs(args)
 	if err != nil {
 		return nil, PurchaseResponse{}, err
 	}
 
 	resp, err := ExecutePurchase(ctx, PurchaseRequest{
-		Region:         args.Region,
+		Region:         region,
 		Recommendation: rec,
 		DryRun:         dryRun,
 		Confirm:        confirm,
-		ResolveClient:  t.resolveClient(args),
+		ResolveClient:  t.resolveClient(args, region),
 		Nonce:          args.IdempotencyNonce,
 	})
 	if err != nil {
@@ -153,30 +153,35 @@ func (t *simpleAWSRIPurchaseTool) handle(ctx context.Context, _ *mcp.CallToolReq
 	return nil, *resp, nil
 }
 
-func (t *simpleAWSRIPurchaseTool) recommendationFromArgs(args simpleAWSRIPurchaseArgs) (rec common.Recommendation, dryRun, confirm bool, err error) {
-	if fieldErr := requireNonBlank("region", args.Region); fieldErr != nil {
-		return common.Recommendation{}, false, false, fieldErr
+// recommendationFromArgs validates args and builds the common.Recommendation
+// to purchase, the effective region (trimmed of any surrounding whitespace),
+// and the effective dry_run/confirm booleans.
+func (t *simpleAWSRIPurchaseTool) recommendationFromArgs(args simpleAWSRIPurchaseArgs) (rec common.Recommendation, region string, dryRun, confirm bool, err error) {
+	region, err = requireNonBlank("region", args.Region)
+	if err != nil {
+		return common.Recommendation{}, "", false, false, err
 	}
-	if fieldErr := requireNonBlank("resource_type", args.ResourceType); fieldErr != nil {
-		return common.Recommendation{}, false, false, fieldErr
+	resourceType, err := requireNonBlank("resource_type", args.ResourceType)
+	if err != nil {
+		return common.Recommendation{}, "", false, false, err
 	}
 	if args.Count <= 0 {
-		return common.Recommendation{}, false, false, fmt.Errorf("count must be > 0, got %d", args.Count)
+		return common.Recommendation{}, "", false, false, fmt.Errorf("count must be > 0, got %d", args.Count)
 	}
 	term, err := ValidateTermYears(args.TermYears)
 	if err != nil {
-		return common.Recommendation{}, false, false, err
+		return common.Recommendation{}, "", false, false, err
 	}
 	paymentOption, err := ValidatePaymentOption(args.PaymentOption)
 	if err != nil {
-		return common.Recommendation{}, false, false, err
+		return common.Recommendation{}, "", false, false, err
 	}
 
 	rec = common.Recommendation{
 		Provider:       common.ProviderAWS,
 		Service:        t.spec.service,
-		Region:         args.Region,
-		ResourceType:   args.ResourceType,
+		Region:         region,
+		ResourceType:   resourceType,
 		Count:          args.Count,
 		CommitmentType: common.CommitmentReservedInstance,
 		Term:           term.RecommendationTerm(),
@@ -190,16 +195,21 @@ func (t *simpleAWSRIPurchaseTool) recommendationFromArgs(args simpleAWSRIPurchas
 	if args.Confirm != nil {
 		confirm = *args.Confirm
 	}
-	return rec, dryRun, confirm, nil
+	return rec, region, dryRun, confirm, nil
 }
 
-func (t *simpleAWSRIPurchaseTool) resolveClient(args simpleAWSRIPurchaseArgs) ResolveClientFunc {
+// resolveClient returns the ResolveClientFunc that ExecutePurchase invokes
+// only for a real purchase. region is the effective, already-validated-and-
+// trimmed region returned by recommendationFromArgs -- not args.Region --
+// so a real purchase never resolves the provider/service client against a
+// raw, un-trimmed value.
+func (t *simpleAWSRIPurchaseTool) resolveClient(args simpleAWSRIPurchaseArgs, region string) ResolveClientFunc {
 	return func(ctx context.Context) (provider.ServiceClient, error) {
-		cfg := &provider.ProviderConfig{Name: string(common.ProviderAWS), AWSProfile: args.AWSProfile, Region: args.Region}
+		cfg := &provider.ProviderConfig{Name: string(common.ProviderAWS), AWSProfile: args.AWSProfile, Region: region}
 		prov, err := t.createProvider(string(common.ProviderAWS), cfg)
 		if err != nil {
 			return nil, err
 		}
-		return prov.GetServiceClient(ctx, t.spec.service, args.Region)
+		return prov.GetServiceClient(ctx, t.spec.service, region)
 	}
 }

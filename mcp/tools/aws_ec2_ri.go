@@ -85,17 +85,17 @@ func (t *awsEC2RIPurchaseTool) Register(s *mcp.Server) error {
 }
 
 func (t *awsEC2RIPurchaseTool) handle(ctx context.Context, _ *mcp.CallToolRequest, args ec2RIPurchaseArgs) (*mcp.CallToolResult, PurchaseResponse, error) {
-	rec, dryRun, confirm, err := ec2RecommendationFromArgs(args)
+	rec, region, dryRun, confirm, err := ec2RecommendationFromArgs(args)
 	if err != nil {
 		return nil, PurchaseResponse{}, err
 	}
 
 	resp, err := ExecutePurchase(ctx, PurchaseRequest{
-		Region:         args.Region,
+		Region:         region,
 		Recommendation: rec,
 		DryRun:         dryRun,
 		Confirm:        confirm,
-		ResolveClient:  t.resolveClient(args),
+		ResolveClient:  t.resolveClient(args, region),
 		Nonce:          args.IdempotencyNonce,
 	})
 	if err != nil {
@@ -158,42 +158,44 @@ func effectiveDryRunConfirm(args ec2RIPurchaseArgs) (dryRun, confirm bool) {
 }
 
 // ec2RecommendationFromArgs validates every field of args and builds the
-// common.Recommendation to purchase, plus the effective dry_run/confirm
-// booleans.
-func ec2RecommendationFromArgs(args ec2RIPurchaseArgs) (rec common.Recommendation, dryRun, confirm bool, err error) {
-	if fieldErr := requireNonBlank("region", args.Region); fieldErr != nil {
-		return common.Recommendation{}, false, false, fieldErr
+// common.Recommendation to purchase, the effective region (trimmed of any
+// surrounding whitespace), and the effective dry_run/confirm booleans.
+func ec2RecommendationFromArgs(args ec2RIPurchaseArgs) (rec common.Recommendation, region string, dryRun, confirm bool, err error) {
+	region, err = requireNonBlank("region", args.Region)
+	if err != nil {
+		return common.Recommendation{}, "", false, false, err
 	}
-	if fieldErr := requireNonBlank("instance_type", args.InstanceType); fieldErr != nil {
-		return common.Recommendation{}, false, false, fieldErr
+	instanceType, err := requireNonBlank("instance_type", args.InstanceType)
+	if err != nil {
+		return common.Recommendation{}, "", false, false, err
 	}
 	if args.Count <= 0 {
-		return common.Recommendation{}, false, false, fmt.Errorf("count must be > 0, got %d", args.Count)
+		return common.Recommendation{}, "", false, false, fmt.Errorf("count must be > 0, got %d", args.Count)
 	}
 	term, err := ValidateTermYears(args.TermYears)
 	if err != nil {
-		return common.Recommendation{}, false, false, err
+		return common.Recommendation{}, "", false, false, err
 	}
 	paymentOption, err := ValidatePaymentOption(args.PaymentOption)
 	if err != nil {
-		return common.Recommendation{}, false, false, err
+		return common.Recommendation{}, "", false, false, err
 	}
 	dims, err := resolveEC2ComputeDimensions(args)
 	if err != nil {
-		return common.Recommendation{}, false, false, err
+		return common.Recommendation{}, "", false, false, err
 	}
 
 	rec = common.Recommendation{
 		Provider:       common.ProviderAWS,
 		Service:        common.ServiceEC2,
-		Region:         args.Region,
-		ResourceType:   args.InstanceType,
+		Region:         region,
+		ResourceType:   instanceType,
 		Count:          args.Count,
 		CommitmentType: common.CommitmentReservedInstance,
 		Term:           term.RecommendationTerm(),
 		PaymentOption:  string(paymentOption),
 		Details: &common.ComputeDetails{
-			InstanceType: args.InstanceType,
+			InstanceType: instanceType,
 			Platform:     string(dims.platform),
 			Tenancy:      string(dims.tenancy),
 			Scope:        string(dims.scope),
@@ -201,19 +203,22 @@ func ec2RecommendationFromArgs(args ec2RIPurchaseArgs) (rec common.Recommendatio
 	}
 
 	dryRun, confirm = effectiveDryRunConfirm(args)
-	return rec, dryRun, confirm, nil
+	return rec, region, dryRun, confirm, nil
 }
 
 // resolveClient returns the ResolveClientFunc that ExecutePurchase invokes
 // only for a real purchase, so provider/credential resolution is deferred
 // until after the dry_run/confirm gate has already decided to execute.
-func (t *awsEC2RIPurchaseTool) resolveClient(args ec2RIPurchaseArgs) ResolveClientFunc {
+// region is the effective, already-validated-and-trimmed region returned by
+// ec2RecommendationFromArgs -- not args.Region -- so a real purchase never
+// resolves the provider/service client against a raw, un-trimmed value.
+func (t *awsEC2RIPurchaseTool) resolveClient(args ec2RIPurchaseArgs, region string) ResolveClientFunc {
 	return func(ctx context.Context) (provider.ServiceClient, error) {
-		cfg := &provider.ProviderConfig{Name: string(common.ProviderAWS), AWSProfile: args.AWSProfile, Region: args.Region}
+		cfg := &provider.ProviderConfig{Name: string(common.ProviderAWS), AWSProfile: args.AWSProfile, Region: region}
 		prov, err := t.createProvider(string(common.ProviderAWS), cfg)
 		if err != nil {
 			return nil, err
 		}
-		return prov.GetServiceClient(ctx, common.ServiceEC2, args.Region)
+		return prov.GetServiceClient(ctx, common.ServiceEC2, region)
 	}
 }
