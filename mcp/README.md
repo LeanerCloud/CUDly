@@ -85,14 +85,14 @@ Add an entry to your client's MCP server config. For Claude Code, this is `~/.cl
 A typical session searches for a recommendation, previews the purchase, then executes it:
 
 1. **Search**: call `cudly_search_recommendations` with `provider="aws"`, `service="ec2"`, `region="us-east-1"` to see what AWS Cost Explorer currently recommends reserving.
-2. **Preview**: take a result's `region`/`resource_type`/`count` and call `cudly_aws_ec2_ri_purchase` with those values and `term_years`/`payment_option` of your choice. Leave `dry_run` at its default (`true`) -- the response shows the cost/savings figures from the recommendation without contacting AWS or spending anything.
+2. **Preview**: take a result's `region`/`resource_type`/`count` and call `cudly_aws_ec2_ri_purchase` with those values and `term_years`/`payment_option` of your choice. Leave `dry_run` at its default (`true`) -- the response validates your parameters without contacting AWS or spending anything, and reports `cost`/`on_demand_cost`/`estimated_savings`/`savings_percentage` only when a real figure is actually known (omitted otherwise, never a fabricated `0`).
 3. **Execute**: once the preview looks right, call the same tool again with `dry_run=false, confirm=true`. This is the only combination that performs a real purchase; any other combination either previews or returns an explicit refusal error (see [Safety model](#safety-model)).
 
 Every other provider's purchase tool (`cudly_aws_savingsplans_purchase`, `cudly_aws_rds_ri_purchase`, `cudly_azure_compute_ri_purchase`, `cudly_gcp_computeengine_cud_purchase`, ...) follows the identical dry_run-then-confirm pattern. Call `cudly_list_commitment_actions` at any point for the full, always-current list of tools, which ones can spend real money today, and 2-3 example prompts per tool.
 
 ## Safety model
 
-- `dry_run` defaults to `true` on every purchase tool. A dry-run call never contacts the cloud provider and never spends money -- it only validates your parameters and echoes back the cost/savings figures already known from the recommendation.
+- `dry_run` defaults to `true` on every purchase tool. A dry-run call never contacts the cloud provider and never spends money -- it only validates your parameters. It reports pricing (`cost`/`on_demand_cost`/`estimated_savings`/`savings_percentage`) only when a real figure is genuinely known; those fields are omitted, not zeroed, when it isn't.
 - A real purchase requires **both** `dry_run=false` **and** `confirm=true`. `dry_run=false` with `confirm=false` (or vice versa) is refused with a structured error, not silently downgraded to a preview or silently ignored.
 - Every money-affecting parameter (region, resource type, count, term, payment option, and any provider-specific dimension such as RDS's `az_config`) is validated against an explicit enum or non-empty check before anything is built or sent. There is no silent default for a value that materially changes what gets purchased.
 - Every real purchase is tagged with a source identifying it came from this MCP server (never a user-suppliable string) and a deterministic idempotency token derived from the request's own parameters, so retrying an identical tool call after a network error dedupes at the provider instead of buying twice.

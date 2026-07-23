@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -48,21 +49,37 @@ func (f *fakeServiceClient) GetValidResourceTypes(_ context.Context) ([]string, 
 
 var _ provider.ServiceClient = (*fakeServiceClient)(nil)
 
+// testRecommendation mirrors what a real purchase tool's *FromArgs
+// constructor actually builds: none of them populate
+// OnDemandCost/CommitmentCost/EstimatedSavings/SavingsPercentage (they build
+// a fresh Recommendation from the caller's typed args, not from a priced
+// search result), so this fixture leaves those fields at their zero value
+// too. An earlier version of this fixture hand-set those fields, which
+// masked the all-responses-report-0 finding from review -- see
+// TestExecutePurchasePreviewOmitsUnknownCostFields.
 func testRecommendation() common.Recommendation {
 	return common.Recommendation{
-		Provider:          common.ProviderAWS,
-		Account:           "123456789012",
-		Service:           common.ServiceEC2,
-		Region:            "us-east-1",
-		ResourceType:      "m5.large",
-		Count:             3,
-		Term:              "3yr",
-		PaymentOption:     "no-upfront",
-		OnDemandCost:      1000,
-		CommitmentCost:    600,
-		EstimatedSavings:  400,
-		SavingsPercentage: 40,
+		Provider:      common.ProviderAWS,
+		Account:       "123456789012",
+		Service:       common.ServiceEC2,
+		Region:        "us-east-1",
+		ResourceType:  "m5.large",
+		Count:         3,
+		Term:          "3yr",
+		PaymentOption: "no-upfront",
 	}
+}
+
+// testRecommendationWithCost extends testRecommendation with real cost
+// figures, used only to prove ExecutePurchase passes a genuinely-known cost
+// through to the response when one is present.
+func testRecommendationWithCost() common.Recommendation {
+	rec := testRecommendation()
+	rec.OnDemandCost = 1000
+	rec.CommitmentCost = 600
+	rec.EstimatedSavings = 400
+	rec.SavingsPercentage = 40
+	return rec
 }
 
 func TestDecidePurchaseMode(t *testing.T) {
@@ -106,7 +123,7 @@ func TestExecutePurchaseDryRunNeverCallsProvider(t *testing.T) {
 
 	resp, err := ExecutePurchase(context.Background(), PurchaseRequest{
 		Region:         "us-east-1",
-		Recommendation: testRecommendation(),
+		Recommendation: testRecommendationWithCost(),
 		DryRun:         true,
 		Confirm:        true,
 		ResolveClient:  resolve,
@@ -117,10 +134,47 @@ func TestExecutePurchaseDryRunNeverCallsProvider(t *testing.T) {
 	assert.False(t, resolveCalled, "dry_run=true must never resolve a service client")
 	assert.True(t, resp.DryRun)
 	assert.True(t, resp.Success)
-	assert.Equal(t, 600.0, resp.Cost)
-	assert.Equal(t, 1000.0, resp.OnDemandCost)
-	assert.Equal(t, 400.0, resp.EstimatedSavings)
-	assert.Equal(t, 40.0, resp.SavingsPercentage)
+	require.NotNil(t, resp.Cost, "a genuinely-known cost must be passed through, not dropped")
+	assert.Equal(t, 600.0, *resp.Cost)
+	require.NotNil(t, resp.OnDemandCost)
+	assert.Equal(t, 1000.0, *resp.OnDemandCost)
+	require.NotNil(t, resp.EstimatedSavings)
+	assert.Equal(t, 400.0, *resp.EstimatedSavings)
+	require.NotNil(t, resp.SavingsPercentage)
+	assert.Equal(t, 40.0, *resp.SavingsPercentage)
+}
+
+// TestExecutePurchasePreviewOmitsUnknownCostFields proves finding 2 of the
+// adversarial review: a dry-run preview built from a Recommendation that
+// mirrors what real purchase tools actually construct (no cost fields set,
+// since no *FromArgs constructor in this package populates them) must not
+// report cost/on_demand_cost/estimated_savings/savings_percentage as a real
+// 0 -- that would be indistinguishable from a confirmed $0 purchase. The
+// pointer fields must be nil, and therefore omitted from the JSON payload
+// entirely rather than serialized as 0.
+func TestExecutePurchasePreviewOmitsUnknownCostFields(t *testing.T) {
+	t.Parallel()
+	resp, err := ExecutePurchase(context.Background(), PurchaseRequest{
+		Region:         "us-east-1",
+		Recommendation: testRecommendation(),
+		DryRun:         true,
+		Confirm:        false,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+
+	assert.Nil(t, resp.Cost)
+	assert.Nil(t, resp.OnDemandCost)
+	assert.Nil(t, resp.EstimatedSavings)
+	assert.Nil(t, resp.SavingsPercentage)
+
+	raw, err := json.Marshal(resp)
+	require.NoError(t, err)
+	body := string(raw)
+	assert.NotContains(t, body, `"cost"`, "unknown cost must be omitted from the JSON payload, not reported as 0")
+	assert.NotContains(t, body, `"on_demand_cost"`)
+	assert.NotContains(t, body, `"estimated_savings"`)
+	assert.NotContains(t, body, `"savings_percentage"`)
 }
 
 // TestExecutePurchaseUnconfirmedRealPurchaseRefused proves confirm=false
