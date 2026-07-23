@@ -11,13 +11,18 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/provider"
 )
 
+// validAzureComputeArgs uses payment_option=all-upfront, the only schedule
+// Azure Reserved Instances actually honor (see
+// TestAzureComputeRecommendationFromArgsRejectsUnhonoredPaymentOption):
+// azure_compute_ri.go rejects any other value rather than silently
+// purchasing under a mismatched billing schedule.
 func validAzureComputeArgs() azureComputeRIPurchaseArgs {
 	return azureComputeRIPurchaseArgs{
 		Region:        "eastus",
 		VMSize:        "Standard_D2s_v3",
 		Count:         2,
 		TermYears:     3,
-		PaymentOption: "no-upfront",
+		PaymentOption: "all-upfront",
 	}
 }
 
@@ -57,6 +62,38 @@ func TestAzureComputeRecommendationFromArgsInvalid(t *testing.T) {
 			assert.Contains(t, err.Error(), tc.errSub)
 		})
 	}
+}
+
+// TestAzureComputeRecommendationFromArgsRejectsUnhonoredPaymentOption proves
+// finding 3 of the adversarial review: azure_compute_ri.go used to validate
+// payment_option against the shared AWS/Azure/GCP enum and then silently
+// ignore it -- Azure's purchase API has no billing-plan parameter and always
+// bills upfront, so a caller requesting no-upfront or partial-upfront got a
+// real purchase billed upfront, under a payment schedule they never chose.
+// The tool must now reject any payment_option other than all-upfront with
+// an explicit error instead of silently mismatching.
+func TestAzureComputeRecommendationFromArgsRejectsUnhonoredPaymentOption(t *testing.T) {
+	t.Parallel()
+	for _, po := range []string{"no-upfront", "partial-upfront"} {
+		t.Run(po, func(t *testing.T) {
+			args := validAzureComputeArgs()
+			args.PaymentOption = po
+			_, _, _, err := azureComputeRecommendationFromArgs(args)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "all-upfront")
+		})
+	}
+}
+
+// TestAzureComputeRecommendationFromArgsAcceptsAllUpfront proves the one
+// payment_option Azure actually honors still succeeds.
+func TestAzureComputeRecommendationFromArgsAcceptsAllUpfront(t *testing.T) {
+	t.Parallel()
+	args := validAzureComputeArgs()
+	args.PaymentOption = "all-upfront"
+	rec, _, _, err := azureComputeRecommendationFromArgs(args)
+	require.NoError(t, err)
+	assert.Equal(t, "all-upfront", rec.PaymentOption)
 }
 
 func TestAzureComputeRIPurchaseHandleConfirmFalseRefuses(t *testing.T) {

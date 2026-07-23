@@ -12,19 +12,23 @@ import (
 
 const azureComputeRIPurchaseName = "cudly_azure_compute_ri_purchase"
 
-// azureComputeRIPurchaseDescription flags a real, currently-unfixed gap
-// (found while wiring this tool, not introduced by it): Azure's purchase
-// body (providers/azure/services/compute/client.go:buildReservationBody)
-// never sends a billingPlanType, so every purchase uses Azure's default
-// (upfront) billing plan regardless of the payment_option requested here --
-// payment_option only affects the displayed cost estimate, not the actual
-// invoice. Flagged rather than silently fixed (out of scope for this PR).
+// azureComputeRIPurchaseDescription flags a real, pre-existing gap in
+// Azure's purchase API (found while wiring this tool, not introduced by it):
+// Azure's purchase body (providers/azure/services/compute/client.go:
+// buildReservationBody) never sends a billingPlanType, so every purchase
+// uses Azure's default (upfront) billing plan regardless of the
+// payment_option requested here. Rather than silently accepting a
+// payment_option Azure will not actually honor -- and purchasing under a
+// different billing schedule than the caller chose -- this tool requires
+// payment_option=all-upfront and rejects any other value with an explicit
+// error (fail loud, not a silent mismatch; see
+// azureComputeRecommendationFromArgs).
 const azureComputeRIPurchaseDescription = "Purchase an Azure VM Reserved Instance. THIS SPENDS REAL MONEY when " +
 	"dry_run=false and confirm=true. Always call with dry_run=true first (the default) to validate your " +
 	"parameters before committing; a dry_run response never contacts Azure and never spends money. CAVEAT: " +
-	"Azure's purchase API always uses the default (upfront) billing plan today -- payment_option only affects " +
-	"the cost estimate shown here, not the actual invoice; this is a pre-existing gap, not something this tool " +
-	"controls."
+	"Azure Reserved Instances only support all-upfront billing -- Azure's purchase API has no billing-plan " +
+	"parameter and always bills upfront -- so payment_option must be all-upfront; any other value is rejected " +
+	"with an error rather than silently purchased under a schedule Azure will not honor."
 
 // azureComputeRIPurchaseArgs is the input schema for
 // cudly_azure_compute_ri_purchase. Unlike EC2, Azure's purchase body needs no
@@ -35,7 +39,7 @@ type azureComputeRIPurchaseArgs struct {
 	VMSize              string `json:"vm_size" jsonschema:"Azure VM size (SKU), e.g. Standard_D2s_v3"`
 	Count               int    `json:"count" jsonschema:"number of VM instances to reserve, must be > 0"`
 	TermYears           int    `json:"term_years" jsonschema:"commitment length in years"`
-	PaymentOption       string `json:"payment_option" jsonschema:"payment schedule; see the CAVEAT in this tool's description"`
+	PaymentOption       string `json:"payment_option" jsonschema:"payment schedule; Azure only honors all-upfront, see the CAVEAT in this tool's description"`
 	AzureSubscriptionID string `json:"azure_subscription_id,omitempty" jsonschema:"Azure subscription ID override; default uses AZURE_SUBSCRIPTION_ID"`
 	DryRun              *bool  `json:"dry_run,omitempty" jsonschema:"preview only, no purchase; defaults to true"`
 	Confirm             *bool  `json:"confirm,omitempty" jsonschema:"required (with dry_run=false) to execute a real purchase; defaults to false"`
@@ -119,6 +123,18 @@ func azureComputeRecommendationFromArgs(args azureComputeRIPurchaseArgs) (rec co
 	paymentOption, err := ValidatePaymentOption(args.PaymentOption)
 	if err != nil {
 		return common.Recommendation{}, false, false, err
+	}
+	// Azure's purchase API has no billing-plan parameter and always bills
+	// upfront (see the azureComputeRIPurchaseDescription doc comment), so a
+	// payment_option other than all-upfront would be silently purchased
+	// under a schedule the caller never chose. Reject it now instead of
+	// letting a real purchase proceed under a mismatched payment_option.
+	if paymentOption != PaymentOptionAllUpfront {
+		return common.Recommendation{}, false, false, fmt.Errorf(
+			"azure reserved instances only support all-upfront billing (got payment_option=%q): "+
+				"azure's purchase API has no billing-plan parameter and always bills upfront, so any other "+
+				"payment_option would be purchased under a different schedule than requested rather than honored",
+			paymentOption)
 	}
 
 	rec = common.Recommendation{
