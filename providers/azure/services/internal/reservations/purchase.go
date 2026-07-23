@@ -49,6 +49,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations"
+
 	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
@@ -67,6 +69,41 @@ func ParseTermYears(term string) (int, error) {
 		return 3, nil
 	default:
 		return 0, fmt.Errorf("unsupported reservation term: %s", term)
+	}
+}
+
+// BillingPlanForPaymentOption maps a recommendation's payment-option string
+// to the armreservations.ReservationBillingPlan Azure's purchase API expects
+// in properties.billingPlan (confirmed against
+// armreservations.PurchaseRequestProperties.BillingPlan and the two-member
+// enum in constants.go: ReservationBillingPlanUpfront = "Upfront",
+// ReservationBillingPlanMonthly = "Monthly"). Azure reservations support
+// exactly those two billing plans -- there is no partial-upfront -- and
+// Monthly costs the same total as Upfront (no premium for spreading
+// payments), so "no-upfront"/"monthly" is a safe, cost-neutral default at
+// the caller layer.
+//
+// CUDly's own recommendation converter (providers/azure/internal/
+// recommendations/converter.go) emits PaymentOption "upfront"/"monthly";
+// the MCP tool boundary and the CLI --payment flag use "all-upfront"/
+// "no-upfront"/"partial-upfront". Both vocabularies are accepted here so
+// this function is the single mapping point regardless of which caller
+// populated rec.PaymentOption.
+//
+// An empty or unrecognized value (including "partial-upfront", which Azure
+// cannot express at all) is a hard error rather than a silent default: the
+// default belongs at the caller (CLI/MCP) layer, never silently applied on
+// this money-affecting path (feedback_no_silent_fallbacks).
+func BillingPlanForPaymentOption(paymentOption string) (armreservations.ReservationBillingPlan, error) {
+	switch strings.ToLower(strings.TrimSpace(paymentOption)) {
+	case "all-upfront", "upfront":
+		return armreservations.ReservationBillingPlanUpfront, nil
+	case "no-upfront", "monthly":
+		return armreservations.ReservationBillingPlanMonthly, nil
+	default:
+		return "", fmt.Errorf(
+			"azure reservations support only upfront or monthly billing; %q is not available (partial-upfront has no azure equivalent)",
+			paymentOption)
 	}
 }
 

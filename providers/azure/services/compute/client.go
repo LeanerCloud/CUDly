@@ -416,12 +416,17 @@ func (c *ComputeClient) buildReservationBody(rec common.Recommendation, source, 
 	if err != nil {
 		return nil, err
 	}
+	billingPlan, err := reservations.BillingPlanForPaymentOption(rec.PaymentOption)
+	if err != nil {
+		return nil, err
+	}
 	requestBody := map[string]interface{}{
 		"sku":      map[string]string{"name": rec.ResourceType},
 		"location": c.region,
 		"properties": map[string]interface{}{
 			"reservedResourceType": string(armreservations.ReservedResourceTypeVirtualMachines),
 			"billingScopeId":       fmt.Sprintf("/subscriptions/%s", c.subscriptionID),
+			"billingPlan":          string(billingPlan),
 			"term":                 fmt.Sprintf("P%dY", termYears),
 			"quantity":             rec.Count,
 			"displayName": reservations.BuildDisplayName(reservations.DisplayNameFields{
