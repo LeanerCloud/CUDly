@@ -39,6 +39,7 @@ type MockConfigStore struct {
 	CountPendingExecutionsForAccountFn  func(ctx context.Context, accountID string) (int, error)
 	ListPendingExecutionIDsForAccountFn func(ctx context.Context, accountID string) ([]string, error)
 	SavePurchaseExecutionFn             func(ctx context.Context, exec *config.PurchaseExecution) error
+	GetUserEmailByIDFn                  func(ctx context.Context, userID string) (string, error)
 	mock.Mock
 }
 
@@ -296,6 +297,21 @@ func (m *MockConfigStore) GetExecutionByPlanAndDate(ctx context.Context, planID 
 		panic(fmt.Sprintf("mock: expected *config.PurchaseExecution, got %T", args.Get(0)))
 	}
 	return v, args.Error(1)
+}
+
+// GetUserEmailByID mocks the GetUserEmailByID operation. Defaults to ("", nil)
+// when no Fn is set and no expectation is registered, so tests that never
+// exercise the 4-eyes identity-resolution path (mode off, the default) don't
+// need to stub this method.
+func (m *MockConfigStore) GetUserEmailByID(ctx context.Context, userID string) (string, error) {
+	if m.GetUserEmailByIDFn != nil {
+		return m.GetUserEmailByIDFn(ctx, userID)
+	}
+	if !isExpected(&m.Mock, "GetUserEmailByID") {
+		return "", nil
+	}
+	args := m.Called(ctx, userID)
+	return args.String(0), args.Error(1)
 }
 
 // CountPendingExecutionsForAccount mocks the CountPendingExecutionsForAccount operation.

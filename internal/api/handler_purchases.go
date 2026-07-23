@@ -713,7 +713,7 @@ func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.Lam
 		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), session.Email, actor)
 	}
 
-	if err := h.purchase.ApproveAndExecute(ctx, execution.ExecutionID, session.Email, actor); err != nil {
+	if err := h.purchase.ApproveAndExecute(ctx, execution.ExecutionID, fourEyesActorIdentity(session), actor); err != nil {
 		// ApproveAndExecute returns either a transition error (the row
 		// drifted out of pending/notified between our check and the UPDATE
 		// -- race with cancel/expire) or an execution error (AWS API failed,
@@ -2282,6 +2282,28 @@ func resolveCreatorUserID(session *Session) *string {
 	return &uid
 }
 
+// fourEyesActorIdentity returns the identity string passed as the actor to
+// purchase.Manager.ApproveAndExecute for the 4-eyes dual-control comparison
+// (issue #1005 / PR #1500 adversarial review). Real human sessions always
+// carry a non-empty Email. The stateless admin API key session
+// (apiKeyAdminUserID sentinel) does not — falling back to session.Email alone
+// there would make the manager's enforceFourEyesPolicy treat every API-key-
+// driven approve/direct-execute as "actor identity unknown" and fail closed,
+// even when the row was created by a different real user (a legitimate,
+// non-self-approval case the RBAC layer already permits via the
+// apiKeyAdminUserID short-circuit in authorizeSessionApprove /
+// authorizeSessionExecuteDirect). Falling back to the sentinel itself is
+// safe: it is never a valid email, so it can never collide with a real
+// user's resolved email in the 4-eyes comparison, and a row CREATED via the
+// API key (CreatedByUserID stays nil per resolveCreatorUserID above) is
+// still denied through the existing NULL-creator fail-closed branch.
+func fourEyesActorIdentity(session *Session) string {
+	if session.Email != "" {
+		return session.Email
+	}
+	return session.UserID
+}
+
 // executePurchase handles direct purchase execution from recommendations
 // matchDuplicateInList scans a slice of pending executions for one that
 // matches creatorID + idempotencyKey within the idempotency window.
@@ -2623,7 +2645,7 @@ func (h *Handler) directExecutePurchase(ctx context.Context, req *events.LambdaF
 	// Human session direct-execute: stamp the session user's UUID onto
 	// transitioned_by (FK-safe via validUUIDPtrOrNil) so the audit trail
 	// records who flipped the row to "approved".
-	if err := h.purchase.ApproveAndExecute(ctx, executionID, session.Email, validUUIDPtrOrNil(&session.UserID)); err != nil {
+	if err := h.purchase.ApproveAndExecute(ctx, executionID, fourEyesActorIdentity(session), validUUIDPtrOrNil(&session.UserID)); err != nil {
 		logging.Errorf("purchase[%s]: directExecutePurchase failed after %s: %v",
 			executionID, time.Since(t0), err)
 		return nil, NewClientError(409, fmt.Sprintf("execution %s could not be direct-executed: %v", executionID, err))

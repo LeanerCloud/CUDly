@@ -93,6 +93,10 @@ func (m *mockConfigStoreForHealth) GetExecutionByPlanAndDate(ctx context.Context
 	return nil, nil
 }
 
+func (m *mockConfigStoreForHealth) GetUserEmailByID(ctx context.Context, userID string) (string, error) {
+	return "", nil
+}
+
 func (m *mockConfigStoreForHealth) SavePurchaseHistory(ctx context.Context, record *config.PurchaseHistoryRecord) error {
 	return nil
 }

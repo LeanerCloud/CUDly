@@ -73,6 +73,16 @@ type StoreInterface interface {
 	// never returns (nil, nil). A nil error guarantees a non-nil execution.
 	GetExecutionByID(ctx context.Context, executionID string) (*PurchaseExecution, error)
 	GetExecutionByPlanAndDate(ctx context.Context, planID string, scheduledDate time.Time) (*PurchaseExecution, error)
+	// GetUserEmailByID resolves the email address of the auth user identified
+	// by userID (the `users` table, owned by internal/auth). Read-only helper
+	// used by the 4-eyes approval policy (issue #1005) to compare the acting
+	// approver's identity against a PurchaseExecution.CreatedByUserID without
+	// internal/purchase importing internal/auth (which would create an import
+	// cycle: internal/auth already imports internal/config). Returns ("", nil)
+	// when no user matches userID — the caller treats an empty result as
+	// "identity unresolved" and fails closed, never as "email intentionally
+	// blank".
+	GetUserEmailByID(ctx context.Context, userID string) (string, error)
 	// CountPendingExecutionsForAccount returns the number of purchase_executions
 	// in status 'pending' or 'notified' that reference the given cloud account.
 	// Used by the deleteAccount handler to preflight DB-level FK violations

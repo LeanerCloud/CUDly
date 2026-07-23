@@ -10,6 +10,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/internal/purchase"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -4009,6 +4010,117 @@ func TestHandler_executePurchase_DirectExec_ExecuteOwn_Owner(t *testing.T) {
 	assert.Equal(t, true, resultMap["direct_execute"])
 }
 
+// TestHandler_executePurchase_DirectExec_FourEyesOn_DeniesSelfExecute is the
+// true end-to-end regression test for the HIGH finding on PR #1500's
+// adversarial review: execute_mode="direct" bypassed 4-eyes mode entirely
+// because directExecutePurchase -> purchase.Manager.ApproveAndExecute never
+// consulted RequireDifferentApprover, and by construction the creator IS the
+// direct-executor on this path (see the doc comment on
+// TestHandler_executePurchase_DirectExec_ExecuteOwn_NonOwner below), so this
+// was unconditional self-authorization for anyone holding execute-own or
+// execute-any.
+//
+// Unlike the other DirectExec tests above (which stub out purchase.Manager
+// entirely via MockPurchaseManager and so never exercise the actual gate),
+// this test wires a REAL *purchase.Manager backed by the same MockConfigStore
+// the Handler uses, so the manager-layer 4-eyes check added in
+// ApproveAndExecute is genuinely exercised through the full HTTP dispatch
+// path. Confirmed to fail (proceed to a real TransitionExecutionStatus call
+// with the pre-fix code) and pass after the fix.
+func TestHandler_executePurchase_DirectExec_FourEyesOn_DeniesSelfExecute(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	ownerID := "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	ownerSession := &Session{UserID: ownerID, Email: "owner@example.com"}
+	mockAuth.On("ValidateSession", ctx, "owner-token").Return(ownerSession, nil)
+	mockAuth.On("HasPermissionAPI", ctx, ownerID, "execute", "purchases").Return(true, nil)
+	mockAuth.allowConstraintChecks()
+	mockAuth.On("HasPermissionAPI", ctx, ownerID, "execute-any", "purchases").Return(false, nil)
+	mockAuth.On("HasPermissionAPI", ctx, ownerID, "execute-own", "purchases").Return(true, nil)
+	mockAuth.On("GetAllowedAccountsAPI", ctx, ownerID).Return([]string{}, nil)
+
+	// Same store stubs as setupDirectExecMocks, except GetGlobalConfig
+	// returns 4-eyes mode ON instead of the {} default.
+	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
+	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
+	// enforceFourEyesPolicy re-loads the (freshly-created, randomly-ID'd)
+	// execution to read CreatedByUserID; the real one always carries the
+	// direct-executor's own UUID (see comment above), which is what makes
+	// this an unconditional self-approval case pre-fix. transitionedBy
+	// carries that same UUID, so the manager's tier-1 UUID comparison denies
+	// this without ever calling GetUserEmailByID.
+	mockStore.On("GetExecutionByID", ctx, mock.AnythingOfType("string")).Return(
+		&config.PurchaseExecution{CreatedByUserID: &ownerID}, nil)
+
+	realManager := purchase.NewManager(purchase.ManagerConfig{ConfigStore: mockStore})
+	handler := &Handler{config: mockStore, auth: mockAuth, purchase: realManager}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer owner-token"},
+		Body:    directExecRecBody,
+	}
+	_, err := handler.executePurchase(ctx, req)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a clientError")
+	assert.Equal(t, 409, ce.code)
+	assert.Contains(t, ce.Error(), "4-eyes mode requires a different approver")
+	mockStore.AssertNotCalled(t, "TransitionExecutionStatus",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockStore.AssertNotCalled(t, "GetUserEmailByID", mock.Anything, mock.Anything)
+}
+
+// TestHandler_executePurchase_DirectExec_FourEyesOn_PerUserAPIKey_DeniesSelfExecute
+// is the true end-to-end regression test for the HIGH gap an independent
+// adversarial review found in an earlier version of this fix: a per-user API
+// key session (Session.UserAPIKeyID != "") carries a real user UUID as
+// Session.UserID but an EMPTY Session.Email -- unlike the normal bearer-
+// token session TestHandler_executePurchase_DirectExec_FourEyesOn_DeniesSelfExecute
+// above uses. fourEyesActorIdentity's fallback to session.UserID for that
+// empty Email produces a UUID-shaped string that a naive email-only 4-eyes
+// comparison could never match against the creator's real resolved email,
+// silently allowing self-direct-execute under 4-eyes mode. This drives the
+// same direct-execute call directly (bypassing the outer RBAC/request
+// plumbing already covered by the sibling DirectExec tests) with exactly
+// that session shape, proving the manager's UUID-first comparison tier
+// still denies it.
+func TestHandler_executePurchase_DirectExec_FourEyesOn_PerUserAPIKey_DeniesSelfExecute(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	ownerID := "33333333-3333-3333-3333-333333333333"
+	// Per-user API key session: a real user UUID, but Email is empty (unlike
+	// a normal bearer-token session) and UserAPIKeyID is set.
+	ownerSession := &Session{UserID: ownerID, Email: "", UserAPIKeyID: "key-1"}
+
+	mockStore.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
+	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+
+	execution := &config.PurchaseExecution{
+		ExecutionID:     "exec-apikey-direct",
+		Status:          "pending",
+		CreatedByUserID: &ownerID, // stamped from the same session that direct-executes
+	}
+	mockStore.On("GetExecutionByID", ctx, "exec-apikey-direct").Return(execution, nil)
+
+	realManager := purchase.NewManager(purchase.ManagerConfig{ConfigStore: mockStore})
+	handler := &Handler{config: mockStore, purchase: realManager}
+	_, err := handler.directExecutePurchase(ctx, &events.LambdaFunctionURLRequest{}, execution, ownerSession)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a clientError")
+	assert.Equal(t, 409, ce.code)
+	assert.Contains(t, ce.Error(), "4-eyes mode requires a different approver")
+	mockStore.AssertNotCalled(t, "TransitionExecutionStatus",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockStore.AssertNotCalled(t, "GetUserEmailByID", mock.Anything, mock.Anything)
+}
+
 // TestHandler_executePurchase_DirectExec_ExecuteOwn_NonOwner verifies the
 // execute-own ownership gate: a session with execute-own:purchases but a
 // different UserID than the execution creator receives a 403.
@@ -5465,4 +5577,129 @@ func TestRequireDifferentApprover_EmailTokenPath_ModeOn(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 403, ce.code)
 	assert.Contains(t, ce.Error(), "4-eyes mode")
+}
+
+// TestHandler_approvePurchaseViaSession_FourEyesOn_DeniesSelfApprove is the
+// end-to-end regression test for approve path (a): a session holding
+// approve-any (e.g. an admin) that also created the execution must be denied
+// under 4-eyes mode. This is the pre-existing protection named in PR #1500 --
+// requireDifferentApprover was already wired into approvePurchaseViaSession --
+// but it had never been exercised end-to-end via the real dispatch (only the
+// helper itself was unit-tested, per TestRequireDifferentApprover_ModeOn_*
+// above). This test locks the handler-level denial in place as a continuity
+// guard alongside the new manager-layer gate: mockPurchase asserts
+// ApproveAndExecute is never reached, so the manager gate added for the (b)/
+// (c) bypasses is exercised as pure defense-in-depth here, not the primary
+// control.
+func TestHandler_approvePurchaseViaSession_FourEyesOn_DeniesSelfApprove(t *testing.T) {
+	ctx := context.Background()
+	execID := "cccccccc-cccc-cccc-cccc-ccccccccccc1"
+	adminID := "admin-uuid"
+	adminEmail := "admin@example.com"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:     execID,
+		ApprovalToken:   "valid-token",
+		Status:          "pending",
+		CreatedByUserID: &adminID,
+		Recommendations: []config.RecommendationRecord{{ID: "r1"}},
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{UserID: adminID, Email: adminEmail}, nil)
+	mockAuth.grantAdmin()
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
+
+	mockPurchase := new(MockPurchaseManager)
+	// The 4-eyes denial must happen before the manager is ever consulted.
+
+	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	_, err := handler.approvePurchase(ctx, req, execID, "")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.Error(), "4-eyes mode")
+	mockPurchase.AssertNotCalled(t, "ApproveAndExecute",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestHandler_approvePurchaseViaSession_FourEyesOn_DifferentApproverSucceeds
+// is the positive control for path (a): a different (non-creator) approver
+// must still succeed end to end, through BOTH the handler-level
+// requireDifferentApprover gate AND the new manager-layer enforceFourEyesPolicy
+// gate -- proving the fix does not over-broaden into blocking legitimate
+// dual-control approvals. Uses a REAL *purchase.Manager (not
+// MockPurchaseManager) so the manager gate is genuinely exercised.
+func TestHandler_approvePurchaseViaSession_FourEyesOn_DifferentApproverSucceeds(t *testing.T) {
+	ctx := context.Background()
+	execID := "cccccccc-cccc-cccc-cccc-ccccccccccc2"
+	creatorID := "11111111-1111-1111-1111-111111111111"
+	approverID := "22222222-2222-2222-2222-222222222222"
+	approverEmail := "approver@example.com"
+	planID := "plan-fourEyes-session"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:     execID,
+		PlanID:          planID,
+		ApprovalToken:   "valid-token",
+		Status:          "pending",
+		CreatedByUserID: &creatorID,
+	}
+	approved := &config.PurchaseExecution{ExecutionID: execID, PlanID: planID, Status: "approved"}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
+	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "approved", &approverID).Return(approved, nil)
+	plan := &config.PurchasePlan{ID: planID, Name: "test-plan"}
+	mockConfig.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
+	mockConfig.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	mockConfig.On("IncrementPlanCurrentStep", ctx, planID).Return(nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{UserID: approverID, Email: approverEmail}, nil)
+	mockAuth.grantAdmin()
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
+
+	realManager := purchase.NewManager(purchase.ManagerConfig{ConfigStore: mockConfig, EmailSender: &stubEmailNotifier{}})
+	handler := &Handler{purchase: realManager, config: mockConfig, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	result, err := handler.approvePurchase(ctx, req, execID, "")
+	require.NoError(t, err)
+	resultMap := result.(map[string]string)
+	assert.Equal(t, "completed", resultMap["status"])
+	// Session-based callers pass their own UUID as transitionedBy, so the
+	// manager's 4-eyes check compares UUIDs directly (tier 1) and must never
+	// need to resolve either identity's email.
+	mockConfig.AssertNotCalled(t, "GetUserEmailByID", mock.Anything, mock.Anything)
+}
+
+// TestFourEyesActorIdentity is a regression guard discovered during review of
+// the manager-layer 4-eyes fix: the stateless admin API key session
+// (apiKeyAdminUserID sentinel) always carries an empty Session.Email. Passing
+// session.Email directly as the 4-eyes actor identity would make
+// enforceFourEyesPolicy treat every API-key-driven approve/direct-execute as
+// "actor identity unknown" and deny it, even for a legitimate different-
+// approver case the RBAC layer already permits (authorizeSessionApprove /
+// authorizeSessionExecuteDirect short-circuit on apiKeyAdminUserID).
+// fourEyesActorIdentity must fall back to session.UserID (the sentinel
+// string) so the 4-eyes comparison has a non-empty, never-a-real-email
+// identity to compare instead.
+func TestFourEyesActorIdentity(t *testing.T) {
+	t.Run("real user session returns Email unchanged", func(t *testing.T) {
+		session := &Session{UserID: "real-uuid", Email: "user@example.com"}
+		assert.Equal(t, "user@example.com", fourEyesActorIdentity(session))
+	})
+	t.Run("API key sentinel session falls back to UserID", func(t *testing.T) {
+		session := &Session{UserID: apiKeyAdminUserID, Email: ""}
+		assert.Equal(t, apiKeyAdminUserID, fourEyesActorIdentity(session))
+	})
 }

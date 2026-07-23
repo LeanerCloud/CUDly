@@ -1422,6 +1422,26 @@ func (s *PostgresStore) GetExecutionByPlanAndDate(ctx context.Context, planID st
 	return &executions[0], nil
 }
 
+// GetUserEmailByID resolves the email address of the auth user identified by
+// userID. The `users` table belongs to internal/auth's schema, but internal/
+// auth already imports internal/config (service_mfa.go), so internal/config
+// cannot import internal/auth back without a cycle. This method queries the
+// shared database directly by table/column name instead, returning a plain
+// string so no auth.User type crosses the package boundary. Returns ("", nil)
+// when userID does not resolve to a row -- callers must treat that as
+// "identity unresolved," not as a legitimately blank email.
+func (s *PostgresStore) GetUserEmailByID(ctx context.Context, userID string) (string, error) {
+	var email string
+	err := s.db.QueryRow(ctx, `SELECT email FROM users WHERE id = $1`, userID).Scan(&email)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to get user email: %w", err)
+	}
+	return email, nil
+}
+
 // CountPendingExecutionsForAccount returns the number of pending/notified
 // purchase executions still referencing this cloud account. The deleteAccount
 // handler calls this before issuing DELETE FROM cloud_accounts so it can
