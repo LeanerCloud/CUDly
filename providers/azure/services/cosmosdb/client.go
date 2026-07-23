@@ -297,6 +297,11 @@ func (c *CosmosDBClient) PurchaseCommitment(ctx context.Context, rec common.Reco
 		result.Error = termErr
 		return result, result.Error
 	}
+	billingPlan, billingPlanErr := reservations.BillingPlanForPaymentOption(rec.PaymentOption)
+	if billingPlanErr != nil {
+		result.Error = billingPlanErr
+		return result, result.Error
+	}
 
 	requestBody := map[string]interface{}{
 		"sku": map[string]string{
@@ -306,6 +311,7 @@ func (c *CosmosDBClient) PurchaseCommitment(ctx context.Context, rec common.Reco
 		"properties": map[string]interface{}{
 			"reservedResourceType": string(armreservations.ReservedResourceTypeCosmosDb),
 			"billingScopeId":       fmt.Sprintf("/subscriptions/%s", c.subscriptionID),
+			"billingPlan":          string(billingPlan),
 			"term":                 fmt.Sprintf("P%dY", termYears),
 			"quantity":             rec.Count,
 			"displayName": reservations.BuildDisplayName(reservations.DisplayNameFields{
