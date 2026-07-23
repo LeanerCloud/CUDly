@@ -633,6 +633,7 @@ func TestComputeClient_PurchaseCommitment_Success(t *testing.T) {
 		Term:           "1yr",
 		Count:          1,
 		CommitmentCost: 2000.0,
+		PaymentOption:  "no-upfront",
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -662,6 +663,7 @@ func TestComputeClient_PurchaseCommitment_3YearTerm(t *testing.T) {
 		Term:           "3yr",
 		Count:          1,
 		CommitmentCost: 5000.0,
+		PaymentOption:  "all-upfront",
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -690,6 +692,7 @@ func TestComputeClient_PurchaseCommitment_Accepted(t *testing.T) {
 		Term:           "1yr",
 		Count:          1,
 		CommitmentCost: 2000.0,
+		PaymentOption:  "no-upfront",
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -705,9 +708,10 @@ func TestComputeClient_PurchaseCommitment_TokenError(t *testing.T) {
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
 	rec := common.Recommendation{
-		ResourceType: "Standard_D2s_v3",
-		Term:         "1yr",
-		Count:        1,
+		ResourceType:  "Standard_D2s_v3",
+		Term:          "1yr",
+		Count:         1,
+		PaymentOption: "no-upfront",
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -729,9 +733,10 @@ func TestComputeClient_PurchaseCommitment_HTTPError(t *testing.T) {
 	})).Return(nil, errors.New("network error")).Once()
 
 	rec := common.Recommendation{
-		ResourceType: "Standard_D2s_v3",
-		Term:         "1yr",
-		Count:        1,
+		ResourceType:  "Standard_D2s_v3",
+		Term:          "1yr",
+		Count:         1,
+		PaymentOption: "no-upfront",
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -759,9 +764,10 @@ func TestComputeClient_PurchaseCommitment_BadStatus(t *testing.T) {
 	).Once()
 
 	rec := common.Recommendation{
-		ResourceType: "Standard_D2s_v3",
-		Term:         "1yr",
-		Count:        1,
+		ResourceType:  "Standard_D2s_v3",
+		Term:          "1yr",
+		Count:         1,
+		PaymentOption: "no-upfront",
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -800,6 +806,7 @@ func TestComputeClient_PurchaseCommitment_TwoStepFlow(t *testing.T) {
 		Term:           "1yr",
 		Count:          1,
 		CommitmentCost: 500.0,
+		PaymentOption:  "all-upfront",
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -842,7 +849,7 @@ func TestComputeClient_PurchaseCommitment_SessionTimeoutRetry(t *testing.T) {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/order-second/purchase"
 	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
 
-	rec := common.Recommendation{ResourceType: "Standard_B2ats_v2", Term: "1yr", Count: 1}
+	rec := common.Recommendation{ResourceType: "Standard_B2ats_v2", Term: "1yr", Count: 1, PaymentOption: "no-upfront"}
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
@@ -881,7 +888,7 @@ func TestComputeClient_PurchaseCommitment_TagInjection(t *testing.T) {
 			r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase"
 	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
 
-	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Term: "1yr", Count: 1, CommitmentCost: 2000.0}
+	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Term: "1yr", Count: 1, CommitmentCost: 2000.0, PaymentOption: "monthly"}
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: source})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
@@ -990,9 +997,57 @@ func TestFetchAzurePricing_WrapperSmokeTest(t *testing.T) {
 	assert.Equal(t, "Standard_D2s_v3", result.Items[0].ArmSKUName)
 }
 
+// TestBuildReservationBody_BillingPlan pins the billingPlan wiring: Azure
+// reservations support exactly two billing plans (Upfront, Monthly -- no
+// partial-upfront), and rec.PaymentOption must map onto the correct one
+// regardless of which vocabulary populated it (the converter's
+// "upfront"/"monthly" or the CLI/MCP's "all-upfront"/"no-upfront"). An empty
+// or unrecognized value (including "partial-upfront", which Azure cannot
+// express) must fail loud rather than silently defaulting to Upfront
+// (feedback_no_silent_fallbacks) -- before this fix, buildReservationBody
+// never set billingPlan at all, so every purchase silently defaulted to
+// Azure's Upfront behavior regardless of what the caller requested.
+func TestBuildReservationBody_BillingPlan(t *testing.T) {
+	cases := []struct {
+		name          string
+		paymentOption string
+		wantPlan      string
+		wantErrSub    string
+	}{
+		{name: "all-upfront maps to Upfront", paymentOption: "all-upfront", wantPlan: "Upfront"},
+		{name: "upfront maps to Upfront", paymentOption: "upfront", wantPlan: "Upfront"},
+		{name: "no-upfront maps to Monthly", paymentOption: "no-upfront", wantPlan: "Monthly"},
+		{name: "monthly maps to Monthly", paymentOption: "monthly", wantPlan: "Monthly"},
+		{name: "partial-upfront is rejected", paymentOption: "partial-upfront", wantErrSub: "partial-upfront has no azure equivalent"},
+		{name: "empty payment option is rejected", paymentOption: "", wantErrSub: "azure reservations support only upfront or monthly billing"},
+		{name: "unrecognized payment option is rejected", paymentOption: "bogus", wantErrSub: "azure reservations support only upfront or monthly billing"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &ComputeClient{region: "eastus", subscriptionID: "sub-abc"}
+			rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Count: 1, Term: "1yr", PaymentOption: tc.paymentOption}
+
+			body, err := c.buildReservationBody(rec, common.PurchaseSourceWeb, "")
+
+			if tc.wantErrSub != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErrSub)
+				assert.Nil(t, body)
+				return
+			}
+			require.NoError(t, err)
+			var got map[string]interface{}
+			require.NoError(t, json.Unmarshal(body, &got))
+			props, ok := got["properties"].(map[string]interface{})
+			require.True(t, ok, "properties map missing from reservation body")
+			assert.Equal(t, tc.wantPlan, props["billingPlan"])
+		})
+	}
+}
+
 func TestBuildReservationBody_IncludesPurchaseAutomationTag(t *testing.T) {
 	c := &ComputeClient{region: "eastus", subscriptionID: "sub-abc"}
-	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Count: 1, Term: "1yr"}
+	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Count: 1, Term: "1yr", PaymentOption: "no-upfront"}
 
 	body, err := c.buildReservationBody(rec, common.PurchaseSourceWeb, "")
 	require.NoError(t, err)
@@ -1006,7 +1061,7 @@ func TestBuildReservationBody_IncludesPurchaseAutomationTag(t *testing.T) {
 
 func TestBuildReservationBody_OmitsTagsWhenSourceAndTokenEmpty(t *testing.T) {
 	c := &ComputeClient{region: "eastus", subscriptionID: "sub-abc"}
-	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Count: 1, Term: "1yr"}
+	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Count: 1, Term: "1yr", PaymentOption: "no-upfront"}
 
 	body, err := c.buildReservationBody(rec, "", "")
 	require.NoError(t, err)
@@ -1024,7 +1079,7 @@ func TestBuildReservationBody_OmitsTagsWhenSourceAndTokenEmpty(t *testing.T) {
 // and skip the duplicate buy.
 func TestBuildReservationBody_IncludesIdempotencyTokenTag(t *testing.T) {
 	c := &ComputeClient{region: "eastus", subscriptionID: "sub-abc"}
-	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Count: 1, Term: "1yr"}
+	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Count: 1, Term: "1yr", PaymentOption: "no-upfront"}
 	token := common.DeriveIdempotencyToken("exec-721-compute", 0)
 
 	body, err := c.buildReservationBody(rec, common.PurchaseSourceWeb, token)
@@ -1280,6 +1335,7 @@ func TestComputeClient_PurchaseCommitment_DisplayNameConformsToAzureAllowlist(t 
 		Term:           "1yr",
 		Count:          1,
 		CommitmentCost: 2000.0,
+		PaymentOption:  "all-upfront",
 	}
 	_, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
