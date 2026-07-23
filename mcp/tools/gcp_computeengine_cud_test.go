@@ -23,8 +23,9 @@ func validGCPCUDArgs() gcpComputeEngineCUDPurchaseArgs {
 
 func TestGCPComputeEngineRecommendationFromArgs(t *testing.T) {
 	t.Parallel()
-	rec, dryRun, confirm, err := gcpComputeEngineRecommendationFromArgs(validGCPCUDArgs())
+	rec, region, dryRun, confirm, err := gcpComputeEngineRecommendationFromArgs(validGCPCUDArgs())
 	require.NoError(t, err)
+	assert.Equal(t, "us-central1", region)
 	assert.True(t, dryRun)
 	assert.False(t, confirm)
 	assert.Equal(t, common.ProviderGCP, rec.Provider)
@@ -63,11 +64,33 @@ func TestGCPComputeEngineRecommendationFromArgsInvalid(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			args := validGCPCUDArgs()
 			tc.mutate(&args)
-			_, _, _, err := gcpComputeEngineRecommendationFromArgs(args)
+			_, _, _, _, err := gcpComputeEngineRecommendationFromArgs(args)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.errSub)
 		})
 	}
+}
+
+// TestGCPComputeEngineRecommendationFromArgsTrimsSurroundingWhitespace is the
+// regression guard for the CodeRabbit finding: requireNonBlank rejected an
+// all-whitespace value but let a value with surrounding whitespace (e.g.
+// " us-central1 ") pass through unchanged into rec.Region/rec.ResourceType and
+// the returned region (which resolveClient uses for ProviderConfig.Region and
+// GetServiceClient).
+func TestGCPComputeEngineRecommendationFromArgsTrimsSurroundingWhitespace(t *testing.T) {
+	t.Parallel()
+	args := validGCPCUDArgs()
+	args.Region = " us-central1 "
+	args.MachineType = " n2-standard-4 "
+
+	rec, region, _, _, err := gcpComputeEngineRecommendationFromArgs(args)
+	require.NoError(t, err)
+	assert.Equal(t, "us-central1", region, "returned region must be trimmed")
+	assert.Equal(t, "us-central1", rec.Region, "rec.Region must be trimmed")
+	assert.Equal(t, "n2-standard-4", rec.ResourceType, "rec.ResourceType must be trimmed")
+	details, ok := rec.Details.(common.ComputeDetails)
+	require.True(t, ok)
+	assert.Equal(t, "n2-standard-4", details.InstanceType, "Details.InstanceType must be trimmed")
 }
 
 func TestGCPComputeEngineCUDPurchaseHandleConfirmFalseRefuses(t *testing.T) {

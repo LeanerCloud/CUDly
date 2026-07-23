@@ -94,17 +94,17 @@ func (t *azureComputeRIPurchaseTool) Register(s *mcp.Server) error {
 }
 
 func (t *azureComputeRIPurchaseTool) handle(ctx context.Context, _ *mcp.CallToolRequest, args azureComputeRIPurchaseArgs) (*mcp.CallToolResult, PurchaseResponse, error) {
-	rec, dryRun, confirm, err := azureComputeRecommendationFromArgs(args)
+	rec, region, dryRun, confirm, err := azureComputeRecommendationFromArgs(args)
 	if err != nil {
 		return nil, PurchaseResponse{}, err
 	}
 
 	resp, err := ExecutePurchase(ctx, PurchaseRequest{
-		Region:         args.Region,
+		Region:         region,
 		Recommendation: rec,
 		DryRun:         dryRun,
 		Confirm:        confirm,
-		ResolveClient:  t.resolveClient(args),
+		ResolveClient:  t.resolveClient(args, region),
 		Nonce:          args.IdempotencyNonce,
 	})
 	if err != nil {
@@ -113,19 +113,21 @@ func (t *azureComputeRIPurchaseTool) handle(ctx context.Context, _ *mcp.CallTool
 	return nil, *resp, nil
 }
 
-func azureComputeRecommendationFromArgs(args azureComputeRIPurchaseArgs) (rec common.Recommendation, dryRun, confirm bool, err error) {
-	if fieldErr := requireNonBlank("region", args.Region); fieldErr != nil {
-		return common.Recommendation{}, false, false, fieldErr
+func azureComputeRecommendationFromArgs(args azureComputeRIPurchaseArgs) (rec common.Recommendation, region string, dryRun, confirm bool, err error) {
+	region, err = requireNonBlank("region", args.Region)
+	if err != nil {
+		return common.Recommendation{}, "", false, false, err
 	}
-	if fieldErr := requireNonBlank("vm_size", args.VMSize); fieldErr != nil {
-		return common.Recommendation{}, false, false, fieldErr
+	vmSize, err := requireNonBlank("vm_size", args.VMSize)
+	if err != nil {
+		return common.Recommendation{}, "", false, false, err
 	}
 	if args.Count <= 0 {
-		return common.Recommendation{}, false, false, fmt.Errorf("count must be > 0, got %d", args.Count)
+		return common.Recommendation{}, "", false, false, fmt.Errorf("count must be > 0, got %d", args.Count)
 	}
 	term, err := ValidateTermYears(args.TermYears)
 	if err != nil {
-		return common.Recommendation{}, false, false, err
+		return common.Recommendation{}, "", false, false, err
 	}
 
 	// payment_option defaults to no-upfront (matching the CLI's --payment
@@ -139,7 +141,7 @@ func azureComputeRecommendationFromArgs(args azureComputeRIPurchaseArgs) (rec co
 	}
 	paymentOption, err := ValidatePaymentOption(paymentOptionStr)
 	if err != nil {
-		return common.Recommendation{}, false, false, err
+		return common.Recommendation{}, "", false, false, err
 	}
 	// Azure reservations support exactly two billing plans (Upfront,
 	// Monthly -- see providers/azure/services/internal/reservations.
@@ -148,7 +150,7 @@ func azureComputeRecommendationFromArgs(args azureComputeRIPurchaseArgs) (rec co
 	// for a real purchase), means a dry_run preview never reports success
 	// for a request that could never be honored for real.
 	if paymentOption == PaymentOptionPartialUpfront {
-		return common.Recommendation{}, false, false, fmt.Errorf(
+		return common.Recommendation{}, "", false, false, fmt.Errorf(
 			"azure reservations do not support payment_option=%q: azure billing plans are all-upfront or "+
 				"no-upfront (monthly, same total price) only, with no partial-upfront option",
 			paymentOption)
@@ -165,24 +167,29 @@ func azureComputeRecommendationFromArgs(args azureComputeRIPurchaseArgs) (rec co
 	rec = common.Recommendation{
 		Provider:       common.ProviderAzure,
 		Service:        common.ServiceCompute,
-		Region:         args.Region,
-		ResourceType:   args.VMSize,
+		Region:         region,
+		ResourceType:   vmSize,
 		Count:          args.Count,
 		CommitmentType: common.CommitmentReservedInstance,
 		Term:           term.RecommendationTerm(),
 		PaymentOption:  string(paymentOption),
 	}
 
-	return rec, dryRun, confirm, nil
+	return rec, region, dryRun, confirm, nil
 }
 
-func (t *azureComputeRIPurchaseTool) resolveClient(args azureComputeRIPurchaseArgs) ResolveClientFunc {
+// resolveClient returns the ResolveClientFunc that ExecutePurchase invokes
+// only for a real purchase. region is the effective, already-validated-and-
+// trimmed region returned by azureComputeRecommendationFromArgs -- not
+// args.Region -- so a real purchase never resolves the provider/service
+// client against a raw, un-trimmed value.
+func (t *azureComputeRIPurchaseTool) resolveClient(args azureComputeRIPurchaseArgs, region string) ResolveClientFunc {
 	return func(ctx context.Context) (provider.ServiceClient, error) {
-		cfg := &provider.ProviderConfig{Name: string(common.ProviderAzure), AzureSubscriptionID: args.AzureSubscriptionID, Region: args.Region}
+		cfg := &provider.ProviderConfig{Name: string(common.ProviderAzure), AzureSubscriptionID: args.AzureSubscriptionID, Region: region}
 		prov, err := t.createProvider(string(common.ProviderAzure), cfg)
 		if err != nil {
 			return nil, err
 		}
-		return prov.GetServiceClient(ctx, common.ServiceCompute, args.Region)
+		return prov.GetServiceClient(ctx, common.ServiceCompute, region)
 	}
 }

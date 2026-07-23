@@ -25,8 +25,9 @@ func validEC2Args() ec2RIPurchaseArgs {
 
 func TestEC2RecommendationFromArgsDefaults(t *testing.T) {
 	t.Parallel()
-	rec, dryRun, confirm, err := ec2RecommendationFromArgs(validEC2Args())
+	rec, region, dryRun, confirm, err := ec2RecommendationFromArgs(validEC2Args())
 	require.NoError(t, err)
+	assert.Equal(t, "us-east-1", region)
 	assert.True(t, dryRun, "dry_run must default to true")
 	assert.False(t, confirm, "confirm must default to false")
 	assert.Equal(t, common.ProviderAWS, rec.Provider)
@@ -51,7 +52,7 @@ func TestEC2RecommendationFromArgsExplicitFlags(t *testing.T) {
 	args.Tenancy = "dedicated"
 	args.Scope = "availability-zone"
 
-	rec, dryRun, confirm, err := ec2RecommendationFromArgs(args)
+	rec, _, dryRun, confirm, err := ec2RecommendationFromArgs(args)
 	require.NoError(t, err)
 	assert.False(t, dryRun)
 	assert.True(t, confirm)
@@ -60,6 +61,29 @@ func TestEC2RecommendationFromArgsExplicitFlags(t *testing.T) {
 	assert.Equal(t, "Windows", details.Platform)
 	assert.Equal(t, "dedicated", details.Tenancy)
 	assert.Equal(t, "availability-zone", details.Scope)
+}
+
+// TestEC2RecommendationFromArgsTrimsSurroundingWhitespace is the regression
+// guard for the CodeRabbit finding: requireNonBlank rejected an all-whitespace
+// value but let a value with surrounding whitespace (e.g. " us-east-1 ")
+// through unchanged, which then flowed into rec.Region/rec.ResourceType and
+// (via the returned region) into resolveClient's ProviderConfig.Region and
+// GetServiceClient call. Both the region returned to the caller and every
+// identifier field on rec must be the trimmed form.
+func TestEC2RecommendationFromArgsTrimsSurroundingWhitespace(t *testing.T) {
+	t.Parallel()
+	args := validEC2Args()
+	args.Region = " us-east-1 "
+	args.InstanceType = " m5.large "
+
+	rec, region, _, _, err := ec2RecommendationFromArgs(args)
+	require.NoError(t, err)
+	assert.Equal(t, "us-east-1", region, "returned region must be trimmed")
+	assert.Equal(t, "us-east-1", rec.Region, "rec.Region must be trimmed")
+	assert.Equal(t, "m5.large", rec.ResourceType, "rec.ResourceType must be trimmed")
+	details, ok := rec.Details.(*common.ComputeDetails)
+	require.True(t, ok)
+	assert.Equal(t, "m5.large", details.InstanceType, "Details.InstanceType must be trimmed")
 }
 
 func TestEC2RecommendationFromArgsMissingRequiredFields(t *testing.T) {
@@ -85,7 +109,7 @@ func TestEC2RecommendationFromArgsMissingRequiredFields(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			args := validEC2Args()
 			tc.mutate(&args)
-			_, _, _, err := ec2RecommendationFromArgs(args)
+			_, _, _, _, err := ec2RecommendationFromArgs(args)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.errSub)
 		})

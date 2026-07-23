@@ -78,17 +78,17 @@ func (t *gcpComputeEngineCUDPurchaseTool) Register(s *mcp.Server) error {
 }
 
 func (t *gcpComputeEngineCUDPurchaseTool) handle(ctx context.Context, _ *mcp.CallToolRequest, args gcpComputeEngineCUDPurchaseArgs) (*mcp.CallToolResult, PurchaseResponse, error) {
-	rec, dryRun, confirm, err := gcpComputeEngineRecommendationFromArgs(args)
+	rec, region, dryRun, confirm, err := gcpComputeEngineRecommendationFromArgs(args)
 	if err != nil {
 		return nil, PurchaseResponse{}, err
 	}
 
 	resp, err := ExecutePurchase(ctx, PurchaseRequest{
-		Region:         args.Region,
+		Region:         region,
 		Recommendation: rec,
 		DryRun:         dryRun,
 		Confirm:        confirm,
-		ResolveClient:  t.resolveClient(args),
+		ResolveClient:  t.resolveClient(args, region),
 		Nonce:          args.IdempotencyNonce,
 	})
 	if err != nil {
@@ -97,46 +97,42 @@ func (t *gcpComputeEngineCUDPurchaseTool) handle(ctx context.Context, _ *mcp.Cal
 	return nil, *resp, nil
 }
 
-func gcpCUDPurchaseRequiredFields(args gcpComputeEngineCUDPurchaseArgs) error {
-	if err := requireNonBlank("region", args.Region); err != nil {
-		return err
+// gcpComputeEngineRecommendationFromArgs validates args and builds the
+// common.Recommendation to purchase, the effective region (trimmed of any
+// surrounding whitespace), and the effective dry_run/confirm booleans.
+// Details is set as a value (common.ComputeDetails{}), not a pointer, to
+// match the value type assertion in
+// providers/gcp/services/computeengine/client.go's memoryMBFromDetails.
+func gcpComputeEngineRecommendationFromArgs(args gcpComputeEngineCUDPurchaseArgs) (rec common.Recommendation, region string, dryRun, confirm bool, err error) {
+	region, err = requireNonBlank("region", args.Region)
+	if err != nil {
+		return common.Recommendation{}, "", false, false, err
 	}
-	if err := requireNonBlank("machine_type", args.MachineType); err != nil {
-		return err
+	machineType, err := requireNonBlank("machine_type", args.MachineType)
+	if err != nil {
+		return common.Recommendation{}, "", false, false, err
 	}
 	if args.VCPUCount <= 0 {
-		return fmt.Errorf("vcpu_count must be > 0, got %d", args.VCPUCount)
+		return common.Recommendation{}, "", false, false, fmt.Errorf("vcpu_count must be > 0, got %d", args.VCPUCount)
 	}
 	if args.MemoryGB <= 0 {
-		return fmt.Errorf("memory_gb must be > 0, got %v", args.MemoryGB)
-	}
-	return nil
-}
-
-// gcpComputeEngineRecommendationFromArgs validates args and builds the
-// common.Recommendation to purchase, plus the effective dry_run/confirm
-// booleans. Details is set as a value (common.ComputeDetails{}), not a
-// pointer, to match the value type assertion in
-// providers/gcp/services/computeengine/client.go's memoryMBFromDetails.
-func gcpComputeEngineRecommendationFromArgs(args gcpComputeEngineCUDPurchaseArgs) (rec common.Recommendation, dryRun, confirm bool, err error) {
-	if fieldErr := gcpCUDPurchaseRequiredFields(args); fieldErr != nil {
-		return common.Recommendation{}, false, false, fieldErr
+		return common.Recommendation{}, "", false, false, fmt.Errorf("memory_gb must be > 0, got %v", args.MemoryGB)
 	}
 	term, err := ValidateTermYears(args.TermYears)
 	if err != nil {
-		return common.Recommendation{}, false, false, err
+		return common.Recommendation{}, "", false, false, err
 	}
 
 	rec = common.Recommendation{
 		Provider:       common.ProviderGCP,
 		Service:        common.ServiceCompute,
-		Region:         args.Region,
-		ResourceType:   args.MachineType,
+		Region:         region,
+		ResourceType:   machineType,
 		Count:          args.VCPUCount,
 		CommitmentType: common.CommitmentCUD,
 		Term:           term.RecommendationTerm(),
 		Details: common.ComputeDetails{
-			InstanceType: args.MachineType,
+			InstanceType: machineType,
 			MemoryGB:     args.MemoryGB,
 		},
 	}
@@ -148,16 +144,21 @@ func gcpComputeEngineRecommendationFromArgs(args gcpComputeEngineCUDPurchaseArgs
 	if args.Confirm != nil {
 		confirm = *args.Confirm
 	}
-	return rec, dryRun, confirm, nil
+	return rec, region, dryRun, confirm, nil
 }
 
-func (t *gcpComputeEngineCUDPurchaseTool) resolveClient(args gcpComputeEngineCUDPurchaseArgs) ResolveClientFunc {
+// resolveClient returns the ResolveClientFunc that ExecutePurchase invokes
+// only for a real purchase. region is the effective, already-validated-and-
+// trimmed region returned by gcpComputeEngineRecommendationFromArgs -- not
+// args.Region -- so a real purchase never resolves the provider/service
+// client against a raw, un-trimmed value.
+func (t *gcpComputeEngineCUDPurchaseTool) resolveClient(args gcpComputeEngineCUDPurchaseArgs, region string) ResolveClientFunc {
 	return func(ctx context.Context) (provider.ServiceClient, error) {
-		cfg := &provider.ProviderConfig{Name: string(common.ProviderGCP), GCPProjectID: args.GCPProjectID, Region: args.Region}
+		cfg := &provider.ProviderConfig{Name: string(common.ProviderGCP), GCPProjectID: args.GCPProjectID, Region: region}
 		prov, err := t.createProvider(string(common.ProviderGCP), cfg)
 		if err != nil {
 			return nil, err
 		}
-		return prov.GetServiceClient(ctx, common.ServiceCompute, args.Region)
+		return prov.GetServiceClient(ctx, common.ServiceCompute, region)
 	}
 }

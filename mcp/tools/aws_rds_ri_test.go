@@ -25,8 +25,9 @@ func validRDSArgs() rdsRIPurchaseArgs {
 
 func TestRDSRecommendationFromArgs(t *testing.T) {
 	t.Parallel()
-	rec, dryRun, confirm, err := rdsRecommendationFromArgs(validRDSArgs())
+	rec, region, dryRun, confirm, err := rdsRecommendationFromArgs(validRDSArgs())
 	require.NoError(t, err)
+	assert.Equal(t, "us-east-1", region)
 	assert.True(t, dryRun)
 	assert.False(t, confirm)
 	assert.Equal(t, common.ServiceRDS, rec.Service)
@@ -60,11 +61,35 @@ func TestRDSRecommendationFromArgsInvalid(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			args := validRDSArgs()
 			tc.mutate(&args)
-			_, _, _, err := rdsRecommendationFromArgs(args)
+			_, _, _, _, err := rdsRecommendationFromArgs(args)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.errSub)
 		})
 	}
+}
+
+// TestRDSRecommendationFromArgsTrimsSurroundingWhitespace is the regression
+// guard for the CodeRabbit finding: requireNonBlank rejected an
+// all-whitespace value but let a value with surrounding whitespace (e.g.
+// " us-east-1 ") pass through unchanged into rec.Region/rec.ResourceType/
+// Details and the returned region (which resolveClient uses for
+// ProviderConfig.Region and GetServiceClient).
+func TestRDSRecommendationFromArgsTrimsSurroundingWhitespace(t *testing.T) {
+	t.Parallel()
+	args := validRDSArgs()
+	args.Region = " us-east-1 "
+	args.InstanceClass = " db.r6g.large "
+	args.Engine = " postgres "
+
+	rec, region, _, _, err := rdsRecommendationFromArgs(args)
+	require.NoError(t, err)
+	assert.Equal(t, "us-east-1", region, "returned region must be trimmed")
+	assert.Equal(t, "us-east-1", rec.Region, "rec.Region must be trimmed")
+	assert.Equal(t, "db.r6g.large", rec.ResourceType, "rec.ResourceType must be trimmed")
+	details, ok := rec.Details.(*common.DatabaseDetails)
+	require.True(t, ok)
+	assert.Equal(t, "db.r6g.large", details.InstanceClass, "Details.InstanceClass must be trimmed")
+	assert.Equal(t, "postgres", details.Engine, "Details.Engine must be trimmed")
 }
 
 func TestAWSRDSRIPurchaseHandleConfirmFalseRefuses(t *testing.T) {

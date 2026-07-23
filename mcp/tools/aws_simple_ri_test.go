@@ -75,8 +75,9 @@ func TestSimpleAWSRIPurchaseRecommendationFromArgs(t *testing.T) {
 	for product, ctor := range simpleToolConstructors() {
 		t.Run(product, func(t *testing.T) {
 			tool := ctor().(*simpleAWSRIPurchaseTool)
-			rec, dryRun, confirm, err := tool.recommendationFromArgs(validSimpleArgs())
+			rec, region, dryRun, confirm, err := tool.recommendationFromArgs(validSimpleArgs())
 			require.NoError(t, err)
+			assert.Equal(t, "us-east-1", region)
 			assert.True(t, dryRun)
 			assert.False(t, confirm)
 			assert.Equal(t, common.ProviderAWS, rec.Provider)
@@ -110,11 +111,31 @@ func TestSimpleAWSRIPurchaseInvalidArgs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			args := validSimpleArgs()
 			tc.mutate(&args)
-			_, _, _, err := tool.recommendationFromArgs(args)
+			_, _, _, _, err := tool.recommendationFromArgs(args)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.errSub)
 		})
 	}
+}
+
+// TestSimpleAWSRIPurchaseRecommendationFromArgsTrimsSurroundingWhitespace is
+// the regression guard for the CodeRabbit finding: requireNonBlank rejected
+// an all-whitespace value but let a value with surrounding whitespace (e.g.
+// " us-east-1 ") pass through unchanged into rec.Region/rec.ResourceType and
+// the returned region (which resolveClient uses for ProviderConfig.Region
+// and GetServiceClient).
+func TestSimpleAWSRIPurchaseRecommendationFromArgsTrimsSurroundingWhitespace(t *testing.T) {
+	t.Parallel()
+	tool := NewAWSOpenSearchRIPurchaseTool().(*simpleAWSRIPurchaseTool)
+	args := validSimpleArgs()
+	args.Region = " us-east-1 "
+	args.ResourceType = " r6g.large "
+
+	rec, region, _, _, err := tool.recommendationFromArgs(args)
+	require.NoError(t, err)
+	assert.Equal(t, "us-east-1", region, "returned region must be trimmed")
+	assert.Equal(t, "us-east-1", rec.Region, "rec.Region must be trimmed")
+	assert.Equal(t, "r6g.large", rec.ResourceType, "rec.ResourceType must be trimmed")
 }
 
 func TestSimpleAWSRIPurchaseHandleConfirmFalseRefuses(t *testing.T) {

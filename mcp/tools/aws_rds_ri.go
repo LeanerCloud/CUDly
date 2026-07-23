@@ -80,17 +80,17 @@ func (t *awsRDSRIPurchaseTool) Register(s *mcp.Server) error {
 }
 
 func (t *awsRDSRIPurchaseTool) handle(ctx context.Context, _ *mcp.CallToolRequest, args rdsRIPurchaseArgs) (*mcp.CallToolResult, PurchaseResponse, error) {
-	rec, dryRun, confirm, err := rdsRecommendationFromArgs(args)
+	rec, region, dryRun, confirm, err := rdsRecommendationFromArgs(args)
 	if err != nil {
 		return nil, PurchaseResponse{}, err
 	}
 
 	resp, err := ExecutePurchase(ctx, PurchaseRequest{
-		Region:         args.Region,
+		Region:         region,
 		Recommendation: rec,
 		DryRun:         dryRun,
 		Confirm:        confirm,
-		ResolveClient:  t.resolveClient(args),
+		ResolveClient:  t.resolveClient(args, region),
 		Nonce:          args.IdempotencyNonce,
 	})
 	if err != nil {
@@ -99,55 +99,51 @@ func (t *awsRDSRIPurchaseTool) handle(ctx context.Context, _ *mcp.CallToolReques
 	return nil, *resp, nil
 }
 
-func rdsRIPurchaseRequiredFields(args rdsRIPurchaseArgs) error {
-	if err := requireNonBlank("region", args.Region); err != nil {
-		return err
+// rdsRecommendationFromArgs validates args and builds the
+// common.Recommendation to purchase, the effective region (trimmed of any
+// surrounding whitespace), and the effective dry_run/confirm booleans.
+func rdsRecommendationFromArgs(args rdsRIPurchaseArgs) (rec common.Recommendation, region string, dryRun, confirm bool, err error) {
+	region, err = requireNonBlank("region", args.Region)
+	if err != nil {
+		return common.Recommendation{}, "", false, false, err
 	}
-	if err := requireNonBlank("instance_class", args.InstanceClass); err != nil {
-		return err
+	instanceClass, err := requireNonBlank("instance_class", args.InstanceClass)
+	if err != nil {
+		return common.Recommendation{}, "", false, false, err
 	}
 	if args.Count <= 0 {
-		return fmt.Errorf("count must be > 0, got %d", args.Count)
+		return common.Recommendation{}, "", false, false, fmt.Errorf("count must be > 0, got %d", args.Count)
 	}
-	if err := requireNonBlank("engine", args.Engine); err != nil {
-		return err
-	}
-	return nil
-}
-
-// rdsRecommendationFromArgs validates args and builds the
-// common.Recommendation to purchase, plus the effective dry_run/confirm
-// booleans.
-func rdsRecommendationFromArgs(args rdsRIPurchaseArgs) (rec common.Recommendation, dryRun, confirm bool, err error) {
-	if fieldErr := rdsRIPurchaseRequiredFields(args); fieldErr != nil {
-		return common.Recommendation{}, false, false, fieldErr
+	engine, err := requireNonBlank("engine", args.Engine)
+	if err != nil {
+		return common.Recommendation{}, "", false, false, err
 	}
 	term, err := ValidateTermYears(args.TermYears)
 	if err != nil {
-		return common.Recommendation{}, false, false, err
+		return common.Recommendation{}, "", false, false, err
 	}
 	paymentOption, err := ValidatePaymentOption(args.PaymentOption)
 	if err != nil {
-		return common.Recommendation{}, false, false, err
+		return common.Recommendation{}, "", false, false, err
 	}
 	azConfig, err := ValidateAZConfig(args.AZConfig)
 	if err != nil {
-		return common.Recommendation{}, false, false, err
+		return common.Recommendation{}, "", false, false, err
 	}
 
 	rec = common.Recommendation{
 		Provider:       common.ProviderAWS,
 		Service:        common.ServiceRDS,
-		Region:         args.Region,
-		ResourceType:   args.InstanceClass,
+		Region:         region,
+		ResourceType:   instanceClass,
 		Count:          args.Count,
 		CommitmentType: common.CommitmentReservedInstance,
 		Term:           term.RecommendationTerm(),
 		PaymentOption:  string(paymentOption),
 		Details: &common.DatabaseDetails{
-			Engine:        args.Engine,
+			Engine:        engine,
 			AZConfig:      string(azConfig),
-			InstanceClass: args.InstanceClass,
+			InstanceClass: instanceClass,
 		},
 	}
 
@@ -158,16 +154,21 @@ func rdsRecommendationFromArgs(args rdsRIPurchaseArgs) (rec common.Recommendatio
 	if args.Confirm != nil {
 		confirm = *args.Confirm
 	}
-	return rec, dryRun, confirm, nil
+	return rec, region, dryRun, confirm, nil
 }
 
-func (t *awsRDSRIPurchaseTool) resolveClient(args rdsRIPurchaseArgs) ResolveClientFunc {
+// resolveClient returns the ResolveClientFunc that ExecutePurchase invokes
+// only for a real purchase. region is the effective, already-validated-and-
+// trimmed region returned by rdsRecommendationFromArgs -- not args.Region --
+// so a real purchase never resolves the provider/service client against a
+// raw, un-trimmed value.
+func (t *awsRDSRIPurchaseTool) resolveClient(args rdsRIPurchaseArgs, region string) ResolveClientFunc {
 	return func(ctx context.Context) (provider.ServiceClient, error) {
-		cfg := &provider.ProviderConfig{Name: string(common.ProviderAWS), AWSProfile: args.AWSProfile, Region: args.Region}
+		cfg := &provider.ProviderConfig{Name: string(common.ProviderAWS), AWSProfile: args.AWSProfile, Region: region}
 		prov, err := t.createProvider(string(common.ProviderAWS), cfg)
 		if err != nil {
 			return nil, err
 		}
-		return prov.GetServiceClient(ctx, common.ServiceRDS, args.Region)
+		return prov.GetServiceClient(ctx, common.ServiceRDS, region)
 	}
 }
