@@ -50,6 +50,10 @@ func NewServer(version string) (*gosdk.Server, error) {
 	for _, r := range regs {
 		descriptors = append(descriptors, r.Descriptor())
 	}
+	// Include cudly_list_commitment_actions' own entry so the catalog it
+	// returns really does list "every tool available on this MCP server" as
+	// its description promises, itself included.
+	descriptors = append(descriptors, tools.ListCommitmentActionsDescriptor())
 
 	listTool := tools.NewListCommitmentActions(descriptors)
 	regs = append(regs, listTool)
