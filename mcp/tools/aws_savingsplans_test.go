@@ -36,6 +36,23 @@ func TestSavingsPlanRecommendationFromArgsAccountLevel(t *testing.T) {
 	assert.InDelta(t, 10.50, details.HourlyCommitment, 0.001)
 }
 
+// TestSavingsPlanRecommendationFromArgsAccountLevelWhitespaceRegion proves a
+// whitespace-only region (e.g. "  ") for an account-level sp_type (Compute,
+// SageMaker, Database) still falls back to savingsPlansAccountLevelRegion,
+// the same as an empty region does. Before the fix, the fallback only
+// triggered on region == "", so a whitespace-only region threaded the raw
+// "  " value into resolveClient instead of the account-level default.
+func TestSavingsPlanRecommendationFromArgsAccountLevelWhitespaceRegion(t *testing.T) {
+	t.Parallel()
+	args := validSavingsPlansArgs()
+	args.Region = "  "
+	rec, region, _, _, err := savingsPlanRecommendationFromArgs(args)
+	require.NoError(t, err)
+	assert.Equal(t, savingsPlansAccountLevelRegion, region,
+		"whitespace-only region must resolve to the account-level default, not be threaded through as-is")
+	assert.Equal(t, common.ServiceSavingsPlansCompute, rec.Service)
+}
+
 func TestSavingsPlanRecommendationFromArgsEC2InstanceRequiresRegion(t *testing.T) {
 	t.Parallel()
 	args := validSavingsPlansArgs()

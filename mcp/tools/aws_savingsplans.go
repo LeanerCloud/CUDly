@@ -162,7 +162,7 @@ func savingsPlanRecommendationFromArgs(args savingsPlansPurchaseArgs) (rec commo
 	}
 
 	region = args.Region
-	if region == "" {
+	if strings.TrimSpace(region) == "" {
 		region = savingsPlansAccountLevelRegion
 	}
 
