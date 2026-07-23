@@ -264,6 +264,11 @@ func (c *ManagedRedisClient) PurchaseCommitment(ctx context.Context, rec common.
 		result.Error = termErr
 		return result, result.Error
 	}
+	billingPlan, billingPlanErr := reservations.BillingPlanForPaymentOption(rec.PaymentOption)
+	if billingPlanErr != nil {
+		result.Error = billingPlanErr
+		return result, result.Error
+	}
 
 	requestBody := map[string]interface{}{
 		"sku": map[string]string{
@@ -273,6 +278,7 @@ func (c *ManagedRedisClient) PurchaseCommitment(ctx context.Context, rec common.
 		"properties": map[string]interface{}{
 			"reservedResourceType": string(armreservations.ReservedResourceTypeRedisCache),
 			"billingScopeId":       fmt.Sprintf("/subscriptions/%s", c.subscriptionID),
+			"billingPlan":          string(billingPlan),
 			"term":                 fmt.Sprintf("P%dY", termYears),
 			"quantity":             rec.Count,
 			"displayName":          fmt.Sprintf("Azure Cache for Redis Reservation - %s", rec.ResourceType),
