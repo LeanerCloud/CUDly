@@ -159,6 +159,25 @@ func TestSearchRecommendationsInvalidTermYears(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid term_years")
 }
 
+// TestSearchRecommendationsInvalidLookbackPeriod is the regression guard for
+// the CodeRabbit finding: lookback_period was constrained only by the
+// advertised MCP jsonschema enum (Register's BuildInputSchema override), not
+// re-validated in the handler, so a direct MCP call bypassing schema
+// enforcement could pass an unsupported value through to the provider.
+func TestSearchRecommendationsInvalidLookbackPeriod(t *testing.T) {
+	t.Parallel()
+	fp := &fakeProvider{name: "aws", services: []common.ServiceType{common.ServiceEC2}}
+	tool := newTestSearchTool(fp)
+
+	_, _, err := tool.handle(context.Background(), nil, searchRecommendationsArgs{
+		Provider:       "aws",
+		Service:        "ec2",
+		LookbackPeriod: "90d",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid lookback_period")
+}
+
 func TestSearchRecommendationsInvalidSPType(t *testing.T) {
 	t.Parallel()
 	fp := &fakeProvider{name: "aws", services: []common.ServiceType{common.ServiceSavingsPlansAll}}
