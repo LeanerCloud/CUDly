@@ -157,6 +157,65 @@ func TestSavingsPlanRecommendationFromArgsInstanceFamilyOptionalForOtherTypes(t 
 	})
 }
 
+// TestSavingsPlanRecommendationFromArgsDetailsRegionFamilyOnlyForEC2Instance
+// is the regression guard for the CodeRabbit money-path finding: Details.Region
+// and Details.InstanceFamily are documented on common.SavingsPlanDetails as
+// "only populated for EC2Instance"; providers/aws/services/savingsplans/client.go
+// uses Details.Region as a DescribeSavingsPlansOfferings filter. A
+// caller-supplied region/instance_family for an account-level sp_type
+// (Compute, SageMaker, Database) must NOT leak into Details -- before the
+// fix, both fields were populated unconditionally from args, regardless of
+// sp_type.
+func TestSavingsPlanRecommendationFromArgsDetailsRegionFamilyOnlyForEC2Instance(t *testing.T) {
+	t.Parallel()
+
+	for _, spType := range []string{"Compute", "SageMaker"} {
+		t.Run(spType, func(t *testing.T) {
+			args := validSavingsPlansArgs()
+			args.SPType = spType
+			args.Region = "eu-west-1"
+			args.InstanceFamily = "m5"
+
+			rec, _, _, _, err := savingsPlanRecommendationFromArgs(args)
+			require.NoError(t, err)
+			details, ok := rec.Details.(*common.SavingsPlanDetails)
+			require.True(t, ok)
+			assert.Empty(t, details.Region, "account-level sp_type=%s must not carry a caller-supplied region into Details", spType)
+			assert.Empty(t, details.InstanceFamily, "account-level sp_type=%s must not carry a caller-supplied instance_family into Details", spType)
+		})
+	}
+
+	t.Run("Database", func(t *testing.T) {
+		args := validSavingsPlansArgs()
+		args.SPType = "Database"
+		args.TermYears = 1
+		args.PaymentOption = "no-upfront"
+		args.Region = "eu-west-1"
+		args.InstanceFamily = "m5"
+
+		rec, _, _, _, err := savingsPlanRecommendationFromArgs(args)
+		require.NoError(t, err)
+		details, ok := rec.Details.(*common.SavingsPlanDetails)
+		require.True(t, ok)
+		assert.Empty(t, details.Region, "sp_type=Database must not carry a caller-supplied region into Details")
+		assert.Empty(t, details.InstanceFamily, "sp_type=Database must not carry a caller-supplied instance_family into Details")
+	})
+
+	t.Run("EC2Instance still carries both", func(t *testing.T) {
+		args := validSavingsPlansArgs()
+		args.SPType = "EC2Instance"
+		args.Region = "us-east-1"
+		args.InstanceFamily = "m5"
+
+		rec, _, _, _, err := savingsPlanRecommendationFromArgs(args)
+		require.NoError(t, err)
+		details, ok := rec.Details.(*common.SavingsPlanDetails)
+		require.True(t, ok)
+		assert.Equal(t, "us-east-1", details.Region)
+		assert.Equal(t, "m5", details.InstanceFamily)
+	})
+}
+
 func TestSavingsPlanRecommendationFromArgsInvalid(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
