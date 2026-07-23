@@ -20,15 +20,19 @@ const azureComputeRIPurchaseName = "cudly_azure_compute_ri_purchase"
 // payment_option requested here. Rather than silently accepting a
 // payment_option Azure will not actually honor -- and purchasing under a
 // different billing schedule than the caller chose -- this tool requires
-// payment_option=all-upfront and rejects any other value with an explicit
-// error (fail loud, not a silent mismatch; see
-// azureComputeRecommendationFromArgs).
+// payment_option=all-upfront for a real purchase (dry_run=false,
+// confirm=true) and rejects any other value there with an explicit error
+// (fail loud, not a silent mismatch; see azureComputeRecommendationFromArgs).
+// A dry_run=true preview still validates other payment_option values so a
+// caller can rehearse parameters without hitting this rejection.
 const azureComputeRIPurchaseDescription = "Purchase an Azure VM Reserved Instance. THIS SPENDS REAL MONEY when " +
 	"dry_run=false and confirm=true. Always call with dry_run=true first (the default) to validate your " +
 	"parameters before committing; a dry_run response never contacts Azure and never spends money. CAVEAT: " +
 	"Azure Reserved Instances only support all-upfront billing -- Azure's purchase API has no billing-plan " +
-	"parameter and always bills upfront -- so payment_option must be all-upfront; any other value is rejected " +
-	"with an error rather than silently purchased under a schedule Azure will not honor."
+	"parameter and always bills upfront -- so payment_option must be all-upfront for a real purchase " +
+	"(dry_run=false, confirm=true); any other value is rejected there with an error rather than silently " +
+	"purchased under a schedule Azure will not honor. A dry_run=true preview still validates other " +
+	"payment_option values so a caller can rehearse parameters before learning that."
 
 // azureComputeRIPurchaseArgs is the input schema for
 // cudly_azure_compute_ri_purchase. Unlike EC2, Azure's purchase body needs no
@@ -124,14 +128,29 @@ func azureComputeRecommendationFromArgs(args azureComputeRIPurchaseArgs) (rec co
 	if err != nil {
 		return common.Recommendation{}, false, false, err
 	}
+
+	dryRun, confirm = true, false
+	if args.DryRun != nil {
+		dryRun = *args.DryRun
+	}
+	if args.Confirm != nil {
+		confirm = *args.Confirm
+	}
+
 	// Azure's purchase API has no billing-plan parameter and always bills
 	// upfront (see the azureComputeRIPurchaseDescription doc comment), so a
 	// payment_option other than all-upfront would be silently purchased
-	// under a schedule the caller never chose. Reject it now instead of
-	// letting a real purchase proceed under a mismatched payment_option.
-	if paymentOption != PaymentOptionAllUpfront {
+	// under a schedule the caller never chose. Reusing decidePurchaseMode
+	// (the same real-purchase-vs-preview gate ExecutePurchase applies) scopes
+	// this rejection to a call that would actually spend money: a preview
+	// (dry_run=true) still validates every other parameter so a caller can
+	// rehearse a no-upfront/partial-upfront request before learning it can
+	// never be honored for real, and a call that's merely missing confirm
+	// surfaces that error from ExecutePurchase's shared gate instead of this
+	// Azure-specific one.
+	if mode, _ := decidePurchaseMode(dryRun, confirm); mode == modeExecute && paymentOption != PaymentOptionAllUpfront {
 		return common.Recommendation{}, false, false, fmt.Errorf(
-			"azure reserved instances only support all-upfront billing (got payment_option=%q): "+
+			"azure reserved instances only support all-upfront billing for a real purchase (got payment_option=%q): "+
 				"azure's purchase API has no billing-plan parameter and always bills upfront, so any other "+
 				"payment_option would be purchased under a different schedule than requested rather than honored",
 			paymentOption)
@@ -148,13 +167,6 @@ func azureComputeRecommendationFromArgs(args azureComputeRIPurchaseArgs) (rec co
 		PaymentOption:  string(paymentOption),
 	}
 
-	dryRun, confirm = true, false
-	if args.DryRun != nil {
-		dryRun = *args.DryRun
-	}
-	if args.Confirm != nil {
-		confirm = *args.Confirm
-	}
 	return rec, dryRun, confirm, nil
 }
 
