@@ -418,6 +418,53 @@ describe('CSS File Organization', () => {
   });
 });
 
+describe('Touch Target Minimums (issue #983 / PR #989)', () => {
+  let css: string;
+
+  beforeAll(() => {
+    const stylesDir = path.join(__dirname, '..', 'styles');
+    const cssFiles = fs.readdirSync(stylesDir)
+      .filter(file => file.endsWith('.css'))
+      .map(file => fs.readFileSync(path.join(stylesDir, file), 'utf8'));
+    css = cssFiles.join('\n');
+  });
+
+  test('coarse-pointer media query sets a 44x44 minimum on generic button selectors', () => {
+    // PR #989 added this rule so touch devices get HIG/WCAG-compliant tap
+    // targets. .btn-small and .toggle-password render as plain <button>
+    // elements (recommendations.ts, auth.ts), so they inherit the minimum
+    // from `button` here rather than needing a class-specific rule
+    // (verified: neither declares its own min-height/min-width, see below).
+    // .modal-confirm-close is deliberately excluded from that guarantee:
+    // PR #985 (bottom-sheet modal, issue #985) gives it an explicit
+    // min-width/min-height: 44px of its own (needed because it is
+    // absolutely positioned, not sized by content), which is a stronger
+    // guarantee than the generic coarse-pointer rule, not a regression.
+    const media = css.match(/@media\s*\(pointer:\s*coarse\)\s*\{([\s\S]*?)\n\}/);
+    expect(media).not.toBeNull();
+    const block = media?.[1] ?? '';
+    expect(block).toMatch(/\bbutton\b/);
+    expect(block).toMatch(/\[role="button"\]/);
+    expect(block).toMatch(/min-height:\s*44px/);
+    expect(block).toMatch(/min-width:\s*44px/);
+  });
+
+  test.each(['.btn-small', '.toggle-password'])(
+    '%s does not declare its own min-height/height (would override the coarse-pointer 44px minimum by specificity)',
+    (selector) => {
+      const escaped = selector.replace('.', '\\.');
+      const rule = css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
+      expect(rule).not.toBeNull();
+      const declarations = rule?.[1] ?? '';
+      const sizingProps = declarations
+        .split(';')
+        .map(decl => decl.split(':')[0]?.trim())
+        .filter(prop => /^(min-|max-)?(height|width)$/.test(prop ?? ''));
+      expect(sizingProps).toEqual([]);
+    }
+  );
+});
+
 describe('CSS Applied Correctly', () => {
   beforeEach(() => {
     document.body.innerHTML = `
