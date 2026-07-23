@@ -5,7 +5,8 @@ import { initHistoryDateRange, viewPlanHistory, loadHistory, setupHistoryHandler
 
 // Mock the dependent modules
 jest.mock('../api', () => ({
-  getHistory: jest.fn()
+  getHistory: jest.fn(),
+  getConfig: jest.fn().mockResolvedValue({ global: {} }),
 }));
 
 jest.mock('../navigation', () => ({

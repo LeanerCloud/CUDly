@@ -312,6 +312,10 @@ export interface Config {
   // Default false. When true, per-account LadderConfig.enabled settings
   // determine whether the engine runs for that account.
   laddering_enabled?: boolean;
+  // When true, a purchase execution cannot be approved by the same user who
+  // created it -- a different person with approval rights must do so.
+  // SOX / SOC2 segregation-of-duties control. Default: false.
+  require_different_approver?: boolean;
 }
 
 export interface ServiceConfig {

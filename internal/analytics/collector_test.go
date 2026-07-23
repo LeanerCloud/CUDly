@@ -204,6 +204,10 @@ func (m *mockConfigStore) GetExecutionByPlanAndDate(ctx context.Context, planID 
 	return nil, nil
 }
 
+func (m *mockConfigStore) GetUserEmailByID(ctx context.Context, userID string) (string, error) {
+	return "", nil
+}
+
 func (m *mockConfigStore) SavePurchaseHistory(ctx context.Context, record *config.PurchaseHistoryRecord) error {
 	return nil
 }

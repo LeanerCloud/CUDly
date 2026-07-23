@@ -354,6 +354,7 @@ func TestApproveViaSession_PassesCSRF(t *testing.T) {
 		Recommendations: []config.RecommendationRecord{{ID: "r1"}},
 	}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 
 	mockAuth := new(MockAuthService)
 	adminSession := &Session{Email: adminEmail}

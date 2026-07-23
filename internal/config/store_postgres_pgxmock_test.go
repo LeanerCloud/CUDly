@@ -62,6 +62,7 @@ func TestPGXMock_GetGlobalConfig_Success(t *testing.T) {
 		"laddering_enabled",
 		"ladder_execution_enabled",
 		"offering_class",
+		"require_different_approver",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		[]string{"aws"}, strPtr("ops@example.com"), true,
@@ -75,6 +76,7 @@ func TestPGXMock_GetGlobalConfig_Success(t *testing.T) {
 		false,
 		false,
 		"convertible",
+		false,
 	)
 	mock.ExpectQuery("SELECT").WillReturnRows(rows)
 
@@ -86,6 +88,7 @@ func TestPGXMock_GetGlobalConfig_Success(t *testing.T) {
 	assert.Equal(t, 24, cfg.RecommendationsCacheStaleHours)
 	assert.Equal(t, 7, cfg.RecommendationsLookbackDays)
 	assert.Equal(t, "convertible", cfg.OfferingClass)
+	assert.False(t, cfg.RequireDifferentApprover)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -119,6 +122,7 @@ func TestPGXMock_GetGlobalConfig_GracePeriodDays(t *testing.T) {
 		"laddering_enabled",
 		"ladder_execution_enabled",
 		"offering_class",
+		"require_different_approver",
 	}
 	baseRow := func(graceJSON string) []any {
 		return []any{
@@ -133,6 +137,7 @@ func TestPGXMock_GetGlobalConfig_GracePeriodDays(t *testing.T) {
 			false,
 			false,
 			"convertible",
+			false,
 		}
 	}
 
@@ -192,6 +197,7 @@ var globalConfigCols = []string{
 	"laddering_enabled",
 	"ladder_execution_enabled",
 	"offering_class",
+	"require_different_approver",
 }
 
 // TestPGXMock_UpdateGlobalConfigAtomic_LockedReadModifyWrite proves the F2
@@ -222,6 +228,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_LockedReadModifyWrite(t *testing.T) {
 		false,         // laddering_enabled = false
 		false,         // ladder_execution_enabled = false
 		"convertible", // offering_class
+		false,         // require_different_approver
 	)
 
 	// Strict order: the SELECT and the UPSERT must sit between the same
@@ -230,7 +237,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_LockedReadModifyWrite(t *testing.T) {
 	mock.ExpectExec("pg_advisory_xact_lock").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	mock.ExpectQuery("FROM global_config").WillReturnRows(seeded)
-	mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(23)...).
+	mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(24)...).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
@@ -278,6 +285,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_ApplyErrorRollsBack(t *testing.T) {
 		false,
 		false,
 		"convertible",
+		false,
 	)
 
 	mock.ExpectBegin()
