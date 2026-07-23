@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
@@ -93,6 +95,21 @@ type PurchaseResponse struct {
 	EffectiveDate     string   `json:"effective_date,omitempty"`
 	TermYears         int      `json:"term_years,omitempty"`
 	Error             string   `json:"error,omitempty"`
+}
+
+// termYearsFromRecommendationTerm extracts the integer commitment length in
+// years from a Recommendation.Term string in the "<N>yr" format every
+// *FromArgs constructor in this package writes via
+// TermYears.RecommendationTerm() (enums.go). Returns 0 when term does not
+// match that format (e.g. an empty Term), so PurchaseResponse.TermYears is
+// simply omitted (it has `omitempty`) rather than reporting a fabricated
+// value.
+func termYearsFromRecommendationTerm(term string) int {
+	years, err := strconv.Atoi(strings.TrimSuffix(term, "yr"))
+	if err != nil {
+		return 0
+	}
+	return years
 }
 
 // nonZeroCostPtr returns a pointer to v, or nil when v is exactly zero. Cost
@@ -245,6 +262,7 @@ func ExecutePurchase(ctx context.Context, req PurchaseRequest) (*PurchaseRespons
 			OnDemandCost:      nonZeroCostPtr(rec.OnDemandCost),
 			EstimatedSavings:  nonZeroCostPtr(rec.EstimatedSavings),
 			SavingsPercentage: nonZeroCostPtr(rec.SavingsPercentage),
+			TermYears:         termYearsFromRecommendationTerm(rec.Term),
 		}, nil
 	}
 
@@ -278,6 +296,7 @@ func ExecutePurchase(ctx context.Context, req PurchaseRequest) (*PurchaseRespons
 		EstimatedSavings:  nonZeroCostPtr(rec.EstimatedSavings),
 		SavingsPercentage: nonZeroCostPtr(rec.SavingsPercentage),
 		EffectiveDate:     result.Timestamp.Format(time.RFC3339),
+		TermYears:         termYearsFromRecommendationTerm(rec.Term),
 	}
 	if result.Error != nil {
 		resp.Error = result.Error.Error()
