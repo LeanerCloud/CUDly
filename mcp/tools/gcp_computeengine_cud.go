@@ -98,11 +98,11 @@ func (t *gcpComputeEngineCUDPurchaseTool) handle(ctx context.Context, _ *mcp.Cal
 }
 
 func gcpCUDPurchaseRequiredFields(args gcpComputeEngineCUDPurchaseArgs) error {
-	if args.Region == "" {
-		return fmt.Errorf("region is required")
+	if err := requireNonBlank("region", args.Region); err != nil {
+		return err
 	}
-	if args.MachineType == "" {
-		return fmt.Errorf("machine_type is required")
+	if err := requireNonBlank("machine_type", args.MachineType); err != nil {
+		return err
 	}
 	if args.VCPUCount <= 0 {
 		return fmt.Errorf("vcpu_count must be > 0, got %d", args.VCPUCount)

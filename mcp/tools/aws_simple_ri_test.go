@@ -99,7 +99,9 @@ func TestSimpleAWSRIPurchaseInvalidArgs(t *testing.T) {
 		errSub string
 	}{
 		{"missing region", func(a *simpleAWSRIPurchaseArgs) { a.Region = "" }, "region is required"},
+		{"whitespace-only region", func(a *simpleAWSRIPurchaseArgs) { a.Region = "   " }, "region is required"},
 		{"missing resource_type", func(a *simpleAWSRIPurchaseArgs) { a.ResourceType = "" }, "resource_type is required"},
+		{"whitespace-only resource_type", func(a *simpleAWSRIPurchaseArgs) { a.ResourceType = "\t " }, "resource_type is required"},
 		{"zero count", func(a *simpleAWSRIPurchaseArgs) { a.Count = 0 }, "count must be"},
 		{"invalid term", func(a *simpleAWSRIPurchaseArgs) { a.TermYears = 4 }, "invalid term_years"},
 		{"invalid payment option", func(a *simpleAWSRIPurchaseArgs) { a.PaymentOption = "bogus" }, "invalid payment_option"},

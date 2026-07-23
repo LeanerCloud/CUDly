@@ -51,7 +51,9 @@ func TestGCPComputeEngineRecommendationFromArgsInvalid(t *testing.T) {
 		errSub string
 	}{
 		{"missing region", func(a *gcpComputeEngineCUDPurchaseArgs) { a.Region = "" }, "region is required"},
+		{"whitespace-only region", func(a *gcpComputeEngineCUDPurchaseArgs) { a.Region = "   " }, "region is required"},
 		{"missing machine_type", func(a *gcpComputeEngineCUDPurchaseArgs) { a.MachineType = "" }, "machine_type is required"},
+		{"whitespace-only machine_type", func(a *gcpComputeEngineCUDPurchaseArgs) { a.MachineType = "\t " }, "machine_type is required"},
 		{"zero vcpu_count", func(a *gcpComputeEngineCUDPurchaseArgs) { a.VCPUCount = 0 }, "vcpu_count must be"},
 		{"zero memory_gb", func(a *gcpComputeEngineCUDPurchaseArgs) { a.MemoryGB = 0 }, "memory_gb must be"},
 		{"negative memory_gb", func(a *gcpComputeEngineCUDPurchaseArgs) { a.MemoryGB = -1 }, "memory_gb must be"},
