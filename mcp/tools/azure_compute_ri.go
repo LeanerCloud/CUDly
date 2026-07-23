@@ -71,8 +71,14 @@ func (t *azureComputeRIPurchaseTool) Descriptor() Descriptor {
 
 func (t *azureComputeRIPurchaseTool) Register(s *mcp.Server) error {
 	schema, err := BuildInputSchema[azureComputeRIPurchaseArgs](map[string]FieldOverride{
-		"term_years":     {Enum: []any{int(TermOneYear), int(TermThreeYear)}},
-		"payment_option": {Enum: []any{string(PaymentOptionAllUpfront), string(PaymentOptionPartialUpfront), string(PaymentOptionNoUpfront)}, Default: string(PaymentOptionNoUpfront)},
+		"term_years": {Enum: []any{int(TermOneYear), int(TermThreeYear)}},
+		// Azure has no partial-upfront billing plan (see
+		// azureComputeRIPurchaseDescription and azureComputeRecommendationFromArgs
+		// below), so this tool's schema advertises only the two values Azure
+		// actually honors. The runtime check in azureComputeRecommendationFromArgs
+		// still rejects partial-upfront explicitly, as defense in depth for a
+		// caller that bypasses the schema.
+		"payment_option": {Enum: []any{string(PaymentOptionAllUpfront), string(PaymentOptionNoUpfront)}, Default: string(PaymentOptionNoUpfront)},
 		"dry_run":        {Default: true},
 		"confirm":        {Default: false},
 	})
