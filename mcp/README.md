@@ -9,16 +9,18 @@ Every purchase tool is dry-run by default (`dry_run=true`) and requires an expli
 From the repository root:
 
 ```bash
-go build -o cudly-mcp ./cmd/cudly-mcp
+go install ./cmd/cudly-mcp
 ```
 
-Or run directly without a separate build step:
+This installs the `cudly-mcp` binary to `$(go env GOBIN)` (or `$(go env GOPATH)/bin` if `GOBIN` is unset); make sure that directory is on your `PATH` so `cudly-mcp` resolves without a full path.
+
+Or run directly without a separate install step:
 
 ```bash
 go run ./cmd/cudly-mcp
 ```
 
-There is no separate module or release artifact for `cudly-mcp` yet -- build it from a checkout of this repository.
+There is no separate module or release artifact for `cudly-mcp` yet -- install it from a checkout of this repository.
 
 ## Configure credentials
 
@@ -55,14 +57,14 @@ Pass `gcp_project_id` on a per-call basis to override the ambient project.
 ## Launch
 
 ```bash
-./cudly-mcp
+cudly-mcp
 ```
 
 The server speaks MCP over stdio and logs diagnostics to stderr; it does not print anything to stdout other than protocol traffic, so it is safe to launch directly from an MCP client's process-spawning config (below) rather than through a wrapper script.
 
 ## Register with an MCP client
 
-Add an entry to your client's MCP server config. For Claude Code, this is `~/.claude/mcp.json`:
+Add an entry to your client's MCP server config. For Claude Code, this is `~/.claude/mcp.json`. Use the absolute path `go install` reported (`$(go env GOBIN)/cudly-mcp` or `$(go env GOPATH)/bin/cudly-mcp`) if the client does not inherit your shell's `PATH`:
 
 ```json
 {
