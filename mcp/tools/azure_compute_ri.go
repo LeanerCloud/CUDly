@@ -148,7 +148,7 @@ func azureComputeRecommendationFromArgs(args azureComputeRIPurchaseArgs) (rec co
 	// never be honored for real, and a call that's merely missing confirm
 	// surfaces that error from ExecutePurchase's shared gate instead of this
 	// Azure-specific one.
-	if mode, _ := decidePurchaseMode(dryRun, confirm); mode == modeExecute && paymentOption != PaymentOptionAllUpfront {
+	if azureRealPurchaseRequiresAllUpfront(dryRun, confirm, paymentOption) {
 		return common.Recommendation{}, false, false, fmt.Errorf(
 			"azure reserved instances only support all-upfront billing for a real purchase (got payment_option=%q): "+
 				"azure's purchase API has no billing-plan parameter and always bills upfront, so any other "+
@@ -168,6 +168,19 @@ func azureComputeRecommendationFromArgs(args azureComputeRIPurchaseArgs) (rec co
 	}
 
 	return rec, dryRun, confirm, nil
+}
+
+// azureRealPurchaseRequiresAllUpfront reports whether the given dry_run and
+// confirm flags would drive a real purchase (mode == modeExecute) for a
+// paymentOption other than all-upfront, the one case
+// azureComputeRecommendationFromArgs must reject (see its doc comment). When
+// decidePurchaseMode itself refuses the call (dry_run=false, confirm=false),
+// gateErr is non-nil and this reports false: that refusal already surfaces
+// from ExecutePurchase's shared gate, so this Azure-specific check must not
+// also report a (misleading) all-upfront violation for it.
+func azureRealPurchaseRequiresAllUpfront(dryRun, confirm bool, paymentOption PaymentOption) bool {
+	mode, gateErr := decidePurchaseMode(dryRun, confirm)
+	return gateErr == nil && mode == modeExecute && paymentOption != PaymentOptionAllUpfront
 }
 
 func (t *azureComputeRIPurchaseTool) resolveClient(args azureComputeRIPurchaseArgs) ResolveClientFunc {
