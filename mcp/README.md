@@ -64,7 +64,7 @@ The server speaks MCP over stdio and logs diagnostics to stderr; it does not pri
 
 ## Register with an MCP client
 
-Add an entry to your client's MCP server config. For Claude Code, this is `~/.claude/mcp.json`. Use the absolute path `go install` reported (`$(go env GOBIN)/cudly-mcp` or `$(go env GOPATH)/bin/cudly-mcp`) if the client does not inherit your shell's `PATH`:
+Add an entry to your client's MCP server config. For Claude Code, this is `~/.claude/mcp.json`. If the client does not inherit your shell's `PATH`, use the absolute path `go install` reported: `$(go env GOBIN)/cudly-mcp` if `GOBIN` is set, otherwise `$(go env GOPATH)/bin/cudly-mcp` (`$(go env GOBIN)` expands to an empty string when `GOBIN` is unset, so that path alone is not a valid binary location):
 
 ```json
 {
