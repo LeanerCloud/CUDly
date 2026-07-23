@@ -85,65 +85,6 @@ resource "aws_iam_policy" "compute_b" {
           }
         }
       },
-      {
-        # Key-lifecycle mutate + read actions on CUDly-tagged CMKs. Needed so
-        # the deploy can manage the OIDC issuer signing key (aws_kms_key.signing):
-        # PR #1480 migrated its spec RSA_2048 -> ECC_NIST_P256 (ES256), and KMS
-        # cannot change a key spec in place, so Terraform must replace the key
-        # (ScheduleKeyDeletion on the old CMK + CreateKey/TagResource on the new).
-        # Destructive actions (ScheduleKeyDeletion) are gated to Project=CUDly
-        # keys so the deploy SA can never schedule deletion of an unrelated
-        # workload's CMK sharing the account. GetKeyRotationStatus is read by the
-        # provider for aws_kms_key.enable_key_rotation.
-        Sid    = "KMSKeyLifecycleTaggedOnly"
-        Effect = "Allow"
-        Action = [
-          "kms:ScheduleKeyDeletion",
-          "kms:CancelKeyDeletion",
-          "kms:PutKeyPolicy",
-          "kms:EnableKeyRotation",
-          "kms:DisableKeyRotation",
-          "kms:GetKeyRotationStatus",
-          "kms:ListResourceTags",
-        ]
-        Resource = "*"
-        Condition = {
-          StringEquals = {
-            "aws:ResourceTag/Project" = "CUDly"
-          }
-        }
-      },
-      {
-        # TagResource/UntagResource are gated on the REQUEST tag (aws:RequestTag)
-        # rather than the resource tag, because a freshly created CMK is not yet
-        # tagged Project=CUDly when Terraform applies its tags. This constrains
-        # the deploy SA to only ever tag keys AS Project=CUDly, so a new key
-        # immediately falls under the ResourceTag-gated statements above.
-        Sid    = "KMSTagResourceRequestGated"
-        Effect = "Allow"
-        Action = [
-          "kms:TagResource",
-          "kms:UntagResource",
-        ]
-        Resource = "*"
-        Condition = {
-          StringEquals = {
-            "aws:RequestTag/Project" = "CUDly"
-          }
-        }
-      },
-      {
-        # kms:CreateKey cannot be scoped to a resource ARN (the key does not yet
-        # exist) and AWS does not support conditioning it on tags reliably across
-        # providers, so it is granted on "*". This is low-risk: creating a CMK
-        # grants no access to any data and does not expose existing keys; the
-        # dangerous action (ScheduleKeyDeletion) remains tag-gated above, and the
-        # new key is immediately tagged Project=CUDly via KMSTagResourceRequestGated.
-        Sid      = "KMSCreateKey"
-        Effect   = "Allow"
-        Action   = ["kms:CreateKey"]
-        Resource = "*"
-      },
     ]
   })
 

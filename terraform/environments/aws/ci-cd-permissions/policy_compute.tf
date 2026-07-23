@@ -320,7 +320,8 @@ resource "aws_iam_policy" "compute" {
       {
         # KMS mutating + destructive actions are gated on the key being
         # tagged Project=CUDly. The CUDly OIDC signing key is tagged at
-        # creation by Terraform (see modules/security/aws/kms_signing.tf).
+        # creation by Terraform (see modules/compute/aws/lambda/signing-key.tf,
+        # tags = merge(var.tags, ...)).
         # Without this gate the deploy SA could schedule deletion or
         # disable any KMS key in the account, causing denial of service
         # for unrelated workloads.
@@ -330,9 +331,27 @@ resource "aws_iam_policy" "compute" {
         # key-side check (tag-gated). The alias-side check lives in
         # policy_compute_b.tf KMSAliasMutate (ARN-scoped because aliases
         # have no IAM-visible tags).
+        # kms:CancelKeyDeletion lets the deploy SA reverse an
+        # in-progress ScheduleKeyDeletion on a CUDly-tagged key (e.g. a
+        # replace that gets interrupted before the new key is fully
+        # provisioned) without ever unlocking deletion of an unrelated
+        # account CMK.
+        #
+        # The condition uses StringEqualsIgnoreCase rather than
+        # StringEquals: the signing key's Project tag comes from
+        # local.common_tags (terraform/environments/aws/main.tf), which
+        # sets Project = var.project_name, and var.project_name defaults
+        # to the lowercase "cudly" (terraform/environments/aws/variables.tf).
+        # That resource-level tag overrides the provider's default_tags
+        # value of "CUDly" (uppercase) for the same key, so a
+        # case-sensitive StringEquals match against "CUDly" never
+        # matches the signing key and every action below was silently
+        # denied (AccessDenied: kms:ScheduleKeyDeletion) even though the
+        # key IS a CUDly-owned resource. See PR #1496.
         Sid    = "KMSMutateTaggedOnly"
         Effect = "Allow"
         Action = [
+          "kms:CancelKeyDeletion",
           "kms:CreateAlias",
           "kms:DeleteAlias",
           "kms:DisableKey",
@@ -346,7 +365,7 @@ resource "aws_iam_policy" "compute" {
         ]
         Resource = "*"
         Condition = {
-          StringEquals = {
+          StringEqualsIgnoreCase = {
             "aws:ResourceTag/Project" = "CUDly"
           }
         }
