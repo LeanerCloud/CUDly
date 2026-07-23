@@ -12,38 +12,33 @@ import (
 
 const azureComputeRIPurchaseName = "cudly_azure_compute_ri_purchase"
 
-// azureComputeRIPurchaseDescription flags a real, pre-existing gap in
-// Azure's purchase API (found while wiring this tool, not introduced by it):
-// Azure's purchase body (providers/azure/services/compute/client.go:
-// buildReservationBody) never sends a billingPlanType, so every purchase
-// uses Azure's default (upfront) billing plan regardless of the
-// payment_option requested here. Rather than silently accepting a
-// payment_option Azure will not actually honor -- and purchasing under a
-// different billing schedule than the caller chose -- this tool requires
-// payment_option=all-upfront for a real purchase (dry_run=false,
-// confirm=true) and rejects any other value there with an explicit error
-// (fail loud, not a silent mismatch; see azureComputeRecommendationFromArgs).
-// A dry_run=true preview still validates other payment_option values so a
-// caller can rehearse parameters without hitting this rejection.
+// azureComputeRIPurchaseDescription documents Azure's actual billing-plan
+// contract: providers/azure/services/compute/client.go's buildReservationBody
+// sends properties.billingPlan (armreservations.ReservationBillingPlan --
+// Upfront or Monthly), so both all-upfront and no-upfront purchases are
+// honored for real. Monthly costs the same total as Upfront -- Azure has no
+// premium for spreading payments -- but there is no partial-upfront billing
+// plan at all, so that value is rejected with an explicit error rather than
+// silently purchased under a different schedule (see
+// azureComputeRecommendationFromArgs).
 const azureComputeRIPurchaseDescription = "Purchase an Azure VM Reserved Instance. THIS SPENDS REAL MONEY when " +
 	"dry_run=false and confirm=true. Always call with dry_run=true first (the default) to validate your " +
-	"parameters before committing; a dry_run response never contacts Azure and never spends money. CAVEAT: " +
-	"Azure Reserved Instances only support all-upfront billing -- Azure's purchase API has no billing-plan " +
-	"parameter and always bills upfront -- so payment_option must be all-upfront for a real purchase " +
-	"(dry_run=false, confirm=true); any other value is rejected there with an error rather than silently " +
-	"purchased under a schedule Azure will not honor. A dry_run=true preview still validates other " +
-	"payment_option values so a caller can rehearse parameters before learning that."
+	"parameters before committing; a dry_run response never contacts Azure and never spends money. Azure " +
+	"Reserved Instances support two billing plans: all-upfront and no-upfront (billed monthly, same total " +
+	"price as all-upfront -- Azure charges no premium for spreading payments). payment_option defaults to " +
+	"no-upfront when omitted. Azure has no partial-upfront billing plan, so that value is rejected with an " +
+	"explicit error rather than silently purchased under all-upfront or no-upfront instead."
 
 // azureComputeRIPurchaseArgs is the input schema for
 // cudly_azure_compute_ri_purchase. Unlike EC2, Azure's purchase body needs no
 // Recommendation.Details -- providers/azure/services/compute/client.go's
-// buildReservationBody only reads Region/ResourceType/Count/Term.
+// buildReservationBody only reads Region/ResourceType/Count/Term/PaymentOption.
 type azureComputeRIPurchaseArgs struct {
 	Region              string `json:"region" jsonschema:"Azure region, e.g. eastus"`
 	VMSize              string `json:"vm_size" jsonschema:"Azure VM size (SKU), e.g. Standard_D2s_v3"`
 	Count               int    `json:"count" jsonschema:"number of VM instances to reserve, must be > 0"`
 	TermYears           int    `json:"term_years" jsonschema:"commitment length in years"`
-	PaymentOption       string `json:"payment_option" jsonschema:"payment schedule; Azure only honors all-upfront, see the CAVEAT in this tool's description"`
+	PaymentOption       string `json:"payment_option,omitempty" jsonschema:"payment schedule; Azure honors all-upfront and no-upfront (monthly, same total price); no partial-upfront; defaults to no-upfront"`
 	AzureSubscriptionID string `json:"azure_subscription_id,omitempty" jsonschema:"Azure subscription ID override; default uses AZURE_SUBSCRIPTION_ID"`
 	DryRun              *bool  `json:"dry_run,omitempty" jsonschema:"preview only, no purchase; defaults to true"`
 	Confirm             *bool  `json:"confirm,omitempty" jsonschema:"required (with dry_run=false) to execute a real purchase; defaults to false"`
@@ -76,7 +71,7 @@ func (t *azureComputeRIPurchaseTool) Descriptor() Descriptor {
 func (t *azureComputeRIPurchaseTool) Register(s *mcp.Server) error {
 	schema, err := BuildInputSchema[azureComputeRIPurchaseArgs](map[string]FieldOverride{
 		"term_years":     {Enum: []any{int(TermOneYear), int(TermThreeYear)}},
-		"payment_option": {Enum: []any{string(PaymentOptionAllUpfront), string(PaymentOptionPartialUpfront), string(PaymentOptionNoUpfront)}},
+		"payment_option": {Enum: []any{string(PaymentOptionAllUpfront), string(PaymentOptionPartialUpfront), string(PaymentOptionNoUpfront)}, Default: string(PaymentOptionNoUpfront)},
 		"dry_run":        {Default: true},
 		"confirm":        {Default: false},
 	})
@@ -124,9 +119,31 @@ func azureComputeRecommendationFromArgs(args azureComputeRIPurchaseArgs) (rec co
 	if err != nil {
 		return common.Recommendation{}, false, false, err
 	}
-	paymentOption, err := ValidatePaymentOption(args.PaymentOption)
+
+	// payment_option defaults to no-upfront (matching the CLI's --payment
+	// default, cmd/main.go) when the caller omits it -- an omitted string
+	// field arrives as "" and is never confused with an explicit,
+	// unrecognized value (feedback_no_silent_fallbacks: the default is
+	// applied here, explicitly, not fabricated deeper in the stack).
+	paymentOptionStr := args.PaymentOption
+	if paymentOptionStr == "" {
+		paymentOptionStr = string(PaymentOptionNoUpfront)
+	}
+	paymentOption, err := ValidatePaymentOption(paymentOptionStr)
 	if err != nil {
 		return common.Recommendation{}, false, false, err
+	}
+	// Azure reservations support exactly two billing plans (Upfront,
+	// Monthly -- see providers/azure/services/internal/reservations.
+	// BillingPlanForPaymentOption); there is no partial-upfront at any
+	// layer of Azure's API. Rejecting it here, unconditionally (not just
+	// for a real purchase), means a dry_run preview never reports success
+	// for a request that could never be honored for real.
+	if paymentOption == PaymentOptionPartialUpfront {
+		return common.Recommendation{}, false, false, fmt.Errorf(
+			"azure reservations do not support payment_option=%q: azure billing plans are all-upfront or "+
+				"no-upfront (monthly, same total price) only, with no partial-upfront option",
+			paymentOption)
 	}
 
 	dryRun, confirm = true, false
@@ -135,25 +152,6 @@ func azureComputeRecommendationFromArgs(args azureComputeRIPurchaseArgs) (rec co
 	}
 	if args.Confirm != nil {
 		confirm = *args.Confirm
-	}
-
-	// Azure's purchase API has no billing-plan parameter and always bills
-	// upfront (see the azureComputeRIPurchaseDescription doc comment), so a
-	// payment_option other than all-upfront would be silently purchased
-	// under a schedule the caller never chose. Reusing decidePurchaseMode
-	// (the same real-purchase-vs-preview gate ExecutePurchase applies) scopes
-	// this rejection to a call that would actually spend money: a preview
-	// (dry_run=true) still validates every other parameter so a caller can
-	// rehearse a no-upfront/partial-upfront request before learning it can
-	// never be honored for real, and a call that's merely missing confirm
-	// surfaces that error from ExecutePurchase's shared gate instead of this
-	// Azure-specific one.
-	if azureRealPurchaseRequiresAllUpfront(dryRun, confirm, paymentOption) {
-		return common.Recommendation{}, false, false, fmt.Errorf(
-			"azure reserved instances only support all-upfront billing for a real purchase (got payment_option=%q): "+
-				"azure's purchase API has no billing-plan parameter and always bills upfront, so any other "+
-				"payment_option would be purchased under a different schedule than requested rather than honored",
-			paymentOption)
 	}
 
 	rec = common.Recommendation{
@@ -168,19 +166,6 @@ func azureComputeRecommendationFromArgs(args azureComputeRIPurchaseArgs) (rec co
 	}
 
 	return rec, dryRun, confirm, nil
-}
-
-// azureRealPurchaseRequiresAllUpfront reports whether the given dry_run and
-// confirm flags would drive a real purchase (mode == modeExecute) for a
-// paymentOption other than all-upfront, the one case
-// azureComputeRecommendationFromArgs must reject (see its doc comment). When
-// decidePurchaseMode itself refuses the call (dry_run=false, confirm=false),
-// gateErr is non-nil and this reports false: that refusal already surfaces
-// from ExecutePurchase's shared gate, so this Azure-specific check must not
-// also report a (misleading) all-upfront violation for it.
-func azureRealPurchaseRequiresAllUpfront(dryRun, confirm bool, paymentOption PaymentOption) bool {
-	mode, gateErr := decidePurchaseMode(dryRun, confirm)
-	return gateErr == nil && mode == modeExecute && paymentOption != PaymentOptionAllUpfront
 }
 
 func (t *azureComputeRIPurchaseTool) resolveClient(args azureComputeRIPurchaseArgs) ResolveClientFunc {
