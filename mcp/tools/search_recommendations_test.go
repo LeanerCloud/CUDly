@@ -335,3 +335,26 @@ func TestSearchRecommendationsEC2NoDefaultsInjected(t *testing.T) {
 	assert.Empty(t, client.lastParams.PaymentOption)
 	assert.Empty(t, client.lastParams.LookbackPeriod)
 }
+
+// TestSearchRecommendationsMultipleInvalidFieldsJoinedInOneError is the
+// validate-all-at-once safety net (issue #1506 change 2): a request with
+// several invalid fields must name all of them in one returned error instead
+// of surfacing only the first one found.
+func TestSearchRecommendationsMultipleInvalidFieldsJoinedInOneError(t *testing.T) {
+	t.Parallel()
+	fp := &fakeProvider{name: "aws", services: []common.ServiceType{common.ServiceEC2}}
+	tool := newTestSearchTool(fp)
+
+	_, _, err := tool.handle(context.Background(), nil, searchRecommendationsArgs{
+		Provider:       "aws",
+		Service:        "ec2",
+		PaymentOption:  "not-a-real-option",
+		LookbackPeriod: "90d",
+		IncludeSPTypes: []string{"NotARealType"},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid payment_option")
+	assert.Contains(t, err.Error(), "invalid lookback_period")
+	assert.Contains(t, err.Error(), "include_sp_types")
+}
