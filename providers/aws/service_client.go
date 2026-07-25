@@ -85,14 +85,27 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	return recs, nil
 }
 
-// applyRecommendationFilters applies account and region filters to recommendations
+// applyRecommendationFilters applies account and region filters to recommendations.
+//
+// GetReservationPurchaseRecommendation and GetSavingsPlansPurchaseRecommendation
+// are both account-level Cost Explorer APIs: neither request carries a region
+// parameter, so AWS returns recommendations across every region the account
+// has usage in regardless of what params.Region asks for (issue #1506) --
+// this is the only region enforcement a single-region search gets. Region is
+// folded into the include-region set here (rather than requiring the caller
+// to pass include_regions) so cudly_search_recommendations' region="us-east-1"
+// argument -- documented as filtering the search -- actually does.
 func applyRecommendationFilters(recs []common.Recommendation, params common.RecommendationParams) []common.Recommendation {
 	if len(params.AccountFilter) > 0 {
 		recs = filterByAccounts(recs, params.AccountFilter)
 	}
 
-	if len(params.IncludeRegions) > 0 {
-		recs = filterByIncludedRegions(recs, params.IncludeRegions)
+	includeRegions := params.IncludeRegions
+	if params.Region != "" {
+		includeRegions = append(append([]string{}, includeRegions...), params.Region)
+	}
+	if len(includeRegions) > 0 {
+		recs = filterByIncludedRegions(recs, includeRegions)
 	}
 
 	if len(params.ExcludeRegions) > 0 {

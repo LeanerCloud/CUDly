@@ -290,3 +290,51 @@ func TestRecommendationsClientAdapter_GetAllRecommendations(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
+
+// TestApplyRecommendationFilters_Region is the regression guard for issue
+// #1506's Change 3: GetReservationPurchaseRecommendation and
+// GetSavingsPlansPurchaseRecommendation are account-level Cost Explorer
+// calls with no region parameter, so AWS returns recommendations from every
+// region the account has usage in regardless of params.Region. Before the
+// fix, only params.IncludeRegions/ExcludeRegions were honored here, so a
+// caller passing region alone (as cudly_search_recommendations documents)
+// got no region filtering at all -- an eu-west-1 recommendation could
+// surface from a us-east-1 search.
+func TestApplyRecommendationFilters_Region(t *testing.T) {
+	recs := []common.Recommendation{
+		{Account: "111", Region: "us-east-1"},
+		{Account: "222", Region: "eu-west-1"},
+	}
+
+	t.Run("region alone filters out other regions", func(t *testing.T) {
+		got := applyRecommendationFilters(recs, common.RecommendationParams{Region: "us-east-1"})
+		require.Len(t, got, 1)
+		assert.Equal(t, "us-east-1", got[0].Region)
+	})
+
+	t.Run("no region constraint returns everything", func(t *testing.T) {
+		got := applyRecommendationFilters(recs, common.RecommendationParams{})
+		assert.Len(t, got, 2)
+	})
+
+	t.Run("region and include_regions are additive", func(t *testing.T) {
+		threeRegionRecs := append(append([]common.Recommendation{}, recs...), common.Recommendation{Account: "333", Region: "ap-southeast-1"})
+		got := applyRecommendationFilters(threeRegionRecs, common.RecommendationParams{
+			Region:         "us-east-1",
+			IncludeRegions: []string{"eu-west-1"},
+		})
+		gotRegions := make([]string, len(got))
+		for i, r := range got {
+			gotRegions[i] = r.Region
+		}
+		assert.ElementsMatch(t, []string{"us-east-1", "eu-west-1"}, gotRegions)
+	})
+
+	t.Run("exclude_regions still applies on top of region", func(t *testing.T) {
+		got := applyRecommendationFilters(recs, common.RecommendationParams{
+			Region:         "us-east-1",
+			ExcludeRegions: []string{"us-east-1"},
+		})
+		assert.Empty(t, got)
+	})
+}
