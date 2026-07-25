@@ -28,9 +28,9 @@ type searchRecommendationsArgs struct {
 	Region              string   `json:"region,omitempty" jsonschema:"region to search; omit for account/global-level services such as Savings Plans"`
 	IncludeRegions      []string `json:"include_regions,omitempty" jsonschema:"restrict the search to these regions, in addition to (or instead of) region"`
 	ExcludeRegions      []string `json:"exclude_regions,omitempty" jsonschema:"exclude these regions from the search"`
-	LookbackPeriod      string   `json:"lookback_period,omitempty" jsonschema:"cost/usage lookback window backing the recommendation"`
-	TermYears           int      `json:"term_years,omitempty" jsonschema:"filter to a specific commitment term; omit to search all terms"`
-	PaymentOption       string   `json:"payment_option,omitempty" jsonschema:"filter to a specific payment schedule; omit to search all"`
+	LookbackPeriod      string   `json:"lookback_period,omitempty" jsonschema:"cost/usage lookback window backing the recommendation; AWS Savings Plans searches default to 30d when omitted (AWS requires a value); reservation searches (EC2/RDS/etc) leave it omitted to search all lookback windows"`
+	TermYears           int      `json:"term_years,omitempty" jsonschema:"commitment term filter; AWS Savings Plans searches default to 1 (1yr, no-upfront) when omitted (AWS requires a value); reservation searches (EC2/RDS/etc) leave it omitted to search all terms"`
+	PaymentOption       string   `json:"payment_option,omitempty" jsonschema:"payment schedule filter; AWS Savings Plans searches default to no-upfront when omitted (AWS requires a value); reservation searches (EC2/RDS/etc) leave it omitted to search all payment options"`
 	AccountFilter       []string `json:"account_filter,omitempty" jsonschema:"restrict the search to these account/subscription/project IDs"`
 	IncludeSPTypes      []string `json:"include_sp_types,omitempty" jsonschema:"AWS Savings Plans types to include; omit for all"`
 	ExcludeSPTypes      []string `json:"exclude_sp_types,omitempty" jsonschema:"AWS Savings Plans types to exclude"`
@@ -86,7 +86,7 @@ func (t *searchRecommendationsTool) Register(s *mcp.Server) error {
 }
 
 func (t *searchRecommendationsTool) handle(ctx context.Context, _ *mcp.CallToolRequest, args searchRecommendationsArgs) (*mcp.CallToolResult, searchRecommendationsResult, error) {
-	providerType, term, err := validateSearchArgs(args)
+	providerType, term, args, err := validateSearchArgs(args)
 	if err != nil {
 		return nil, searchRecommendationsResult{}, err
 	}
@@ -118,38 +118,78 @@ func (t *searchRecommendationsTool) handle(ctx context.Context, _ *mcp.CallToolR
 // validateSearchArgs validates every money-neutral-but-still-typed field on
 // args that does not require a live provider (provider name, payment
 // option, lookback_period, term, Savings Plans type filters), returning the
-// typed provider name and the normalised Recommendation term string
-// ("1yr"/"3yr", or "" when args.TermYears was omitted).
-func validateSearchArgs(args searchRecommendationsArgs) (common.ProviderType, string, error) {
+// typed provider name, the normalised Recommendation term string
+// ("1yr"/"3yr", or "" when args.TermYears was omitted), and args with
+// applySavingsPlansSearchDefaults applied.
+func validateSearchArgs(args searchRecommendationsArgs) (common.ProviderType, string, searchRecommendationsArgs, error) {
 	providerType, err := validateProviderName(args.Provider)
 	if err != nil {
-		return "", "", err
+		return "", "", args, err
 	}
+	args = applySavingsPlansSearchDefaults(providerType, args)
 
 	if args.PaymentOption != "" {
 		if _, err := ValidatePaymentOption(args.PaymentOption); err != nil {
-			return "", "", err
+			return "", "", args, err
 		}
 	}
 
 	if _, err := ValidateLookbackPeriod(args.LookbackPeriod); err != nil {
-		return "", "", err
+		return "", "", args, err
 	}
 
 	term := ""
 	if args.TermYears != 0 {
 		ty, err := ValidateTermYears(args.TermYears)
 		if err != nil {
-			return "", "", err
+			return "", "", args, err
 		}
 		term = ty.RecommendationTerm()
 	}
 
 	if err := validateSPTypeFilters(args.IncludeSPTypes, args.ExcludeSPTypes); err != nil {
-		return "", "", err
+		return "", "", args, err
 	}
 
-	return providerType, term, nil
+	return providerType, term, args, nil
+}
+
+// isAWSSavingsPlansSearch reports whether args targets an AWS Savings Plans
+// search -- the only combination where AWS's
+// GetSavingsPlansPurchaseRecommendation requires term_years, payment_option,
+// and lookback_period on every call. GetReservationPurchaseRecommendation
+// (EC2/RDS/etc) defaults these server-side when omitted, so detection must
+// never broaden past the Savings Plans family. Checked straight off the raw
+// args -- no live provider needed -- via the same common.IsSavingsPlan
+// family predicate the AWS recommendations client itself dispatches on
+// (providers/aws/recommendations/client.go).
+func isAWSSavingsPlansSearch(providerType common.ProviderType, service string) bool {
+	return providerType == common.ProviderAWS && common.IsSavingsPlan(common.ServiceType(service))
+}
+
+// applySavingsPlansSearchDefaults defaults payment_option, term_years, and
+// lookback_period to no-upfront/1yr/30d when args targets an AWS Savings
+// Plans search and the caller omitted them. Without this, an AWS SP search
+// with these fields blank fails against Cost Explorer one field at a time
+// (issue #1506): GetSavingsPlansPurchaseRecommendation requires all three,
+// unlike the EC2/RDS reservation path this tool otherwise shares, which
+// defaults them server-side. A caller-supplied value always wins -- this
+// only fills in what was left blank. No-op for every other provider/service
+// combination.
+func applySavingsPlansSearchDefaults(providerType common.ProviderType, args searchRecommendationsArgs) searchRecommendationsArgs {
+	if !isAWSSavingsPlansSearch(providerType, args.Service) {
+		return args
+	}
+	if args.PaymentOption == "" {
+		args.PaymentOption = string(PaymentOptionNoUpfront)
+	}
+	if args.TermYears == 0 {
+		args.TermYears = int(TermOneYear)
+	}
+	if args.LookbackPeriod == "" {
+		args.LookbackPeriod = string(LookbackPeriod30Days)
+	}
+	return args
 }
 
 // validateSPTypeFilters validates every entry of include/exclude against
