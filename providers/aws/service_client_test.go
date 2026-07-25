@@ -338,3 +338,61 @@ func TestApplyRecommendationFilters_Region(t *testing.T) {
 		assert.Empty(t, got)
 	})
 }
+
+// TestApplyRecommendationFilters_SavingsPlanRegion is the regression guard
+// for the read-path bug where a region filter silently dropped ALL Savings
+// Plans recommendations. Unlike RI/reservation recs, SP recs never populate
+// the top-level rec.Region: account-level plans (Compute/SageMaker/Database)
+// carry no region at all, and EC2Instance plans carry their region in
+// Details.Region (common.SavingsPlanDetails) instead, per parser_sp.go's
+// extractEC2SPFields. Before the fix, filterByIncludedRegions/
+// filterByExcludedRegions matched only rec.Region, so every SP rec --
+// region-agnostic or not -- was silently dropped by any region constraint.
+func TestApplyRecommendationFilters_SavingsPlanRegion(t *testing.T) {
+	accountLevelSP := common.Recommendation{
+		Account:        "111",
+		Region:         "",
+		CommitmentType: common.CommitmentSavingsPlan,
+		Details:        &common.SavingsPlanDetails{PlanType: "Compute"},
+	}
+	ec2InstanceSP := common.Recommendation{
+		Account:        "222",
+		Region:         "",
+		CommitmentType: common.CommitmentSavingsPlan,
+		Details:        &common.SavingsPlanDetails{PlanType: "EC2Instance", Region: "us-east-1"},
+	}
+
+	t.Run("account-level SP rec is kept under a region filter", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{accountLevelSP}, common.RecommendationParams{Region: "us-east-1"})
+		require.Len(t, got, 1)
+	})
+
+	t.Run("EC2Instance SP rec matching Details.Region is kept", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{ec2InstanceSP}, common.RecommendationParams{Region: "us-east-1"})
+		require.Len(t, got, 1)
+	})
+
+	t.Run("EC2Instance SP rec not matching Details.Region is dropped", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{ec2InstanceSP}, common.RecommendationParams{Region: "eu-west-1"})
+		assert.Empty(t, got)
+	})
+
+	t.Run("account-level SP rec is never excluded by exclude_regions", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{accountLevelSP}, common.RecommendationParams{ExcludeRegions: []string{"us-east-1"}})
+		require.Len(t, got, 1)
+	})
+
+	t.Run("EC2Instance SP rec matching exclude_regions is dropped", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{ec2InstanceSP}, common.RecommendationParams{ExcludeRegions: []string{"us-east-1"}})
+		assert.Empty(t, got)
+	})
+
+	t.Run("mixed recs: region filter keeps account-level and matching region, drops non-matching", func(t *testing.T) {
+		regionScoped := common.Recommendation{Account: "333", Region: "eu-west-1"}
+		got := applyRecommendationFilters(
+			[]common.Recommendation{accountLevelSP, ec2InstanceSP, regionScoped},
+			common.RecommendationParams{Region: "us-east-1"},
+		)
+		require.Len(t, got, 2)
+	})
+}
