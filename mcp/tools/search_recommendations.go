@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -121,6 +122,11 @@ func (t *searchRecommendationsTool) handle(ctx context.Context, _ *mcp.CallToolR
 // typed provider name, the normalised Recommendation term string
 // ("1yr"/"3yr", or "" when args.TermYears was omitted), and args with
 // applySavingsPlansSearchDefaults applied.
+//
+// Every invalid or missing field is collected and joined into a single
+// error rather than returning on the first one found, so a caller missing
+// several required fields (see requireSavingsPlansSearchFields) sees all of
+// them at once instead of fixing them one call at a time.
 func validateSearchArgs(args searchRecommendationsArgs) (common.ProviderType, string, searchRecommendationsArgs, error) {
 	providerType, err := validateProviderName(args.Provider)
 	if err != nil {
@@ -128,27 +134,37 @@ func validateSearchArgs(args searchRecommendationsArgs) (common.ProviderType, st
 	}
 	args = applySavingsPlansSearchDefaults(providerType, args)
 
+	var errs []error
+
 	if args.PaymentOption != "" {
 		if _, err := ValidatePaymentOption(args.PaymentOption); err != nil {
-			return "", "", args, err
+			errs = append(errs, err)
 		}
 	}
 
 	if _, err := ValidateLookbackPeriod(args.LookbackPeriod); err != nil {
-		return "", "", args, err
+		errs = append(errs, err)
 	}
 
 	term := ""
 	if args.TermYears != 0 {
-		ty, err := ValidateTermYears(args.TermYears)
-		if err != nil {
-			return "", "", args, err
+		if ty, err := ValidateTermYears(args.TermYears); err != nil {
+			errs = append(errs, err)
+		} else {
+			term = ty.RecommendationTerm()
 		}
-		term = ty.RecommendationTerm()
 	}
 
 	if err := validateSPTypeFilters(args.IncludeSPTypes, args.ExcludeSPTypes); err != nil {
-		return "", "", args, err
+		errs = append(errs, err)
+	}
+
+	if err := requireSavingsPlansSearchFields(providerType, args); err != nil {
+		errs = append(errs, err)
+	}
+
+	if len(errs) > 0 {
+		return "", "", args, errors.Join(errs...)
 	}
 
 	return providerType, term, args, nil
@@ -190,6 +206,33 @@ func applySavingsPlansSearchDefaults(providerType common.ProviderType, args sear
 		args.LookbackPeriod = string(LookbackPeriod30Days)
 	}
 	return args
+}
+
+// requireSavingsPlansSearchFields is a validate-all-at-once safety net: after
+// applySavingsPlansSearchDefaults runs, an AWS Savings Plans search should
+// never still be missing payment_option/term_years/lookback_period. If a
+// future change to the defaulting logic leaves one blank anyway, this fails
+// loud -- naming every still-missing field in one error -- rather than
+// letting the request reach Cost Explorer and fail one field at a time (the
+// cascade issue #1506 fixes).
+func requireSavingsPlansSearchFields(providerType common.ProviderType, args searchRecommendationsArgs) error {
+	if !isAWSSavingsPlansSearch(providerType, args.Service) {
+		return nil
+	}
+	var missing []string
+	if args.PaymentOption == "" {
+		missing = append(missing, "payment_option")
+	}
+	if args.TermYears == 0 {
+		missing = append(missing, "term_years")
+	}
+	if args.LookbackPeriod == "" {
+		missing = append(missing, "lookback_period")
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("savings plans search missing required field(s): %s", strings.Join(missing, ", "))
 }
 
 // validateSPTypeFilters validates every entry of include/exclude against
