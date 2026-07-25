@@ -106,6 +106,7 @@ These are pre-existing behaviours in the underlying purchase clients, not someth
 
 - **Azure VM Reservations have no partial-upfront billing plan.** Azure honors exactly two billing plans, all-upfront and no-upfront (billed monthly, same total price -- Azure charges no premium for spreading payments), and `cudly_azure_compute_ri_purchase` defaults `payment_option` to no-upfront when omitted. `payment_option=partial-upfront` has no Azure equivalent and is rejected with an explicit error rather than silently purchased under all-upfront or no-upfront instead.
 - **GCP Compute Engine CUDs commit resources, not instances.** `cudly_gcp_computeengine_cud_purchase` takes `vcpu_count` and `memory_gb` directly (a CUD is a vCPU+memory commitment), not an instance count -- there is no implicit vCPU-per-instance conversion.
+- **AWS Savings Plans searches require term/payment/lookback; `cudly_search_recommendations` defaults them.** Unlike EC2/RDS reservation searches (which AWS defaults server-side when `term_years`/`payment_option`/`lookback_period` are omitted), `GetSavingsPlansPurchaseRecommendation` rejects the call unless all three are set. When `service` targets a Savings Plans search on AWS, the tool fills in unset fields with `term_years=1` (1yr), `payment_option=no-upfront`, `lookback_period=30d` -- an explicitly supplied value is never overridden. Reservation searches (EC2/RDS/etc) are unaffected: omitted still means "search all".
 
 ## Deployment model
 
