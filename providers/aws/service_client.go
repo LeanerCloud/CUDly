@@ -132,7 +132,33 @@ func filterByAccounts(recs []common.Recommendation, accounts []string) []common.
 	return filtered
 }
 
-// filterByIncludedRegions filters recommendations to only included regions
+// effectiveRegion returns the region to use for region-filter matching.
+// Savings Plans recommendations never populate the top-level rec.Region
+// (GetSavingsPlansPurchaseRecommendation is account-level and carries no
+// region parameter -- see applyRecommendationFilters); EC2Instance Savings
+// Plans instead carry their recommended region in Details.Region
+// (SavingsPlanDetails, populated by parser_sp.go's extractEC2SPFields).
+// Falling back to it here means a region/include_regions filter matches
+// EC2Instance SP recs on their real region instead of dropping them via an
+// always-empty top-level Region. Compute/SageMaker/Database SP recs are
+// genuinely region-agnostic (Details.Region stays "" for them), so this
+// still returns "" for those and callers must treat "" as "keep, do not
+// filter" rather than "belongs to no region" (see #1495).
+func effectiveRegion(rec common.Recommendation) string {
+	if rec.Region != "" {
+		return rec.Region
+	}
+	if sp, ok := rec.Details.(*common.SavingsPlanDetails); ok && sp != nil {
+		return sp.Region
+	}
+	return ""
+}
+
+// filterByIncludedRegions filters recommendations to only included regions.
+// A recommendation whose effective region is empty is region-agnostic
+// (account-level Savings Plans recs -- see effectiveRegion) and is always
+// kept: an include filter narrows region-scoped recs, it must not silently
+// drop recs that carry no region at all.
 func filterByIncludedRegions(recs []common.Recommendation, regions []string) []common.Recommendation {
 	regionMap := make(map[string]bool)
 	for _, region := range regions {
@@ -141,7 +167,8 @@ func filterByIncludedRegions(recs []common.Recommendation, regions []string) []c
 
 	filtered := make([]common.Recommendation, 0, len(recs))
 	for _, rec := range recs {
-		if regionMap[rec.Region] {
+		effRegion := effectiveRegion(rec)
+		if effRegion == "" || regionMap[effRegion] {
 			filtered = append(filtered, rec)
 		}
 	}
@@ -149,7 +176,10 @@ func filterByIncludedRegions(recs []common.Recommendation, regions []string) []c
 	return filtered
 }
 
-// filterByExcludedRegions filters out recommendations from excluded regions
+// filterByExcludedRegions filters out recommendations from excluded regions.
+// A recommendation with an empty effective region (region-agnostic,
+// account-level Savings Plans recs -- see effectiveRegion) is never
+// excluded: it does not belong to any of the excluded regions.
 func filterByExcludedRegions(recs []common.Recommendation, regions []string) []common.Recommendation {
 	regionMap := make(map[string]bool)
 	for _, region := range regions {
@@ -158,7 +188,8 @@ func filterByExcludedRegions(recs []common.Recommendation, regions []string) []c
 
 	filtered := make([]common.Recommendation, 0, len(recs))
 	for _, rec := range recs {
-		if !regionMap[rec.Region] {
+		effRegion := effectiveRegion(rec)
+		if effRegion == "" || !regionMap[effRegion] {
 			filtered = append(filtered, rec)
 		}
 	}
