@@ -96,10 +96,12 @@ func validPaymentOptionsFor(provider string) []string {
 //     partial-upfront → monthly (no semantic equivalent — coerce to the
 //     no-upfront tier, CUDly's default billing schedule for Azure, rather
 //     than drop the rec; caller may log). Coercing to upfront here would
-//     silently bill an all-upfront schedule the caller never chose, since
-//     the web/API path wires billingPlan directly from this normalized
-//     payment option (see providers/azure billingPlan construction);
-//     landing on monthly keeps the rec on the default schedule instead.
+//     silently bill an all-upfront schedule the caller never chose: this
+//     normalized payment option drives the upfront-vs-monthly cost split in
+//     providers/azure/services/compute/client.go's GetOfferingDetails
+//     (the PaymentOption switch that allocates upfrontCost vs
+//     recurringCost), not a billingPlan request field; landing on monthly
+//     keeps the rec on the default schedule instead.
 //   - GCP  : all-upfront → monthly, no-upfront → monthly,
 //     partial-upfront → monthly, upfront → monthly (GCP CUDs are
 //     inherently monthly-billed — every non-monthly token collapses to the
@@ -156,9 +158,12 @@ func crossProviderPaymentAlias(provider, raw string) (string, bool) {
 		// equivalent — coerce to the no-upfront (monthly) tier, CUDly's
 		// default billing schedule, so the rec survives validation rather
 		// than dropping silently (caller WARN-logs). Coercing to "upfront"
-		// would silently bill an upfront schedule the caller never chose,
-		// since the web/API path wires Azure's billingPlan straight from
-		// this normalized payment option.
+		// would silently bill an upfront schedule the caller never chose:
+		// the web/API path's normalized payment option drives the
+		// upfront-vs-monthly cost split in
+		// providers/azure/services/compute/client.go's
+		// GetOfferingDetails (the PaymentOption switch), not a
+		// billingPlan request field.
 		switch raw {
 		case "all-upfront":
 			return "upfront", true
