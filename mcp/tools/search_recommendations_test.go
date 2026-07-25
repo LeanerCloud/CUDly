@@ -18,9 +18,11 @@ type fakeRecommendationsClient struct {
 	lastParams *common.RecommendationParams
 	recs       []common.Recommendation
 	err        error
+	calls      int
 }
 
 func (f *fakeRecommendationsClient) GetRecommendations(_ context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
+	f.calls++
 	f.lastParams = params
 	return f.recs, f.err
 }
@@ -258,4 +260,78 @@ func TestSearchRecommendationsClientErrorSurfaced(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Cost Explorer API throttled")
+}
+
+// TestSearchRecommendationsSPDefaultsAppliedWhenOmitted is the regression
+// guard for issue #1506: AWS's GetSavingsPlansPurchaseRecommendation
+// requires term/payment_option/lookback_period on every call, unlike
+// GetReservationPurchaseRecommendation (EC2/RDS/etc), which defaults them
+// server-side. Before the fix, an SP search omitting these three fields
+// forwarded them blank and only succeeds after AWS rejects the request (in
+// production, that means a caller must retry with each field filled in, one
+// at a time). This proves a single search call now builds the
+// no-upfront/1yr/30d defaults and reaches the provider exactly once.
+func TestSearchRecommendationsSPDefaultsAppliedWhenOmitted(t *testing.T) {
+	t.Parallel()
+	client := &fakeRecommendationsClient{}
+	fp := &fakeProvider{name: "aws", services: []common.ServiceType{common.ServiceSavingsPlansAll}, recClient: client}
+	tool := newTestSearchTool(fp)
+
+	_, _, err := tool.handle(context.Background(), nil, searchRecommendationsArgs{
+		Provider: "aws",
+		Service:  string(common.ServiceSavingsPlansAll),
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, client.calls, "must reach the provider exactly once")
+	require.NotNil(t, client.lastParams)
+	assert.Equal(t, "1yr", client.lastParams.Term)
+	assert.Equal(t, "no-upfront", client.lastParams.PaymentOption)
+	assert.Equal(t, "30d", client.lastParams.LookbackPeriod)
+}
+
+// TestSearchRecommendationsSPExplicitTermYearsPreserved proves the SP
+// defaults never override an explicitly supplied value: term_years=3 must
+// reach the provider as "3yr", not the 1yr default.
+func TestSearchRecommendationsSPExplicitTermYearsPreserved(t *testing.T) {
+	t.Parallel()
+	client := &fakeRecommendationsClient{}
+	fp := &fakeProvider{name: "aws", services: []common.ServiceType{common.ServiceSavingsPlansAll}, recClient: client}
+	tool := newTestSearchTool(fp)
+
+	_, _, err := tool.handle(context.Background(), nil, searchRecommendationsArgs{
+		Provider:  "aws",
+		Service:   string(common.ServiceSavingsPlansAll),
+		TermYears: 3,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, client.lastParams)
+	assert.Equal(t, "3yr", client.lastParams.Term)
+	assert.Equal(t, "no-upfront", client.lastParams.PaymentOption, "payment_option still defaults when omitted")
+	assert.Equal(t, "30d", client.lastParams.LookbackPeriod, "lookback_period still defaults when omitted")
+}
+
+// TestSearchRecommendationsEC2NoDefaultsInjected proves the SP defaults are
+// scoped to AWS Savings Plans searches only: an EC2 (reservation) search
+// omitting term/payment/lookback must reach the provider with those fields
+// still blank, since GetReservationPurchaseRecommendation already searches
+// all terms/payment options/lookback windows when they're omitted --
+// defaulting them here would wrongly narrow those results.
+func TestSearchRecommendationsEC2NoDefaultsInjected(t *testing.T) {
+	t.Parallel()
+	client := &fakeRecommendationsClient{}
+	fp := &fakeProvider{name: "aws", services: []common.ServiceType{common.ServiceEC2}, recClient: client}
+	tool := newTestSearchTool(fp)
+
+	_, _, err := tool.handle(context.Background(), nil, searchRecommendationsArgs{
+		Provider: "aws",
+		Service:  "ec2",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, client.lastParams)
+	assert.Empty(t, client.lastParams.Term)
+	assert.Empty(t, client.lastParams.PaymentOption)
+	assert.Empty(t, client.lastParams.LookbackPeriod)
 }
