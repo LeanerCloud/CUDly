@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
 
 // Security constants.
@@ -564,8 +565,17 @@ func validatePurchaseRecommendation(rec *config.RecommendationRecord, idx int) e
 	payment := strings.ToLower(strings.TrimSpace(rec.Payment))
 	// Coerce any legacy/cross-provider alias before the whitelist check so
 	// that callers using old AWS-style tokens are transparently redirected to
-	// the canonical token for the target provider.
+	// the canonical token for the target provider. WARN when a real
+	// normalization occurs (raw != canonical) so an operator can audit the
+	// coercion of this money-affecting field, matching the WARN contract
+	// documented on config.NormalizePaymentOption and mirroring the same
+	// coerced/uncoerced logging convertRecommendations does at the
+	// scheduler's emission boundary (internal/scheduler/scheduler.go).
 	if normalized, ok := config.NormalizePaymentOption(provider, payment); ok {
+		if normalized != payment {
+			logging.Warnf("validatePurchaseRecommendation: rec %d (%s/%s) payment option normalized: raw=%q canonical=%q",
+				idx, provider, rec.Service, payment, normalized)
+		}
 		payment = normalized
 	}
 	if !payments[payment] {

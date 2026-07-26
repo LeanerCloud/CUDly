@@ -147,6 +147,60 @@ func TestValidatePurchaseRecommendation_ErrorMessage(t *testing.T) {
 	assert.Contains(t, err.Error(), "monthly")
 }
 
+// TestValidatePurchaseRecommendation_NormalizationWarning is a regression test
+// for #1504: the doc comment on config.NormalizePaymentOption
+// (internal/config/validation.go) states that the caller is expected to WARN
+// when a raw payment-option token differs from its normalized canonical form,
+// so an operator can audit a money-affecting coercion. validatePurchaseRecommendation
+// is that caller; it must emit a WARN log when normalization actually changes
+// the value (raw != canonical). This test captures the default logger's
+// output via captureDefaultLog (defined in handler_accounts_test.go, package
+// api) and asserts the log line is emitted with the provider, service, raw
+// and canonical values, and rec index.
+//
+// Not run with t.Parallel(): captureDefaultLog mutates the shared default
+// logger's output, which would race against other SetOutput-using tests if
+// parallelized (see TestValidatePlanAccountProviders_GetAccountDBError_NoPIILeak).
+func TestValidatePurchaseRecommendation_NormalizationWarning(t *testing.T) {
+	logBuf := captureDefaultLog(t)
+
+	// Azure partial-upfront has no direct Azure equivalent; NormalizePaymentOption
+	// coerces it to "monthly" (#1503). This is a real raw != canonical
+	// transition and must be logged.
+	rec := validRec()
+	rec.Provider = "azure"
+	rec.Payment = "partial-upfront"
+	err := validatePurchaseRecommendation(&rec, 7)
+	require.NoError(t, err)
+	// The money-affecting coercion itself must be unchanged by adding the log.
+	assert.Equal(t, "monthly", rec.Payment, "coercion behavior must stay partial-upfront -> monthly, not upfront")
+
+	logged := logBuf.String()
+	assert.Contains(t, logged, "[WARN]")
+	assert.Contains(t, logged, "rec 7 (azure/ec2)", "warning must identify the rec index, provider and service for audit")
+	assert.Contains(t, logged, `raw="partial-upfront"`)
+	assert.Contains(t, logged, `canonical="monthly"`)
+}
+
+// TestValidatePurchaseRecommendation_NoWarningWhenAlreadyCanonical guards that
+// an already-canonical payment option (no real normalization) does not emit a
+// WARN log: only an actual raw->canonical transition should be observable, so
+// operators aren't flooded with noise on the common case.
+//
+// Not run with t.Parallel(); see TestValidatePurchaseRecommendation_NormalizationWarning.
+func TestValidatePurchaseRecommendation_NoWarningWhenAlreadyCanonical(t *testing.T) {
+	logBuf := captureDefaultLog(t)
+
+	rec := validRec()
+	rec.Provider = "azure"
+	rec.Payment = "monthly" // already canonical for azure; no normalization occurs
+	err := validatePurchaseRecommendation(&rec, 0)
+	require.NoError(t, err)
+	assert.Equal(t, "monthly", rec.Payment)
+
+	assert.Empty(t, logBuf.String(), "no normalization occurred, so nothing should be logged")
+}
+
 // The per-rec #643 validation is wired into the web execute boundary
 // (validateExecutePurchaseRequest), NOT the shared validateAndTotalRecommendations
 // which the retry path also calls with replayed recs. This test pins that
