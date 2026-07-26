@@ -51,6 +51,10 @@
     "chart.js": "4.5.1",
     "qrcode": "1.5.4"
   },
+  "overrides": {
+    "minimatch": "^10.2.5",
+    "brace-expansion": "^5.0.8"
+  },
   "jest": {
     "preset": "ts-jest",
     "testEnvironment": "jsdom",
