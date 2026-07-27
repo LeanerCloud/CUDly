@@ -37,7 +37,7 @@ type gcpComputeEngineCUDPurchaseArgs struct {
 	VCPUCount        int     `json:"vcpu_count" jsonschema:"number of vCPUs to commit, must be > 0"`
 	MemoryGB         float64 `json:"memory_gb" jsonschema:"amount of memory (GB) to commit, must be > 0"`
 	TermYears        int     `json:"term_years" jsonschema:"commitment length in years"`
-	GCPProjectID     string  `json:"gcp_project_id,omitempty" jsonschema:"GCP project ID override; default uses ambient project"`
+	GCPProjectID     string  `json:"gcp_project_id,omitempty" jsonschema:"GCP project ID to buy for. Optional for a dry_run preview (the ambient project is used); REQUIRED for a real purchase (dry_run=false, confirm=true), which is refused without it because GCP has no ambient project variable that reliably names the target project"`
 	DryRun           *bool   `json:"dry_run,omitempty" jsonschema:"preview only, no purchase; defaults to true"`
 	Confirm          *bool   `json:"confirm,omitempty" jsonschema:"required (with dry_run=false) to execute a real purchase; defaults to false"`
 	IdempotencyNonce string  `json:"idempotency_nonce,omitempty" jsonschema:"optional; set to a fresh value to authorize a purchase that is otherwise identical to a previous one (e.g. buy 3 more RIs with the same parameters); leave empty (the default) so retries with identical parameters dedupe and never double-buy"`
@@ -91,12 +91,36 @@ func (t *gcpComputeEngineCUDPurchaseTool) handle(ctx context.Context, _ *mcp.Cal
 	}
 
 	resp, err := ExecutePurchase(ctx, PurchaseRequest{
-		Region:          region,
-		Recommendation:  rec,
-		DryRun:          dryRun,
-		Confirm:         confirm,
-		ResolveClient:   t.resolveClient(args, region),
-		Nonce:           args.IdempotencyNonce,
+		Region:         region,
+		Recommendation: rec,
+		DryRun:         dryRun,
+		Confirm:        confirm,
+		ResolveClient:  t.resolveClient(args, region),
+		Nonce:          args.IdempotencyNonce,
+		// No ambient environment fallback here, deliberately, and unlike the
+		// AWS ("AWS_PROFILE") and Azure ("AZURE_SUBSCRIPTION_ID") tools. Do
+		// not "fix" this asymmetry by adding one: CredentialScope's contract
+		// is that its fallback names the SAME variable the provider factory
+		// itself consults, so that naming an account explicitly and letting
+		// it resolve ambiently derive the same idempotency token. GCP has no
+		// such variable. providers/gcp/provider.go's resolveGCPProjectID
+		// reads only config.GCPProjectID and the deprecated config.Profile,
+		// and when both are empty NewProvider falls through to
+		// getDefaultProject, which picks the first ACTIVE project returned by
+		// cloudresourcemanager's paginated ListProjects.
+		//
+		// Adding e.g. GOOGLE_CLOUD_PROJECT to this call alone would make the
+		// token LIE: the scope would read that variable while the purchase
+		// still landed in whatever project getDefaultProject resolved, so the
+		// same target reached two ways would derive two different tokens and
+		// double-buy. That is exactly the hazard requireCredentialScope
+		// exists to close. Teaching the factory to read it too would fix the
+		// divergence but change project selection for every other consumer of
+		// providers/gcp (CLI, web, scheduler), and GOOGLE_CLOUD_PROJECT
+		// conventionally names the project a process RUNS IN, not the one it
+		// should buy for, so on a hosted runtime that silently redirects
+		// purchases. Requiring gcp_project_id explicitly is the safe reading:
+		// it fails closed with a message naming the argument to pass.
 		CredentialScope: CredentialScope(args.GCPProjectID),
 	})
 	if err != nil {
