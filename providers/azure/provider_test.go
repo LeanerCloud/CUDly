@@ -1450,6 +1450,59 @@ func TestAzureProvider_GetAccounts_ConcurrentColdCache_SingleARMCall(t *testing.
 		"concurrent cold-cache GetAccounts must issue exactly one ARM list call (single-flight)")
 }
 
+// Swapping the credential or the subscriptions client must drop the cached
+// subscription list. The cache records what the PREVIOUS credential/client
+// could see; serving it afterwards would report subscriptions the new
+// principal may have no access to, and GetRecommendationsClient would then
+// fan out across them.
+func TestAzureProvider_CacheDroppedOnCredentialOrClientSwap(t *testing.T) {
+	clearAzureSubscriptionEnv(t)
+
+	t.Run("SetCredential invalidates", func(t *testing.T) {
+		counting := &countingSubscriptionsClient{mockSubscriptionsClient: twoSubscriptionPages()}
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(counting)
+
+		_, err := p.GetAccounts(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, int64(1), counting.calls.Load())
+
+		p.SetCredential(&mockTokenCredential{})
+
+		_, err = p.GetAccounts(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, int64(2), counting.calls.Load(),
+			"a credential swap must re-resolve the subscription list, not reuse the old credential's")
+	})
+
+	t.Run("SetSubscriptionsClient invalidates", func(t *testing.T) {
+		first := &countingSubscriptionsClient{mockSubscriptionsClient: twoSubscriptionPages()}
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(first)
+
+		_, err := p.GetAccounts(context.Background())
+		require.NoError(t, err)
+
+		soloID, soloName := "sub-solo", "Solo Subscription"
+		p.SetSubscriptionsClient(&mockSubscriptionsClient{
+			listPagerFunc: func(_ *armsubscriptions.ClientListOptions) SubscriptionsPager {
+				return &mockSubscriptionsPager{
+					pages: []armsubscriptions.ClientListResponse{
+						{SubscriptionListResult: armsubscriptions.SubscriptionListResult{
+							Value: []*armsubscriptions.Subscription{{SubscriptionID: &soloID, DisplayName: &soloName}},
+						}},
+					},
+				}
+			},
+		})
+
+		accts, err := p.GetAccounts(context.Background())
+		require.NoError(t, err)
+		require.Len(t, accts, 1, "the swapped-in client's subscriptions must be returned, not the cached ones")
+		assert.Equal(t, soloID, accts[0].ID)
+	})
+}
+
 // gatedGenerationSubscriptionsClient holds its first ARM list call open (like
 // gatedCountingSubscriptionsClient) but serves a DIFFERENT subscription on
 // each call, so a test can tell a re-fetched result apart from a resurrected

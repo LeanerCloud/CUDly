@@ -166,9 +166,14 @@ func resolveAzureSubscriptionID(config *provider.ProviderConfig) string {
 	return config.Profile
 }
 
-// SetSubscriptionsClient sets the subscriptions client (for testing)
+// SetSubscriptionsClient sets the subscriptions client (for testing).
+//
+// Drops any cached subscription list: the cache holds what the PREVIOUS
+// client returned, and serving that after the client is swapped would answer
+// with a different source's subscriptions.
 func (p *AzureProvider) SetSubscriptionsClient(client SubscriptionsClient) {
 	p.subscriptionsClient = client
+	p.InvalidateAccountsCache()
 }
 
 // SetCredentialProvider sets the credential provider (for testing)
@@ -176,9 +181,19 @@ func (p *AzureProvider) SetCredentialProvider(credProvider CredentialProvider) {
 	p.credProvider = credProvider
 }
 
-// SetCredential sets the credential directly (for testing)
+// SetCredential sets the credential directly.
+//
+// Also used in production (the scheduler and purchase-execution paths
+// construct the provider and then install per-account federated credentials),
+// so it must drop any cached subscription list: that cache is the set of
+// subscriptions the PREVIOUS credential could see. Serving it to the new
+// credential would report subscriptions this principal may have no access to,
+// and -- via GetRecommendationsClient's fan-out -- fan out across them.
+// Today every caller installs the credential before the first accounts fetch,
+// so this is a guard against a future reordering rather than a live leak.
 func (p *AzureProvider) SetCredential(cred azcore.TokenCredential) {
 	p.cred = cred
+	p.InvalidateAccountsCache()
 }
 
 // Name returns the provider name
