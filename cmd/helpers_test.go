@@ -589,6 +589,11 @@ func TestNormalizeEngineName(t *testing.T) {
 	}
 }
 
+// TestGetEngineFromRecommendation only exercises pointer-typed
+// DatabaseDetails/CacheDetails: every producer (AWS, Azure, the CSV
+// loader, and the JSON codec) constructs them that way, so there is no
+// value-typed case to cover -- see
+// pkg/common/service_details_codec.go's package doc for the invariant.
 func TestGetEngineFromRecommendation(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -596,25 +601,11 @@ func TestGetEngineFromRecommendation(t *testing.T) {
 		rec      common.Recommendation
 	}{
 		{
-			name: "DatabaseDetails value type",
-			rec: common.Recommendation{
-				Details: common.DatabaseDetails{Engine: "mysql"},
-			},
-			expected: "mysql",
-		},
-		{
 			name: "DatabaseDetails pointer type",
 			rec: common.Recommendation{
 				Details: &common.DatabaseDetails{Engine: "postgresql"},
 			},
 			expected: "postgresql",
-		},
-		{
-			name: "CacheDetails value type",
-			rec: common.Recommendation{
-				Details: common.CacheDetails{Engine: "redis"},
-			},
-			expected: "redis",
 		},
 		{
 			name: "CacheDetails pointer type",

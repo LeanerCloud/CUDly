@@ -1200,7 +1200,7 @@ func TestScheduler_ConvertRecommendations(t *testing.T) {
 			PaymentOption:    "partial-upfront",
 			CommitmentCost:   500.0,
 			EstimatedSavings: 200.0,
-			Details: common.DatabaseDetails{
+			Details: &common.DatabaseDetails{
 				Engine: "mysql",
 			},
 		},
@@ -1463,9 +1463,9 @@ func TestScheduler_ConvertRecommendations_IDUniqueness(t *testing.T) {
 				rdsBase := base
 				rdsBase.Service = common.ServiceRDS
 				rdsBase.ResourceType = "db.m5.large"
-				rdsBase.Details = common.DatabaseDetails{Engine: "mysql"}
+				rdsBase.Details = &common.DatabaseDetails{Engine: "mysql"}
 				rdsTwin := rdsBase
-				rdsTwin.Details = common.DatabaseDetails{Engine: "postgres"}
+				rdsTwin.Details = &common.DatabaseDetails{Engine: "postgres"}
 				return rdsBase, rdsTwin
 			},
 		},
