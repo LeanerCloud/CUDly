@@ -399,12 +399,15 @@ export interface PurchaseResult {
   // #289). Absent (undefined) on the standard approval-required flow.
   direct_execute?: boolean;
   // Per-rec payment-option coercion notices (#1503 follow-up). Present only
-  // when the backend normalized a requested payment option onto a DIFFERENT
-  // provider-canonical token (e.g. Azure "partial-upfront" -> "monthly"):
+  // when the backend normalized a requested payment option onto a token that
+  // bills on a DIFFERENT schedule (e.g. Azure "partial-upfront" -> "monthly"):
   // each entry names what was requested, what was actually applied, and why,
   // so the UI can tell the user instead of silently changing the billing
   // schedule. Absent (never an empty array) when every option was already
-  // canonical.
+  // canonical, and also when the backend only respelled a token into the
+  // provider's own vocabulary for the same schedule (Azure "all-upfront" ->
+  // "upfront") — that changes nothing the user pays, so warning about it
+  // would just teach them to dismiss the notice that matters.
   payment_adjustments?: PaymentAdjustment[];
   results?: Array<{
     recommendation_id: string;

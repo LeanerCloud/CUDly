@@ -1021,6 +1021,68 @@ func TestNormalizePaymentOption(t *testing.T) {
 	}
 }
 
+// TestPaymentScheduleFor pins the token -> cash-flow classification that lets
+// callers tell a cross-provider RENAME apart from a real billing-schedule
+// change (#1503). Getting this wrong in either direction is a user-visible
+// defect: over-classifying warns on ordinary purchases until users learn to
+// dismiss the warning, under-classifying hides a schedule change the customer
+// never chose.
+func TestPaymentScheduleFor(t *testing.T) {
+	tests := []struct {
+		token string
+		want  PaymentSchedule
+	}{
+		// One charge at purchase, spelled two ways.
+		{"all-upfront", PaymentScheduleUpfront},
+		{"upfront", PaymentScheduleUpfront},
+		// AWS's middle tier; no Azure or GCP equivalent.
+		{"partial-upfront", PaymentSchedulePartialUpfront},
+		// Nothing at purchase, billed per period; spelled two ways.
+		{"no-upfront", PaymentScheduleRecurring},
+		{"monthly", PaymentScheduleRecurring},
+		// Not a modeled schedule.
+		{"", PaymentScheduleUnknown},
+		{"ohai", PaymentScheduleUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.token, func(t *testing.T) {
+			assert.Equal(t, tt.want, PaymentScheduleFor(tt.token))
+		})
+	}
+}
+
+// TestPaymentCoercionChangesSchedule walks every rewrite crossProviderPaymentAlias
+// can actually perform and pins whether it is a disclosable change. The pairs
+// are the ones NormalizePaymentOption produces, so this test breaks if a future
+// mapping change silently flips a rename into a schedule change or vice versa.
+func TestPaymentCoercionChangesSchedule(t *testing.T) {
+	tests := []struct {
+		name      string
+		raw       string
+		canonical string
+		want      bool
+	}{
+		// Azure vocabulary: same cash flow, different word.
+		{"azure all-upfront respelled upfront", "all-upfront", "upfront", false},
+		{"azure no-upfront respelled monthly", "no-upfront", "monthly", false},
+		// Azure has no partial tier, so this really moves the money.
+		{"azure partial-upfront becomes monthly", "partial-upfront", "monthly", true},
+		// GCP is monthly-only: upfront-shaped tokens all change the schedule.
+		{"gcp upfront becomes monthly", "upfront", "monthly", true},
+		{"gcp all-upfront becomes monthly", "all-upfront", "monthly", true},
+		{"gcp partial-upfront becomes monthly", "partial-upfront", "monthly", true},
+		{"gcp no-upfront respelled monthly", "no-upfront", "monthly", false},
+		// No rewrite at all.
+		{"identity", "monthly", "monthly", false},
+		{"empty identity", "", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, PaymentCoercionChangesSchedule(tt.raw, tt.canonical))
+		})
+	}
+}
+
 func TestIsValidRampScheduleType(t *testing.T) {
 	assert.True(t, isValidRampScheduleType("immediate"))
 	assert.True(t, isValidRampScheduleType("weekly"))

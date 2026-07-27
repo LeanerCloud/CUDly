@@ -201,6 +201,70 @@ func crossProviderPaymentAlias(provider, raw string) (string, bool) {
 	return "", false
 }
 
+// PaymentSchedule is the cash-flow shape a payment-option token implies,
+// stripped of the provider-specific spelling of that token. Two tokens that
+// map to the same PaymentSchedule bill the customer identically; only the
+// word differs (AWS spells all-upfront what Azure spells upfront, and AWS
+// spells no-upfront what Azure and GCP spell monthly).
+//
+// It exists so callers can tell a rename apart from a real change when
+// NormalizePaymentOption rewrites a token: a rename is bookkeeping, a real
+// change moves the customer's money and has to be disclosed (#1503).
+type PaymentSchedule string
+
+const (
+	// PaymentScheduleUpfront: the whole commitment is charged once, at purchase.
+	PaymentScheduleUpfront PaymentSchedule = "upfront"
+	// PaymentSchedulePartialUpfront: part is charged at purchase, the rest recurs.
+	PaymentSchedulePartialUpfront PaymentSchedule = "partial-upfront"
+	// PaymentScheduleRecurring: nothing is charged at purchase; the commitment
+	// is billed per period across the term.
+	PaymentScheduleRecurring PaymentSchedule = "recurring"
+	// PaymentScheduleUnknown: the token is not one of the modeled schedules.
+	// Two unrecognized tokens compare equal under this classification, so
+	// callers that must distinguish them have to compare the raw tokens too.
+	// In practice unmapped tokens never reach a coercion comparison:
+	// NormalizePaymentOption returns ok=false for them and the validator
+	// rejects them at the next boundary.
+	PaymentScheduleUnknown PaymentSchedule = "unknown"
+)
+
+// PaymentScheduleFor classifies a payment-option token by the billing
+// schedule it implies. The token must already be lowercased and trimmed
+// (validatePurchaseRecommendation and NormalizePaymentOption both work on
+// such tokens).
+func PaymentScheduleFor(token string) PaymentSchedule {
+	switch token {
+	case "all-upfront", "upfront":
+		return PaymentScheduleUpfront
+	case "partial-upfront":
+		return PaymentSchedulePartialUpfront
+	case "no-upfront", "monthly":
+		return PaymentScheduleRecurring
+	default:
+		return PaymentScheduleUnknown
+	}
+}
+
+// PaymentCoercionChangesSchedule reports whether rewriting raw to canonical
+// actually changes what the customer pays and when, as opposed to merely
+// renaming the same schedule into the target provider's vocabulary.
+//
+// Azure "all-upfront" -> "upfront" and Azure/GCP "no-upfront" -> "monthly"
+// are renames: identical cash flow, different spelling. Azure
+// "partial-upfront" -> "monthly" and GCP "upfront" -> "monthly" are real
+// changes: the customer is billed on a schedule they did not ask for.
+//
+// Only real changes are worth putting in front of a user (#1503). The
+// fan-out purchase modal submits the AWS-style "all-upfront" for Azure
+// buckets by construction (frontend/src/lib/purchase-compatibility.ts:
+// paymentOptionsFor), so treating every rewrite as a change would fire a
+// "billing schedule adjusted" warning on the ordinary Azure upfront
+// purchase and train users to dismiss the one notice that matters.
+func PaymentCoercionChangesSchedule(raw, canonical string) bool {
+	return PaymentScheduleFor(raw) != PaymentScheduleFor(canonical)
+}
+
 // ValidOfferingClasses lists the accepted EC2 RI offering class values for
 // GlobalConfig. The empty string is also accepted (maps to "convertible" at
 // purchase time to preserve pre-694 behavior).

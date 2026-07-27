@@ -524,12 +524,17 @@ var purchaseTermWhitelist = map[string]map[int]bool{
 
 // PaymentAdjustment surfaces a payment-option coercion to the API caller
 // (follow-up to #1503): when the web execute path normalizes a caller-supplied
-// payment option onto a provider-canonical token that DIFFERS from what was
-// requested (e.g. Azure "partial-upfront" -> "monthly"), the response carries
-// one of these per adjusted rec so the caller sees what they requested, what
-// was actually applied, and why, not just the operator WARN log. Purely
-// additive visibility: the coercion policy itself lives in
+// payment option onto a provider-canonical token that bills on a DIFFERENT
+// schedule than what was requested (e.g. Azure "partial-upfront" -> "monthly"),
+// the response carries one of these per adjusted rec so the caller sees what
+// they requested, what was actually applied, and why, not just the operator
+// WARN log. Purely additive visibility: the coercion policy itself lives in
 // config.NormalizePaymentOption and is unchanged.
+//
+// Cross-provider renames of the SAME schedule (Azure "all-upfront" ->
+// "upfront", "no-upfront" -> "monthly") are not adjustments: nothing about
+// the customer's cash flow changed, so there is nothing to disclose. See
+// config.PaymentCoercionChangesSchedule.
 type PaymentAdjustment struct {
 	// RecIndex is the rec's position in the request's recommendations slice.
 	RecIndex int    `json:"rec_index"`
@@ -561,9 +566,10 @@ type PaymentAdjustment struct {
 //     rejects anything that has no canonical mapping, with an error that
 //     names the provider and lists the accepted tokens.
 //
-// When step 1 actually changes the token (raw != canonical), the returned
-// *PaymentAdjustment describes the coercion so the response can surface it to
-// the caller; nil means the payment option was already canonical.
+// When step 1 changes the BILLING SCHEDULE (not merely the spelling), the
+// returned *PaymentAdjustment describes the coercion so the response can
+// surface it to the caller; nil means the payment option was already canonical
+// or was respelled onto an equivalent schedule.
 func validatePurchaseRecommendation(rec *config.RecommendationRecord, idx int) (*PaymentAdjustment, error) {
 	provider := strings.ToLower(strings.TrimSpace(rec.Provider))
 	payments := purchasePaymentSet(provider)
@@ -597,24 +603,26 @@ func validatePurchaseRecommendation(rec *config.RecommendationRecord, idx int) (
 	// coercion of this money-affecting field, matching the WARN contract
 	// documented on config.NormalizePaymentOption and mirroring the same
 	// coerced/uncoerced logging convertRecommendations does at the
-	// scheduler's emission boundary (internal/scheduler/scheduler.go). The
-	// same transition is also returned as a PaymentAdjustment so the API
-	// response surfaces it to the caller, not just the operator log.
+	// scheduler's emission boundary (internal/scheduler/scheduler.go).
+	//
+	// The caller-facing PaymentAdjustment is deliberately NARROWER than the
+	// WARN: it is returned only when the rewrite changes the billing schedule
+	// itself, not when it merely respells the same schedule in the target
+	// provider's vocabulary (Azure "all-upfront" -> "upfront", "no-upfront" ->
+	// "monthly"). Every WARN is worth an operator's attention because it means
+	// an upstream caller sent a non-canonical token; only a schedule change is
+	// worth interrupting the user, whose money is what actually moved. The
+	// fan-out purchase modal submits "all-upfront" for Azure buckets by
+	// construction (frontend/src/lib/purchase-compatibility.ts), so surfacing
+	// renames too would warn on the ordinary Azure upfront purchase and teach
+	// users to dismiss the notice that matters.
 	var adjustment *PaymentAdjustment
 	if normalized, ok := config.NormalizePaymentOption(provider, payment); ok {
 		if normalized != payment {
 			logging.Warnf("validatePurchaseRecommendation: rec %d (%s/%s) payment option normalized: raw=%q canonical=%q",
 				idx, provider, rec.Service, payment, normalized)
-			adjustment = &PaymentAdjustment{
-				RecIndex:               idx,
-				Provider:               provider,
-				Service:                rec.Service,
-				RequestedPaymentOption: payment,
-				AppliedPaymentOption:   normalized,
-				Reason: fmt.Sprintf("payment option %q is not in %s's supported set (%s); the closest supported option %q was applied",
-					payment, provider, strings.Join(config.ValidPaymentOptionsByProvider[provider], ", "), normalized),
-			}
 		}
+		adjustment = paymentAdjustmentFor(idx, provider, rec.Service, payment, normalized)
 		payment = normalized
 	}
 	if !payments[payment] {
@@ -626,6 +634,28 @@ func validatePurchaseRecommendation(rec *config.RecommendationRecord, idx int) (
 	}
 	rec.Payment = payment
 	return adjustment, nil
+}
+
+// paymentAdjustmentFor builds the caller-facing coercion notice for a single
+// rec, or returns nil when there is nothing to disclose: either the token was
+// left alone, or it was only respelled into the target provider's vocabulary
+// for the same billing schedule (see config.PaymentCoercionChangesSchedule).
+//
+// requested is the caller's token after trim/lowercase; applied is the
+// provider-canonical token the purchase will actually carry.
+func paymentAdjustmentFor(idx int, provider, service, requested, applied string) *PaymentAdjustment {
+	if !config.PaymentCoercionChangesSchedule(requested, applied) {
+		return nil
+	}
+	return &PaymentAdjustment{
+		RecIndex:               idx,
+		Provider:               provider,
+		Service:                service,
+		RequestedPaymentOption: requested,
+		AppliedPaymentOption:   applied,
+		Reason: fmt.Sprintf("payment option %q is not in %s's supported set (%s); the closest supported option %q was applied",
+			requested, provider, strings.Join(config.ValidPaymentOptionsByProvider[provider], ", "), applied),
+	}
 }
 
 // validateCapacityConsistency cross-checks the client-supplied capacity_percent

@@ -44,80 +44,96 @@ func TestValidatePurchaseRecommendation(t *testing.T) {
 		name      string
 		rec       config.RecommendationRecord
 		wantError bool
-		// wantPayment is set ONLY on rows whose input token gets coerced: it is
-		// asserted against rec.Payment after a successful call, and the row must
-		// also surface a matching PaymentAdjustment. Rows with "" must NOT
-		// surface an adjustment (canonical passthrough, incl. case-only changes).
+		// wantPayment is set ONLY on rows whose input token gets rewritten: it
+		// is asserted against rec.Payment after a successful call. "" means the
+		// token was already canonical for the provider (case-only differences
+		// included).
 		wantPayment string
+		// wantAdjustment marks the rows whose rewrite changes the BILLING
+		// SCHEDULE rather than just the spelling, and so must surface a
+		// caller-visible PaymentAdjustment (#1503 follow-up). A rewrite between
+		// two spellings of the same schedule (Azure "all-upfront" -> "upfront")
+		// costs the customer nothing and must NOT be disclosed. Field-level
+		// assertions live in
+		// TestValidatePurchaseRecommendation_SurfacesPaymentAdjustment and
+		// TestValidatePurchaseRecommendation_NoAdjustmentForScheduleEquivalentRename.
+		wantAdjustment bool
 	}{
 		// --- AWS canonical set ---
-		{"valid aws all-upfront 3y", validRec(), false, ""},
-		{"valid aws no-upfront 1y", mutate(func(r *config.RecommendationRecord) { r.Payment = "no-upfront"; r.Term = 1 }), false, ""},
-		{"valid aws partial-upfront", mutate(func(r *config.RecommendationRecord) { r.Payment = "partial-upfront" }), false, ""},
-		{"aws rejects azure-only monthly", mutate(func(r *config.RecommendationRecord) { r.Payment = "monthly" }), true, ""},
-		{"aws rejects azure-only upfront", mutate(func(r *config.RecommendationRecord) { r.Payment = "upfront" }), true, ""},
+		{"valid aws all-upfront 3y", validRec(), false, "", false},
+		{"valid aws no-upfront 1y", mutate(func(r *config.RecommendationRecord) { r.Payment = "no-upfront"; r.Term = 1 }), false, "", false},
+		{"valid aws partial-upfront", mutate(func(r *config.RecommendationRecord) { r.Payment = "partial-upfront" }), false, "", false},
+		{"aws rejects azure-only monthly", mutate(func(r *config.RecommendationRecord) { r.Payment = "monthly" }), true, "", false},
+		{"aws rejects azure-only upfront", mutate(func(r *config.RecommendationRecord) { r.Payment = "upfront" }), true, "", false},
 		// --- Azure canonical set ---
-		{"valid azure upfront", mutate(func(r *config.RecommendationRecord) { r.Provider = "azure"; r.Payment = "upfront" }), false, ""},
-		{"valid azure monthly", mutate(func(r *config.RecommendationRecord) { r.Provider = "azure"; r.Payment = "monthly" }), false, ""},
-		// Legacy AWS-style tokens on Azure are normalized to Azure-canonical before validation.
-		{"azure accepts legacy all-upfront (coerced to upfront)", mutate(func(r *config.RecommendationRecord) {
+		{"valid azure upfront", mutate(func(r *config.RecommendationRecord) { r.Provider = "azure"; r.Payment = "upfront" }), false, "", false},
+		{"valid azure monthly", mutate(func(r *config.RecommendationRecord) { r.Provider = "azure"; r.Payment = "monthly" }), false, "", false},
+		// Legacy AWS-style tokens on Azure are normalized to Azure-canonical
+		// before validation. Both of these are pure respellings -- Azure's
+		// "upfront" IS all-upfront and its "monthly" IS no-upfront -- so the
+		// customer's cash flow is untouched and no adjustment is surfaced.
+		{"azure accepts legacy all-upfront (respelled upfront, no adjustment)", mutate(func(r *config.RecommendationRecord) {
 			r.Provider = "azure"
 			r.Payment = "all-upfront"
-		}), false, "upfront"},
-		{"azure accepts legacy no-upfront (coerced to monthly)", mutate(func(r *config.RecommendationRecord) {
+		}), false, "upfront", false},
+		{"azure accepts legacy no-upfront (respelled monthly, no adjustment)", mutate(func(r *config.RecommendationRecord) {
 			r.Provider = "azure"
 			r.Payment = "no-upfront"
-		}), false, "monthly"},
+		}), false, "monthly", false},
 		// partial-upfront has no Azure equivalent; it coerces to monthly (the
 		// no-upfront default), never to upfront, so the caller never gets
 		// silently billed an all-upfront schedule it did not choose (#1503).
+		// This one genuinely changes the schedule, so it must be disclosed.
 		{"azure accepts legacy partial-upfront (coerced to monthly, not upfront)", mutate(func(r *config.RecommendationRecord) {
 			r.Provider = "azure"
 			r.Payment = "partial-upfront"
-		}), false, "monthly"},
+		}), false, "monthly", true},
 		{"azure rejects unknown token", mutate(func(r *config.RecommendationRecord) {
 			r.Provider = "azure"
 			r.Payment = "foo"
-		}), true, ""},
+		}), true, "", false},
 		// --- GCP canonical set (monthly-only) ---
-		{"valid gcp monthly", mutate(func(r *config.RecommendationRecord) { r.Provider = "gcp"; r.Payment = "monthly" }), false, ""},
-		// Legacy tokens on GCP are all normalized to monthly.
+		{"valid gcp monthly", mutate(func(r *config.RecommendationRecord) { r.Provider = "gcp"; r.Payment = "monthly" }), false, "", false},
+		// Legacy tokens on GCP are all normalized to monthly. GCP has no
+		// upfront tier at all, so every upfront-shaped token really does move
+		// the customer onto a different schedule; only no-upfront is a
+		// respelling of the schedule they already asked for.
 		{"gcp accepts legacy upfront (coerced to monthly)", mutate(func(r *config.RecommendationRecord) {
 			r.Provider = "gcp"
 			r.Payment = "upfront"
-		}), false, "monthly"},
+		}), false, "monthly", true},
 		{"gcp accepts legacy all-upfront (coerced to monthly)", mutate(func(r *config.RecommendationRecord) {
 			r.Provider = "gcp"
 			r.Payment = "all-upfront"
-		}), false, "monthly"},
-		{"gcp accepts legacy no-upfront (coerced to monthly)", mutate(func(r *config.RecommendationRecord) {
+		}), false, "monthly", true},
+		{"gcp accepts legacy no-upfront (respelled monthly, no adjustment)", mutate(func(r *config.RecommendationRecord) {
 			r.Provider = "gcp"
 			r.Payment = "no-upfront"
-		}), false, "monthly"},
+		}), false, "monthly", false},
 		{"gcp rejects unknown token", mutate(func(r *config.RecommendationRecord) {
 			r.Provider = "gcp"
 			r.Payment = "foo"
-		}), true, ""},
+		}), true, "", false},
 		// --- General ---
-		{"payment case-insensitive", mutate(func(r *config.RecommendationRecord) { r.Payment = "All-Upfront" }), false, ""},
-		{"invalid term 7", mutate(func(r *config.RecommendationRecord) { r.Term = 7 }), true, ""},
-		{"invalid term 0", mutate(func(r *config.RecommendationRecord) { r.Term = 0 }), true, ""},
-		{"invalid payment foo", mutate(func(r *config.RecommendationRecord) { r.Payment = "foo" }), true, ""},
-		{"negative count", mutate(func(r *config.RecommendationRecord) { r.Count = -1 }), true, ""},
+		{"payment case-insensitive", mutate(func(r *config.RecommendationRecord) { r.Payment = "All-Upfront" }), false, "", false},
+		{"invalid term 7", mutate(func(r *config.RecommendationRecord) { r.Term = 7 }), true, "", false},
+		{"invalid term 0", mutate(func(r *config.RecommendationRecord) { r.Term = 0 }), true, "", false},
+		{"invalid payment foo", mutate(func(r *config.RecommendationRecord) { r.Payment = "foo" }), true, "", false},
+		{"negative count", mutate(func(r *config.RecommendationRecord) { r.Count = -1 }), true, "", false},
 		{"negative monthly cost rejected", mutate(func(r *config.RecommendationRecord) {
 			m := -1.0
 			r.MonthlyCost = &m
-		}), true, ""},
-		{"nil monthly cost accepted", mutate(func(r *config.RecommendationRecord) { r.MonthlyCost = nil }), false, ""},
+		}), true, "", false},
+		{"nil monthly cost accepted", mutate(func(r *config.RecommendationRecord) { r.MonthlyCost = nil }), false, "", false},
 		{"zero monthly cost accepted", mutate(func(r *config.RecommendationRecord) {
 			m := 0.0
 			r.MonthlyCost = &m
-		}), false, ""},
-		{"zero count", mutate(func(r *config.RecommendationRecord) { r.Count = 0 }), true, ""},
-		{"empty service", mutate(func(r *config.RecommendationRecord) { r.Service = "" }), true, ""},
-		{"empty provider rejected", mutate(func(r *config.RecommendationRecord) { r.Provider = "" }), true, ""},
-		{"all provider rejected", mutate(func(r *config.RecommendationRecord) { r.Provider = "all" }), true, ""},
-		{"unknown provider rejected", mutate(func(r *config.RecommendationRecord) { r.Provider = "ibm" }), true, ""},
+		}), false, "", false},
+		{"zero count", mutate(func(r *config.RecommendationRecord) { r.Count = 0 }), true, "", false},
+		{"empty service", mutate(func(r *config.RecommendationRecord) { r.Service = "" }), true, "", false},
+		{"empty provider rejected", mutate(func(r *config.RecommendationRecord) { r.Provider = "" }), true, "", false},
+		{"all provider rejected", mutate(func(r *config.RecommendationRecord) { r.Provider = "all" }), true, "", false},
+		{"unknown provider rejected", mutate(func(r *config.RecommendationRecord) { r.Provider = "ibm" }), true, "", false},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -127,20 +143,17 @@ func TestValidatePurchaseRecommendation(t *testing.T) {
 			adjustment, err := validatePurchaseRecommendation(&rec, 0)
 			if tt.wantError {
 				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			if tt.wantPayment != "" {
+				assert.Equal(t, tt.wantPayment, rec.Payment)
+			}
+			if tt.wantAdjustment {
+				require.NotNil(t, adjustment, "a billing-schedule change must surface a PaymentAdjustment")
+				assert.Equal(t, tt.wantPayment, adjustment.AppliedPaymentOption)
 			} else {
-				require.NoError(t, err)
-				if tt.wantPayment != "" {
-					assert.Equal(t, tt.wantPayment, rec.Payment)
-					// wantPayment is only set on rows whose input token gets
-					// coerced, so each of those must also surface a caller-
-					// visible PaymentAdjustment consistent with the mutation
-					// (#1503 follow-up). Field-level assertions live in
-					// TestValidatePurchaseRecommendation_SurfacesPaymentAdjustment.
-					require.NotNil(t, adjustment, "coerced payment option must surface a PaymentAdjustment")
-					assert.Equal(t, tt.wantPayment, adjustment.AppliedPaymentOption)
-				} else {
-					assert.Nil(t, adjustment, "no coercion occurred, so no adjustment should be surfaced")
-				}
+				assert.Nil(t, adjustment, "the billing schedule did not change, so nothing should be disclosed")
 			}
 		})
 	}
@@ -245,6 +258,85 @@ func TestValidatePurchaseRecommendation_SurfacesPaymentAdjustment(t *testing.T) 
 	// The adjustment must agree with the actual mutation applied to the rec:
 	// applied means applied, not merely advertised.
 	assert.Equal(t, adjustment.AppliedPaymentOption, rec.Payment)
+}
+
+// TestValidatePurchaseRecommendation_NoAdjustmentForScheduleEquivalentRename
+// guards the other half of the #1503 disclosure contract: a coercion that only
+// respells a token in the target provider's vocabulary must NOT be reported as
+// an adjustment, because nothing about the customer's cash flow changed.
+//
+// This is not hypothetical noise-avoidance. The fan-out purchase modal's
+// per-bucket Payment dropdown is populated from paymentOptionsFor
+// (frontend/src/lib/purchase-compatibility.ts), whose candidate list has no
+// "upfront" entry — so an Azure bucket the user pays upfront ALWAYS submits
+// the AWS-style "all-upfront". Reporting that rename would put a sticky
+// "Billing schedule adjusted" warning on every ordinary Azure upfront
+// purchase, claiming a change that did not happen and drowning out the
+// partial-upfront case that did.
+//
+// The operator WARN is deliberately still emitted for these: a non-canonical
+// token on the wire is an upstream input bug worth auditing even when it costs
+// the customer nothing.
+//
+// Not run with t.Parallel(): captureDefaultLog mutates the shared default
+// logger's output (see TestValidatePurchaseRecommendation_NormalizationWarning).
+func TestValidatePurchaseRecommendation_NoAdjustmentForScheduleEquivalentRename(t *testing.T) {
+	tests := []struct {
+		name        string
+		provider    string
+		payment     string
+		wantPayment string
+	}{
+		// Azure spells AWS's all-upfront "upfront": same single charge at
+		// purchase, different word.
+		{"azure all-upfront is upfront respelled", "azure", "all-upfront", "upfront"},
+		// Azure spells AWS's no-upfront "monthly": same per-period billing.
+		{"azure no-upfront is monthly respelled", "azure", "no-upfront", "monthly"},
+		// GCP likewise has only the recurring schedule spelled "monthly".
+		{"gcp no-upfront is monthly respelled", "gcp", "no-upfront", "monthly"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			logBuf := captureDefaultLog(t)
+
+			rec := validRec()
+			rec.Provider = tc.provider
+			rec.Payment = tc.payment
+			adjustment, err := validatePurchaseRecommendation(&rec, 0)
+			require.NoError(t, err)
+			assert.Nil(t, adjustment,
+				"%s bills identically to %s; a rename must not be disclosed as a billing-schedule change",
+				tc.payment, tc.wantPayment)
+			// The canonicalization itself must still happen.
+			assert.Equal(t, tc.wantPayment, rec.Payment)
+			// ...and the operator-facing audit log must still fire.
+			assert.Contains(t, logBuf.String(), "[WARN]",
+				"a non-canonical token on the wire is still an upstream input bug worth logging")
+		})
+	}
+}
+
+// TestValidatePurchaseRecommendation_AdjustmentWhenScheduleChanges covers the
+// non-Azure half of the same contract: GCP commitments are monthly-only, so an
+// upfront-shaped token really does move the customer onto a different billing
+// schedule and MUST be disclosed.
+func TestValidatePurchaseRecommendation_AdjustmentWhenScheduleChanges(t *testing.T) {
+	t.Parallel()
+	for _, payment := range []string{"all-upfront", "upfront", "partial-upfront"} {
+		t.Run(payment, func(t *testing.T) {
+			t.Parallel()
+			rec := validRec()
+			rec.Provider = "gcp"
+			rec.Payment = payment
+			adjustment, err := validatePurchaseRecommendation(&rec, 0)
+			require.NoError(t, err)
+			require.NotNil(t, adjustment,
+				"gcp has no upfront billing tier, so %q lands on a different schedule and must be disclosed", payment)
+			assert.Equal(t, payment, adjustment.RequestedPaymentOption)
+			assert.Equal(t, "monthly", adjustment.AppliedPaymentOption)
+			assert.Equal(t, "monthly", rec.Payment)
+		})
+	}
 }
 
 // TestHandler_executePurchase_SurfacesPaymentAdjustments is the response-level
