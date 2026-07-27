@@ -79,7 +79,9 @@ type ExchangePreview struct {
 
 	// PolicyErrors is non-empty when Azure's exchange policy blocks this
 	// combination (e.g. cross-billing-account, expired RIs). Each entry is
-	// a human-readable policy violation message. Callers must refuse to
+	// a human-readable policy violation message, rendered by
+	// policyErrorMessage so that one entry here always corresponds to
+	// exactly one violation Azure reported. Callers must refuse to
 	// execute when this is non-empty.
 	PolicyErrors []string `json:"policy_errors,omitempty"`
 }
@@ -491,12 +493,34 @@ func extractExchangePreview(props armreservations.CalculateExchangeResponsePrope
 	preview.PurchasesTotal, _ = extractPrice(props.PurchasesTotal)
 	if props.PolicyResult != nil {
 		for _, e := range props.PolicyResult.PolicyErrors {
-			if e != nil && e.Message != nil {
-				preview.PolicyErrors = append(preview.PolicyErrors, *e.Message)
-			}
+			preview.PolicyErrors = append(preview.PolicyErrors, policyErrorMessage(e))
 		}
 	}
 	return preview
+}
+
+// policyErrorMessage renders one Azure exchange policy violation as a
+// non-empty string.
+//
+// Both fields of armreservations.ExchangePolicyError are optional pointers,
+// so an entry may carry only a Code, or (in a contract violation) neither.
+// Every entry must still produce a message: callers gate execution on
+// len(ExchangePreview.PolicyErrors) > 0, so dropping a Message-less entry
+// would empty the slice and let a policy-rejected exchange be committed.
+func policyErrorMessage(e *armreservations.ExchangePolicyError) string {
+	if e == nil {
+		return "azure reported an unspecified exchange policy violation"
+	}
+	switch {
+	case e.Message != nil && *e.Message != "" && e.Code != nil && *e.Code != "":
+		return fmt.Sprintf("%s: %s", *e.Code, *e.Message)
+	case e.Message != nil && *e.Message != "":
+		return *e.Message
+	case e.Code != nil && *e.Code != "":
+		return *e.Code
+	default:
+		return "azure reported an unspecified exchange policy violation"
+	}
 }
 
 func extractCompatibleOfferings(props armreservations.CalculateExchangeResponseProperties) []CompatibleOffering {

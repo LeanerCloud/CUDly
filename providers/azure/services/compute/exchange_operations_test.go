@@ -257,7 +257,66 @@ func TestCalculateExchange_PolicyErrorsExtraction(t *testing.T) {
 	require.NoError(t, err, "a policy-rejected combination is still a successful priced call")
 	require.NotNil(t, preview)
 	require.Len(t, preview.PolicyErrors, 1)
-	assert.Equal(t, "reservations must share a billing account", preview.PolicyErrors[0])
+	assert.Equal(t, "CrossBillingAccount: reservations must share a billing account", preview.PolicyErrors[0])
+}
+
+// TestCalculateExchange_PolicyErrorsWithoutMessageStillSurface pins the
+// money-path invariant that every policy violation Azure reports produces an
+// entry in ExchangePreview.PolicyErrors.
+//
+// armreservations.ExchangePolicyError has two optional pointer fields, so
+// Azure may report a violation as a bare Code. The execute handler gates
+// solely on len(PolicyErrors) > 0, so dropping such an entry would empty the
+// slice and let a policy-rejected exchange be committed. Pre-fix,
+// extractExchangePreview skipped every entry whose Message was nil and this
+// test failed with 0 entries.
+func TestCalculateExchange_PolicyErrorsWithoutMessageStillSurface(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy *armreservations.ExchangePolicyError
+		want   string
+	}{
+		{
+			name:   "code only",
+			policy: &armreservations.ExchangePolicyError{Code: to.Ptr("ExchangeNotSupported")},
+			want:   "ExchangeNotSupported",
+		},
+		{
+			name:   "empty message falls back to code",
+			policy: &armreservations.ExchangePolicyError{Code: to.Ptr("ExchangeNotSupported"), Message: to.Ptr("")},
+			want:   "ExchangeNotSupported",
+		},
+		{
+			name:   "neither code nor message",
+			policy: &armreservations.ExchangePolicyError{},
+			want:   "azure reported an unspecified exchange policy violation",
+		},
+		{
+			name:   "nil entry",
+			policy: nil,
+			want:   "azure reported an unspecified exchange policy violation",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := compute.NewClient(nil, "sub-1", "")
+			c.SetCalculateExchangeCaller(func(_ context.Context, _ armreservations.CalculateExchangeRequest) (armreservations.CalculateExchangeOperationResultResponse, error) {
+				return succeededResult(&armreservations.CalculateExchangeResponseProperties{
+					SessionID: to.Ptr("session-with-messageless-policy-error"),
+					PolicyResult: &armreservations.ExchangePolicyErrors{
+						PolicyErrors: []*armreservations.ExchangePolicyError{tt.policy},
+					},
+				}), nil
+			})
+
+			preview, _, err := c.CalculateExchange(context.Background(), []compute.ExchangeableReservation{validSource()}, []compute.ExchangeTarget{validTarget()})
+			require.NoError(t, err)
+			require.NotNil(t, preview)
+			require.Len(t, preview.PolicyErrors, 1, "a policy violation must never be dropped: the execute handler gates on this slice being non-empty")
+			assert.Equal(t, tt.want, preview.PolicyErrors[0])
+		})
+	}
 }
 
 func TestCalculateExchange_NilVsZeroMoneyFields(t *testing.T) {
