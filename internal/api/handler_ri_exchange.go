@@ -283,11 +283,19 @@ type AzureExchangeSourceBody struct {
 // validates it against the SDK's typed enum rather than accepting anything
 // the caller sends.
 type AzureExchangeTargetBody struct {
-	SKU            string `json:"sku"`
-	Location       string `json:"location"`
-	Term           string `json:"term"`
-	Quantity       int32  `json:"quantity"`
-	BillingScopeID string `json:"billing_scope_id"`
+	SKU      string `json:"sku"`
+	Location string `json:"location"`
+	Term     string `json:"term"`
+	Quantity int32  `json:"quantity"`
+
+	// BillingScopeID is optional and is NOT the scope that gets charged:
+	// the handler always derives that from the request's authorized
+	// subscription_id (azureBillingScopeID), matching every other Azure
+	// reservation purchase path in this repo. When supplied it must match
+	// the derived scope, so a caller cannot direct the charge at a
+	// different subscription than the one their permission constraints
+	// were evaluated against.
+	BillingScopeID string `json:"billing_scope_id,omitempty"`
 }
 
 // AzureCompatibleOfferingsRequestBody is the request body for the
@@ -365,15 +373,35 @@ func validateAzureExchangeSources(sources []AzureExchangeSourceBody) error {
 	return nil
 }
 
+// azureBillingScopeID returns the ARM billing scope that a purchase against
+// subscriptionID is charged to.
+//
+// The billing scope is always derived from the request's subscription_id,
+// never accepted from the caller. Every other Azure reservation purchase
+// path in this repo does the same (ComputeClient.buildReservationBody and
+// the database / cache / search / cosmosdb / synapse / managedredis
+// clients all build "/subscriptions/{their own subscriptionID}"). It also
+// keeps the charge inside the scope authorization actually checked: the
+// execute:ri-exchange AccountIDs constraint is evaluated against the
+// CloudAccount registered for subscription_id, so letting a caller name a
+// different billing scope would move the money outside the account whose
+// constraints were verified.
+func azureBillingScopeID(subscriptionID string) string {
+	return "/subscriptions/" + subscriptionID
+}
+
 // validateAzureExchangeTargets checks the shared targets[] shape for both
-// the offerings and execute request bodies.
-func validateAzureExchangeTargets(targets []AzureExchangeTargetBody) error {
+// the offerings and execute request bodies. subscriptionID is the already-
+// validated request subscription; a target may omit billing_scope_id
+// entirely, but may not name a scope other than that subscription's.
+func validateAzureExchangeTargets(targets []AzureExchangeTargetBody, subscriptionID string) error {
 	if len(targets) == 0 {
 		return NewClientError(400, "targets is required")
 	}
 	if len(targets) > maxAzureExchangeItems {
 		return NewClientError(400, fmt.Sprintf("targets exceeds the maximum of %d items", maxAzureExchangeItems))
 	}
+	scope := azureBillingScopeID(subscriptionID)
 	for i, t := range targets {
 		if t.SKU == "" {
 			return NewClientError(400, fmt.Sprintf("targets[%d].sku is required", i))
@@ -381,8 +409,10 @@ func validateAzureExchangeTargets(targets []AzureExchangeTargetBody) error {
 		if t.Location == "" {
 			return NewClientError(400, fmt.Sprintf("targets[%d].location is required", i))
 		}
-		if t.BillingScopeID == "" {
-			return NewClientError(400, fmt.Sprintf("targets[%d].billing_scope_id is required", i))
+		if t.BillingScopeID != "" && !strings.EqualFold(t.BillingScopeID, scope) {
+			return NewClientError(400, fmt.Sprintf(
+				"targets[%d].billing_scope_id %q is not the billing scope of subscription %q; omit it to charge the subscription's own scope",
+				i, t.BillingScopeID, subscriptionID))
 		}
 		if t.Quantity < 1 {
 			return NewClientError(400, fmt.Sprintf("targets[%d].quantity must be >= 1", i))
@@ -406,7 +436,7 @@ func validateAzureOfferingsBody(body AzureCompatibleOfferingsRequestBody) error 
 	if err := validateAzureExchangeSources(body.Sources); err != nil {
 		return err
 	}
-	return validateAzureExchangeTargets(body.Targets)
+	return validateAzureExchangeTargets(body.Targets, body.SubscriptionID)
 }
 
 // validateAzureExecuteBody validates the execute request body: the shared
@@ -440,11 +470,14 @@ func toAzureExchangeSources(sources []AzureExchangeSourceBody) []azurecompute.Ex
 }
 
 // toAzureExchangeTargets converts the HTTP-shaped targets into the
-// provider-layer shape, re-parsing the term string. validateAzureExchangeTargets
-// must be called first; a term error here indicates an internal invariant
-// break rather than a fresh client mistake.
-func toAzureExchangeTargets(targets []AzureExchangeTargetBody) ([]azurecompute.ExchangeTarget, error) {
+// provider-layer shape, re-parsing the term string and deriving each
+// target's billing scope from subscriptionID rather than from the request
+// body (see azureBillingScopeID). validateAzureExchangeTargets must be
+// called first; a term error here indicates an internal invariant break
+// rather than a fresh client mistake.
+func toAzureExchangeTargets(targets []AzureExchangeTargetBody, subscriptionID string) ([]azurecompute.ExchangeTarget, error) {
 	out := make([]azurecompute.ExchangeTarget, len(targets))
+	scope := azureBillingScopeID(subscriptionID)
 	for i, t := range targets {
 		term, err := azureReservationTermFromString(t.Term)
 		if err != nil {
@@ -455,7 +488,7 @@ func toAzureExchangeTargets(targets []AzureExchangeTargetBody) ([]azurecompute.E
 			Location:       t.Location,
 			Term:           term,
 			Quantity:       t.Quantity,
-			BillingScopeID: t.BillingScopeID,
+			BillingScopeID: scope,
 		}
 	}
 	return out, nil
@@ -477,23 +510,64 @@ func targetLocations(targets []AzureExchangeTargetBody) []string {
 	return out
 }
 
+// requireAzureSubscriptionScope enforces the session's allowed_accounts
+// scope (issue #1030) against the CloudAccount registered for
+// subscriptionID, the same per-account gate the sibling /ri-exchange
+// endpoints apply. Without it, subscription_id is a caller-controlled
+// pointer at any subscription in the tenant: a user scoped to one account
+// could price, and with an otherwise-unconstrained execute:ri-exchange
+// permission execute, an exchange against another account's subscription.
+// The per-permission Constraints check does not cover this -- it only
+// consults the permission's own AccountIDs, never the user's
+// allowed_accounts.
+//
+// Returns errNotFound (404, not 403) when a scoped session names a
+// subscription outside its scope, including one with no registered account
+// at all, matching requireAccountAccess: a user must not be able to probe
+// which subscriptions exist outside their scope.
+//
+// Unrestricted / admin sessions short-circuit before the account fetch,
+// mirroring requireExecutionAccess.
+func (h *Handler) requireAzureSubscriptionScope(ctx context.Context, session *Session, subscriptionID string) error {
+	allowed, err := h.getAllowedAccounts(ctx, session)
+	if err != nil {
+		return fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	if auth.IsUnrestrictedAccess(allowed) {
+		return nil
+	}
+	account, err := h.config.GetCloudAccountByExternalID(ctx, "azure", subscriptionID)
+	if err != nil {
+		return fmt.Errorf("failed to resolve cloud account scope: %w", err)
+	}
+	if account == nil || !auth.MatchesAccount(allowed, account.ID, account.Name) {
+		return errNotFound
+	}
+	return nil
+}
+
 // getAzureCompatibleOfferings prices a proposed Azure RI exchange and
 // returns the compatible offerings Azure is willing to accept plus the cost
-// preview, without committing anything. Requires "view:purchases" permission,
-// mirroring the AWS quote endpoint.
+// preview, without committing anything. Requires "view:purchases" permission
+// plus allowed_accounts scope over the requested subscription, mirroring the
+// AWS quote endpoint.
 //
 // POST /api/ri-exchange/azure-instances/compatible-offerings.
 func (h *Handler) getAzureCompatibleOfferings(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
+	session, err := h.requirePermission(ctx, req, "view", "purchases")
+	if err != nil {
 		return nil, err
 	}
 
 	var body AzureCompatibleOfferingsRequestBody
-	if err := json.Unmarshal([]byte(req.Body), &body); err != nil {
+	if err = json.Unmarshal([]byte(req.Body), &body); err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
-	if err := validateAzureOfferingsBody(body); err != nil {
-		return nil, err
+	if validateErr := validateAzureOfferingsBody(body); validateErr != nil {
+		return nil, validateErr
+	}
+	if scopeErr := h.requireAzureSubscriptionScope(ctx, session, body.SubscriptionID); scopeErr != nil {
+		return nil, scopeErr
 	}
 
 	client, err := h.buildAzureExchangeClient(ctx, body.SubscriptionID)
@@ -504,7 +578,7 @@ func (h *Handler) getAzureCompatibleOfferings(ctx context.Context, req *events.L
 		return nil, NewClientError(404, fmt.Sprintf("no Azure account registered for subscription %q", body.SubscriptionID))
 	}
 
-	targets, err := toAzureExchangeTargets(body.Targets)
+	targets, err := toAzureExchangeTargets(body.Targets, body.SubscriptionID)
 	if err != nil {
 		return nil, err
 	}
@@ -537,6 +611,10 @@ func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *
 	}
 	if client == nil {
 		return nil, NewClientError(404, fmt.Sprintf("no Azure account registered for subscription %q", body.SubscriptionID))
+	}
+
+	if scopeErr := h.requireAzureSubscriptionScope(ctx, session, body.SubscriptionID); scopeErr != nil {
+		return nil, scopeErr
 	}
 
 	accountID, err := h.resolveAzureExchangeAccountID(ctx, body.SubscriptionID)
@@ -646,7 +724,10 @@ func checkAzureExchangeMoneyGuardrails(preview *azurecompute.ExchangePreview, ma
 	if preview.NetPayable == nil {
 		return NewClientError(422, "Azure did not return a net payable amount; refusing to execute")
 	}
-	if preview.NetPayableCurrency != currency {
+	// Case-insensitive to match the isUSD test in checkAzureExecuteConstraints:
+	// a request of "usd" must not clear the USD-denominated cap check there
+	// and then be rejected here as a mismatch against Azure's "USD".
+	if !strings.EqualFold(preview.NetPayableCurrency, currency) {
 		return NewClientError(422, fmt.Sprintf("quoted currency %q does not match requested currency %q", preview.NetPayableCurrency, currency))
 	}
 	netPayableRat := new(big.Rat).SetFloat64(*preview.NetPayable)
@@ -701,7 +782,7 @@ func (h *Handler) executeAzureExchange(ctx context.Context, req *events.LambdaFu
 		return nil, err
 	}
 
-	targets, err := toAzureExchangeTargets(body.Targets)
+	targets, err := toAzureExchangeTargets(body.Targets, body.SubscriptionID)
 	if err != nil {
 		return nil, err
 	}

@@ -705,10 +705,15 @@ paths:
       tags: [RIExchange]
       summary: Price a proposed Azure RI exchange and list compatible offerings
       description: >
-        Requires `view:purchases` permission. Runs Azure CalculateExchange
-        against the given source reservations and target SKUs and returns
-        the priced candidate offerings plus a cost preview, without
-        committing any financial transaction.
+        Requires `view:purchases` permission and `allowed_accounts` scope
+        over the cloud account registered for `subscription_id`. Runs Azure
+        CalculateExchange against the given source reservations and target
+        SKUs and returns the priced candidate offerings plus a cost preview,
+        without committing any financial transaction.
+
+        Each target's billing scope is always derived from `subscription_id`.
+        A target may omit `billing_scope_id`; supplying one that names a
+        different subscription is a 400.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -754,7 +759,12 @@ paths:
       summary: Execute an Azure RI exchange (irreversible)
       description: >
         Requires `execute:ri-exchange` permission (deliberately separate from
-        `execute:purchases`, mirroring the AWS execute endpoint). The server
+        `execute:purchases`, mirroring the AWS execute endpoint) plus
+        `allowed_accounts` scope over the cloud account registered for
+        `subscription_id`. Each target's billing scope is derived from
+        `subscription_id`, so the charge always lands on the account whose
+        permission constraints were checked; a `billing_scope_id` naming a
+        different subscription is a 400. The server
         re-runs CalculateExchange itself against the given sources/targets
         and only executes the fresh session that call returns -- a
         client-supplied session is never trusted. Execution is refused when

@@ -1820,6 +1820,16 @@ func (m *mockAzureExchangeOpsClient) ExecuteExchange(ctx context.Context, sessio
 	return result, args.Error(1)
 }
 
+// allowAnyAccountScope stubs the allowed_accounts lookup as unrestricted
+// (the "*" / Administrators-group shape), so tests whose subject is
+// something other than requireAzureSubscriptionScope reach the behavior
+// they actually assert. Maybe() because the validation-only tests return
+// before the scope check runs. Tests that DO exercise the scope gate
+// register their own restricted GetAllowedAccountsAPI expectation instead.
+func allowAnyAccountScope(m *MockAuthService) {
+	m.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return([]string(nil), nil).Maybe()
+}
+
 // validAzureOfferingsBody is a request body satisfying every field
 // validateAzureOfferingsBody checks. Individual tests below build on it.
 const validAzureOfferingsBody = `{
@@ -1867,8 +1877,8 @@ func TestValidateAzureOfferingsBody(t *testing.T) {
 	missingSKU.SKU = ""
 	missingLocation := azureOfferingsTarget()
 	missingLocation.Location = ""
-	missingBillingScope := azureOfferingsTarget()
-	missingBillingScope.BillingScopeID = ""
+	foreignBillingScope := azureOfferingsTarget()
+	foreignBillingScope.BillingScopeID = "/subscriptions/someone-elses-sub"
 	zeroTargetQty := azureOfferingsTarget()
 	zeroTargetQty.Quantity = 0
 	unknownTerm := azureOfferingsTarget()
@@ -1925,9 +1935,9 @@ func TestValidateAzureOfferingsBody(t *testing.T) {
 			"targets[0].location is required",
 		},
 		{
-			"target missing billing_scope_id",
-			AzureCompatibleOfferingsRequestBody{SubscriptionID: "sub-1", Sources: []AzureExchangeSourceBody{azureOfferingsSource()}, Targets: []AzureExchangeTargetBody{missingBillingScope}},
-			"targets[0].billing_scope_id is required",
+			"target names a foreign billing scope",
+			AzureCompatibleOfferingsRequestBody{SubscriptionID: "sub-1", Sources: []AzureExchangeSourceBody{azureOfferingsSource()}, Targets: []AzureExchangeTargetBody{foreignBillingScope}},
+			`targets[0].billing_scope_id "/subscriptions/someone-elses-sub" is not the billing scope of subscription "sub-1"`,
 		},
 		{
 			"target quantity zero",
@@ -1986,6 +1996,7 @@ func TestGetAzureCompatibleOfferings_InvalidJSON(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "user-1", "view", "purchases").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	h := &Handler{auth: mockAuth}
@@ -2010,6 +2021,7 @@ func TestGetAzureCompatibleOfferings_UnregisteredSubscription(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "user-1", "view", "purchases").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockStore := &MockConfigStore{}
@@ -2036,6 +2048,7 @@ func TestGetAzureCompatibleOfferings_AzureClientFault(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "user-1", "view", "purchases").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	opsClient := new(mockAzureExchangeOpsClient)
@@ -2062,6 +2075,7 @@ func TestGetAzureCompatibleOfferings_TransientErrorIs500(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "user-1", "view", "purchases").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	opsClient := new(mockAzureExchangeOpsClient)
@@ -2091,6 +2105,7 @@ func TestGetAzureCompatibleOfferings_HappyPath(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "user-1", "view", "purchases").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	preview := &azurecompute.ExchangePreview{SessionID: "sess-preview-1"} // NetPayable intentionally nil
@@ -2119,6 +2134,191 @@ func TestGetAzureCompatibleOfferings_HappyPath(t *testing.T) {
 	assert.InDelta(t, 42.5, *resp.Offerings[0].BillingCurrencyTotal, 0.0001)
 }
 
+// --- billing scope derivation (the charged scope is never client-chosen) ---
+
+// TestToAzureExchangeTargets_DerivesBillingScope pins that the scope Azure
+// is told to charge comes from the authorized subscription, not from the
+// request body. A body-supplied scope reaching the provider layer would
+// move the charge outside the CloudAccount that checkAzureExecuteConstraints
+// evaluated the caller's AccountIDs constraint against.
+func TestToAzureExchangeTargets_DerivesBillingScope(t *testing.T) {
+	targets, err := toAzureExchangeTargets([]AzureExchangeTargetBody{
+		{SKU: "Standard_D4s_v3", Location: "eastus", Term: "P1Y", Quantity: 1},
+		{SKU: "Standard_D8s_v3", Location: "westus", Term: "P3Y", Quantity: 2, BillingScopeID: "/SUBSCRIPTIONS/SUB-1"},
+	}, "sub-1")
+	require.NoError(t, err)
+	require.Len(t, targets, 2)
+	for i, tgt := range targets {
+		assert.Equal(t, "/subscriptions/sub-1", tgt.BillingScopeID,
+			"targets[%d] must be charged to the request's own subscription scope", i)
+	}
+}
+
+// TestGetAzureCompatibleOfferings_ForeignBillingScopeRejected asserts a
+// target naming another subscription's billing scope is refused before any
+// Azure call. No CalculateExchange expectation is registered, so the mock
+// panics (failing the test) the instant the guard stops rejecting.
+func TestGetAzureCompatibleOfferings_ForeignBillingScopeRejected(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "view", "purchases").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	opsClient := new(mockAzureExchangeOpsClient)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := &Handler{auth: mockAuth, azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient }}
+	_, err := h.getAzureCompatibleOfferings(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body: `{"subscription_id":"sub-1","sources":[{"reservation_id":"res-1","quantity":1}],` +
+			`"targets":[{"sku":"Standard_D4s_v3","location":"eastus","term":"P1Y","quantity":1,` +
+			`"billing_scope_id":"/subscriptions/victim-sub"}]}`,
+	})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, err.Error(), "is not the billing scope of subscription")
+}
+
+// TestExecuteAzureExchange_ForeignBillingScopeRejected is the same guard on
+// the money-committing endpoint: the caller's AccountIDs constraint is
+// checked against subscription_id, so a differing billing_scope_id would
+// charge an account the check never looked at.
+func TestExecuteAzureExchange_ForeignBillingScopeRejected(t *testing.T) {
+	ctx := context.Background()
+	opsClient := new(mockAzureExchangeOpsClient)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	// Deliberately not newAzureExecuteMoneyPathHandler: the rejection must
+	// happen at body validation, before any permission-constraint or Azure
+	// call, so no expectation for those is registered here.
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	h := &Handler{auth: mockAuth, azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient }}
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body: `{"subscription_id":"sub-1","sources":[{"reservation_id":"res-1","quantity":1}],` +
+			`"targets":[{"sku":"Standard_D4s_v3","location":"eastus","term":"P1Y","quantity":1,` +
+			`"billing_scope_id":"/subscriptions/victim-sub"}],"max_payment_due":"100.00","currency":"USD"}`,
+	})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, err.Error(), "is not the billing scope of subscription")
+}
+
+// --- allowed_accounts scoping (issue #1030) ---
+
+// scopedAzureAuth builds an auth mock for a user restricted to a single
+// cloud account, used by the out-of-scope tests below.
+func scopedAzureAuth(t *testing.T, action, resource string, allowed []string) *MockAuthService {
+	t.Helper()
+	ctx := context.Background()
+	m := new(MockAuthService)
+	m.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	m.On("HasPermissionAPI", ctx, "user-1", action, resource).Return(true, nil)
+	m.On("GetAllowedAccountsAPI", ctx, "user-1").Return(allowed, nil)
+	t.Cleanup(func() { m.AssertExpectations(t) })
+	return m
+}
+
+// scopedAzureStore returns a config store whose only registered Azure
+// account is acct-other / "Other Team", i.e. not the one the scoped session
+// is allowed to see.
+func scopedAzureStore() *MockConfigStore {
+	s := &MockConfigStore{}
+	s.GetCloudAccountByExternalIDFn = func(_ context.Context, _, _ string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: "acct-other", Name: "Other Team"}, nil
+	}
+	return s
+}
+
+// TestGetAzureCompatibleOfferings_OutOfScopeSubscription asserts a user
+// scoped to one account cannot price an exchange for another account's
+// subscription. subscription_id is caller-controlled and the permission
+// Constraints check only consults the permission's own AccountIDs, so
+// without this gate the endpoint leaks another account's reservation
+// pricing.
+func TestGetAzureCompatibleOfferings_OutOfScopeSubscription(t *testing.T) {
+	ctx := context.Background()
+	opsClient := new(mockAzureExchangeOpsClient)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := &Handler{
+		auth:                 scopedAzureAuth(t, "view", "purchases", []string{"acct-mine"}),
+		config:               scopedAzureStore(),
+		azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient },
+	}
+	_, err := h.getAzureCompatibleOfferings(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureOfferingsBody,
+	})
+	require.Error(t, err, "a scoped session must not price an out-of-scope subscription")
+	assert.ErrorIs(t, err, errNotFound)
+}
+
+// TestExecuteAzureExchange_OutOfScopeSubscription is the money-path half:
+// an out-of-scope subscription must never reach CalculateExchange or
+// ExecuteExchange. Neither is registered on the mock, so any call panics.
+func TestExecuteAzureExchange_OutOfScopeSubscription(t *testing.T) {
+	ctx := context.Background()
+	opsClient := new(mockAzureExchangeOpsClient)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := &Handler{
+		auth:                 scopedAzureAuth(t, "execute", "ri-exchange", []string{"acct-mine"}),
+		config:               scopedAzureStore(),
+		azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient },
+	}
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody,
+	})
+	require.Error(t, err, "a scoped session must not execute against an out-of-scope subscription")
+	assert.ErrorIs(t, err, errNotFound)
+}
+
+// TestExecuteAzureExchange_InScopeSubscriptionAllowed is the other side of
+// the gate: a scoped session whose allowed_accounts DO cover the resolved
+// account still gets through to execution.
+func TestExecuteAzureExchange_InScopeSubscriptionAllowed(t *testing.T) {
+	ctx := context.Background()
+	opsClient := new(mockAzureExchangeOpsClient)
+	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
+		&azurecompute.ExchangePreview{SessionID: "sess-fresh", NetPayable: toPtr(10.00), NetPayableCurrency: "USD"},
+		[]azurecompute.CompatibleOffering{}, nil,
+	)
+	opsClient.On("ExecuteExchange", ctx, "sess-fresh").Return(
+		&azurecompute.ExchangeResult{SessionID: "sess-fresh", Status: "Succeeded"}, nil,
+	)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	mockAuth := scopedAzureAuth(t, "execute", "ri-exchange", []string{"acct-mine"})
+	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange", mock.Anything).Return(true, nil)
+	store := &MockConfigStore{}
+	store.GetCloudAccountByExternalIDFn = func(_ context.Context, _, _ string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: "acct-mine", Name: "My Team"}, nil
+	}
+
+	h := &Handler{auth: mockAuth, config: store, azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient }}
+	res, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody,
+	})
+	require.NoError(t, err)
+	resp, ok := res.(*AzureExecuteExchangeResponse)
+	require.True(t, ok)
+	assert.Equal(t, "sess-fresh", resp.SessionID)
+}
+
 // --- executeAzureExchange: auth fail-closed ---
 
 func TestExecuteAzureExchange_NoAuth(t *testing.T) {
@@ -2133,6 +2333,7 @@ func TestExecuteAzureExchange_MissingExecutePermission(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(false, nil)
+	allowAnyAccountScope(mockAuth)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	h := &Handler{auth: mockAuth}
@@ -2155,6 +2356,7 @@ func TestExecuteAzureExchange_ConstraintExceeded(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
 	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange", mock.Anything).Return(false, nil)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
@@ -2210,6 +2412,7 @@ func TestExecuteAzureExchange_NonUSDCurrencyBlindCapRejected(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
 	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange",
 		mock.MatchedBy(func(sets []auth.PermissionConstraints) bool {
 			return len(sets) == 1 && sets[0].MaxPurchaseAmount == math.MaxFloat64
@@ -2253,6 +2456,7 @@ func TestExecuteAzureExchange_USDCurrencyCapStillEnforced(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
 	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange",
 		mock.MatchedBy(func(sets []auth.PermissionConstraints) bool {
 			return len(sets) == 1 && sets[0].MaxPurchaseAmount == 100.00
@@ -2296,6 +2500,7 @@ func TestExecuteAzureExchange_NonUSDWithoutCapStillAllowed(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
 	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange",
 		mock.MatchedBy(func(sets []auth.PermissionConstraints) bool {
 			return len(sets) == 1 && sets[0].MaxPurchaseAmount == math.MaxFloat64
@@ -2333,6 +2538,17 @@ func TestExecuteAzureExchange_NonUSDWithoutCapStillAllowed(t *testing.T) {
 // defensive nil check: a future azureExchangeClient implementation that
 // mistakenly returns (nil, nil, nil) from CalculateExchange must not panic
 // this handler.
+// TestCheckAzureExchangeMoneyGuardrails_CurrencyCaseInsensitive pins the
+// currency comparison to the same case-insensitive rule
+// checkAzureExecuteConstraints uses for its isUSD test. With an exact-match
+// comparison a request of "usd" took the USD cap path there and was then
+// always rejected here as a mismatch against Azure's "USD", making a
+// well-formed request permanently unexecutable.
+func TestCheckAzureExchangeMoneyGuardrails_CurrencyCaseInsensitive(t *testing.T) {
+	preview := &azurecompute.ExchangePreview{SessionID: "sess-1", NetPayable: toPtr(10.00), NetPayableCurrency: "USD"}
+	require.NoError(t, checkAzureExchangeMoneyGuardrails(preview, big.NewRat(100, 1), "usd"))
+}
+
 func TestCheckAzureExchangeMoneyGuardrails_NilPreviewRefused(t *testing.T) {
 	err := checkAzureExchangeMoneyGuardrails(nil, big.NewRat(100, 1), "USD")
 	require.Error(t, err, "a nil preview must be refused, not dereferenced")
@@ -2346,6 +2562,7 @@ func TestExecuteAzureExchange_MalformedJSON(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	h := &Handler{auth: mockAuth}
@@ -2364,6 +2581,7 @@ func TestExecuteAzureExchange_MissingMaxPaymentDue(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	h := &Handler{auth: mockAuth}
@@ -2383,6 +2601,7 @@ func TestExecuteAzureExchange_InvalidMaxPaymentDue(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	h := &Handler{auth: mockAuth}
@@ -2415,6 +2634,7 @@ func newAzureExecuteMoneyPathHandler(t *testing.T, opsClient azureExchangeClient
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
 	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange", mock.Anything).Return(true, nil)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
