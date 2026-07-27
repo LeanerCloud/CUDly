@@ -6,10 +6,16 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log"
+	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/purchase"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 )
+
+// skippedCollectionMarkerClearTimeout bounds the detached best-effort clear
+// issued when a marker-owning collect run is skipped by the advisory lock.
+// Matches the scheduler's deferred clear budget.
+const skippedCollectionMarkerClearTimeout = 5 * time.Second
 
 // TaskLocker abstracts advisory lock operations for scheduled task concurrency control.
 type TaskLocker interface {
@@ -97,12 +103,55 @@ func (app *Application) HandleScheduledTask(ctx context.Context, taskType Schedu
 		}
 		if !acquired {
 			log.Printf("Task %q already running (advisory lock held), skipping", taskType) // #nosec G706 -- taskType is looked up from a known-value map; %q quotes the value to prevent CR/LF log injection
+			app.releaseSkippedCollectionMarker(taskType, params.OwnerToken)
 			return map[string]string{"status": "skipped", "reason": "already_running"}, nil
 		}
 		defer locker.ReleaseAdvisoryLock(ctx, lockID)
 	}
 
 	return app.dispatchTask(ctx, taskType, params)
+}
+
+// releaseSkippedCollectionMarker releases this run's OWN collection in-flight
+// marker when a TaskCollectRecommendations invocation that holds an owner
+// token is skipped by the advisory lock, and therefore never reaches
+// CollectRecommendations, whose deferred token-scoped clear would normally
+// release it.
+//
+// Without this the abandoned run's marker sits stranded until the 5-minute
+// auto-recovery window in MarkCollectionStarted expires, and every refresh
+// the user attempts during that window is rejected with 409 "collection
+// already in progress" while no collection backed by that marker is running.
+// Before the issue #261 compare-and-clear guard, the overlapping run holding
+// the lock happened to cover this case with its unconditional clear; scoping
+// the clear to its owner correctly stopped that cross-run wipe, so the
+// abandoning run now has to release its own marker explicitly.
+//
+// Only the lock-skip path releases. A lock-check error returns an error, which
+// lets the Lambda async-invoke retry the same event (same owner token) and
+// still run the collect, so the marker must survive that path.
+//
+// Scoped by ownerToken, so this can only ever release the marker this run
+// owns, never a concurrent run's. Callers that never won MarkCollectionStarted
+// (EventBridge cron, the /api/scheduled/ HTTP path, the --task CLI) carry no
+// token, own no marker, and are skipped. Best effort: a failure only defers
+// cleanup to the 5-minute window, so it is logged rather than failing the
+// task. Uses a detached short-deadline context for the same reason the
+// scheduler's deferred clear does: ctx may already be near its deadline by
+// the time cleanup runs.
+func (app *Application) releaseSkippedCollectionMarker(taskType ScheduledTaskType, ownerToken string) {
+	if taskType != TaskCollectRecommendations || ownerToken == "" {
+		return
+	}
+	if app.Config == nil {
+		log.Println("Cannot release collection marker for skipped run: no config store configured")
+		return
+	}
+	clearCtx, cancel := context.WithTimeout(context.Background(), skippedCollectionMarkerClearTimeout)
+	defer cancel()
+	if err := app.Config.ClearCollectionStarted(clearCtx, ownerToken); err != nil {
+		log.Printf("Failed to release collection marker for skipped run: %v", err)
+	}
 }
 
 // dispatchTask routes a scheduled task to its handler.

@@ -6,9 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/internal/mocks"
 	"github.com/LeanerCloud/CUDly/internal/purchase"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/LeanerCloud/CUDly/internal/testutil"
+	"github.com/stretchr/testify/mock"
 )
 
 // mockTaskLocker implements TaskLocker for testing.
@@ -300,6 +302,107 @@ func TestHandleScheduledTaskAdvisoryLock(t *testing.T) {
 		_, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations, ScheduledTaskParams{})
 		testutil.AssertError(t, err)
 		testutil.AssertContains(t, err.Error(), "failed to check task lock")
+	})
+}
+
+// TestHandleScheduledTaskReleasesMarkerWhenSkipped pins the abandoned-marker
+// leak in the issue #261 compare-and-clear guard: a collect run that WON
+// MarkCollectionStarted (so it owns the in-flight marker) but is then skipped
+// by the advisory lock never reaches CollectRecommendations, so the deferred
+// token-scoped clear never fires. Before this release the marker sat stranded
+// for the full 5-minute auto-recovery window, rejecting every refresh the user
+// attempted with 409 while nothing backed by that marker was running.
+func TestHandleScheduledTaskReleasesMarkerWhenSkipped(t *testing.T) {
+	t.Run("owner token released when the run is skipped", func(t *testing.T) {
+		ctx := testutil.TestContext(t)
+		store := new(mocks.MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
+		store.On("ClearCollectionStarted", mock.Anything, "tok-owner").Return(nil)
+
+		app := &Application{
+			Config:     store,
+			Scheduler:  &testutil.MockScheduler{},
+			Purchase:   &testutil.MockPurchaseManager{},
+			TaskLocker: &mockTaskLocker{acquired: false},
+		}
+
+		result, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations,
+			ScheduledTaskParams{OwnerToken: "tok-owner"})
+		testutil.AssertNoError(t, err)
+
+		m, ok := result.(map[string]string)
+		if !ok {
+			t.Fatalf("expected map[string]string, got %T", result)
+		}
+		testutil.AssertEqual(t, "skipped", m["status"])
+		store.AssertCalled(t, "ClearCollectionStarted", mock.Anything, "tok-owner")
+	})
+
+	// A tokenless run (EventBridge cron, the /api/scheduled/ HTTP path, the
+	// --task CLI) owns no marker, so a skip must not clear anything: that
+	// would be exactly the cross-run wipe issue #261 closes. The expectation
+	// is registered (as Maybe) so an unwanted call is still recorded rather
+	// than falling through the mock's no-expectation default and letting
+	// AssertNotCalled pass vacuously.
+	t.Run("tokenless skipped run clears nothing", func(t *testing.T) {
+		ctx := testutil.TestContext(t)
+		store := new(mocks.MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
+		store.On("ClearCollectionStarted", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+		app := &Application{
+			Config:     store,
+			Scheduler:  &testutil.MockScheduler{},
+			Purchase:   &testutil.MockPurchaseManager{},
+			TaskLocker: &mockTaskLocker{acquired: false},
+		}
+
+		_, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations, ScheduledTaskParams{})
+		testutil.AssertNoError(t, err)
+		store.AssertNotCalled(t, "ClearCollectionStarted", mock.Anything, mock.Anything)
+	})
+
+	// A lock-check error is returned to the caller, so the Lambda async invoke
+	// retries the same event with the same owner token and the collect can
+	// still run. Releasing the marker there would strand the retry.
+	t.Run("lock error keeps the marker for the retry", func(t *testing.T) {
+		ctx := testutil.TestContext(t)
+		store := new(mocks.MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
+		store.On("ClearCollectionStarted", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+		app := &Application{
+			Config:     store,
+			Scheduler:  &testutil.MockScheduler{},
+			Purchase:   &testutil.MockPurchaseManager{},
+			TaskLocker: &mockTaskLocker{err: errors.New("db connection lost")},
+		}
+
+		_, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations,
+			ScheduledTaskParams{OwnerToken: "tok-owner"})
+		testutil.AssertError(t, err)
+		store.AssertNotCalled(t, "ClearCollectionStarted", mock.Anything, mock.Anything)
+	})
+
+	// Only collect_recommendations carries an owner token. A stray token on
+	// another task type must never reach the collection marker.
+	t.Run("other task types never touch the marker", func(t *testing.T) {
+		ctx := testutil.TestContext(t)
+		store := new(mocks.MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
+		store.On("ClearCollectionStarted", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+		app := &Application{
+			Config:     store,
+			Scheduler:  &testutil.MockScheduler{},
+			Purchase:   &testutil.MockPurchaseManager{},
+			TaskLocker: &mockTaskLocker{acquired: false},
+		}
+
+		_, err := app.HandleScheduledTask(ctx, TaskCleanupExpiredRecords,
+			ScheduledTaskParams{OwnerToken: "tok-owner"})
+		testutil.AssertNoError(t, err)
+		store.AssertNotCalled(t, "ClearCollectionStarted", mock.Anything, mock.Anything)
 	})
 }
 
