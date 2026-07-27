@@ -617,8 +617,7 @@ func TestExecutePurchaseAuditLogging(t *testing.T) {
 
 	t.Run("a real purchase logs the attempt and the outcome", func(t *testing.T) {
 		fake := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true, CommitmentID: "ri-abc123"}}
-		var out string
-		out = capture(func() {
+		out := capture(func() {
 			_, err := ExecutePurchase(context.Background(), PurchaseRequest{
 				Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true,
 				CredentialScope: "subscription-a",

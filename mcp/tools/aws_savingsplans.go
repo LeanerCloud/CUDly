@@ -121,8 +121,11 @@ func (t *awsSavingsPlansPurchaseTool) handle(ctx context.Context, _ *mcp.CallToo
 // function's cyclomatic complexity stays under the repo's gocyclo gate as
 // validation branches (e.g. validateDatabaseSPConstraints) are added.
 func validateSavingsPlanArgs(args savingsPlansPurchaseArgs) (spType SPType, term TermYears, paymentOption PaymentOption, err error) {
-	if err := validateHourlyCommitment(args.HourlyCommitment); err != nil {
-		return "", 0, "", err
+	// Named commitErr rather than err: this function's err is a named return,
+	// so `err :=` trips govet's shadow check while `err =` trips gocritic's
+	// sloppyReassign. A distinct name satisfies both.
+	if commitErr := validateHourlyCommitment(args.HourlyCommitment); commitErr != nil {
+		return "", 0, "", commitErr
 	}
 	spType, err = ValidateSPType(args.SPType)
 	if err != nil {
