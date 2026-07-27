@@ -29,9 +29,9 @@ type searchRecommendationsArgs struct {
 	Region              string   `json:"region,omitempty" jsonschema:"region to search; omit for account/global-level services such as Savings Plans"`
 	IncludeRegions      []string `json:"include_regions,omitempty" jsonschema:"restrict the search to these regions, in addition to (or instead of) region"`
 	ExcludeRegions      []string `json:"exclude_regions,omitempty" jsonschema:"exclude these regions from the search"`
-	LookbackPeriod      string   `json:"lookback_period,omitempty" jsonschema:"cost/usage lookback window backing the recommendation; AWS Savings Plans searches default to 30d when omitted (AWS requires a value); reservation searches (EC2/RDS/etc) leave it omitted to search all lookback windows"`
-	TermYears           int      `json:"term_years,omitempty" jsonschema:"commitment term filter; AWS Savings Plans searches default to 1 (1yr, no-upfront) when omitted (AWS requires a value); reservation searches (EC2/RDS/etc) leave it omitted to search all terms"`
-	PaymentOption       string   `json:"payment_option,omitempty" jsonschema:"payment schedule filter; AWS Savings Plans searches default to no-upfront when omitted (AWS requires a value); reservation searches (EC2/RDS/etc) leave it omitted to search all payment options"`
+	LookbackPeriod      string   `json:"lookback_period,omitempty" jsonschema:"cost/usage lookback window backing the recommendation; AWS Savings Plans searches default to 30d when omitted (AWS requires a value); reservation searches (EC2/RDS/etc) fall back to AWS's own server-side default (7 days) when omitted"`
+	TermYears           int      `json:"term_years,omitempty" jsonschema:"commitment term filter; AWS Savings Plans searches default to 1 (1yr, no-upfront) when omitted (AWS requires a value); reservation searches (EC2/RDS/etc) leave it omitted to search BOTH 1yr and 3yr and return a result per term"`
+	PaymentOption       string   `json:"payment_option,omitempty" jsonschema:"payment schedule filter; AWS Savings Plans searches default to no-upfront when omitted (AWS requires a value); reservation searches (EC2/RDS/etc) leave it omitted to search ALL THREE payment options and return a result per option"`
 	AccountFilter       []string `json:"account_filter,omitempty" jsonschema:"restrict the search to these account/subscription/project IDs"`
 	IncludeSPTypes      []string `json:"include_sp_types,omitempty" jsonschema:"AWS Savings Plans types to include; omit for all"`
 	ExcludeSPTypes      []string `json:"exclude_sp_types,omitempty" jsonschema:"AWS Savings Plans types to exclude"`
@@ -112,12 +112,121 @@ func (t *searchRecommendationsTool) handle(ctx context.Context, _ *mcp.CallToolR
 		return nil, searchRecommendationsResult{}, fmt.Errorf("get %s recommendations client: %w", providerType, err)
 	}
 
-	recs, err := recClient.GetRecommendations(ctx, recommendationParamsFromArgs(service, term, args))
+	recs, err := fetchSearchCombos(ctx, recClient, providerType, service, term, args)
 	if err != nil {
-		return nil, searchRecommendationsResult{}, fmt.Errorf("get recommendations: %w", err)
+		return nil, searchRecommendationsResult{}, err
 	}
 
 	return nil, searchRecommendationsResult{Count: len(recs), Recommendations: recs}, nil
+}
+
+// searchCombo is one (term, payment option) pair to query. Cost Explorer's
+// GetReservationPurchaseRecommendation accepts exactly one term and one
+// payment option per request and returns recommendations only for that cell
+// -- there is no "give me every variant" mode -- so covering the full menu
+// takes one call per combo.
+type searchCombo struct {
+	term    string
+	payment string
+}
+
+// allSearchTerms and allSearchPaymentOptions are the full reservation menus
+// fanned out over when the caller omits term_years / payment_option. They
+// mirror defaultDiscoveryTerms and defaultDiscoveryPaymentOptions in
+// providers/aws/recommendations/client.go, which the scheduler's discovery
+// sweep already fans out over for the same reason.
+var (
+	allSearchTerms          = []string{TermOneYear.RecommendationTerm(), TermThreeYear.RecommendationTerm()}
+	allSearchPaymentOptions = []string{
+		string(PaymentOptionAllUpfront),
+		string(PaymentOptionPartialUpfront),
+		string(PaymentOptionNoUpfront),
+	}
+)
+
+// searchCombos returns every (term, payment) pair the search must query.
+//
+// For an AWS reservation search (EC2/RDS/ElastiCache/...), an omitted
+// term_years or payment_option means "search all", so the omitted dimension
+// expands to its full menu and the result is the Cartesian product: 6 combos
+// when both are omitted, 2 or 3 when one is, 1 when both are supplied.
+//
+// Without this expansion, omitting the fields sent Cost Explorer an EMPTY
+// TermInYears/PaymentOption (convertTermInYears and convertPaymentOption both
+// silently map unrecognized input to ""), AWS quietly applied its own default
+// of 1yr/all-upfront, and the caller saw exactly ONE of the six purchasable
+// options while the tool claimed to have searched them all. On a real account
+// that hid the best offer outright: 1yr/all-upfront saved 40% where
+// 3yr/all-upfront saved 63% on the identical instance.
+//
+// Every other search -- Savings Plans (own required-field defaulting, see
+// applySavingsPlansSearchDefaults), Azure (term/payment come back off the
+// Advisor response, they are not request filters), GCP (no term/payment
+// concept in its recommendations path) -- queries once with whatever the
+// caller supplied, since fanning out there would re-issue the same query and
+// duplicate results.
+func searchCombos(providerType common.ProviderType, service common.ServiceType, term, payment string) []searchCombo {
+	if providerType != common.ProviderAWS || common.IsSavingsPlan(service) {
+		return []searchCombo{{term: term, payment: payment}}
+	}
+
+	terms := []string{term}
+	if term == "" {
+		terms = allSearchTerms
+	}
+	payments := []string{payment}
+	if payment == "" {
+		payments = allSearchPaymentOptions
+	}
+
+	combos := make([]searchCombo, 0, len(terms)*len(payments))
+	for _, tm := range terms {
+		for _, pay := range payments {
+			combos = append(combos, searchCombo{term: tm, payment: pay})
+		}
+	}
+	return combos
+}
+
+// fetchSearchCombos queries every combo searchCombos selected and returns the
+// concatenated recommendations, always as a non-nil slice so a no-results
+// search serializes as [] rather than null.
+//
+// Each combo is sent with a CONCRETE term and payment option, which is also
+// what makes the returned recommendations self-describing: the AWS parser
+// tags each one with the term/payment of the request that produced it
+// (providers/aws/recommendations/parser_ri.go), so a fanned-out result set
+// says which offer each set of money figures belongs to instead of leaving
+// them blank and unattributable.
+//
+// A failing combo fails the whole search rather than being skipped. The
+// scheduler's equivalent sweep (GetRecommendationsForService) tolerates
+// per-combo errors because partial progress beats none in a batch job, but
+// here the caller is choosing what to BUY: silently returning 5 of 6 offers
+// is indistinguishable from "these are all your options" and recreates the
+// exact defect this fan-out exists to fix. The error names the combo so a
+// retry is targeted.
+func fetchSearchCombos(
+	ctx context.Context,
+	recClient provider.RecommendationsClient,
+	providerType common.ProviderType,
+	service common.ServiceType,
+	term string,
+	args searchRecommendationsArgs,
+) ([]common.Recommendation, error) {
+	combos := searchCombos(providerType, service, term, args.PaymentOption)
+	recs := make([]common.Recommendation, 0)
+	for _, combo := range combos {
+		got, err := recClient.GetRecommendations(ctx, recommendationParamsFromArgs(service, combo, args))
+		if err != nil {
+			if len(combos) == 1 {
+				return nil, fmt.Errorf("get recommendations: %w", err)
+			}
+			return nil, fmt.Errorf("get recommendations (term=%s, payment_option=%s): %w", combo.term, combo.payment, err)
+		}
+		recs = append(recs, got...)
+	}
+	return recs, nil
 }
 
 // validateSearchArgs validates every money-neutral-but-still-typed field on
@@ -362,14 +471,17 @@ func providerConfigFromArgs(providerType common.ProviderType, args searchRecomme
 }
 
 // recommendationParamsFromArgs builds the common.RecommendationParams for
-// the already-validated service and term.
-func recommendationParamsFromArgs(service common.ServiceType, term string, args searchRecommendationsArgs) *common.RecommendationParams {
+// the already-validated service and one combo from searchCombos. Term and
+// payment option come from the combo, NOT from args, so a fanned-out search
+// sends each (term, payment) cell concretely; every other field is shared
+// across the fan-out and comes from args.
+func recommendationParamsFromArgs(service common.ServiceType, combo searchCombo, args searchRecommendationsArgs) *common.RecommendationParams {
 	return &common.RecommendationParams{
 		Service:        service,
 		Region:         args.Region,
 		LookbackPeriod: args.LookbackPeriod,
-		Term:           term,
-		PaymentOption:  args.PaymentOption,
+		Term:           combo.term,
+		PaymentOption:  combo.payment,
 		AccountFilter:  args.AccountFilter,
 		IncludeRegions: args.IncludeRegions,
 		ExcludeRegions: args.ExcludeRegions,
