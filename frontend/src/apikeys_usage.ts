@@ -13,6 +13,14 @@ import type { APIKeysUsageStats } from './api/types';
 import { showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
 
 /**
+ * Generation counter for in-flight summary loads. Refreshes can resolve out
+ * of order, so a load only touches the DOM if it is still the newest one --
+ * otherwise a slow older request would overwrite a newer result, or paint an
+ * error over a summary that loaded fine.
+ */
+let usageStatsGeneration = 0;
+
+/**
  * Load and render the section-level usage summary (totals + top keys).
  * Fails closed: on error the summary slot shows an inline message and
  * the rest of the section still works.
@@ -20,12 +28,15 @@ import { showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
 export async function loadApiKeysUsageStats(): Promise<void> {
   const container = document.getElementById('apikeys-usage-summary');
   if (!container) return;
+  const generation = ++usageStatsGeneration;
   showSkeletonBlock(container, '100%', '4rem');
   try {
     const stats = await api.getApiKeysUsageStats();
+    if (generation !== usageStatsGeneration) return;
     renderApiKeysUsageSummary(stats);
   } catch (error) {
     console.error('Failed to load API keys usage stats:', error);
+    if (generation !== usageStatsGeneration) return;
     teardownSkeleton(container);
     const p = document.createElement('p');
     p.className = 'error';
