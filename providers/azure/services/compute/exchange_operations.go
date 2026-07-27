@@ -112,9 +112,11 @@ type ExchangeTarget struct {
 	Location string
 
 	// Term is the reservation term. Required: must be one of
-	// armreservations.PossibleReservationTermValues() (P1Y or P3Y in this
-	// SDK version). There is no default -- an unset or unrecognized term
-	// is a validation error rather than a silent P1Y fallback.
+	// armreservations.PossibleReservationTermValues(). There is no default
+	// -- an unset or unrecognized term is a validation error rather than a
+	// silent P1Y fallback. Which of those terms Azure actually sells for a
+	// given resource type is Azure's call, surfaced as a policy error from
+	// CalculateExchange rather than second-guessed here.
 	Term armreservations.ReservationTerm
 
 	// Quantity is the number of instances to reserve. Required: must be >= 1.

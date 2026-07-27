@@ -731,13 +731,13 @@ paths:
                   minItems: 1
                   maxItems: 50
                   items:
-                    type: object
+                    $ref: '#/components/schemas/AzureExchangeSource'
                 targets:
                   type: array
                   minItems: 1
                   maxItems: 50
                   items:
-                    type: object
+                    $ref: '#/components/schemas/AzureExchangeTarget'
       responses:
         '200':
           description: Compatible offerings and cost preview
@@ -792,13 +792,13 @@ paths:
                   minItems: 1
                   maxItems: 50
                   items:
-                    type: object
+                    $ref: '#/components/schemas/AzureExchangeSource'
                 targets:
                   type: array
                   minItems: 1
                   maxItems: 50
                   items:
-                    type: object
+                    $ref: '#/components/schemas/AzureExchangeTarget'
                 max_payment_due:
                   type: string
                   description: Spend-cap guardrail (decimal string, e.g. "1000.00")
@@ -1867,6 +1867,60 @@ components:
 
   # ---- Schemas ------------------------------------------------------------
   schemas:
+    # -- Azure RI exchange --------------------------------------------------
+    AzureExchangeSource:
+      type: object
+      description: One Azure VM reservation to hand back in an exchange.
+      required: [reservation_id, quantity]
+      properties:
+        reservation_id:
+          type: string
+          description: >
+            Full ARM resource id of the reservation item, as returned by
+            GET /api/ri-exchange/azure-instances, e.g.
+            /providers/Microsoft.Capacity/reservationOrders/{orderId}/reservations/{reservationId}
+        quantity:
+          type: integer
+          format: int32
+          minimum: 1
+          description: Number of instances to hand back.
+
+    AzureExchangeTarget:
+      type: object
+      description: One Azure VM reservation to acquire in an exchange.
+      required: [sku, location, term, quantity]
+      properties:
+        sku:
+          type: string
+          description: VM size to purchase, e.g. Standard_D4s_v3.
+        location:
+          type: string
+          description: Azure region, e.g. eastus.
+        term:
+          type: string
+          description: >
+            Reservation term, validated against the Azure SDK's own term
+            enum; any other value is a 400. Which of these Azure actually
+            accepts depends on the resource type (VM reservations are sold
+            for one and three years), so a term Azure does not offer for
+            this SKU comes back as a policy error from the pricing call
+            rather than being rejected here.
+          enum: [P1Y, P3Y, P5Y]
+        quantity:
+          type: integer
+          format: int32
+          minimum: 1
+          description: Number of instances to reserve.
+        billing_scope_id:
+          type: string
+          description: >
+            Optional, and NOT the scope that gets charged: the billing scope
+            is always derived from subscription_id. Supplying a value that
+            names a different subscription is a 400, so a caller cannot
+            direct the charge away from the subscription their permission
+            constraints were evaluated against. Omit it to charge the
+            subscription's own scope.
+
     # -- Generic ------------------------------------------------------------
     Error:
       type: object
