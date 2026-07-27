@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	spTypes "github.com/aws/aws-sdk-go-v2/service/savingsplans/types"
@@ -119,8 +121,8 @@ func (t *awsSavingsPlansPurchaseTool) handle(ctx context.Context, _ *mcp.CallToo
 // function's cyclomatic complexity stays under the repo's gocyclo gate as
 // validation branches (e.g. validateDatabaseSPConstraints) are added.
 func validateSavingsPlanArgs(args savingsPlansPurchaseArgs) (spType SPType, term TermYears, paymentOption PaymentOption, err error) {
-	if args.HourlyCommitment <= 0 {
-		return "", 0, "", fmt.Errorf("hourly_commitment must be > 0, got %v", args.HourlyCommitment)
+	if err := validateHourlyCommitment(args.HourlyCommitment); err != nil {
+		return "", 0, "", err
 	}
 	spType, err = ValidateSPType(args.SPType)
 	if err != nil {
@@ -217,6 +219,55 @@ func savingsPlanRecommendationFromArgs(args savingsPlansPurchaseArgs) (rec commo
 		confirm = *args.Confirm
 	}
 	return rec, region, dryRun, confirm, nil
+}
+
+// commitmentFormat is the exact format providers/aws/services/savingsplans/
+// client.go renders CreateSavingsPlanInput.Commitment with. Duplicated here
+// deliberately: validateHourlyCommitment's job is to prove the caller's
+// amount survives THAT rendering unchanged, so it must compare against the
+// same format string rather than an independently-chosen precision.
+const commitmentFormat = "%.2f"
+
+// commitmentEpsilon is the relative tolerance for "the rendered amount is
+// the same money as the requested amount". A decimal literal such as 0.07
+// is not exactly representable in float64 (0.07*100 is 7.000000000000001),
+// so an exact equality test would reject legitimate whole-cent values;
+// anything genuinely finer than a cent differs from its rendering by at
+// least ~0.001, orders of magnitude above this bound.
+const commitmentEpsilon = 1e-9
+
+// validateHourlyCommitment rejects a commitment AWS cannot bill exactly.
+// The Savings Plans client renders the amount with %.2f, so anything finer
+// than a cent is silently rounded on the way to CreateSavingsPlan: a
+// requested $0.004/hour becomes "0.00" and a requested $10.005/hour becomes
+// "10.01", in both cases committing real money to a figure the caller never
+// asked for. Rounding a money value behind the caller's back is exactly the
+// silent coercion this path must not do (feedback_no_silent_fallbacks), so a
+// sub-cent value is an explicit error naming the amount AWS would actually
+// have charged.
+//
+// This also keeps the idempotency key honest. idempotencyKeyFor folds in the
+// full-precision HourlyCommitment, so without this two requests AWS would
+// bill identically (10.001 and 10.004, both "10.00") would derive different
+// tokens and could purchase twice.
+func validateHourlyCommitment(hourlyCommitment float64) error {
+	if hourlyCommitment <= 0 {
+		return fmt.Errorf("hourly_commitment must be > 0, got %v", hourlyCommitment)
+	}
+	rendered := fmt.Sprintf(commitmentFormat, hourlyCommitment)
+	billed, err := strconv.ParseFloat(rendered, 64)
+	if err != nil {
+		// Unreachable for a finite float64 rendered with %.2f; a NaN or Inf
+		// commitment is rejected by the > 0 check above.
+		return fmt.Errorf("hourly_commitment %v is not a billable amount: %w", hourlyCommitment, err)
+	}
+	if math.Abs(hourlyCommitment-billed) > commitmentEpsilon*math.Max(1, hourlyCommitment) {
+		return fmt.Errorf(
+			"hourly_commitment %v is finer than one cent: AWS bills a Savings Plan commitment to two decimal "+
+				"places, so this would be silently charged as %s/hour instead; pass an amount in whole cents",
+			hourlyCommitment, rendered)
+	}
+	return nil
 }
 
 // validateDatabaseSPConstraints rejects a Database Savings Plan request
