@@ -578,13 +578,13 @@ export interface APIKeyInfo {
   // Usage counters (issue #340/#344 deferred sub-task).
   // Optional in the type so older mock data / cached responses without
   // the columns don't blow up the renderer -- but the backend always
-  // sends them as of migration 000093. request_count_window is a
+  // sends them as of migration 000094. request_count_window is a
   // FIXED/TUMBLING window count, not a true rolling 24h total --
   // request_count_window_start says exactly which period it covers, and
   // both come back as 0 / absent once that window has closed, so a key
   // that went idle reads as no current activity rather than replaying a
   // count from an old window.
-  // null when the key was already in use before migration 000093 added the
+  // null when the key was already in use before migration 000094 added the
   // counters, so its true lifetime volume is unrecoverable. Render it as
   // "no data", never as 0.
   request_count_total?: number | null;

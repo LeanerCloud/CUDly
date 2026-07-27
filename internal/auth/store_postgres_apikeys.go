@@ -163,7 +163,7 @@ func (s *PostgresStore) UpdateAPIKey(ctx context.Context, key *UserAPIKey) error
 // UpdateAPIKeyLastUsed atomically updates the last_used_at timestamp for an
 // API key. Retained for backwards compatibility with callers that only need
 // the timestamp update -- production code routes through RecordAPIKeyUsage,
-// which additionally maintains the usage counters from migration 000093.
+// which additionally maintains the usage counters from migration 000094.
 func (s *PostgresStore) UpdateAPIKeyLastUsed(ctx context.Context, keyID string) error {
 	query := `UPDATE api_keys SET last_used_at = NOW() WHERE id = $1`
 	result, err := s.db.Exec(ctx, query, keyID)

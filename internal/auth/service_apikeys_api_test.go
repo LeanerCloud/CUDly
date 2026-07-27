@@ -255,7 +255,7 @@ func TestService_ListUserAPIKeysAPI(t *testing.T) {
 		assert.Nil(t, resp.APIKeys[2].RequestCountWindowStart)
 	})
 
-	// Regression: migration 000093 added request_count_total with DEFAULT 0,
+	// Regression: migration 000094 added request_count_total with DEFAULT 0,
 	// so a key that was already serving traffic reads as zero. Reporting that
 	// as "0 requests" states a volume nobody measured. It must come back as
 	// unknown (nil) instead, while a genuinely-unused key still reports 0.

@@ -78,7 +78,7 @@ type UserAPIKey struct {
 	KeyHash     string       `json:"-" dynamodbav:"KeyHash"`
 	Permissions []Permission `json:"permissions,omitempty" dynamodbav:"Permissions"`
 	IsActive    bool         `json:"is_active" dynamodbav:"IsActive"`
-	// Usage counters (issue #340/#344 deferred sub-task -- migration 000093).
+	// Usage counters (issue #340/#344 deferred sub-task -- migration 000094).
 	// Both default to 0 for legacy rows. RequestCountWindow is a
 	// FIXED/TUMBLING window count, not a true trailing-24h rolling count:
 	// the store's RecordAPIKeyUsage path restarts it (and

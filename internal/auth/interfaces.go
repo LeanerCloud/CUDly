@@ -56,7 +56,7 @@ type StoreInterface interface {
 	// fixed/tumbling window count (not a true trailing-24h rolling count):
 	// it resets (along with request_count_window_start) when the existing
 	// window is older than apiKeyUsageWindow. Stale windows are zeroed on
-	// read, not on write -- see effectiveWindowUsage. See migration 000093
+	// read, not on write -- see effectiveWindowUsage. See migration 000094
 	// for the column shape.
 	RecordAPIKeyUsage(ctx context.Context, keyID string, delta int64) error
 	DeleteAPIKey(ctx context.Context, keyID string) error

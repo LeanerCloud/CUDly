@@ -2288,7 +2288,7 @@ components:
           nullable: true
           description: |
             Lifetime request count since the key was created. Null when the
-            count is unknown: keys already in use before migration 000093
+            count is unknown: keys already in use before migration 000094
             introduced the counter have no recoverable lifetime figure, and
             reporting 0 for them would assert a volume nobody measured. A key
             that has genuinely never been used reports 0, not null.

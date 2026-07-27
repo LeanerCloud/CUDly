@@ -16,7 +16,7 @@ let currentApiKeys: APIKeyInfo[] = [];
 
 /**
  * Cell content for a request count the backend cannot report, i.e. a key
- * already in use before migration 000093 introduced the counters. Static
+ * already in use before migration 000094 introduced the counters. Static
  * markup with no interpolated data, matching the "Never" treatment the
  * Last Used and Expires columns already use for absent values.
  */
@@ -449,7 +449,7 @@ function showError(message: string): void {
  * the tile width.
  *
  * `null` means the backend does not know the count (a key already in use
- * before migration 000093 added the counters) and renders as an em dash
+ * before migration 000094 added the counters) and renders as an em dash
  * rather than "0", which would state a request volume nobody measured.
  * `undefined` (an older cached response with no counter fields at all) is
  * treated the same way, as is any non-finite or negative value.

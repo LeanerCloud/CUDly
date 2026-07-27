@@ -53,7 +53,7 @@ func effectiveWindowUsage(key *UserAPIKey, now time.Time) (int64, *time.Time) {
 // effectiveLifetimeUsage returns the lifetime request count to report, or nil
 // when the true count is not known.
 //
-// Migration 000093 added request_count_total with DEFAULT 0, so every key that
+// Migration 000094 added request_count_total with DEFAULT 0, so every key that
 // already existed reads as zero no matter how much traffic it actually served.
 // RecordAPIKeyUsage is the only writer of last_used_at on the request path and
 // it always bumps the counter in the same statement, so "has been used at
@@ -104,7 +104,7 @@ type APIKeyInfo struct {
 	// PostgresStore.RecordAPIKeyUsage and RequestCountWindowStart above.
 	//
 	// RequestCountTotal is a pointer because "unknown" and "zero" are
-	// different answers: a key that was already in use before migration 000093
+	// different answers: a key that was already in use before migration 000094
 	// added the counter has no recoverable lifetime figure, and reporting 0
 	// for it would be a fabricated number. nil means unknown; see
 	// effectiveLifetimeUsage.
@@ -136,7 +136,7 @@ type APIKeysUsageStatsTopKey struct {
 //
 // TotalRequestsLifetime sums only the keys whose lifetime count is known.
 // LifetimePartial reports whether any key was left out because its usage
-// predates migration 000093 (see effectiveLifetimeUsage), so the UI can show
+// predates migration 000094 (see effectiveLifetimeUsage), so the UI can show
 // the total as a lower bound instead of presenting an undercount as exact.
 type APIKeysUsageStatsResponse struct {
 	TotalActive           int                       `json:"total_active"`
@@ -248,7 +248,7 @@ func (s *Service) ListUserAPIKeysAPI(ctx context.Context, userID string) (any, e
 // GetAPIKeysUsageStatsAPI computes section-level usage stats for the
 // calling user's own API keys. Aggregated in-process so we don't need a
 // separate DB round-trip -- ListUserAPIKeys already returns the per-key
-// counters from migration 000093.
+// counters from migration 000094.
 //
 // The "top keys" list is sorted by effective window count descending, with
 // total-lifetime as the tiebreaker so a long-running idle key doesn't
@@ -285,7 +285,7 @@ func (s *Service) GetAPIKeysUsageStatsAPI(ctx context.Context, userID string) (a
 		if lifetime := effectiveLifetimeUsage(k); lifetime != nil {
 			resp.TotalRequestsLifetime += *lifetime
 		} else {
-			// Pre-000093 key: its real lifetime count is unrecoverable, so
+			// Pre-000094 key: its real lifetime count is unrecoverable, so
 			// the total is a lower bound rather than an exact figure.
 			resp.LifetimePartial = true
 		}

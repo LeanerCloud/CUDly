@@ -1121,7 +1121,7 @@ describe('API Keys Module', () => {
       expect(cells?.[1]?.textContent).toBe('n/a');
     });
 
-    // Regression: a key already in use before migration 000093 has no
+    // Regression: a key already in use before migration 000094 has no
     // recoverable lifetime count. The backend sends null for it; rendering
     // "0" would state a request volume nobody measured. A genuinely-unused
     // key still shows 0.
