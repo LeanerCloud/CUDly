@@ -221,3 +221,60 @@ func TestAzureComputeRIPurchaseSchemaExcludesPartialUpfront(t *testing.T) {
 	assert.Contains(t, enum, "all-upfront")
 	assert.Contains(t, enum, "no-upfront")
 }
+
+// TestSearchRecommendationsSchemaAdvertisesTermAndPaymentEnums pins that
+// cudly_search_recommendations tells a client which term_years and
+// payment_option values are valid, rather than leaving it to discover them by
+// sending a value the tool rejects. ValidateTermYears / ValidatePaymentOption
+// remain the enforcing guard (a client may send anything regardless of what
+// the schema declares); this covers discoverability, and fails if the schema
+// ever drifts from those validators. Drives the real MCP protocol (ListTools)
+// so it asserts what an actual client sees.
+func TestSearchRecommendationsSchemaAdvertisesTermAndPaymentEnums(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	server, err := NewServer("test")
+	require.NoError(t, err)
+
+	clientTransport, serverTransport := gosdk.NewInMemoryTransports()
+	go func() {
+		_ = server.Run(ctx, serverTransport)
+	}()
+
+	client := gosdk.NewClient(&gosdk.Implementation{Name: "test-client"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	require.NoError(t, err)
+	defer session.Close()
+
+	toolsList, err := session.ListTools(ctx, nil)
+	require.NoError(t, err)
+
+	var searchTool *gosdk.Tool
+	for _, tl := range toolsList.Tools {
+		if tl.Name == "cudly_search_recommendations" {
+			searchTool = tl
+			break
+		}
+	}
+	require.NotNil(t, searchTool, "cudly_search_recommendations must be registered")
+
+	schema, ok := searchTool.InputSchema.(map[string]any)
+	require.True(t, ok, "client-side InputSchema must be the default JSON marshaling (map[string]any)")
+	properties, ok := schema["properties"].(map[string]any)
+	require.True(t, ok)
+
+	paymentOption, ok := properties["payment_option"].(map[string]any)
+	require.True(t, ok)
+	paymentEnum, ok := paymentOption["enum"].([]any)
+	require.True(t, ok, "payment_option must advertise its value set")
+	assert.ElementsMatch(t, []any{"all-upfront", "partial-upfront", "no-upfront"}, paymentEnum)
+
+	termYears, ok := properties["term_years"].(map[string]any)
+	require.True(t, ok)
+	termEnum, ok := termYears["enum"].([]any)
+	require.True(t, ok, "term_years must advertise its value set")
+	// JSON numbers decode as float64 on the client side, so compare on the
+	// decoded values rather than the ints the server-side override used.
+	assert.ElementsMatch(t, []any{float64(1), float64(3)}, termEnum)
+}

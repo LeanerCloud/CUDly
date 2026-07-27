@@ -71,9 +71,20 @@ func (t *searchRecommendationsTool) Descriptor() Descriptor {
 }
 
 func (t *searchRecommendationsTool) Register(s *mcp.Server) error {
+	// Every constrained field advertises its value set in the schema, so an
+	// MCP client can discover the valid inputs without a round trip that
+	// fails validation. These mirror ValidatePaymentOption / ValidateTermYears,
+	// which stay the enforcing check: the schema is discoverability, not the
+	// guard, since a client may send anything regardless of what it declares.
 	schema, err := BuildInputSchema[searchRecommendationsArgs](map[string]FieldOverride{
 		"provider":        {Enum: []any{string(common.ProviderAWS), string(common.ProviderAzure), string(common.ProviderGCP)}},
 		"lookback_period": {Enum: []any{"7d", "30d", "60d"}},
+		"payment_option": {Enum: []any{
+			string(PaymentOptionAllUpfront),
+			string(PaymentOptionPartialUpfront),
+			string(PaymentOptionNoUpfront),
+		}},
+		"term_years": {Enum: []any{int(TermOneYear), int(TermThreeYear)}},
 	})
 	if err != nil {
 		return err
