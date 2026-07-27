@@ -3070,4 +3070,103 @@ describe('Plans Module', () => {
       expect(paymentSelect.value).toBe('all-upfront');
     });
   });
+
+  // Issue #340 follow-up (PR #376): per-plan health-score badge.
+  describe('plan health-score badge', () => {
+    const basePlan = {
+      id: 'plan-1',
+      name: 'Test Plan',
+      enabled: true,
+      auto_purchase: true,
+      services: {
+        ec2: { provider: 'aws', service: 'ec2', enabled: true, term: 1, payment: 'all-upfront', coverage: 80 }
+      },
+      ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0 }
+    };
+
+    test('renders a green badge for a healthy score (>= 80)', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{ ...basePlan, health_score: 90, health_factors: [] }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      expect(list?.innerHTML).toContain('badge-success');
+      expect(list?.innerHTML).toContain('Health: 90');
+    });
+
+    test('renders an amber badge for a medium score (50-79)', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{
+          ...basePlan,
+          health_score: 65,
+          health_factors: [{ code: 'behind_schedule', penalty: 20, note: 'on step 1, expected step 3 by now' }]
+        }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      expect(list?.innerHTML).toContain('badge-warning');
+      expect(list?.innerHTML).toContain('Health: 65');
+    });
+
+    test('renders a red badge for a poor score (< 50)', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{
+          ...basePlan,
+          health_score: 30,
+          health_factors: [
+            { code: 'overdue', penalty: 30, note: 'next purchase date has passed' },
+            { code: 'failed_executions', penalty: 40, note: '4 failed execution(s)' }
+          ]
+        }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      expect(list?.innerHTML).toContain('badge-danger');
+      expect(list?.innerHTML).toContain('Health: 30');
+    });
+
+    test('omits the badge entirely when health_score is absent (pre-feature API response)', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({ plans: [{ ...basePlan }] });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      expect(list?.innerHTML).not.toContain('Health:');
+    });
+
+    test('escapes health factor notes in the tooltip (XSS regression)', async () => {
+      const maliciousNote = '"><img src=x onerror=alert(1)>';
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{
+          ...basePlan,
+          health_score: 40,
+          health_factors: [{ code: 'stalled', penalty: 15, note: maliciousNote }]
+        }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      // Pre-fix, the unescaped `"` would close the title attribute early and
+      // the rest would parse as a live <img onerror> element. Post-fix the
+      // quote is entity-encoded so the whole malicious string stays inert
+      // text inside the title attribute -- assert on the parsed DOM (not the
+      // raw HTML string, since HTML serializers are free to leave `<`/`>`
+      // un-re-escaped inside an already-safe attribute value).
+      expect(list?.querySelector('img')).toBeNull();
+      const badge = list?.querySelector('.badge-danger[title]');
+      expect(badge?.getAttribute('title')).toContain(maliciousNote);
+    });
+  });
 });

@@ -861,6 +861,43 @@ interface BackendPlan {
   // (issue #973). The backend sets this flag when an account filter is
   // active so the frontend can bucket them under an "Unassigned" section.
   unassigned?: boolean;
+  // Health score/factors are computed at read time on GET /plans (never
+  // persisted) -- see computePlanHealth in internal/api/plan_health.go
+  // (issue #340 follow-up). Optional so an older cached response served
+  // during a partial deploy still renders the card cleanly.
+  health_score?: number;
+  health_factors?: api.PlanHealthFactor[];
+}
+
+// Score bands for the per-plan health badge (issue #340 follow-up). Green
+// >= 80 (healthy), amber 50-79 (needs attention), red < 50 (action needed).
+// Reuses the existing status-badge palette (badge-success/badge-warning/
+// badge-danger) already used elsewhere on this card rather than introducing
+// new CSS.
+const HEALTH_SCORE_GOOD_THRESHOLD = 80;
+const HEALTH_SCORE_WARN_THRESHOLD = 50;
+
+function healthBadgeClass(score: number): string {
+  if (score >= HEALTH_SCORE_GOOD_THRESHOLD) return 'badge-success';
+  if (score >= HEALTH_SCORE_WARN_THRESHOLD) return 'badge-warning';
+  return 'badge-danger';
+}
+
+// healthBadgeHtml renders the per-plan health-score badge. Returns '' when
+// health_score is absent (older API response during a partial deploy) so
+// the card still renders cleanly without it. The tooltip enumerates every
+// penalty factor so a bad score is actionable instead of opaque; every
+// factor note is escaped since it renders inside an HTML attribute (title)
+// via innerHTML (feedback_innerhtml_xss: all API-sourced values must be
+// escaped here even though the backend generates these notes itself).
+function healthBadgeHtml(plan: BackendPlan): string {
+  if (typeof plan.health_score !== 'number') return '';
+  const factors = plan.health_factors || [];
+  const factorLines = factors.length > 0
+    ? factors.map(f => `-${f.penalty}: ${f.note}`)
+    : ['No issues detected'];
+  const tooltip = [`Plan health: ${plan.health_score}/100`, ...factorLines].join('\n');
+  return `<span class="status-badge ${healthBadgeClass(plan.health_score)}" title="${escapeHtmlAttr(tooltip)}">Health: ${plan.health_score}</span>`;
 }
 
 // Pretty label for a service slug used inside the plan card.
@@ -992,6 +1029,7 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
         <h3>${escapeHtml(plan.name)}</h3>
         <div class="plan-status">
           <span class="status-badge ${status.class}">${status.label}</span>
+          ${healthBadgeHtml(plan)}
           ${overdueBadge}
           ${canManagePlan && !isUnassigned ? `
           <label class="toggle-label">
