@@ -728,10 +728,14 @@ paths:
                   type: string
                 sources:
                   type: array
+                  minItems: 1
+                  maxItems: 50
                   items:
                     type: object
                 targets:
                   type: array
+                  minItems: 1
+                  maxItems: 50
                   items:
                     type: object
       responses:
@@ -785,10 +789,14 @@ paths:
                   type: string
                 sources:
                   type: array
+                  minItems: 1
+                  maxItems: 50
                   items:
                     type: object
                 targets:
                   type: array
+                  minItems: 1
+                  maxItems: 50
                   items:
                     type: object
                 max_payment_due:
