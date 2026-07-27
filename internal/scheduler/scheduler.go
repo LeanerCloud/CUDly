@@ -152,7 +152,11 @@ func cacheTTLFromEnv() time.Duration {
 // cold-start) call with an empty ownerToken since they never won a marker,
 // and the clear is skipped entirely rather than clearing unconditionally,
 // which previously let a cron run wipe a concurrent user-triggered run's
-// marker.
+// marker. This deferred clear is the ONLY place that touches started_at:
+// persistCollection's SetRecommendationsCollectionError call (below, on a
+// provider failure) intentionally leaves started_at alone, so a tokenless
+// run hitting a routine provider error cannot wipe another run's marker
+// either.
 func (s *Scheduler) CollectRecommendations(ctx context.Context, ownerToken string) (*CollectResult, error) {
 	logging.Info("Collecting recommendations from cloud providers...")
 

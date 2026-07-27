@@ -459,4 +459,45 @@ func TestPostgresStore_ClearCollectionStarted_CompareAndClear(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestPostgresStore_SetRecommendationsCollectionError_DoesNotClearOwnerMarker
+// pins a second issue #261 side door found in adversarial review:
+// SetRecommendationsCollectionError is called mid-run from persistCollection
+// on EVERY CollectRecommendations invocation that hits a provider error,
+// including tokenless cron/cold-start/background runs. Pre-fix, it cleared
+// last_collection_started_at unconditionally (no owner check), so a
+// tokenless run's routine provider error would wipe a concurrent owner run's
+// in-flight marker, reopening the exact race the compare-and-clear guard
+// exists to close.
+func TestPostgresStore_SetRecommendationsCollectionError_DoesNotClearOwnerMarker(t *testing.T) {
+	ctx := context.Background()
+	container, err := testhelpers.SetupPostgresContainer(ctx, t)
+	require.NoError(t, err)
+	defer container.Cleanup(ctx)
+	pool := container.DB.Pool()
+	require.NoError(t, migrations.RunMigrations(ctx, pool, getMigrationsPath(), "", ""))
+	store := config.NewPostgresStore(container.DB)
+
+	// Owner run A wins the race and is stamped with a fresh owner token.
+	tokenA, okA, err := store.MarkCollectionStarted(ctx)
+	require.NoError(t, err)
+	require.True(t, okA)
+
+	// A tokenless caller (cron/cold-start/background run hitting a routine
+	// provider error) records the error. It must NOT touch run A's marker.
+	require.NoError(t, store.SetRecommendationsCollectionError(ctx, "aws: transient throttling"))
+
+	freshness, err := store.GetRecommendationsFreshness(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, freshness.LastCollectionError)
+	assert.Equal(t, "aws: transient throttling", *freshness.LastCollectionError)
+	assert.NotNil(t, freshness.LastCollectionStartedAt,
+		"run A's marker must survive a tokenless SetRecommendationsCollectionError call")
+
+	// Run A's own token-guarded clear still works afterward.
+	require.NoError(t, store.ClearCollectionStarted(ctx, tokenA))
+	freshness, err = store.GetRecommendationsFreshness(ctx)
+	require.NoError(t, err)
+	assert.Nil(t, freshness.LastCollectionStartedAt)
+}
+
 func float64Ptr(f float64) *float64 { return &f }

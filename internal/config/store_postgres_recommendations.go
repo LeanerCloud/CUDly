@@ -427,16 +427,24 @@ func (s *PostgresStore) GetRecommendationsFreshness(ctx context.Context) (*Recom
 }
 
 // SetRecommendationsCollectionError records the most recent collection's
-// error message without touching last_collected_at. Also clears
-// last_collection_started_at so the frontend knows the collection has
-// finished (with an error). Used by the scheduler when a collect fails
+// error message without touching last_collected_at or
+// last_collection_started_at. Used by the scheduler when a collect fails
 // partially or fully so the frontend banner surfaces the issue while
 // existing cached rows stay visible.
+//
+// This method must NOT clear last_collection_started_at (issue #261): it is
+// called mid-run from persistCollection on every CollectRecommendations
+// invocation that hits a provider error, including tokenless cron/cold-start/
+// background runs. Clearing the marker here, unconditionally and with no
+// owner check, previously let a tokenless run's routine provider error wipe
+// a concurrent owner run's in-flight marker, reopening the exact race the
+// compare-and-clear guard exists to close. Only the deferred, token-guarded
+// clearCollectionStartedBestEffort (which runs on both the success and
+// failure exit paths of CollectRecommendations) may clear started_at.
 func (s *PostgresStore) SetRecommendationsCollectionError(ctx context.Context, errMsg string) error {
 	if _, err := s.db.Exec(ctx, `
 		UPDATE recommendations_state
-		   SET last_collection_error       = $1,
-		       last_collection_started_at  = NULL
+		   SET last_collection_error = $1
 		 WHERE id = 1
 	`, errMsg); err != nil {
 		return fmt.Errorf("failed to set collection error: %w", err)
