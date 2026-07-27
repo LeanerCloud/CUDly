@@ -292,15 +292,32 @@ export async function fetchAndPopulateCommitmentOptions(fetchFn?: FetchLike): Pr
 }
 
 /**
- * Map legacy AWS payment values to display labels
+ * Map legacy AWS payment values onto the provider-canonical token.
+ *
+ * MUST stay in lockstep with the Go-side mapping in
+ * internal/config/validation.go:crossProviderPaymentAlias — this function
+ * decides which option the plan/purchase dropdowns pre-select, so a
+ * disagreement means the UI shows one billing schedule while the backend
+ * canonicalizes to another. See #1503.
+ *
+ * Azure reservations offer exactly two billing plans, Upfront and Monthly,
+ * and the total cost is identical either way ("The total cost of up-front and
+ * monthly reservations is the same and you don't pay any extra fees when you
+ * choose to pay monthly" —
+ * https://learn.microsoft.com/en-us/azure/cost-management-billing/reservations/prepare-buy-reservation).
+ * There is no partial-upfront equivalent, so that token has to land on one of
+ * the two. It lands on 'monthly': the billing plan cannot be changed after
+ * purchase (same doc set, "Manage Azure Reservations"), so pre-selecting
+ * 'upfront' would put a full, irreversible upfront charge in front of a user
+ * who never asked for one.
  */
 export function normalizePaymentValue(value: string, provider: string): string {
   // Handle legacy values or cross-provider values
   if (provider === 'azure') {
-    if (value === 'all-upfront' || value === 'partial-upfront') {
+    if (value === 'all-upfront') {
       return 'upfront';
     }
-    if (value === 'no-upfront') {
+    if (value === 'no-upfront' || value === 'partial-upfront') {
       return 'monthly';
     }
   } else if (provider === 'gcp') {

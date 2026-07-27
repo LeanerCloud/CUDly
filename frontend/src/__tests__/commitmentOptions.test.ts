@@ -633,8 +633,14 @@ describe('commitmentOptions', () => {
         expect(normalizePaymentValue('all-upfront', 'azure')).toBe('upfront');
       });
 
-      it('should convert partial-upfront to upfront for Azure', () => {
-        expect(normalizePaymentValue('partial-upfront', 'azure')).toBe('upfront');
+      // Regression test for #1503: partial-upfront has no Azure equivalent
+      // and must land on 'monthly', never 'upfront'. Azure's billing plan is
+      // immutable after purchase and both plans cost the same total, so
+      // pre-selecting 'upfront' would hand the user an irreversible full
+      // upfront charge they never chose. Mirrors the Go-side assertion in
+      // internal/config/validation_test.go:TestNormalizePaymentOption.
+      it('should convert partial-upfront to monthly (not upfront) for Azure', () => {
+        expect(normalizePaymentValue('partial-upfront', 'azure')).toBe('monthly');
       });
 
       it('should convert no-upfront to monthly for Azure', () => {
