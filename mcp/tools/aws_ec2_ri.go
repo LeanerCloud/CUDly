@@ -143,21 +143,6 @@ func resolveEC2ComputeDimensions(args ec2RIPurchaseArgs) (ec2ComputeDimensions, 
 	return dims, nil
 }
 
-// effectiveDryRunConfirm applies the dry_run=true / confirm=false defaults:
-// Go's zero value for bool cannot distinguish "caller omitted the field"
-// from "caller explicitly set it false", so both flags are pointers and this
-// is the single place that resolves them to concrete booleans.
-func effectiveDryRunConfirm(args ec2RIPurchaseArgs) (dryRun, confirm bool) {
-	dryRun = true
-	if args.DryRun != nil {
-		dryRun = *args.DryRun
-	}
-	if args.Confirm != nil {
-		confirm = *args.Confirm
-	}
-	return dryRun, confirm
-}
-
 // ec2RecommendationFromArgs validates every field of args and builds the
 // common.Recommendation to purchase, the effective region (trimmed of any
 // surrounding whitespace), and the effective dry_run/confirm booleans.
@@ -203,7 +188,7 @@ func ec2RecommendationFromArgs(args ec2RIPurchaseArgs) (rec common.Recommendatio
 		},
 	}
 
-	dryRun, confirm = effectiveDryRunConfirm(args)
+	dryRun, confirm = ResolveDryRunConfirm(args.DryRun, args.Confirm)
 	return rec, region, dryRun, confirm, nil
 }
 

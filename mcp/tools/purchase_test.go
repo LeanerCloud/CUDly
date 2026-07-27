@@ -650,3 +650,37 @@ func TestExecutePurchaseAuditLogging(t *testing.T) {
 		assert.Contains(t, out, "insufficient capacity")
 	})
 }
+
+// TestResolveDryRunConfirm pins the shared default resolution now used by
+// every purchase tool. This is the gate that decides whether real money
+// moves, and it was previously hand-copied into seven files; the single
+// most important property is that an OMITTED dry_run means preview, never
+// execute.
+func TestResolveDryRunConfirm(t *testing.T) {
+	t.Parallel()
+	ptr := func(b bool) *bool { return &b }
+
+	cases := []struct {
+		name        string
+		dryRun      *bool
+		confirm     *bool
+		wantDryRun  bool
+		wantConfirm bool
+	}{
+		{"both omitted defaults to preview", nil, nil, true, false},
+		// The safety-critical row: confirm=true alone must NOT execute.
+		// decidePurchaseMode then sees dryRun=true and previews.
+		{"omitted dry_run stays preview even when confirmed", nil, ptr(true), true, true},
+		{"explicit false dry_run is honored", ptr(false), ptr(true), false, true},
+		{"explicit true dry_run is honored", ptr(true), ptr(false), true, false},
+		{"explicit false confirm is honored", ptr(false), ptr(false), false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gotDryRun, gotConfirm := ResolveDryRunConfirm(tc.dryRun, tc.confirm)
+			assert.Equal(t, tc.wantDryRun, gotDryRun)
+			assert.Equal(t, tc.wantConfirm, gotConfirm)
+		})
+	}
+}

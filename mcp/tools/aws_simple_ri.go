@@ -189,13 +189,7 @@ func (t *simpleAWSRIPurchaseTool) recommendationFromArgs(args simpleAWSRIPurchas
 		PaymentOption:  string(paymentOption),
 	}
 
-	dryRun, confirm = true, false
-	if args.DryRun != nil {
-		dryRun = *args.DryRun
-	}
-	if args.Confirm != nil {
-		confirm = *args.Confirm
-	}
+	dryRun, confirm = ResolveDryRunConfirm(args.DryRun, args.Confirm)
 	return rec, region, dryRun, confirm, nil
 }
 

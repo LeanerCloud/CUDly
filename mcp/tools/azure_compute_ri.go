@@ -157,13 +157,7 @@ func azureComputeRecommendationFromArgs(args azureComputeRIPurchaseArgs) (rec co
 			paymentOption)
 	}
 
-	dryRun, confirm = true, false
-	if args.DryRun != nil {
-		dryRun = *args.DryRun
-	}
-	if args.Confirm != nil {
-		confirm = *args.Confirm
-	}
+	dryRun, confirm = ResolveDryRunConfirm(args.DryRun, args.Confirm)
 
 	rec = common.Recommendation{
 		Provider:       common.ProviderAzure,
