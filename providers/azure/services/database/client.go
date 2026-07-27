@@ -900,11 +900,10 @@ func (c *DatabaseClient) createServersPager() (SQLServersPager, error) {
 // Engine is always "sqlserver". EngineVersion, AZConfig, and Deployment
 // are enriched by the lazy subscription-wide cached lookups in
 // convertAzureSQLRecommendation; they are left empty here.
-func detailsFromSQLSKU(sku string) common.DatabaseDetails {
+func detailsFromSQLSKU(sku string) *common.DatabaseDetails {
 	// Engine is always SQL Server for an Azure SQL Database reservation.
-	d := common.DatabaseDetails{
+	return &common.DatabaseDetails{
 		Engine:        "sqlserver",
 		InstanceClass: sku,
 	}
-	return d
 }

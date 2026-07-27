@@ -754,8 +754,8 @@ func TestDatabaseClient_ConvertAzureSQLRecommendation_PopulatesAllFields(t *test
 	// matching SKU (no signal); AZConfig/Deployment still need a
 	// per-server lookup and remain deferred.
 	require.NotNil(t, out.Details)
-	details, ok := out.Details.(common.DatabaseDetails)
-	require.True(t, ok, "Details must be a common.DatabaseDetails value")
+	details, ok := out.Details.(*common.DatabaseDetails)
+	require.True(t, ok, "Details must be a *common.DatabaseDetails pointer")
 	assert.Equal(t, "sqlserver", details.Engine)
 	assert.Equal(t, "GeneralPurpose_Gen5_2", details.InstanceClass)
 	assert.Empty(t, details.EngineVersion, "EngineVersion empty when no matching SKU in catalogue")
@@ -800,7 +800,7 @@ func TestDatabaseClient_ConvertAzureSQLRecommendation_PopulatesEngineVersion(t *
 	)
 	out := client.convertAzureSQLRecommendation(context.Background(), rec)
 	require.NotNil(t, out)
-	details, ok := out.Details.(common.DatabaseDetails)
+	details, ok := out.Details.(*common.DatabaseDetails)
 	require.True(t, ok)
 	assert.Equal(t, "sqlserver", details.Engine)
 	assert.Equal(t, skuName, details.InstanceClass)
@@ -822,7 +822,7 @@ func TestDatabaseClient_ConvertAzureSQLRecommendation_CapabilitiesErrorFallsBack
 	)
 	out := client.convertAzureSQLRecommendation(context.Background(), rec)
 	require.NotNil(t, out, "conversion must NOT fail on capabilities-fetch error")
-	details, ok := out.Details.(common.DatabaseDetails)
+	details, ok := out.Details.(*common.DatabaseDetails)
 	require.True(t, ok)
 	assert.Equal(t, "sqlserver", details.Engine)
 	assert.Equal(t, "GeneralPurpose_Gen5_2", details.InstanceClass)
@@ -1408,7 +1408,7 @@ func TestDatabaseClient_ConvertAzureSQLRecommendation_PopulatesAZConfig(t *testi
 	)
 	out := client.convertAzureSQLRecommendation(context.Background(), rec)
 	require.NotNil(t, out)
-	details, ok := out.Details.(common.DatabaseDetails)
+	details, ok := out.Details.(*common.DatabaseDetails)
 	require.True(t, ok)
 	assert.Equal(t, "zoneRedundant", details.AZConfig)
 }
@@ -1429,7 +1429,7 @@ func TestDatabaseClient_ConvertAzureSQLRecommendation_AmbiguousAZConfig(t *testi
 	)
 	out := client.convertAzureSQLRecommendation(context.Background(), rec)
 	require.NotNil(t, out)
-	details, ok := out.Details.(common.DatabaseDetails)
+	details, ok := out.Details.(*common.DatabaseDetails)
 	require.True(t, ok)
 	assert.Empty(t, details.AZConfig, "ambiguous zone-redundancy must leave AZConfig empty")
 }
@@ -1451,7 +1451,7 @@ func TestDatabaseClient_ConvertAzureSQLRecommendation_AZConfigPagerErrorFallsBac
 	)
 	out := client.convertAzureSQLRecommendation(context.Background(), rec)
 	require.NotNil(t, out, "conversion must NOT fail on pager error")
-	details, ok := out.Details.(common.DatabaseDetails)
+	details, ok := out.Details.(*common.DatabaseDetails)
 	require.True(t, ok)
 	assert.Empty(t, details.AZConfig, "AZConfig empty on pager error")
 }
@@ -1480,7 +1480,7 @@ func TestDatabaseClient_ConvertAzureSQLRecommendation_PopulatesDeployment(t *tes
 	)
 	out := client.convertAzureSQLRecommendation(context.Background(), rec)
 	require.NotNil(t, out)
-	details, ok := out.Details.(common.DatabaseDetails)
+	details, ok := out.Details.(*common.DatabaseDetails)
 	require.True(t, ok)
 	assert.Equal(t, "managed", details.Deployment)
 }
@@ -1502,7 +1502,7 @@ func TestDatabaseClient_ConvertAzureSQLRecommendation_DeploymentSingle(t *testin
 	)
 	out := client.convertAzureSQLRecommendation(context.Background(), rec)
 	require.NotNil(t, out)
-	details, ok := out.Details.(common.DatabaseDetails)
+	details, ok := out.Details.(*common.DatabaseDetails)
 	require.True(t, ok)
 	assert.Equal(t, "single", details.Deployment)
 }
@@ -1524,7 +1524,7 @@ func TestDatabaseClient_ConvertAzureSQLRecommendation_DeploymentPagerErrorFallsB
 	)
 	out := client.convertAzureSQLRecommendation(context.Background(), rec)
 	require.NotNil(t, out, "conversion must NOT fail on servers pager error")
-	details, ok := out.Details.(common.DatabaseDetails)
+	details, ok := out.Details.(*common.DatabaseDetails)
 	require.True(t, ok)
 	assert.Empty(t, details.Deployment, "Deployment empty on pager error")
 }

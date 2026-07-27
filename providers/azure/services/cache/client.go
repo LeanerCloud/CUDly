@@ -624,7 +624,7 @@ func (c *CacheClient) convertAzureRedisRecommendation(ctx context.Context, azure
 	if f == nil {
 		return nil
 	}
-	details := common.CacheDetails{
+	details := &common.CacheDetails{
 		Engine:   "redis",
 		NodeType: f.ResourceType,
 	}

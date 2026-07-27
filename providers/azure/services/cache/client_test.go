@@ -842,8 +842,8 @@ func TestCacheClient_ConvertAzureRedisRecommendation_PopulatesAllFields(t *testi
 	// stays 0 when no cache instance matches in the subscription (the
 	// catalogue's only signal source for shard counts).
 	require.NotNil(t, out.Details)
-	details, ok := out.Details.(common.CacheDetails)
-	require.True(t, ok, "Details must be a common.CacheDetails value")
+	details, ok := out.Details.(*common.CacheDetails)
+	require.True(t, ok, "Details must be a *common.CacheDetails pointer")
 	assert.Equal(t, "redis", details.Engine)
 	assert.Equal(t, "Premium_P3", details.NodeType)
 	assert.Equal(t, 0, details.Shards, "Shards is 0 when no matching cache exists in the subscription")
@@ -892,7 +892,7 @@ func TestCacheClient_ConvertAzureRedisRecommendation_PopulatesShardsFromSKUCache
 	)
 	out := client.convertAzureRedisRecommendation(context.Background(), rec)
 	require.NotNil(t, out)
-	details, ok := out.Details.(common.CacheDetails)
+	details, ok := out.Details.(*common.CacheDetails)
 	require.True(t, ok)
 	assert.Equal(t, "redis", details.Engine)
 	assert.Equal(t, "Premium_P3", details.NodeType)
@@ -918,7 +918,7 @@ func TestCacheClient_ConvertAzureRedisRecommendation_PagerErrorFallsBack(t *test
 	)
 	out := client.convertAzureRedisRecommendation(context.Background(), rec)
 	require.NotNil(t, out, "conversion must NOT fail on catalogue-fetch error")
-	details, ok := out.Details.(common.CacheDetails)
+	details, ok := out.Details.(*common.CacheDetails)
 	require.True(t, ok)
 	assert.Equal(t, "redis", details.Engine)
 	assert.Equal(t, "Premium_P3", details.NodeType)
