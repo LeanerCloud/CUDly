@@ -426,3 +426,67 @@ func TestAWSSavingsPlansPurchaseHandleRealPurchaseUsesScopedService(t *testing.T
 	assert.Equal(t, common.ServiceSavingsPlansCompute, gotService, "must resolve the plan-type-scoped client, not the umbrella sentinel")
 	assert.Equal(t, common.PurchaseSourceMCP, fake.lastOpts.Source)
 }
+
+// TestValidateHourlyCommitmentRejectsSubCentAmounts is the regression guard
+// for the silent money-rounding found in review. The Savings Plans client
+// renders CreateSavingsPlanInput.Commitment with %.2f
+// (providers/aws/services/savingsplans/client.go), so before this check a
+// caller asking for $0.004/hour silently committed to "0.00" and one asking
+// for $10.005/hour silently committed to "10.01" -- in both cases spending
+// real money on a figure they never asked for.
+//
+// The whole-cent cases matter just as much as the rejections: 0.07 and 0.29
+// are not exactly representable in float64 (0.07*100 is 7.000000000000001),
+// so a naive exact-integer-cents test would reject perfectly billable
+// amounts and make the tool unusable for most real commitments.
+func TestValidateHourlyCommitmentRejectsSubCentAmounts(t *testing.T) {
+	t.Parallel()
+
+	t.Run("whole-cent amounts are accepted", func(t *testing.T) {
+		t.Parallel()
+		for _, v := range []float64{0.01, 0.07, 0.29, 1, 5, 8.11, 10, 10.5, 12.34, 1000.99} {
+			assert.NoError(t, validateHourlyCommitment(v), "%v is a whole number of cents and must be accepted", v)
+		}
+	})
+
+	t.Run("sub-cent amounts are rejected naming what AWS would have charged", func(t *testing.T) {
+		t.Parallel()
+		for _, tc := range []struct {
+			value      float64
+			wantBilled string
+		}{
+			{0.004, "0.00"},
+			{10.005, "10.01"},
+			{1.0 / 3.0, "0.33"},
+			{0.001, "0.00"},
+		} {
+			err := validateHourlyCommitment(tc.value)
+			require.Error(t, err, "%v is finer than a cent and must be rejected", tc.value)
+			assert.Contains(t, err.Error(), "finer than one cent")
+			assert.Contains(t, err.Error(), tc.wantBilled,
+				"the error must name the amount AWS would actually have been asked to commit")
+		}
+	})
+
+	t.Run("non-positive amounts keep their own error", func(t *testing.T) {
+		t.Parallel()
+		for _, v := range []float64{0, -5, -0.01} {
+			err := validateHourlyCommitment(v)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "must be > 0")
+		}
+	})
+}
+
+// TestSavingsPlanRecommendationFromArgs_RejectsSubCentCommitment pins that
+// the sub-cent guard is reachable through the tool's real validation entry
+// point, not only when validateHourlyCommitment is called directly.
+func TestSavingsPlanRecommendationFromArgs_RejectsSubCentCommitment(t *testing.T) {
+	t.Parallel()
+	args := validSavingsPlansArgs()
+	args.HourlyCommitment = 10.005
+
+	_, _, _, _, err := savingsPlanRecommendationFromArgs(args)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "finer than one cent")
+}
