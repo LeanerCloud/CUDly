@@ -133,6 +133,23 @@ func (app *Application) HandleScheduledTask(ctx context.Context, taskType Schedu
 // lets the Lambda async-invoke retry the same event (same owner token) and
 // still run the collect, so the marker must survive that path.
 //
+// Known residual gap: the token identifies the MARKER, not the invocation, so
+// this cannot distinguish "the lock is held by a tokenless cron run" (release
+// is required, or the marker strands for the full 5-minute window) from "the
+// lock is held by a concurrent duplicate delivery of my own event" (release is
+// premature, since that sibling carries the same token and is still
+// collecting). Lambda's async invocation is at-least-once, so the second case
+// is reachable, and there it clears the marker mid-run: the frontend banner
+// drops early and a refresh issued during the remainder wins a fresh marker
+// only to be lock-skipped and released again, returning 202 without collecting.
+// It is bounded and self-healing (the next refresh after the run completes
+// behaves normally) and touches no purchase or money path. Releasing is still
+// strictly better than not releasing, because the cron-overlap case is routine
+// while duplicate delivery is rare. Closing it properly needs an
+// invocation-scoped identity distinct from the marker token (e.g. the lock
+// winner re-stamping last_collection_owner_id with a fresh token), which is a
+// design change deliberately left out of this PR.
+//
 // Scoped by ownerToken, so this can only ever release the marker this run
 // owns, never a concurrent run's. Callers that never won MarkCollectionStarted
 // (EventBridge cron, the /api/scheduled/ HTTP path, the --task CLI) carry no
