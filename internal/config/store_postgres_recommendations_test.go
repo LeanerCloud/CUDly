@@ -395,11 +395,19 @@ func TestPostgresStore_UpsertRecommendations_AmbientAndRegisteredCoexist(t *test
 }
 
 // TestPostgresStore_ClearCollectionStarted_CompareAndClear pins the issue
-// #261 compare-and-clear guard by replaying the exact race the issue
-// describes: a cron run (run B) overlaps a user-triggered async run
-// (run A). Pre-fix, ClearCollectionStarted took no token and cleared
+// #261 compare-and-clear guard at the store level: a late clear from an
+// abandoned run (run A) must not wipe the marker a later run (run B) now
+// owns. Pre-fix, ClearCollectionStarted took no token and cleared
 // unconditionally, so run A's deferred clear (arriving after run B had
 // already started) would wipe run B's in-flight marker.
+//
+// Both runs here go through MarkCollectionStarted, which only the
+// POST /api/recommendations/refresh handler calls, so run B models a second
+// user-triggered refresh taking over after run A's 5-minute window lapses.
+// The cron variant of the same race (a tokenless scheduler run clearing a
+// user run's marker) cannot be expressed at this level because cron never
+// marks; it is pinned in the scheduler by
+// TestScheduler_CollectRecommendations_EmptyTokenSkipsClear.
 func TestPostgresStore_ClearCollectionStarted_CompareAndClear(t *testing.T) {
 	ctx := context.Background()
 	container, err := testhelpers.SetupPostgresContainer(ctx, t)
@@ -423,8 +431,8 @@ func TestPostgresStore_ClearCollectionStarted_CompareAndClear(t *testing.T) {
 	assert.Empty(t, tokenNone)
 
 	// Force run A's marker stale (simulates its Lambda crashing or running
-	// long past the 5-minute window), so the scheduled cron run (run B) is
-	// allowed to start.
+	// long past the 5-minute window), so the next refresh (run B) is allowed
+	// to take the marker over.
 	_, err = pool.Exec(ctx, `
 		UPDATE recommendations_state
 		   SET last_collection_started_at = NOW() - INTERVAL '6 minutes'
