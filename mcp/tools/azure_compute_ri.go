@@ -100,12 +100,13 @@ func (t *azureComputeRIPurchaseTool) handle(ctx context.Context, _ *mcp.CallTool
 	}
 
 	resp, err := ExecutePurchase(ctx, PurchaseRequest{
-		Region:         region,
-		Recommendation: rec,
-		DryRun:         dryRun,
-		Confirm:        confirm,
-		ResolveClient:  t.resolveClient(args, region),
-		Nonce:          args.IdempotencyNonce,
+		Region:          region,
+		Recommendation:  rec,
+		DryRun:          dryRun,
+		Confirm:         confirm,
+		ResolveClient:   t.resolveClient(args, region),
+		Nonce:           args.IdempotencyNonce,
+		CredentialScope: CredentialScope(args.AzureSubscriptionID, "AZURE_SUBSCRIPTION_ID"),
 	})
 	if err != nil {
 		return nil, PurchaseResponse{}, err
