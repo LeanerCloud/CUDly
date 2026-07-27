@@ -49,38 +49,38 @@ func (h *Handler) listPlans(ctx context.Context, req *events.LambdaFunctionURLRe
 }
 
 // attachPlanHealth computes the per-plan health-score badge (issue #340
-// follow-up) for every plan in the list. Reuses the existing
-// GetExecutionsByStatuses call shape -- the same set the History handler
-// already uses (handler_history.go), capped at config.DefaultListLimit --
-// instead of adding a new plan-scoped store method.
+// follow-up) for every plan in the list, from exact per-plan execution
+// counts (config.ConfigStore.CountExecutionsByPlanAndStatus, aggregated in
+// SQL) rather than from a capped page of execution rows, which would
+// understate plans whose executions fall outside the newest page.
 //
-// If the executions fetch fails, the failure is logged and every plan
-// defaults to a perfect score with no factors, rather than computing a
-// partial score from attributes alone (which would look complete but
-// silently omit the failed/canceled-execution factors) or failing the
-// whole request with a 500. A degraded-but-visible plans list beats an
-// opaque failure on a page that isn't primarily about purchase executions.
+// If the counts fetch fails, every plan's HealthScore is left nil, which
+// serializes as `"health_score": null` and renders as an explicit "unknown"
+// badge. A score is a number operators make purchasing decisions from, so
+// an uncomputable one must stay absent: substituting a default (100 reads
+// as "healthy", 0 as "broken") would be a fabricated number indistinguishable
+// from a real one. The request itself still succeeds -- the Plans page is
+// not primarily about execution history, so a 500 here would be a worse
+// trade than a visibly-unknown badge.
 func (h *Handler) attachPlanHealth(ctx context.Context, plans []config.PurchasePlan, now time.Time) []PlanWithHealth {
 	result := make([]PlanWithHealth, len(plans))
-
-	execs, err := h.config.GetExecutionsByStatuses(ctx, planHealthExecutionStatuses, config.DefaultListLimit)
-	if err != nil {
-		logging.Warnf("listPlans: GetExecutionsByStatuses failed, plan health scores default to 100: %v", err)
-		for i := range plans {
-			result[i] = PlanWithHealth{PurchasePlan: plans[i], HealthScore: planHealthScoreMax}
-		}
+	for i := range plans {
+		result[i] = PlanWithHealth{PurchasePlan: plans[i]}
+	}
+	if len(plans) == 0 {
 		return result
 	}
 
-	execsByPlan := make(map[string][]config.PurchaseExecution, len(execs))
-	for _rvc := range execs {
-		e := execs[_rvc]
-		execsByPlan[e.PlanID] = append(execsByPlan[e.PlanID], e)
+	countsByPlan, err := h.config.CountExecutionsByPlanAndStatus(ctx, planHealthExecutionStatuses)
+	if err != nil {
+		logging.Warnf("listPlans: CountExecutionsByPlanAndStatus failed, plan health reported as unknown: %v", err)
+		return result
 	}
 
 	for i := range plans {
-		score, factors := computePlanHealth(plans[i], now, execsByPlan[plans[i].ID])
-		result[i] = PlanWithHealth{PurchasePlan: plans[i], HealthScore: score, HealthFactors: factors}
+		score, factors := computePlanHealth(plans[i], now, countsByPlan[plans[i].ID])
+		result[i].HealthScore = &score
+		result[i].HealthFactors = factors
 	}
 	return result
 }

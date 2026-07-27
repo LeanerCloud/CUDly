@@ -9,6 +9,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// counts builds the per-plan execution-status counts computePlanHealth
+// consumes, mirroring what CountExecutionsByPlanAndStatus returns for a
+// single plan.
+func counts(pairs map[string]int) config.ExecutionStatusCounts {
+	return config.ExecutionStatusCounts(pairs)
+}
+
 // factorCodes extracts the Code of each factor, in order, for easy
 // assertion without caring about penalty/note wording in most tests.
 func factorCodes(factors []PlanHealthFactor) []PlanHealthFactorCode {
@@ -50,11 +57,9 @@ func TestComputePlanHealth_CompletedPlanShortCircuitsRegardlessOfOtherIssues(t *
 			StartDate:        now.AddDate(0, 0, -60),
 		},
 	}
-	executions := []config.PurchaseExecution{
-		{Status: "failed"}, {Status: "failed"}, {Status: config.StatusCanceled},
-	}
+	execCounts := counts(map[string]int{"failed": 2, config.StatusCanceled: 1})
 
-	score, factors := computePlanHealth(plan, now, executions)
+	score, factors := computePlanHealth(plan, now, execCounts)
 
 	assert.Equal(t, 100, score)
 	assert.Empty(t, factors)
@@ -114,12 +119,9 @@ func TestComputePlanHealth_FailedExecutionsPenaltyCapsAtFour(t *testing.T) {
 	}
 	// 6 failed executions: penalty must cap at 4 * 10 = 40, but the note
 	// must still report the true count of 6.
-	var executions []config.PurchaseExecution
-	for i := 0; i < 6; i++ {
-		executions = append(executions, config.PurchaseExecution{Status: "failed"})
-	}
+	execCounts := counts(map[string]int{"failed": 6})
 
-	score, factors := computePlanHealth(plan, now, executions)
+	score, factors := computePlanHealth(plan, now, execCounts)
 
 	require.Len(t, factors, 1)
 	assert.Equal(t, HealthFactorFailedExecutions, factors[0].Code)
@@ -141,15 +143,12 @@ func TestComputePlanHealth_CanceledExecutionsPenaltyCapsAtFourAndCountsBothSpell
 	}
 	// 3 canonical + 2 legacy-spelled = 5 total canceled; penalty caps at
 	// 4 * 5 = 20 but the note reports the true count of 5.
-	executions := []config.PurchaseExecution{
-		{Status: config.StatusCanceled},
-		{Status: config.StatusCanceled},
-		{Status: config.StatusCanceled},
-		{Status: config.LegacyStatusCanceled},
-		{Status: config.LegacyStatusCanceled},
-	}
+	execCounts := counts(map[string]int{
+		config.StatusCanceled:       3,
+		config.LegacyStatusCanceled: 2,
+	})
 
-	score, factors := computePlanHealth(plan, now, executions)
+	score, factors := computePlanHealth(plan, now, execCounts)
 
 	require.Len(t, factors, 1)
 	assert.Equal(t, HealthFactorCanceledExecutions, factors[0].Code)
@@ -238,6 +237,56 @@ func TestComputePlanHealth_ImmediatePlanSkipsScheduleFactors(t *testing.T) {
 	assert.NotContains(t, codes, HealthFactorBehindSchedule)
 }
 
+// TestComputePlanHealth_ZeroStartDateSkipsScheduleFactors guards the
+// fabricated-penalty case: a ramp schedule with a positive StepIntervalDays
+// but no StartDate (JSONB rows written before start_date was populated, and
+// the case RampSchedule.GetNextPurchaseDate already guards) has no known
+// schedule position. Measuring elapsed time from the zero time.Time reports
+// the plan as ~740000 days behind schedule, which pre-fix subtracted a real
+// -20 penalty derived entirely from a missing input.
+func TestComputePlanHealth_ZeroStartDateSkipsScheduleFactors(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	plan := config.PurchasePlan{
+		Enabled: true,
+		RampSchedule: config.RampSchedule{
+			Type:             "custom",
+			StepIntervalDays: 7,
+			CurrentStep:      1,
+			TotalSteps:       4,
+			// StartDate deliberately left as the zero value.
+		},
+	}
+
+	score, factors := computePlanHealth(plan, now, nil)
+
+	codes := factorCodes(factors)
+	assert.NotContains(t, codes, HealthFactorBehindSchedule)
+	assert.NotContains(t, codes, HealthFactorStalled)
+	assert.Equal(t, 100, score)
+}
+
+// TestComputePlanHealth_ZeroStartDateStillCountsExecutionFactors proves the
+// StartDate guard is scoped to the schedule factors only: an unknown
+// schedule position must not suppress penalties that don't depend on it.
+func TestComputePlanHealth_ZeroStartDateStillCountsExecutionFactors(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	plan := config.PurchasePlan{
+		Enabled: true,
+		RampSchedule: config.RampSchedule{
+			Type:             "custom",
+			StepIntervalDays: 7,
+			CurrentStep:      1,
+			TotalSteps:       4,
+		},
+	}
+
+	score, factors := computePlanHealth(plan, now, counts(map[string]int{"failed": 2}))
+
+	require.Len(t, factors, 1)
+	assert.Equal(t, HealthFactorFailedExecutions, factors[0].Code)
+	assert.Equal(t, 100-2*penaltyPerFailedExec, score)
+}
+
 func TestComputePlanHealth_DisabledMidway(t *testing.T) {
 	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 	plan := config.PurchasePlan{
@@ -291,15 +340,9 @@ func TestComputePlanHealth_ScoreClampsAtZeroWhenPenaltiesStack(t *testing.T) {
 			StartDate:        now.AddDate(0, 0, -90),
 		},
 	}
-	var executions []config.PurchaseExecution
-	for i := 0; i < 6; i++ {
-		executions = append(executions, config.PurchaseExecution{Status: "failed"})
-	}
-	for i := 0; i < 6; i++ {
-		executions = append(executions, config.PurchaseExecution{Status: config.StatusCanceled})
-	}
+	execCounts := counts(map[string]int{"failed": 6, config.StatusCanceled: 6})
 
-	score, factors := computePlanHealth(plan, now, executions)
+	score, factors := computePlanHealth(plan, now, execCounts)
 
 	assert.Equal(t, 0, score)
 	// disabled_midway note: overdue only requires Enabled, which is false
@@ -322,11 +365,12 @@ func TestComputePlanHealth_UnrelatedExecutionStatusesAreNotCounted(t *testing.T)
 			StartDate:        now.AddDate(0, 0, -1),
 		},
 	}
-	executions := []config.PurchaseExecution{
-		{Status: "pending"}, {Status: "notified"}, {Status: "completed"}, {Status: "approved"},
-	}
+	// CountExecutionsByPlanAndStatus is only ever asked for the statuses in
+	// planHealthExecutionStatuses, but an extra key in the map must not leak
+	// into any penalty.
+	execCounts := counts(map[string]int{"pending": 3, "notified": 1, "completed": 9, "approved": 2})
 
-	score, factors := computePlanHealth(plan, now, executions)
+	score, factors := computePlanHealth(plan, now, execCounts)
 
 	assert.Equal(t, 100, score)
 	assert.Empty(t, factors)

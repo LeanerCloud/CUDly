@@ -3144,6 +3144,26 @@ describe('Plans Module', () => {
       expect(list?.innerHTML).not.toContain('Health:');
     });
 
+    // Regression guard for the fabricated-score bug: when the backend can't
+    // compute a score it sends null, and the UI must say so. Pre-fix the
+    // backend substituted 100 on a store failure, painting every plan with a
+    // confident green "healthy" badge built from data it never read.
+    test('renders an explicit unknown badge when health_score is null', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{ ...basePlan, health_score: null }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      expect(list?.innerHTML).toContain('Health: unknown');
+      expect(list?.innerHTML).toContain('badge-muted');
+      // Critically, it must NOT be dressed up as a healthy score.
+      expect(list?.innerHTML).not.toContain('badge-success');
+      expect(list?.innerHTML).not.toContain('Health: 100');
+    });
+
     test('escapes health factor notes in the tooltip (XSS regression)', async () => {
       const maliciousNote = '"><img src=x onerror=alert(1)>';
       (api.getPlans as jest.Mock).mockResolvedValue({

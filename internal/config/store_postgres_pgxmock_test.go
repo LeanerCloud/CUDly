@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -2778,5 +2779,104 @@ func TestPGXMock_CleanupOldExecutions_IncludesCanonicalStatus(t *testing.T) {
 	n, err := store.CleanupOldExecutions(ctx, 90)
 	require.NoError(t, err)
 	assert.Equal(t, int64(4), n)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// ─── CountExecutionsByPlanAndStatus ──────────────────────────────────────────
+
+// TestPGXMock_CountExecutionsByPlanAndStatus_AggregatesInSQL is the
+// regression guard for the plan-health truncation bug: counting executions
+// per plan out of GetExecutionsByStatuses (ORDER BY ... DESC + LIMIT, capped
+// across ALL plans) silently understates any plan whose rows fall outside
+// the newest page, so an unhealthy plan renders a confident "healthy" badge.
+// The counts must therefore come from a GROUP BY with no LIMIT: the result
+// set is bounded by plans x statuses, not by execution volume. The regex
+// anchors fail the test if a refactor reintroduces a LIMIT or drops the
+// aggregation.
+func TestPGXMock_CountExecutionsByPlanAndStatus_AggregatesInSQL(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	rows := pgxmock.NewRows([]string{"plan_id", "status", "count"}).
+		AddRow("plan-a", "failed", 7).
+		AddRow("plan-a", StatusCanceled, 2).
+		AddRow("plan-b", LegacyStatusCanceled, 1)
+	mock.ExpectQuery(`(?s)SELECT plan_id, status, COUNT\(\*\).*FROM purchase_executions.*status = ANY\(\$1\).*GROUP BY plan_id, status`).
+		WithArgs(pgxmock.AnyArg()).
+		WillReturnRows(rows)
+
+	counts, err := store.CountExecutionsByPlanAndStatus(ctx,
+		[]string{"failed", StatusCanceled, LegacyStatusCanceled})
+	require.NoError(t, err)
+
+	// The counts are exact, not capped: 7 failures survive intact even
+	// though DefaultListLimit-style paging would be the temptation here.
+	assert.Equal(t, 7, counts["plan-a"]["failed"])
+	assert.Equal(t, 2, counts["plan-a"][StatusCanceled])
+	assert.Equal(t, 1, counts["plan-b"][LegacyStatusCanceled])
+	// Absent statuses read as a zero count rather than needing a guard.
+	assert.Equal(t, 0, counts["plan-b"]["failed"])
+	assert.Equal(t, 0, counts["plan-missing"]["failed"])
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_CountExecutionsByPlanAndStatus_NoLimitInQuery pins the absence
+// of a LIMIT clause explicitly: a LIMIT here would reinstate exactly the
+// truncation this method exists to avoid. Go's RE2 has no negative lookahead,
+// so the SQL is captured through a custom QueryMatcher and asserted directly
+// rather than expressed as a regex.
+func TestPGXMock_CountExecutionsByPlanAndStatus_NoLimitInQuery(t *testing.T) {
+	var executedSQL string
+	mock, err := pgxmock.NewPool(pgxmock.QueryMatcherOption(
+		pgxmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
+			executedSQL = actualSQL
+			return pgxmock.QueryMatcherRegexp.Match(expectedSQL, actualSQL)
+		})))
+	require.NoError(t, err)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectQuery(`GROUP BY plan_id, status`).
+		WithArgs(pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"plan_id", "status", "count"}))
+
+	_, err = store.CountExecutionsByPlanAndStatus(ctx, []string{"failed"})
+	require.NoError(t, err)
+	assert.NotContains(t, strings.ToUpper(executedSQL), "LIMIT")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_CountExecutionsByPlanAndStatus_EmptyStatuses guards the
+// short-circuit: an empty status list returns an empty (non-nil) map with no
+// SQL roundtrip, so callers can index it without a nil check.
+func TestPGXMock_CountExecutionsByPlanAndStatus_EmptyStatuses(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	counts, err := store.CountExecutionsByPlanAndStatus(ctx, nil)
+	require.NoError(t, err)
+	require.NotNil(t, counts)
+	assert.Empty(t, counts)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_CountExecutionsByPlanAndStatus_QueryError propagates the
+// failure instead of returning partial counts: a partial count would silently
+// inflate a plan's health score.
+func TestPGXMock_CountExecutionsByPlanAndStatus_QueryError(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectQuery(`GROUP BY plan_id, status`).
+		WithArgs(pgxmock.AnyArg()).
+		WillReturnError(errors.New("connection reset"))
+
+	counts, err := store.CountExecutionsByPlanAndStatus(ctx, []string{"failed"})
+	require.Error(t, err)
+	assert.Nil(t, counts)
+	assert.Contains(t, err.Error(), "failed to count executions by plan and status")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

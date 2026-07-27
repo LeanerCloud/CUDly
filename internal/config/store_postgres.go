@@ -1204,6 +1204,50 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 	return s.queryExecutions(ctx, query, statuses, limit)
 }
 
+// CountExecutionsByPlanAndStatus returns, keyed by plan ID, the exact number
+// of executions in each of the supplied statuses.
+//
+// Aggregated with GROUP BY rather than counted from a GetExecutionsByStatuses
+// page: that method's DESC + LIMIT truncation would silently understate any
+// plan whose executions fall outside the newest `limit` rows, which for the
+// plan health score means an unhealthy plan quietly renders as healthy once
+// newer rows from other plans push its failures out of the window. The result
+// set here is bounded by plans x statuses, not by execution volume, so it
+// needs no limit of its own.
+func (s *PostgresStore) CountExecutionsByPlanAndStatus(ctx context.Context, statuses []string) (map[string]ExecutionStatusCounts, error) {
+	counts := make(map[string]ExecutionStatusCounts)
+	if len(statuses) == 0 {
+		return counts, nil
+	}
+
+	rows, err := s.db.Query(ctx, `
+		SELECT plan_id, status, COUNT(*)
+		FROM purchase_executions
+		WHERE status = ANY($1)
+		GROUP BY plan_id, status
+	`, statuses)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count executions by plan and status: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var planID, status string
+		var n int
+		if scanErr := rows.Scan(&planID, &status, &n); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan execution status count: %w", scanErr)
+		}
+		if counts[planID] == nil {
+			counts[planID] = ExecutionStatusCounts{}
+		}
+		counts[planID][status] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate execution status counts: %w", err)
+	}
+	return counts, nil
+}
+
 // GetPlannedExecutions returns executions whose Status is any of the supplied
 // values, ordered by scheduled_date ASC (soonest first), capped at `limit`.
 // Used by the Planned Purchases handler where the user expects to act on

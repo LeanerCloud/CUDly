@@ -661,10 +661,10 @@ func TestHandler_HandleRequest_ListPlans(t *testing.T) {
 
 	plans := []config.PurchasePlan{{ID: "11111111-1111-1111-1111-111111111111"}}
 	mockStore.On("ListPurchasePlans", mock.Anything, mock.Anything).Return(plans, nil)
-	// listPlans now also fetches recent failed/canceled executions to
-	// compute each plan's health-score badge (issue #340 follow-up).
-	mockStore.On("GetExecutionsByStatuses", mock.Anything, mock.Anything, mock.Anything).
-		Return([]config.PurchaseExecution{}, nil)
+	// listPlans now also counts each plan's failed/canceled executions to
+	// compute its health-score badge (issue #340 follow-up).
+	mockStore.On("CountExecutionsByPlanAndStatus", mock.Anything, mock.Anything).
+		Return(map[string]config.ExecutionStatusCounts{}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, apiKey: "test-key"}
 
@@ -1477,8 +1477,8 @@ func TestHandler_HandleRequest_ListPlans_UnassignedFlagged(t *testing.T) {
 	assigned := config.PurchasePlan{ID: "11111111-1111-1111-1111-111111111111", Name: "Assigned Plan", Unassigned: false}
 	legacy := config.PurchasePlan{ID: "22222222-2222-2222-2222-222222222222", Name: "Legacy Plan", Unassigned: true}
 	mockStore.On("ListPurchasePlans", mock.Anything, mock.Anything).Return([]config.PurchasePlan{assigned, legacy}, nil)
-	mockStore.On("GetExecutionsByStatuses", mock.Anything, mock.Anything, mock.Anything).
-		Return([]config.PurchaseExecution{}, nil)
+	mockStore.On("CountExecutionsByPlanAndStatus", mock.Anything, mock.Anything).
+		Return(map[string]config.ExecutionStatusCounts{}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, apiKey: "test-key"}
 

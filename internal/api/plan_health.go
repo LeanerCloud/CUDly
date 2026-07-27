@@ -62,12 +62,13 @@ const (
 // this file.
 const planHealthStatusFailed = "failed"
 
-// planHealthExecutionStatuses selects the execution rows computePlanHealth
-// needs (failed + both spellings of canceled). Passed to the existing
-// GetExecutionsByStatuses store method -- the same call shape the History
-// handler already uses (see handler_history.go), capped at
-// config.DefaultListLimit -- rather than adding a new plan-scoped store
-// method.
+// planHealthExecutionStatuses selects the execution statuses
+// computePlanHealth needs (failed + both spellings of canceled). Passed to
+// config.ConfigStore.CountExecutionsByPlanAndStatus, which aggregates in
+// SQL: the History handler's GetExecutionsByStatuses is capped at
+// config.DefaultListLimit across ALL plans, so counting rows out of it
+// would silently understate any plan whose executions fall outside the
+// newest page and render an unhealthy plan as healthy.
 var planHealthExecutionStatuses = []string{
 	planHealthStatusFailed,
 	config.StatusCanceled,
@@ -75,24 +76,23 @@ var planHealthExecutionStatuses = []string{
 }
 
 // computePlanHealth derives a 0-100 health score for a single purchase plan
-// from its ramp-schedule attributes and its own executions (the caller is
-// expected to have already filtered `executions` down to this plan's
-// PlanID). Starts at 100 and subtracts weighted penalties, clamped to
-// [planHealthScoreMin, planHealthScoreMax]. The returned factors document
-// exactly which penalties applied so a bad score is actionable instead of
-// opaque (issue #340 follow-up, PR #376).
+// from its ramp-schedule attributes and its own execution counts (the caller
+// passes the counts for this plan's ID only). Starts at 100 and subtracts
+// weighted penalties, clamped to [planHealthScoreMin, planHealthScoreMax].
+// The returned factors document exactly which penalties applied so a bad
+// score is actionable instead of opaque (issue #340 follow-up, PR #376).
 //
 // A completed plan (RampSchedule.IsComplete(), guarded against the
 // degenerate TotalSteps == 0 case) short-circuits to a perfect score:
 // historical failure/cancellation rows and a disabled toggle-off after
 // completion are expected end-of-life noise, not signals an operator
 // should chase.
-func computePlanHealth(plan config.PurchasePlan, now time.Time, executions []config.PurchaseExecution) (int, []PlanHealthFactor) {
+func computePlanHealth(plan config.PurchasePlan, now time.Time, counts config.ExecutionStatusCounts) (int, []PlanHealthFactor) {
 	if plan.RampSchedule.TotalSteps > 0 && plan.RampSchedule.IsComplete() {
 		return planHealthScoreMax, nil
 	}
 
-	factors := collectPlanHealthFactors(plan, now, executions)
+	factors := collectPlanHealthFactors(plan, now, counts)
 
 	score := planHealthScoreMax
 	for _, f := range factors {
@@ -109,15 +109,15 @@ func computePlanHealth(plan config.PurchasePlan, now time.Time, executions []con
 // canceled_executions, then the mutually-exclusive stalled/behind_schedule
 // pair, then disabled_midway). Split out from computePlanHealth so each
 // factor stays an independent, individually testable function.
-func collectPlanHealthFactors(plan config.PurchasePlan, now time.Time, executions []config.PurchaseExecution) []PlanHealthFactor {
+func collectPlanHealthFactors(plan config.PurchasePlan, now time.Time, counts config.ExecutionStatusCounts) []PlanHealthFactor {
 	var factors []PlanHealthFactor
 	if f, ok := overdueFactor(plan, now); ok {
 		factors = append(factors, f)
 	}
-	if f, ok := failedExecutionsFactor(executions); ok {
+	if f, ok := failedExecutionsFactor(counts); ok {
 		factors = append(factors, f)
 	}
-	if f, ok := canceledExecutionsFactor(executions); ok {
+	if f, ok := canceledExecutionsFactor(counts); ok {
 		factors = append(factors, f)
 	}
 	if f, ok := scheduleFactor(plan, now); ok {
@@ -144,8 +144,8 @@ func overdueFactor(plan config.PurchasePlan, now time.Time) (PlanHealthFactor, b
 // failedExecutionsFactor: -10 per failed execution, capped at 4 (-40 max).
 // The note reports the true (uncapped) count so an operator can see the
 // full extent even when the penalty itself is capped.
-func failedExecutionsFactor(executions []config.PurchaseExecution) (PlanHealthFactor, bool) {
-	count := countExecutionsByStatus(executions, planHealthStatusFailed)
+func failedExecutionsFactor(counts config.ExecutionStatusCounts) (PlanHealthFactor, bool) {
+	count := counts[planHealthStatusFailed]
 	if count == 0 {
 		return PlanHealthFactor{}, false
 	}
@@ -164,8 +164,8 @@ func failedExecutionsFactor(executions []config.PurchaseExecution) (PlanHealthFa
 // max). Counts both spellings of "canceled" (config.StatusCanceled and the
 // legacy config.LegacyStatusCanceled) so pre-#1278 rows aren't invisible to
 // scoring.
-func canceledExecutionsFactor(executions []config.PurchaseExecution) (PlanHealthFactor, bool) {
-	count := countExecutionsByStatus(executions, config.StatusCanceled, config.LegacyStatusCanceled)
+func canceledExecutionsFactor(counts config.ExecutionStatusCounts) (PlanHealthFactor, bool) {
+	count := counts[config.StatusCanceled] + counts[config.LegacyStatusCanceled]
 	if count == 0 {
 		return PlanHealthFactor{}, false
 	}
@@ -178,22 +178,6 @@ func canceledExecutionsFactor(executions []config.PurchaseExecution) (PlanHealth
 		Penalty: counted * penaltyPerCanceledExec,
 		Note:    fmt.Sprintf("%d canceled execution(s)", count),
 	}, true
-}
-
-// countExecutionsByStatus counts executions whose Status matches any of the
-// supplied values.
-func countExecutionsByStatus(executions []config.PurchaseExecution, statuses ...string) int {
-	count := 0
-	for _rvc := range executions {
-		status := executions[_rvc].Status
-		for _, s := range statuses {
-			if status == s {
-				count++
-				break
-			}
-		}
-	}
-	return count
 }
 
 // scheduleFactor evaluates the ramp schedule's progress against wall-clock
@@ -209,9 +193,15 @@ func countExecutionsByStatus(executions []config.PurchaseExecution, statuses ...
 // have no schedule position to fall behind on and are skipped entirely --
 // there is no divide-by-zero guard needed elsewhere because this is the
 // only place StepIntervalDays is used as a divisor.
+//
+// Plans with no StartDate are skipped for the same reason: the schedule
+// position is unknown, and measuring elapsed time from a zero time.Time
+// would report every such plan as ~740000 days behind schedule -- a
+// fabricated penalty derived from a missing input rather than a real one.
+// RampSchedule.GetNextPurchaseDate guards the same field the same way.
 func scheduleFactor(plan config.PurchasePlan, now time.Time) (PlanHealthFactor, bool) {
 	ramp := plan.RampSchedule
-	if ramp.StepIntervalDays <= 0 {
+	if ramp.StepIntervalDays <= 0 || ramp.StartDate.IsZero() {
 		return PlanHealthFactor{}, false
 	}
 

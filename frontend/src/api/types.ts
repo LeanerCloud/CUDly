@@ -231,7 +231,9 @@ export interface Plan {
   // persisted) by computePlanHealth server-side (issue #340 follow-up).
   // Optional so an older cached response served during a partial deploy
   // still renders the card cleanly -- the badge just doesn't appear.
-  health_score?: number;
+  // Explicitly null when the backend could not compute a score; clients
+  // must render that as "unknown" rather than substituting a default.
+  health_score?: number | null;
   health_factors?: PlanHealthFactor[];
 }
 

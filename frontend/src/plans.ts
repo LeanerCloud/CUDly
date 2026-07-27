@@ -864,8 +864,9 @@ interface BackendPlan {
   // Health score/factors are computed at read time on GET /plans (never
   // persisted) -- see computePlanHealth in internal/api/plan_health.go
   // (issue #340 follow-up). Optional so an older cached response served
-  // during a partial deploy still renders the card cleanly.
-  health_score?: number;
+  // during a partial deploy still renders the card cleanly; explicitly
+  // null when the backend could not compute the score.
+  health_score?: number | null;
   health_factors?: api.PlanHealthFactor[];
 }
 
@@ -883,15 +884,29 @@ function healthBadgeClass(score: number): string {
   return 'badge-danger';
 }
 
-// healthBadgeHtml renders the per-plan health-score badge. Returns '' when
-// health_score is absent (older API response during a partial deploy) so
-// the card still renders cleanly without it. The tooltip enumerates every
-// penalty factor so a bad score is actionable instead of opaque; every
-// factor note is escaped since it renders inside an HTML attribute (title)
-// via innerHTML (feedback_innerhtml_xss: all API-sourced values must be
-// escaped here even though the backend generates these notes itself).
+// healthBadgeHtml renders the per-plan health-score badge, distinguishing
+// three states the API can report:
+//
+//   - field absent: an older API response served during a partial deploy.
+//     Render nothing so the card still looks intentional.
+//   - field null: the backend could not compute the score (execution counts
+//     unavailable). Render an explicit "unknown" badge -- never a stand-in
+//     number, which an operator could not tell apart from a measured score.
+//   - a number: the score, banded into the green/amber/red palette.
+//
+// The tooltip enumerates every penalty factor so a bad score is actionable
+// instead of opaque; every factor note is escaped since it renders inside an
+// HTML attribute (title) via innerHTML (feedback_innerhtml_xss: all
+// API-sourced values must be escaped here even though the backend generates
+// these notes itself).
 function healthBadgeHtml(plan: BackendPlan): string {
-  if (typeof plan.health_score !== 'number') return '';
+  if (plan.health_score === undefined) return '';
+  if (plan.health_score === null) {
+    return `<span class="status-badge badge-muted" title="${escapeHtmlAttr('Plan health could not be computed: the plan\'s execution history was unavailable.')}">Health: unknown</span>`;
+  }
+  // Defensive: the type says number, but this value comes off the wire and
+  // is interpolated into innerHTML below.
+  if (typeof plan.health_score !== 'number' || !Number.isFinite(plan.health_score)) return '';
   const factors = plan.health_factors || [];
   const factorLines = factors.length > 0
     ? factors.map(f => `-${f.penalty}: ${f.note}`)

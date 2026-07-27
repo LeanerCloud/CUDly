@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -33,10 +34,10 @@ func TestHandler_listPlans(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
-	// listPlans now also fetches recent failed/canceled executions to
-	// compute each plan's health-score badge (issue #340 follow-up).
-	mockStore.On("GetExecutionsByStatuses", ctx, planHealthExecutionStatuses, config.DefaultListLimit).
-		Return([]config.PurchaseExecution{}, nil)
+	// listPlans now also counts each plan's failed/canceled executions to
+	// compute its health-score badge (issue #340 follow-up).
+	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses).
+		Return(map[string]config.ExecutionStatusCounts{}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -50,9 +51,11 @@ func TestHandler_listPlans(t *testing.T) {
 
 	assert.Len(t, result.Plans, 2)
 	// Neither seeded plan has ramp-schedule or execution data that would
-	// trigger a penalty, so both default to a perfect score.
-	assert.Equal(t, 100, result.Plans[0].HealthScore)
-	assert.Equal(t, 100, result.Plans[1].HealthScore)
+	// trigger a penalty, so both score a perfect 100.
+	require.NotNil(t, result.Plans[0].HealthScore)
+	require.NotNil(t, result.Plans[1].HealthScore)
+	assert.Equal(t, 100, *result.Plans[0].HealthScore)
+	assert.Equal(t, 100, *result.Plans[1].HealthScore)
 }
 
 func TestHandler_listPlans_AccountIDsFilter(t *testing.T) {
@@ -75,8 +78,8 @@ func TestHandler_listPlans_AccountIDsFilter(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
 	mockStore.On("ListPurchasePlans", ctx, expectedFilter).Return(plans, nil)
-	mockStore.On("GetExecutionsByStatuses", ctx, planHealthExecutionStatuses, config.DefaultListLimit).
-		Return([]config.PurchaseExecution{}, nil)
+	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses).
+		Return(map[string]config.ExecutionStatusCounts{}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -115,11 +118,10 @@ func TestHandler_listPlans_HealthScoreReflectsFailedExecutions(t *testing.T) {
 		{ID: otherPlanID, Name: "Other Plan", Enabled: true},
 	}
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
-	mockStore.On("GetExecutionsByStatuses", ctx, planHealthExecutionStatuses, config.DefaultListLimit).
-		Return([]config.PurchaseExecution{
-			{PlanID: troubledPlanID, Status: "failed"},
-			{PlanID: troubledPlanID, Status: "failed"},
-			{PlanID: otherPlanID, Status: config.StatusCanceled},
+	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses).
+		Return(map[string]config.ExecutionStatusCounts{
+			troubledPlanID: {"failed": 2},
+			otherPlanID:    {config.StatusCanceled: 1},
 		}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -135,27 +137,30 @@ func TestHandler_listPlans_HealthScoreReflectsFailedExecutions(t *testing.T) {
 	}
 
 	troubled := byID[troubledPlanID]
-	assert.Equal(t, 100-2*penaltyPerFailedExec, troubled.HealthScore)
+	require.NotNil(t, troubled.HealthScore)
+	assert.Equal(t, 100-2*penaltyPerFailedExec, *troubled.HealthScore)
 	require.Len(t, troubled.HealthFactors, 1)
 	assert.Equal(t, HealthFactorFailedExecutions, troubled.HealthFactors[0].Code)
 
 	other := byID[otherPlanID]
-	assert.Equal(t, 100-penaltyPerCanceledExec, other.HealthScore)
+	require.NotNil(t, other.HealthScore)
+	assert.Equal(t, 100-penaltyPerCanceledExec, *other.HealthScore)
 	require.Len(t, other.HealthFactors, 1)
 	assert.Equal(t, HealthFactorCanceledExecutions, other.HealthFactors[0].Code)
 }
 
-// TestHandler_listPlans_HealthScoreDegradesToDefaultOnExecutionsFetchError
-// verifies the documented degraded-mode behavior in attachPlanHealth: if
-// GetExecutionsByStatuses fails, listPlans still succeeds (never a 500 on
-// a page that isn't primarily about purchase executions) and every plan
-// gets a perfect default score with no factors, rather than a partially
-// computed score that would look complete but silently omit the
-// execution-based factors.
-func TestHandler_listPlans_HealthScoreDegradesToDefaultOnExecutionsFetchError(t *testing.T) {
+// TestHandler_listPlans_HealthScoreUnknownOnCountsFetchError pins the
+// no-fabricated-score contract: when the execution counts can't be read the
+// request still succeeds (the Plans page is not primarily about execution
+// history), but HealthScore stays nil so it serializes as null and the UI
+// renders an explicit "unknown" badge. Substituting any concrete default --
+// 100 reads as healthy, 0 as broken -- would put a number in front of an
+// operator that is indistinguishable from a measured one.
+func TestHandler_listPlans_HealthScoreUnknownOnCountsFetchError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
@@ -165,7 +170,7 @@ func TestHandler_listPlans_HealthScoreDegradesToDefaultOnExecutionsFetchError(t 
 		{ID: "11111111-1111-1111-1111-111111111111", Name: "Some Plan", Enabled: true},
 	}
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
-	mockStore.On("GetExecutionsByStatuses", ctx, planHealthExecutionStatuses, config.DefaultListLimit).
+	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses).
 		Return(nil, errors.New("db unavailable"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -174,8 +179,73 @@ func TestHandler_listPlans_HealthScoreDegradesToDefaultOnExecutionsFetchError(t 
 	result, err := handler.listPlans(ctx, req, map[string]string{})
 	require.NoError(t, err)
 	require.Len(t, result.Plans, 1)
-	assert.Equal(t, 100, result.Plans[0].HealthScore)
+	assert.Nil(t, result.Plans[0].HealthScore)
 	assert.Empty(t, result.Plans[0].HealthFactors)
+
+	// The wire form must carry an explicit null, not omit the key: the UI
+	// distinguishes null ("unknown") from absent ("older API response").
+	encoded, err := json.Marshal(result.Plans[0])
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"health_score":null`)
+}
+
+// TestHandler_listPlans_HealthUsesExactCountsNotTruncatedPage guards the
+// truncation bug: health scoring must read exact per-plan counts aggregated
+// in SQL, never count rows out of GetExecutionsByStatuses, whose DESC+LIMIT
+// page is capped across ALL plans. With enough execution rows system-wide, a
+// plan's own failures fall outside that page and it renders a confident
+// "healthy" badge while actually being unhealthy.
+func TestHandler_listPlans_HealthUsesExactCountsNotTruncatedPage(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+
+	planID := "11111111-1111-1111-1111-111111111111"
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).
+		Return([]config.PurchasePlan{{ID: planID, Name: "Old Failures", Enabled: true}}, nil)
+	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses).
+		Return(map[string]config.ExecutionStatusCounts{planID: {"failed": 3}}, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-token"}}
+
+	result, err := handler.listPlans(ctx, req, map[string]string{})
+	require.NoError(t, err)
+	require.Len(t, result.Plans, 1)
+	require.NotNil(t, result.Plans[0].HealthScore)
+	assert.Equal(t, 100-3*penaltyPerFailedExec, *result.Plans[0].HealthScore)
+
+	// The capped page must not be consulted at all: reintroducing it would
+	// silently reinstate the truncation.
+	mockStore.AssertNotCalled(t, "GetExecutionsByStatuses", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestHandler_listPlans_EmptyListSkipsCountsQuery: with no plans to score
+// there is nothing to attach health to, so the aggregate query must not run.
+func TestHandler_listPlans_EmptyListSkipsCountsQuery(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).
+		Return([]config.PurchasePlan{}, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-token"}}
+
+	result, err := handler.listPlans(ctx, req, map[string]string{})
+	require.NoError(t, err)
+	assert.Empty(t, result.Plans)
+	mockStore.AssertNotCalled(t, "CountExecutionsByPlanAndStatus", mock.Anything, mock.Anything)
 }
 
 func TestHandler_createPlan(t *testing.T) {

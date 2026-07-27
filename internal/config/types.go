@@ -277,6 +277,12 @@ func (r *RampSchedule) IsComplete() bool {
 	return r.CurrentStep >= r.TotalSteps
 }
 
+// ExecutionStatusCounts maps an execution status value to the number of
+// executions in that status, for a single plan. Returned by
+// CountExecutionsByPlanAndStatus; a status with no rows is simply absent
+// from the map, so a plain lookup yields the correct zero.
+type ExecutionStatusCounts map[string]int
+
 // PurchaseExecution represents a single execution of a purchase plan.
 type PurchaseExecution struct {
 	PlanID           string                 `json:"plan_id" dynamodbav:"plan_id"`

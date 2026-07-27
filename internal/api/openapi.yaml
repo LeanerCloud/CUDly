@@ -2433,9 +2433,14 @@ components:
           properties:
             health_score:
               type: integer
+              nullable: true
               minimum: 0
               maximum: 100
-              description: 0-100 plan health score. Green >= 80, amber 50-79, red < 50.
+              description: >
+                0-100 plan health score. Green >= 80, amber 50-79, red < 50.
+                Null when the score could not be computed (the plan's
+                execution counts were unavailable); clients must render that
+                as "unknown" rather than substituting a default.
             health_factors:
               type: array
               items:
