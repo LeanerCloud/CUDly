@@ -25,6 +25,29 @@ const (
 	modeExecute
 )
 
+// EnvEnableRealPurchases is the operator-side authorization control gating
+// every real (non-preview) purchase this server executes. The model-supplied
+// confirm flag (decidePurchaseMode) only proves the model asked to spend
+// money; it says nothing about whether the operator running this MCP server
+// process wants it able to. mcp/README.md previously documented confirm as
+// "a guardrail against an accidental call, not an authorization control",
+// which left a prompt-injected or simply hallucinating model, given ambient
+// production credentials, able to execute a real purchase from a single tool
+// call. This env var closes that gap: it must be explicitly set before
+// ExecutePurchase will call into a provider for a real purchase, regardless
+// of confirm. See realPurchasesEnabled for the fail-closed matching rule.
+const EnvEnableRealPurchases = "CUDLY_MCP_ENABLE_REAL_PURCHASES"
+
+// realPurchasesEnabled reports the operator's opt-in for EnvEnableRealPurchases.
+// Fails closed: only an exact "1" or "true" (case-insensitive, surrounding
+// whitespace trimmed) enables real purchases. Unset, empty, "0", "false", or
+// any other value disables them -- there is no default-on value, matching
+// the owner-decided default-off gate design.
+func realPurchasesEnabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(EnvEnableRealPurchases)))
+	return v == "1" || v == "true"
+}
+
 // decidePurchaseMode applies the safety rail from the design doc (§7): a
 // real purchase requires confirm=true AND dry_run=false. dry_run=true always
 // wins and returns a preview, regardless of confirm, so a caller previewing
@@ -388,10 +411,14 @@ func logPurchaseOutcome(rec common.Recommendation, token, commitmentID string, s
 		rec.Provider, rec.ResourceType, rec.Count, commitmentID, common.MaskToken(token))
 }
 
-// ExecutePurchase runs the shared dry_run/confirm safety gate and, for a
-// real purchase, resolves the service client and calls PurchaseCommitment
-// with PurchaseSourceMCP and a derived idempotency token. It never calls
-// ResolveClient in preview mode, so a preview makes zero provider/SDK calls.
+// ExecutePurchase runs the shared dry_run/confirm safety gate, then the
+// operator's EnvEnableRealPurchases authorization gate, and for a real
+// purchase that clears both, resolves the service client and calls
+// PurchaseCommitment with PurchaseSourceMCP and a derived idempotency token.
+// It never calls ResolveClient in preview mode, so a preview makes zero
+// provider/SDK calls; it also never calls ResolveClient when
+// EnvEnableRealPurchases is not set, so a disabled server makes zero
+// provider/SDK calls for a would-be real purchase either.
 func ExecutePurchase(ctx context.Context, req PurchaseRequest) (*PurchaseResponse, error) {
 	mode, err := decidePurchaseMode(req.DryRun, req.Confirm)
 	if err != nil {
@@ -409,6 +436,15 @@ func ExecutePurchase(ctx context.Context, req PurchaseRequest) (*PurchaseRespons
 			SavingsPercentage: nonZeroCostPtr(rec.SavingsPercentage),
 			TermYears:         termYearsFromRecommendationTerm(rec.Term),
 		}, nil
+	}
+
+	// Operator authorization gate: mode == modeExecute here (preview already
+	// returned above), so this is the single chokepoint every purchase tool
+	// funnels through before a provider is ever touched. See
+	// EnvEnableRealPurchases for why confirm alone is not enough.
+	if !realPurchasesEnabled() {
+		return nil, fmt.Errorf("real purchases are disabled: set %s=1 to allow the MCP server to execute real purchases",
+			EnvEnableRealPurchases)
 	}
 
 	if req.ResolveClient == nil {

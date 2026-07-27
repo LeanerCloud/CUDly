@@ -2,7 +2,7 @@
 
 `cudly-mcp` exposes CUDly's reserved-capacity search and purchase tools (AWS EC2/RDS/ElastiCache/OpenSearch/Redshift/MemoryDB/Savings Plans, Azure VM Reservations, GCP Compute Engine CUDs) to any MCP client -- Claude Code, Claude Desktop, or another MCP-speaking agent -- as a local process. It is a thin wrapper around the same in-process Go packages (`pkg/provider`, `pkg/common`) the `ri-helper` CLI uses; it never shells out to `ri-helper`, and it is not deployed anywhere (see [Deployment model](#deployment-model)).
 
-Every purchase tool is dry-run by default (`dry_run=true`) and requires an explicit `confirm=true` alongside `dry_run=false` before it spends money. See [Safety model](#safety-model).
+Every purchase tool is dry-run by default (`dry_run=true`) and requires an explicit `confirm=true` alongside `dry_run=false` before it spends money. A real purchase additionally requires the operator to have started the server with `CUDLY_MCP_ENABLE_REAL_PURCHASES=1` -- unset by default, so a fresh install cannot spend money until the operator opts in. See [Safety model](#safety-model).
 
 ## Install
 
@@ -62,6 +62,8 @@ cudly-mcp
 
 The server speaks MCP over stdio and logs diagnostics to stderr; it does not print anything to stdout other than protocol traffic, so it is safe to launch directly from an MCP client's process-spawning config (below) rather than through a wrapper script.
 
+By default, `cudly-mcp` cannot execute real purchases: `dry_run=false, confirm=true` calls are refused until you set `CUDLY_MCP_ENABLE_REAL_PURCHASES=1` in the environment the process launches with. Add it to the `env` block in [Register with an MCP client](#register-with-an-mcp-client) once you are ready to let this server spend money. See [Safety model](#safety-model) for the full rule.
+
 ## Register with an MCP client
 
 Add an entry to your client's MCP server config. For Claude Code, this is `~/.claude/mcp.json`. If the client does not inherit your shell's `PATH`, use the absolute path `go install` reported: `$(go env GOBIN)/cudly-mcp` if `GOBIN` is set, otherwise `$(go env GOPATH)/bin/cudly-mcp` (`$(go env GOBIN)` expands to an empty string when `GOBIN` is unset, so that path alone is not a valid binary location):
@@ -88,7 +90,7 @@ A typical session searches for a recommendation, previews the purchase, then exe
 
 1. **Search**: call `cudly_search_recommendations` with `provider="aws"`, `service="ec2"`, `region="us-east-1"` to see what AWS Cost Explorer currently recommends reserving.
 2. **Preview**: take a result's `region`/`resource_type`/`count` and call `cudly_aws_ec2_ri_purchase` with those values and `term_years`/`payment_option` of your choice. Leave `dry_run` at its default (`true`) -- the response validates your parameters without contacting AWS or spending anything, and reports `cost`/`on_demand_cost`/`estimated_savings`/`savings_percentage` only when a real figure is actually known (omitted otherwise, never a fabricated `0`).
-3. **Execute**: once the preview looks right, call the same tool again with `dry_run=false, confirm=true`. This is the only combination that performs a real purchase; any other combination either previews or returns an explicit refusal error (see [Safety model](#safety-model)).
+3. **Execute**: once the preview looks right, call the same tool again with `dry_run=false, confirm=true`. This is the only combination that performs a real purchase, and only when the operator has also enabled `CUDLY_MCP_ENABLE_REAL_PURCHASES=1` on the server process; any other combination either previews or returns an explicit refusal error (see [Safety model](#safety-model)).
 
 Every other provider's purchase tool (`cudly_aws_savingsplans_purchase`, `cudly_aws_rds_ri_purchase`, `cudly_azure_compute_ri_purchase`, `cudly_gcp_computeengine_cud_purchase`, ...) follows the identical dry_run-then-confirm pattern. Call `cudly_list_commitment_actions` at any point for the full, always-current list of tools, which ones can spend real money today, and 2-3 example prompts per tool.
 
@@ -96,6 +98,7 @@ Every other provider's purchase tool (`cudly_aws_savingsplans_purchase`, `cudly_
 
 - `dry_run` defaults to `true` on every purchase tool. A dry-run call never contacts the cloud provider and never spends money -- it only validates your parameters. It reports pricing (`cost`/`on_demand_cost`/`estimated_savings`/`savings_percentage`) only when a real figure is genuinely known; those fields are omitted, not zeroed, when it isn't.
 - A real purchase requires **both** `dry_run=false` **and** `confirm=true`. `dry_run=false` with `confirm=false` (or vice versa) is refused with a structured error, not silently downgraded to a preview or silently ignored.
+- A real purchase **also** requires the operator to have set `CUDLY_MCP_ENABLE_REAL_PURCHASES=1` (or `true`, case-insensitive) in the environment `cudly-mcp` was launched with. This is layered underneath `confirm`: `confirm` only proves the model asked to spend money, it does not prove the operator running this server wants it able to. The gate is unset (disabled) by default -- unset, empty, `0`, `false`, or any other value all disable real purchases -- so a fresh install cannot spend money until the operator explicitly opts in. When disabled, a `dry_run=false, confirm=true` call is refused before any provider or credential is touched, naming the flag to set. Dry runs are unaffected by this flag; they never spend regardless of its value.
 - Every money-affecting parameter (region, resource type, count, term, payment option, and any provider-specific dimension such as RDS's `az_config`) is validated against an explicit enum or non-empty check before anything is built or sent. There is no silent default for a value that materially changes what gets purchased.
 - Every real purchase is tagged with a source identifying it came from this MCP server (never a user-suppliable string) and a deterministic idempotency token derived from the request's own parameters. By default, retrying an identical tool call -- however long after the original, and regardless of any clock boundary -- always derives the same token, so the provider dedupes the retry instead of buying twice; this is a fail-safe default, since the worst case of a false dedupe is a skipped intentional repeat, never a double purchase. To deliberately make a second, otherwise-identical purchase (e.g. "buy 3 RIs now" and "buy 3 more next week"), pass a fresh `idempotency_nonce` value on the second call; passing the same nonce on a retry of that same call still dedupes correctly.
 - Provider/SDK failures surface their full error text back to the caller; nothing is swallowed.
@@ -106,7 +109,7 @@ Every other provider's purchase tool (`cudly_aws_savingsplans_purchase`, `cudly_
 
 Understand these before enabling real purchases, especially in a shared or production account:
 
-- **No approval workflow.** The web UI routes a purchase through `purchase_executions` with a scheduled date and, under 4-eyes mode, a second approver who cannot be the creator. This server has no such gate: `dry_run=false` plus `confirm=true` in a single tool call executes immediately. The `confirm` flag is a guardrail against an accidental call, not an authorization control, and the model driving the client supplies it.
+- **No scheduled/4-eyes approval workflow.** The web UI routes a purchase through `purchase_executions` with a scheduled date and, under 4-eyes mode, a second approver who cannot be the creator. This server has no such workflow: once `CUDLY_MCP_ENABLE_REAL_PURCHASES=1` is set, `dry_run=false` plus `confirm=true` in a single tool call executes immediately. `confirm` is still a guardrail against an accidental call rather than an authorization control -- it is supplied by the model driving the client, not the operator -- but `CUDLY_MCP_ENABLE_REAL_PURCHASES` is the operator-side authorization control layered underneath it: it must be explicitly enabled before *any* tool call, confirmed or not, can spend money on this server.
 - **No persisted audit record.** The CLI writes a `common.AuditRecord` per purchase and the web path persists an execution row; this server writes only the stderr lines above. An MCP purchase does not appear in CUDly's own purchase history, so reconcile against the provider's console/billing data rather than against CUDly.
 - **Credentials are whatever launched the process.** `aws_profile` / `azure_subscription_id` / `gcp_project_id` are per-call arguments chosen by the model, so any account reachable from the ambient credentials is reachable from any tool call. Scope the credentials you launch `cudly-mcp` with to what you are willing to let it spend, rather than relying on the tool arguments to constrain it.
 

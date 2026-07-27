@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	cudlymcp "github.com/LeanerCloud/CUDly/mcp"
+	"github.com/LeanerCloud/CUDly/mcp/tools"
 )
 
 // isolateFromAmbientAWS points the AWS SDK at deliberately nonexistent
@@ -59,6 +60,11 @@ func isolateFromAmbientAWS(t *testing.T) {
 // named profile before any credential lookup or network call happens.
 func TestRealPurchasePastProviderRegistration(t *testing.T) {
 	isolateFromAmbientAWS(t)
+	// This test's whole point is driving a real (non-dry-run) purchase call
+	// far enough to observe what happens after provider registration, so it
+	// must clear the operator-side EnvEnableRealPurchases gate too, or every
+	// assertion below would instead observe the gate's own refusal.
+	t.Setenv(tools.EnvEnableRealPurchases, "1")
 
 	server, err := cudlymcp.NewServer("test-regression")
 	require.NoError(t, err)
