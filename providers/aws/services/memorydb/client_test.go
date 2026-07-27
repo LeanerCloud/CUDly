@@ -203,7 +203,7 @@ func TestClient_ValidateOffering(t *testing.T) {
 		ResourceType:  "db.r6gd.xlarge",
 		PaymentOption: "partial-upfront",
 		Term:          "1yr",
-		Details: common.CacheDetails{
+		Details: &common.CacheDetails{
 			Engine:   "redis",
 			NodeType: "db.r6gd.xlarge",
 		},
@@ -239,7 +239,7 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 		Count:         3,
 		PaymentOption: "all-upfront",
 		Term:          "3yr",
-		Details: common.CacheDetails{
+		Details: &common.CacheDetails{
 			Engine:   "redis",
 			NodeType: "db.r6gd.2xlarge",
 		},
@@ -458,7 +458,7 @@ func TestClient_GetOfferingDetails(t *testing.T) {
 		ResourceType:  "db.r6gd.xlarge",
 		PaymentOption: "partial-upfront",
 		Term:          "1yr",
-		Details: common.CacheDetails{
+		Details: &common.CacheDetails{
 			Engine:   "redis",
 			NodeType: "db.r6gd.xlarge",
 		},
@@ -507,7 +507,7 @@ func TestClient_GetOfferingDetails_NotFound(t *testing.T) {
 		ResourceType:  "db.r6gd.xlarge",
 		PaymentOption: "partial-upfront",
 		Term:          "1yr",
-		Details: common.CacheDetails{
+		Details: &common.CacheDetails{
 			Engine:   "redis",
 			NodeType: "db.r6gd.xlarge",
 		},
@@ -552,7 +552,7 @@ func TestClient_GetOfferingDetails_APIError(t *testing.T) {
 		ResourceType:  "db.r6gd.xlarge",
 		PaymentOption: "partial-upfront",
 		Term:          "1yr",
-		Details: common.CacheDetails{
+		Details: &common.CacheDetails{
 			Engine:   "redis",
 			NodeType: "db.r6gd.xlarge",
 		},
@@ -595,7 +595,7 @@ func TestClient_PurchaseCommitment_OfferingNotFound(t *testing.T) {
 		ResourceType:  "db.r6gd.xlarge",
 		PaymentOption: "partial-upfront",
 		Term:          "1yr",
-		Details: common.CacheDetails{
+		Details: &common.CacheDetails{
 			Engine:   "redis",
 			NodeType: "db.r6gd.xlarge",
 		},
@@ -627,7 +627,7 @@ func TestClient_PurchaseCommitment_PurchaseError(t *testing.T) {
 		Count:         1,
 		PaymentOption: "partial-upfront",
 		Term:          "1yr",
-		Details: common.CacheDetails{
+		Details: &common.CacheDetails{
 			Engine:   "redis",
 			NodeType: "db.r6gd.xlarge",
 		},
@@ -669,7 +669,7 @@ func TestClient_PurchaseCommitment_EmptyResponse(t *testing.T) {
 		Count:         1,
 		PaymentOption: "partial-upfront",
 		Term:          "1yr",
-		Details: common.CacheDetails{
+		Details: &common.CacheDetails{
 			Engine:   "redis",
 			NodeType: "db.r6gd.xlarge",
 		},
@@ -774,7 +774,7 @@ func mdbIdemRec() common.Recommendation {
 		Count:         1,
 		PaymentOption: "all-upfront",
 		Term:          "1yr",
-		Details:       common.CacheDetails{Engine: "redis", NodeType: "db.r6gd.large"},
+		Details:       &common.CacheDetails{Engine: "redis", NodeType: "db.r6gd.large"},
 	}
 }
 
@@ -910,7 +910,7 @@ func TestClient_PurchaseCommitment_NoToken_RichReservationName(t *testing.T) {
 		Count:         3,
 		PaymentOption: "all-upfront", // must match expectMDBOffering's OfferingType
 		Term:          "1yr",
-		Details:       common.CacheDetails{Engine: "redis", NodeType: "db.r6gd.large"},
+		Details:       &common.CacheDetails{Engine: "redis", NodeType: "db.r6gd.large"},
 	}
 
 	expectMDBOffering(mockMDB)
