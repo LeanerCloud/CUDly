@@ -20,6 +20,7 @@ import (
 func TestHandler_listAPIKeysUsageStats_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -61,6 +62,7 @@ func TestHandler_listAPIKeysUsageStats_NoAuthService(t *testing.T) {
 func TestHandler_listAPIKeysUsageStats_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -81,6 +83,7 @@ func TestHandler_listAPIKeysUsageStats_ServiceError(t *testing.T) {
 func TestHandler_listAPIKeysUsageStats_PermissionDenied(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "viewer-1", Email: "viewer@example.com"}
 	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(session, nil)

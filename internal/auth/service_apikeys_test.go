@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -514,7 +516,7 @@ func TestService_ValidateUserAPIKey(t *testing.T) {
 		// silently passes) if ValidateUserAPIKey ever stops recording usage,
 		// and so we don't have to busy-sleep waiting for the async goroutine.
 		usageRecorded := make(chan struct{}, 1)
-		mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1").
+		mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1", mock.Anything).
 			Run(func(mock.Arguments) { usageRecorded <- struct{}{} }).
 			Return(nil).Once()
 
@@ -726,9 +728,9 @@ func TestService_RecordUsage(t *testing.T) {
 		mockStore := new(MockStore)
 		service := &Service{store: mockStore}
 
-		mockStore.On("RecordAPIKeyUsage", ctx, "key-1").Return(nil)
+		mockStore.On("RecordAPIKeyUsage", ctx, "key-1", mock.Anything).Return(nil)
 
-		err := service.RecordUsage(ctx, "key-1")
+		err := service.RecordUsage(ctx, "key-1", 1)
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)
 	})
@@ -737,12 +739,110 @@ func TestService_RecordUsage(t *testing.T) {
 		mockStore := new(MockStore)
 		service := &Service{store: mockStore}
 
-		mockStore.On("RecordAPIKeyUsage", ctx, "key-1").Return(assert.AnError)
+		mockStore.On("RecordAPIKeyUsage", ctx, "key-1", mock.Anything).Return(assert.AnError)
 
-		err := service.RecordUsage(ctx, "key-1")
+		err := service.RecordUsage(ctx, "key-1", 1)
 		assert.Error(t, err)
 		mockStore.AssertExpectations(t)
 	})
+}
+
+// Regression: singleflight collapses concurrent flushes for the same key
+// into one DB write. Writing a fixed "+1" inside that flush silently dropped
+// every request that arrived while a write was in flight, undercounting the
+// busiest keys -- precisely the keys the usage stats exist to surface. The
+// pending count is accumulated first and the flush writes the whole delta.
+func TestService_FlushPendingUsage(t *testing.T) {
+	t.Run("writes the whole coalesced delta in one call", func(t *testing.T) {
+		mockStore := new(MockStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+		service := &Service{store: mockStore}
+
+		mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1", int64(5)).Return(nil).Once()
+
+		for range 5 {
+			service.addPendingUsage("key-1")
+		}
+		service.flushPendingUsage("key-1")
+	})
+
+	t.Run("does not write when nothing is pending", func(t *testing.T) {
+		mockStore := new(MockStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+		service := &Service{store: mockStore}
+
+		service.flushPendingUsage("never-seen-key")
+		mockStore.AssertNotCalled(t, "RecordAPIKeyUsage", mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("leaves requests booked during the write for the next round", func(t *testing.T) {
+		mockStore := new(MockStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+		service := &Service{store: mockStore}
+
+		// A request that lands while the write is in flight must still be
+		// pending afterwards -- recordUsageAsync's loop picks it up.
+		mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1", int64(2)).
+			Run(func(mock.Arguments) { service.addPendingUsage("key-1") }).
+			Return(nil).Once()
+
+		service.addPendingUsage("key-1")
+		service.addPendingUsage("key-1")
+		service.flushPendingUsage("key-1")
+
+		assert.Equal(t, int64(1), service.peekPendingUsage("key-1"))
+	})
+
+	t.Run("drops the delta on a store error rather than retrying forever", func(t *testing.T) {
+		mockStore := new(MockStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+		service := &Service{store: mockStore}
+
+		mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1", int64(3)).
+			Return(assert.AnError).Once()
+
+		for range 3 {
+			service.addPendingUsage("key-1")
+		}
+		service.flushPendingUsage("key-1")
+
+		assert.Equal(t, int64(0), service.peekPendingUsage("key-1"))
+	})
+}
+
+// Every request must be booked before the flush goroutine starts, so a
+// request is never lost to a flush that had already drained the counter.
+func TestService_RecordUsageAsync_CountsConcurrentRequests(t *testing.T) {
+	mockStore := new(MockStore)
+	service := &Service{store: mockStore}
+
+	const requests = 50
+	var recorded atomic.Int64
+	done := make(chan struct{})
+	mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1", mock.Anything).
+		Run(func(args mock.Arguments) {
+			if recorded.Add(args.Get(2).(int64)) == requests {
+				close(done)
+			}
+		}).
+		Return(nil).Maybe()
+
+	var wg sync.WaitGroup
+	for range requests {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			service.recordUsageAsync("key-1")
+		}()
+	}
+	wg.Wait()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("only %d of %d requests were recorded", recorded.Load(), requests)
+	}
+	assert.Equal(t, int64(requests), recorded.Load())
 }
 
 func TestService_ComputeEffectivePermissions(t *testing.T) {
@@ -902,7 +1002,7 @@ func TestService_HasAPIKeyPermissionAPI(t *testing.T) {
 
 		mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(keyRecord, nil)
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
-		mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1").Return(nil).Maybe()
+		mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1", mock.Anything).Return(nil).Maybe()
 		mockStore.On("GetGroup", ctx, userGrpID).Return(userGrp(), nil)
 		return service
 	}
@@ -1057,7 +1157,7 @@ func TestValidateUserAPIKey_UpdateLastUsedPanicIsRecovered(t *testing.T) {
 	// done is closed by the Run callback immediately before panicking so the
 	// test can wait for goroutine execution without time.Sleep.
 	done := make(chan struct{})
-	mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-panic").
+	mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-panic", mock.Anything).
 		Run(func(args mock.Arguments) {
 			close(done)
 			panic("injected panic for #672 regression test")

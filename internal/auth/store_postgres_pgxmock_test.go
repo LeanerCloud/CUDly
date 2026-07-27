@@ -538,11 +538,40 @@ func TestPGXMock_RecordAPIKeyUsage_Success(t *testing.T) {
 	store := NewPostgresStore(mock)
 
 	mock.ExpectExec(`(?s)UPDATE api_keys\s+SET last_used_at = NOW\(\),.*WHERE id = \$1`).
-		WithArgs("key-1").
+		WithArgs("key-1", int64(1), apiKeyUsageWindow.Seconds()).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-	err := store.RecordAPIKeyUsage(context.Background(), "key-1")
+	err := store.RecordAPIKeyUsage(context.Background(), "key-1", 1)
 	assert.NoError(t, err)
+}
+
+// A flush that coalesced several concurrent requests must add the whole
+// delta, not a hardcoded 1. Asserting the bound argument is what catches a
+// regression to "+ 1" in the SQL.
+func TestPGXMock_RecordAPIKeyUsage_CoalescedDelta(t *testing.T) {
+	mock := newAuthPgxMock(t)
+	store := NewPostgresStore(mock)
+
+	mock.ExpectExec(`(?s)request_count_total = request_count_total \+ \$2.*request_count_window \+ \$2`).
+		WithArgs("key-1", int64(42), apiKeyUsageWindow.Seconds()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := store.RecordAPIKeyUsage(context.Background(), "key-1", 42)
+	assert.NoError(t, err)
+}
+
+// A non-positive delta is a caller bug, not something to paper over with a
+// no-op UPDATE: no statement is issued and the error is explicit.
+func TestPGXMock_RecordAPIKeyUsage_RejectsNonPositiveDelta(t *testing.T) {
+	mock := newAuthPgxMock(t)
+	store := NewPostgresStore(mock)
+
+	for _, delta := range []int64{0, -1} {
+		err := store.RecordAPIKeyUsage(context.Background(), "key-1", delta)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must be positive")
+	}
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestPGXMock_RecordAPIKeyUsage_NotFound(t *testing.T) {
@@ -550,10 +579,10 @@ func TestPGXMock_RecordAPIKeyUsage_NotFound(t *testing.T) {
 	store := NewPostgresStore(mock)
 
 	mock.ExpectExec(`(?s)UPDATE api_keys\s+SET last_used_at = NOW\(\),.*WHERE id = \$1`).
-		WithArgs("missing-key").
+		WithArgs("missing-key", int64(1), apiKeyUsageWindow.Seconds()).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
-	err := store.RecordAPIKeyUsage(context.Background(), "missing-key")
+	err := store.RecordAPIKeyUsage(context.Background(), "missing-key", 1)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "API key not found")
 }
@@ -563,10 +592,10 @@ func TestPGXMock_RecordAPIKeyUsage_ExecError(t *testing.T) {
 	store := NewPostgresStore(mock)
 
 	mock.ExpectExec(`(?s)UPDATE api_keys\s+SET last_used_at = NOW\(\),.*WHERE id = \$1`).
-		WithArgs("key-1").
+		WithArgs("key-1", int64(1), apiKeyUsageWindow.Seconds()).
 		WillReturnError(errors.New("db down"))
 
-	err := store.RecordAPIKeyUsage(context.Background(), "key-1")
+	err := store.RecordAPIKeyUsage(context.Background(), "key-1", 1)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to record API key usage")
 }

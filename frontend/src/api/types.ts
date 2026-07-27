@@ -580,7 +580,10 @@ export interface APIKeyInfo {
   // the columns don't blow up the renderer -- but the backend always
   // sends them as of migration 000093. request_count_window is a
   // FIXED/TUMBLING window count, not a true rolling 24h total --
-  // request_count_window_start says exactly which period it covers.
+  // request_count_window_start says exactly which period it covers, and
+  // both come back as 0 / absent once that window has closed, so a key
+  // that went idle reads as no current activity rather than replaying a
+  // count from an old window.
   request_count_total?: number;
   request_count_window?: number;
   request_count_window_start?: string;
@@ -594,8 +597,11 @@ export interface APIKeysUsageStatsTopKey {
 }
 
 export interface APIKeysUsageStats {
+  // Keys that are neither revoked nor expired, i.e. the ones the API will
+  // actually accept.
   total_active: number;
-  // Sum of each key's fixed-window counter -- not a true rolling 24h total.
+  // Sum of each key's fixed-window counter across still-open windows --
+  // not a true rolling 24h total, and the windows are not aligned.
   total_requests_window: number;
   total_requests_lifetime: number;
   top_keys: APIKeysUsageStatsTopKey[];

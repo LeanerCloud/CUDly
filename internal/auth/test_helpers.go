@@ -217,8 +217,8 @@ func (m *MockStore) UpdateAPIKeyLastUsed(ctx context.Context, keyID string) erro
 	return args.Error(0)
 }
 
-func (m *MockStore) RecordAPIKeyUsage(ctx context.Context, keyID string) error {
-	args := m.Called(ctx, keyID)
+func (m *MockStore) RecordAPIKeyUsage(ctx context.Context, keyID string, delta int64) error {
+	args := m.Called(ctx, keyID, delta)
 	return args.Error(0)
 }
 

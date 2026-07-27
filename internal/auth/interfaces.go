@@ -49,12 +49,16 @@ type StoreInterface interface {
 	ListAPIKeysByUser(ctx context.Context, userID string) ([]*UserAPIKey, error)
 	UpdateAPIKey(ctx context.Context, key *UserAPIKey) error
 	UpdateAPIKeyLastUsed(ctx context.Context, keyID string) error
-	// RecordAPIKeyUsage atomically updates last_used_at and increments
-	// request_count_total + request_count_window. request_count_window is a
+	// RecordAPIKeyUsage atomically updates last_used_at and adds delta to
+	// request_count_total + request_count_window. delta is the number of
+	// requests in this flush (greater than 1 when concurrent requests were
+	// coalesced) and must be positive. request_count_window is a
 	// fixed/tumbling window count (not a true trailing-24h rolling count):
 	// it resets (along with request_count_window_start) when the existing
-	// window is older than 24h. See migration 000093 for the column shape.
-	RecordAPIKeyUsage(ctx context.Context, keyID string) error
+	// window is older than apiKeyUsageWindow. Stale windows are zeroed on
+	// read, not on write -- see effectiveWindowUsage. See migration 000093
+	// for the column shape.
+	RecordAPIKeyUsage(ctx context.Context, keyID string, delta int64) error
 	DeleteAPIKey(ctx context.Context, keyID string) error
 
 	// Health check

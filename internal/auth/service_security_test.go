@@ -254,7 +254,7 @@ func TestValidateUserAPIKey_LastUsedSingleflight(t *testing.T) {
 	done := make(chan struct{})
 	mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(apiKey, nil).Maybe()
 	mockStore.On("GetUserByID", ctx, user.ID).Return(user, nil).Maybe()
-	mockStore.On("RecordAPIKeyUsage", mock.Anything, keyID).
+	mockStore.On("RecordAPIKeyUsage", mock.Anything, keyID, mock.Anything).
 		Run(func(args mock.Arguments) { close(done) }).
 		Return(nil).Once()
 

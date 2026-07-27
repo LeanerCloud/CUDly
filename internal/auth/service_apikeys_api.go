@@ -13,16 +13,41 @@ import (
 // numbers) -- kept small since the summary card is a glance-level widget.
 const apiKeyUsageTopKeysLimit = 3
 
-// sortAPIKeysByActivity sorts in place by request_count_window desc, with
+// apiKeyActivity pairs a key with its effective (non-stale) window count so
+// the totals, the sort and the top-N cut all work off the same number
+// instead of each re-deriving it from the raw column.
+type apiKeyActivity struct {
+	key    *UserAPIKey
+	window int64
+}
+
+// sortAPIKeysByActivity sorts in place by effective window count desc, with
 // request_count_total desc as the tiebreaker. Extracted as a helper so
 // it can be unit-tested without going through the full service.
-func sortAPIKeysByActivity(keys []*UserAPIKey) {
-	sort.SliceStable(keys, func(i, j int) bool {
-		if keys[i].RequestCountWindow != keys[j].RequestCountWindow {
-			return keys[i].RequestCountWindow > keys[j].RequestCountWindow
+func sortAPIKeysByActivity(activity []apiKeyActivity) {
+	sort.SliceStable(activity, func(i, j int) bool {
+		if activity[i].window != activity[j].window {
+			return activity[i].window > activity[j].window
 		}
-		return keys[i].RequestCountTotal > keys[j].RequestCountTotal
+		return activity[i].key.RequestCountTotal > activity[j].key.RequestCountTotal
 	})
+}
+
+// effectiveWindowUsage returns the window counter and window start as they
+// should be reported to API consumers.
+//
+// The stored counter is only rewritten when the key's NEXT request arrives
+// (see PostgresStore.RecordAPIKeyUsage), so a key that stops being used
+// keeps its final window count on the row indefinitely. Reporting that
+// column verbatim would claim a key idle for months served N requests in
+// the current window. An expired window has no current activity, so it
+// reads as zero with no window start rather than a stale non-zero count.
+func effectiveWindowUsage(key *UserAPIKey, now time.Time) (int64, *time.Time) {
+	if key.RequestCountWindowStart == nil ||
+		!now.Before(key.RequestCountWindowStart.Add(apiKeyUsageWindow)) {
+		return 0, nil
+	}
+	return key.RequestCountWindow, key.RequestCountWindowStart
 }
 
 // API wrapper methods for API key operations
@@ -41,9 +66,10 @@ type APIKeyInfo struct {
 	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 	// RequestCountWindowStart is when the current request_count_window
-	// began; nil means the key has never recorded a request. Exposed so
-	// consumers know exactly which period RequestCountWindow covers
-	// instead of assuming a true trailing "last 24h".
+	// began; nil means there is no current window, either because the key
+	// has never recorded a request or because its last window has closed.
+	// Exposed so consumers know exactly which period RequestCountWindow
+	// covers instead of assuming a true trailing "last 24h".
 	RequestCountWindowStart *time.Time   `json:"request_count_window_start,omitempty"`
 	ID                      string       `json:"id"`
 	Name                    string       `json:"name"`
@@ -51,7 +77,8 @@ type APIKeyInfo struct {
 	Permissions             []Permission `json:"permissions,omitempty"`
 	IsActive                bool         `json:"is_active"`
 	// Usage counters (issue #340/#344 deferred sub-task). RequestCountWindow
-	// is a fixed/tumbling window count, not a true rolling 24h total -- see
+	// is a fixed/tumbling window count, not a true rolling 24h total, and is
+	// zero once that window has closed -- see effectiveWindowUsage,
 	// PostgresStore.RecordAPIKeyUsage and RequestCountWindowStart above.
 	RequestCountTotal  int64 `json:"request_count_total"`
 	RequestCountWindow int64 `json:"request_count_window"`
@@ -72,7 +99,12 @@ type APIKeysUsageStatsTopKey struct {
 // calling user's own keys -- same scope as ListUserAPIKeysAPI.
 //
 // TotalRequestsWindow sums each key's fixed-window counter (see
-// PostgresStore.RecordAPIKeyUsage); it is NOT a true trailing-24h total.
+// PostgresStore.RecordAPIKeyUsage) across the keys whose window is still
+// open; it is NOT a true trailing-24h total, and the windows it sums are
+// not aligned with one another.
+//
+// TotalActive counts the keys the authentication path would accept, so a
+// key that is unrevoked but past its expiry is not counted.
 type APIKeysUsageStatsResponse struct {
 	TotalActive           int                       `json:"total_active"`
 	TotalRequestsWindow   int64                     `json:"total_requests_window"`
@@ -152,9 +184,13 @@ func (s *Service) ListUserAPIKeysAPI(ctx context.Context, userID string) (any, e
 		return nil, err
 	}
 
-	// Convert to API response
+	// Convert to API response. The window counter goes through
+	// effectiveWindowUsage so a key whose window has expired reports zero
+	// rather than the stale count still sitting on its row.
+	now := time.Now()
 	apiKeys := make([]*APIKeyInfo, 0, len(keys))
 	for _, key := range keys {
+		windowCount, windowStart := effectiveWindowUsage(key, now)
 		apiKeys = append(apiKeys, &APIKeyInfo{
 			ID:                      key.ID,
 			Name:                    key.Name,
@@ -165,8 +201,8 @@ func (s *Service) ListUserAPIKeysAPI(ctx context.Context, userID string) (any, e
 			LastUsedAt:              key.LastUsedAt,
 			IsActive:                key.IsActive,
 			RequestCountTotal:       key.RequestCountTotal,
-			RequestCountWindow:      key.RequestCountWindow,
-			RequestCountWindowStart: key.RequestCountWindowStart,
+			RequestCountWindow:      windowCount,
+			RequestCountWindowStart: windowStart,
 		})
 	}
 
@@ -180,46 +216,55 @@ func (s *Service) ListUserAPIKeysAPI(ctx context.Context, userID string) (any, e
 // separate DB round-trip -- ListUserAPIKeys already returns the per-key
 // counters from migration 000093.
 //
-// The "top keys" list is sorted by request_count_window descending, with
+// The "top keys" list is sorted by effective window count descending, with
 // total-lifetime as the tiebreaker so a long-running idle key doesn't
 // outrank an active one with the same window count. Up to
 // apiKeyUsageTopKeysLimit entries are surfaced; keys with zero window
 // activity are omitted rather than shown as an uninformative "top key".
+//
+// Window counts run through effectiveWindowUsage first: the raw column
+// keeps its last value until the key is used again, so summing it verbatim
+// would report requests from windows that closed arbitrarily long ago as
+// current activity.
+//
+// TotalActive uses validateAPIKeyStatus, the same predicate the
+// authentication path applies, so a key that is unrevoked but expired is
+// not counted as active here while the keys table below the summary card
+// shows it as "Expired".
 func (s *Service) GetAPIKeysUsageStatsAPI(ctx context.Context, userID string) (any, error) {
 	keys, err := s.ListUserAPIKeys(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
 
+	now := time.Now()
 	resp := &APIKeysUsageStatsResponse{
 		TopKeys: []APIKeysUsageStatsTopKey{},
 	}
+	activity := make([]apiKeyActivity, 0, len(keys))
 	for _, k := range keys {
-		if k.IsActive {
+		windowCount, _ := effectiveWindowUsage(k, now)
+		if validateAPIKeyStatus(k) == nil {
 			resp.TotalActive++
 		}
-		resp.TotalRequestsWindow += k.RequestCountWindow
+		resp.TotalRequestsWindow += windowCount
 		resp.TotalRequestsLifetime += k.RequestCountTotal
+		activity = append(activity, apiKeyActivity{key: k, window: windowCount})
 	}
 
-	sorted := make([]*UserAPIKey, len(keys))
-	copy(sorted, keys)
-	sortAPIKeysByActivity(sorted)
+	sortAPIKeysByActivity(activity)
 
-	limit := apiKeyUsageTopKeysLimit
-	if len(sorted) < limit {
-		limit = len(sorted)
-	}
-	for i := 0; i < limit; i++ {
-		k := sorted[i]
-		if k.RequestCountWindow == 0 {
+	limit := min(apiKeyUsageTopKeysLimit, len(activity))
+	for i := range limit {
+		a := activity[i]
+		if a.window == 0 {
 			break
 		}
 		resp.TopKeys = append(resp.TopKeys, APIKeysUsageStatsTopKey{
-			ID:                 k.ID,
-			Name:               k.Name,
-			KeyPrefix:          k.KeyPrefix,
-			RequestCountWindow: k.RequestCountWindow,
+			ID:                 a.key.ID,
+			Name:               a.key.Name,
+			KeyPrefix:          a.key.KeyPrefix,
+			RequestCountWindow: a.window,
 		})
 	}
 

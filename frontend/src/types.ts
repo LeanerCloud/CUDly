@@ -412,7 +412,8 @@ export interface APIKeyInfo {
   // up the renderer -- the backend always sends them as of migration
   // 000093. request_count_window is a FIXED/TUMBLING window count, not
   // a true rolling 24h total -- request_count_window_start says exactly
-  // which period it covers.
+  // which period it covers, and both come back as 0 / absent once that
+  // window has closed.
   request_count_total?: number;
   request_count_window?: number;
   request_count_window_start?: string;

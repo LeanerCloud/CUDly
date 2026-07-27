@@ -81,10 +81,16 @@ type UserAPIKey struct {
 	// Usage counters (issue #340/#344 deferred sub-task -- migration 000093).
 	// Both default to 0 for legacy rows. RequestCountWindow is a
 	// FIXED/TUMBLING window count, not a true trailing-24h rolling count:
-	// the store's RecordAPIKeyUsage path resets it (and RequestCountWindowStart)
-	// to a fresh window once the existing window is older than 24h, so a
-	// request made just before that reset is dropped from the count as soon
-	// as the next request starts a new window. RequestCountWindowStart is
+	// the store's RecordAPIKeyUsage path restarts it (and
+	// RequestCountWindowStart) once the existing window is older than
+	// apiKeyUsageWindow, so a request made just before that reset is dropped
+	// from the count as soon as the next request starts a new window.
+	//
+	// These are the RAW column values: because the reset only happens on the
+	// key's next request, a key that went idle still carries its closed
+	// window's count here. The API layer zeroes an expired window before
+	// reporting it (see effectiveWindowUsage) -- do not surface these fields
+	// to callers without going through it. RequestCountWindowStart is
 	// exposed so API consumers can see exactly which period the count
 	// covers instead of assuming "last 24h".
 	RequestCountTotal       int64      `json:"request_count_total" dynamodbav:"RequestCountTotal"`

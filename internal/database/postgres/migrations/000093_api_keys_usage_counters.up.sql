@@ -7,7 +7,7 @@
 --
 --   * request_count_total        -- lifetime count since the key was created.
 --   * request_count_window       -- count since request_count_window_start;
---                                  reset to 1 (with a fresh window_start)
+--                                  restarted (with a fresh window_start)
 --                                  the first time RecordAPIKeyUsage sees
 --                                  the window older than 24h. This is a
 --                                  FIXED/TUMBLING window, not a true
@@ -16,6 +16,13 @@
 --                                  discarded from the count as soon as the
 --                                  next request starts a new window. See
 --                                  store_postgres.go RecordAPIKeyUsage.
+--                                  NOTE the restart only happens on the
+--                                  key's NEXT request, so an idle key keeps
+--                                  its closed window's count in this column
+--                                  indefinitely. Readers must treat a
+--                                  window older than 24h as zero -- see
+--                                  service_apikeys_api.go
+--                                  effectiveWindowUsage.
 --   * request_count_window_start -- the timestamp the current window
 --                                  started at; NULL until the first
 --                                  request after this migration runs.

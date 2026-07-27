@@ -1392,8 +1392,10 @@ paths:
       summary: Section-level usage summary for the caller's API keys
       description: |
         Aggregates per-key counters into a single summary card: number of
-        active keys, total requests (24h + lifetime), and the top-3 keys
-        by 24h request count. Scoped to the calling user's own keys.
+        usable keys, total requests (current window + lifetime), and the
+        top-3 keys by current-window request count. Scoped to the calling
+        user's own keys. Counts from windows that have already closed are
+        reported as zero, not as current activity.
       responses:
         '200':
           description: API keys usage stats
@@ -2290,33 +2292,43 @@ components:
           description: |
             Request count since request_count_window_start. This is a
             FIXED/TUMBLING window, not a true trailing-24h rolling count:
-            once the window is older than 24h, the next request resets
-            both this count (to 1) and request_count_window_start (to
-            now), discarding whatever count the previous window had even
-            if some of those requests happened within the preceding 24h.
-            Use request_count_window_start to see exactly which period
-            this count covers.
+            once the window is older than 24h, the next request restarts
+            both this count and request_count_window_start, discarding
+            whatever count the previous window had even if some of those
+            requests happened within the preceding 24h.
+
+            Reported as 0 once the window is older than 24h, even though
+            the underlying row still holds the closed window's count until
+            the key is used again: a key that went idle has no current
+            activity. Use request_count_window_start to see exactly which
+            period this count covers.
         request_count_window_start:
           type: string
           format: date-time
           nullable: true
           description: |
-            Timestamp the current request_count_window began at. Null
-            when the key has never recorded a request.
+            Timestamp the current request_count_window began at. Null when
+            the key has never recorded a request, and also null once the
+            window has closed, since there is then no current period for
+            the count to refer to.
 
     APIKeysUsageStats:
       type: object
       properties:
         total_active:
           type: integer
-          description: Number of currently-active API keys for the caller.
+          description: |
+            Number of the caller's API keys that are currently usable, i.e.
+            neither revoked nor past their expiry. Matches the keys the
+            authentication path will accept.
         total_requests_window:
           type: integer
           format: int64
           description: |
-            Sum of request_count_window across the caller's keys. Each
-            summand is a fixed-window count (see APIKeyInfo.request_count_window),
-            not a true rolling 24h total.
+            Sum of request_count_window across the caller's keys, counting
+            only windows that are still open. Each summand is a fixed-window
+            count (see APIKeyInfo.request_count_window), not a true rolling
+            24h total, and the windows are not aligned with each other.
         total_requests_lifetime:
           type: integer
           format: int64

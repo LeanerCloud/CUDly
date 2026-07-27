@@ -889,48 +889,59 @@ func (s *PostgresStore) UpdateAPIKeyLastUsed(ctx context.Context, keyID string) 
 	return nil
 }
 
-// RecordAPIKeyUsage atomically updates last_used_at, increments
-// request_count_total, and increments-or-resets request_count_window based
-// on whether the current window is still within 24h of its start.
+// RecordAPIKeyUsage atomically updates last_used_at, adds delta to
+// request_count_total, and adds-or-resets request_count_window based on
+// whether the current window is still within apiKeyUsageWindow of its start.
+//
+// delta is the number of requests being recorded in this flush. The auth hot
+// path coalesces concurrent requests for the same key into a single write
+// (see Service.recordUsageAsync), so delta is frequently greater than 1 and
+// must be added rather than treated as a single increment.
 //
 // request_count_window is a FIXED/TUMBLING window counter, not a true
 // trailing-24h rolling count: the single UPDATE does the window decision
 // inline --
-//   - if window_start IS NULL OR (NOW() - window_start) >= 24h, start a
-//     fresh window (window_start = NOW(), count = 1) -- this DISCARDS
-//     whatever count the previous window had, even if some of those
-//     requests happened within the preceding 24h of NOW().
-//   - otherwise increment the existing count.
+//   - if window_start IS NULL OR (NOW() - window_start) >= apiKeyUsageWindow,
+//     start a fresh window (window_start = NOW(), count = delta) -- this
+//     DISCARDS whatever count the previous window had, even if some of those
+//     requests happened within the preceding window-length of NOW().
+//   - otherwise add delta to the existing count.
 //
-// A request made moments before a window resets is therefore dropped from
-// the count as soon as the next request starts a new window; an idle key's
-// stale count also lingers unchanged until its next request. Callers that
+// The window length is passed in from apiKeyUsageWindow rather than written
+// as a SQL literal so the write path and the API read path (which zeroes an
+// expired window, see effectiveWindowUsage) cannot drift apart.
+//
+// An idle key's stale count lingers on the row unchanged until its next
+// request; the read path is responsible for not reporting it. Callers that
 // need the actual period covered should read request_count_window_start
 // rather than assuming "requests in the last 24h".
 //
 // Doing it in one statement keeps the update atomic per row, so two
-// concurrent calls can't both see "stale window" and reset to 1 in
-// parallel -- pgx serializes updates to the same row.
-func (s *PostgresStore) RecordAPIKeyUsage(ctx context.Context, keyID string) error {
+// concurrent calls can't both see "stale window" and reset in parallel --
+// pgx serializes updates to the same row.
+func (s *PostgresStore) RecordAPIKeyUsage(ctx context.Context, keyID string, delta int64) error {
+	if delta <= 0 {
+		return fmt.Errorf("invalid API key usage delta %d: must be positive", delta)
+	}
 	query := `
 		UPDATE api_keys
 		SET last_used_at = NOW(),
-		    request_count_total = request_count_total + 1,
+		    request_count_total = request_count_total + $2,
 		    request_count_window = CASE
 		        WHEN request_count_window_start IS NULL
-		             OR NOW() - request_count_window_start >= INTERVAL '24 hours'
-		        THEN 1
-		        ELSE request_count_window + 1
+		             OR NOW() - request_count_window_start >= make_interval(secs => $3)
+		        THEN $2
+		        ELSE request_count_window + $2
 		    END,
 		    request_count_window_start = CASE
 		        WHEN request_count_window_start IS NULL
-		             OR NOW() - request_count_window_start >= INTERVAL '24 hours'
+		             OR NOW() - request_count_window_start >= make_interval(secs => $3)
 		        THEN NOW()
 		        ELSE request_count_window_start
 		    END
 		WHERE id = $1
 	`
-	result, err := s.db.Exec(ctx, query, keyID)
+	result, err := s.db.Exec(ctx, query, keyID, delta, apiKeyUsageWindow.Seconds())
 	if err != nil {
 		return fmt.Errorf("failed to record API key usage: %w", err)
 	}
