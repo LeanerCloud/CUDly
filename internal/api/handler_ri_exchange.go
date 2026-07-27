@@ -518,15 +518,18 @@ func (h *Handler) getAzureCompatibleOfferings(ctx context.Context, req *events.L
 	return &AzureCompatibleOfferingsResponse{Offerings: offerings, Preview: preview}, nil
 }
 
+// azureMaxPurchaseAmountCurrency is the currency the execute:ri-exchange
+// permission's MaxPurchaseAmount constraint is denominated in, matching the
+// AWS execute:ri-exchange precedent (which takes max_payment_due_usd). There
+// is no FX conversion available here, so a non-USD exchange's raw amount can
+// never be safely compared against a USD-denominated cap -- see
+// checkAzureExecuteConstraints.
+const azureMaxPurchaseAmountCurrency = "USD"
+
 // authorizeAzureExchangeExecution builds the Azure exchange client for the
 // request's subscription and enforces the per-permission Constraints
-// configured on execute:ri-exchange (SEC-01, issue #1141): AccountIDs from
-// the resolved CloudAccount (falling back to unattributedAccountConstraint
-// so an unregistered subscription fails closed against any
-// AccountIDs-constrained permission), Providers/Services fixed to
-// azure/compute, Regions from every target location, and MaxPurchaseAmount
-// from the caller's cap. Extracted from executeAzureExchange to keep that
-// function under the gocyclo limit.
+// configured on execute:ri-exchange (SEC-01, issue #1141). Extracted from
+// executeAzureExchange to keep that function under the gocyclo limit.
 func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *Session, body AzureExecuteExchangeRequestBody, maxRat *big.Rat) (azureExchangeClient, error) {
 	client, err := h.buildAzureExchangeClient(ctx, body.SubscriptionID)
 	if err != nil {
@@ -536,27 +539,89 @@ func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *
 		return nil, NewClientError(404, fmt.Sprintf("no Azure account registered for subscription %q", body.SubscriptionID))
 	}
 
-	account, err := h.config.GetCloudAccountByExternalID(ctx, "azure", body.SubscriptionID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve cloud account scope: %w", err)
-	}
-	accountID := unattributedAccountConstraint
-	if account != nil {
-		accountID = account.ID
-	}
-
-	maxPayment, _ := maxRat.Float64()
-	err = h.requirePermissionConstraints(ctx, session, "execute", "ri-exchange", []auth.PermissionConstraints{{
-		AccountIDs:        []string{accountID},
-		Providers:         []string{string(common.ProviderAzure)},
-		Services:          []string{string(common.ServiceCompute)},
-		Regions:           targetLocations(body.Targets),
-		MaxPurchaseAmount: maxPayment,
-	}})
+	accountID, err := h.resolveAzureExchangeAccountID(ctx, body.SubscriptionID)
 	if err != nil {
 		return nil, err
 	}
+
+	if err := h.checkAzureExecuteConstraints(ctx, session, body, accountID, maxRat); err != nil {
+		return nil, err
+	}
 	return client, nil
+}
+
+// resolveAzureExchangeAccountID looks up the CloudAccount registered for
+// subscriptionID and returns its ID, or unattributedAccountConstraint when
+// no account is registered (so an AccountIDs-constrained permission still
+// fails closed against an unattributed request). Extracted from
+// authorizeAzureExchangeExecution to keep that function under the gocyclo
+// limit.
+func (h *Handler) resolveAzureExchangeAccountID(ctx context.Context, subscriptionID string) (string, error) {
+	account, err := h.config.GetCloudAccountByExternalID(ctx, "azure", subscriptionID)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve cloud account scope: %w", err)
+	}
+	if account != nil {
+		return account.ID, nil
+	}
+	return unattributedAccountConstraint, nil
+}
+
+// checkAzureExecuteConstraints enforces the execute:ri-exchange permission
+// Constraints (SEC-01, issue #1141): AccountIDs from the resolved
+// CloudAccount, Providers/Services fixed to azure/compute, Regions from
+// every target location, and MaxPurchaseAmount from the caller's cap.
+//
+// MaxPurchaseAmount is USD-denominated (azureMaxPurchaseAmountCurrency) with
+// no FX conversion available. A non-USD request's raw amount is therefore
+// never compared directly against the cap -- doing so would let a large
+// non-USD amount (e.g. 1000 KWD, worth far more than 1000 USD) clear a cap
+// meant to bound USD spend. Instead, a non-USD request is checked with an
+// unmatchable sentinel amount (math.MaxFloat64): this denies the request if
+// the granting permission carries ANY MaxPurchaseAmount constraint (fail
+// closed on a cap this code cannot safely evaluate) while still allowing it
+// through when the permission has no amount constraint at all -- callers
+// without a spend cap are not penalized for using a non-USD subscription.
+//
+// When the sentinel check fails, a second call with the amount dimension
+// neutralized (MaxPurchaseAmount: 0, which matchPurchaseAmountConstraint
+// always treats as satisfied) disambiguates the cause: if that second call
+// still fails, some other dimension (account/provider/service/region) is
+// the real reason and its error is returned unchanged; otherwise the amount
+// constraint was specifically the blocker and a currency-specific 403 is
+// returned instead of the generic constraint-denied message.
+func (h *Handler) checkAzureExecuteConstraints(ctx context.Context, session *Session, body AzureExecuteExchangeRequestBody, accountID string, maxRat *big.Rat) error {
+	base := auth.PermissionConstraints{
+		AccountIDs: []string{accountID},
+		Providers:  []string{string(common.ProviderAzure)},
+		Services:   []string{string(common.ServiceCompute)},
+		Regions:    targetLocations(body.Targets),
+	}
+
+	isUSD := strings.EqualFold(body.Currency, azureMaxPurchaseAmountCurrency)
+	attempt := base
+	if isUSD {
+		maxPayment, _ := maxRat.Float64()
+		attempt.MaxPurchaseAmount = maxPayment
+	} else {
+		attempt.MaxPurchaseAmount = math.MaxFloat64
+	}
+
+	err := h.requirePermissionConstraints(ctx, session, "execute", "ri-exchange", []auth.PermissionConstraints{attempt})
+	if err == nil || isUSD {
+		return err
+	}
+
+	// Non-USD and denied: isolate whether the amount dimension was
+	// specifically the cause.
+	withoutAmount := base
+	withoutAmount.MaxPurchaseAmount = 0
+	if otherErr := h.requirePermissionConstraints(ctx, session, "execute", "ri-exchange", []auth.PermissionConstraints{withoutAmount}); otherErr != nil {
+		return otherErr
+	}
+	return NewClientError(403, fmt.Sprintf(
+		"your execute:ri-exchange permission has a spend-cap (MaxPurchaseAmount) constraint, which is USD-denominated and cannot be safely enforced against a %s exchange; use a USD-denominated request or ask an administrator to remove the constraint",
+		body.Currency))
 }
 
 // checkAzureExchangeMoneyGuardrails enforces the money-path guardrails
@@ -566,7 +631,15 @@ func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *
 // a currency mismatch blocks execution, and NetPayable exceeding the cap
 // blocks execution. Extracted from executeAzureExchange to keep that
 // function under the gocyclo limit.
+//
+// A nil preview is itself refused rather than dereferenced: the current
+// azureExchangeClient.CalculateExchange contract never returns (nil, nil,
+// nil), but a future implementation of the interface making that mistake
+// must not panic this handler.
 func checkAzureExchangeMoneyGuardrails(preview *azurecompute.ExchangePreview, maxRat *big.Rat, currency string) error {
+	if preview == nil {
+		return fmt.Errorf("internal error: CalculateExchange returned a nil preview")
+	}
 	if len(preview.PolicyErrors) > 0 {
 		return NewClientError(422, fmt.Sprintf("Azure rejected this exchange: %s", strings.Join(preview.PolicyErrors, "; ")))
 	}

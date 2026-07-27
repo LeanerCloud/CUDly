@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/big"
 	"testing"
 	"time"
@@ -2179,6 +2180,163 @@ func TestExecuteAzureExchange_ConstraintExceeded(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 403, ce.code)
 	assert.Contains(t, ce.Error(), "constraints")
+}
+
+// validAzureExecuteBodyKWD mirrors validAzureExecuteBody but requests a
+// non-USD currency, for the currency-blind-cap guardrail tests below.
+const validAzureExecuteBodyKWD = `{
+	"subscription_id": "sub-1",
+	"sources": [{"reservation_id": "res-1", "quantity": 1}],
+	"targets": [{"sku": "Standard_D4s_v3", "location": "eastus", "term": "P1Y", "quantity": 1, "billing_scope_id": "/subscriptions/sub-1"}],
+	"max_payment_due": "1000.00",
+	"currency": "KWD"
+}`
+
+// TestExecuteAzureExchange_NonUSDCurrencyBlindCapRejected proves the fix for
+// the currency-blind MaxPurchaseAmount finding: MaxPurchaseAmount is
+// USD-denominated (matching the AWS precedent), so a raw float comparison
+// against a non-USD amount would let e.g. 1000 KWD (worth far more than
+// 1000 USD) clear a cap meant to bound USD spend. A non-USD request against
+// a permission that DOES carry a MaxPurchaseAmount constraint must be
+// refused with 403 rather than silently compared.
+//
+// The mock simulates a constrained permission across the two calls
+// checkAzureExecuteConstraints makes: the sentinel-amount call is denied
+// (the permission's real cap rejects the enormous sentinel), then the
+// amount-neutralized disambiguation call is granted (every other dimension
+// is fine), isolating the amount constraint as the specific cause.
+func TestExecuteAzureExchange_NonUSDCurrencyBlindCapRejected(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange",
+		mock.MatchedBy(func(sets []auth.PermissionConstraints) bool {
+			return len(sets) == 1 && sets[0].MaxPurchaseAmount == math.MaxFloat64
+		})).Return(false, nil)
+	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange",
+		mock.MatchedBy(func(sets []auth.PermissionConstraints) bool {
+			return len(sets) == 1 && sets[0].MaxPurchaseAmount == 0
+		})).Return(true, nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	mockStore := &MockConfigStore{}
+	mockStore.GetCloudAccountByExternalIDFn = func(_ context.Context, _, _ string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: "acct-1"}, nil
+	}
+
+	opsClient := new(mockAzureExchangeOpsClient) // no CalculateExchange/ExecuteExchange expectations set
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := &Handler{
+		auth:                 mockAuth,
+		config:               mockStore,
+		azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient },
+	}
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBodyKWD,
+	})
+	require.Error(t, err, "a non-USD request against a MaxPurchaseAmount-constrained permission must be refused, not silently compared as if the amount were USD")
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, err.Error(), "USD-denominated")
+	assert.Contains(t, err.Error(), "KWD")
+}
+
+// TestExecuteAzureExchange_USDCurrencyCapStillEnforced proves the fix does
+// not regress the common case: a USD request is checked directly (single
+// call, the real requested amount) and proceeds when within the cap.
+func TestExecuteAzureExchange_USDCurrencyCapStillEnforced(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange",
+		mock.MatchedBy(func(sets []auth.PermissionConstraints) bool {
+			return len(sets) == 1 && sets[0].MaxPurchaseAmount == 100.00
+		})).Return(true, nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	mockStore := &MockConfigStore{}
+	mockStore.GetCloudAccountByExternalIDFn = func(_ context.Context, _, _ string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: "acct-1"}, nil
+	}
+
+	opsClient := new(mockAzureExchangeOpsClient)
+	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
+		&azurecompute.ExchangePreview{SessionID: "sess-usd-ok", NetPayable: toPtr(50.00), NetPayableCurrency: "USD"},
+		[]azurecompute.CompatibleOffering{}, nil,
+	)
+	opsClient.On("ExecuteExchange", ctx, "sess-usd-ok").Return(&azurecompute.ExchangeResult{
+		SessionID: "sess-usd-ok", NetPayable: toPtr(50.00), NetPayableCurrency: "USD", Status: "Succeeded",
+	}, nil)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := &Handler{
+		auth:                 mockAuth,
+		config:               mockStore,
+		azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient },
+	}
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody, // USD, max_payment_due 100.00
+	})
+	require.NoError(t, err)
+}
+
+// TestExecuteAzureExchange_NonUSDWithoutCapStillAllowed proves the fix does
+// not over-reject: a non-USD request against a permission with NO
+// MaxPurchaseAmount constraint must still be allowed through (only one
+// constraint call is made, since the sentinel amount already passes when
+// the permission has no cap).
+func TestExecuteAzureExchange_NonUSDWithoutCapStillAllowed(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange",
+		mock.MatchedBy(func(sets []auth.PermissionConstraints) bool {
+			return len(sets) == 1 && sets[0].MaxPurchaseAmount == math.MaxFloat64
+		})).Return(true, nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	mockStore := &MockConfigStore{}
+	mockStore.GetCloudAccountByExternalIDFn = func(_ context.Context, _, _ string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: "acct-1"}, nil
+	}
+
+	opsClient := new(mockAzureExchangeOpsClient)
+	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
+		&azurecompute.ExchangePreview{SessionID: "sess-kwd-ok", NetPayable: toPtr(500.00), NetPayableCurrency: "KWD"},
+		[]azurecompute.CompatibleOffering{}, nil,
+	)
+	opsClient.On("ExecuteExchange", ctx, "sess-kwd-ok").Return(&azurecompute.ExchangeResult{
+		SessionID: "sess-kwd-ok", NetPayable: toPtr(500.00), NetPayableCurrency: "KWD", Status: "Succeeded",
+	}, nil)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := &Handler{
+		auth:                 mockAuth,
+		config:               mockStore,
+		azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient },
+	}
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBodyKWD,
+	})
+	require.NoError(t, err, "a non-USD request must still be allowed when the granting permission carries no MaxPurchaseAmount constraint")
+}
+
+// TestCheckAzureExchangeMoneyGuardrails_NilPreviewRefused pins the
+// defensive nil check: a future azureExchangeClient implementation that
+// mistakenly returns (nil, nil, nil) from CalculateExchange must not panic
+// this handler.
+func TestCheckAzureExchangeMoneyGuardrails_NilPreviewRefused(t *testing.T) {
+	err := checkAzureExchangeMoneyGuardrails(nil, big.NewRat(100, 1), "USD")
+	require.Error(t, err, "a nil preview must be refused, not dereferenced")
+	assert.Contains(t, err.Error(), "nil preview")
 }
 
 // --- executeAzureExchange: validation ---
