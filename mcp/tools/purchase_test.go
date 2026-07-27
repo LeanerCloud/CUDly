@@ -146,8 +146,8 @@ func TestExecutePurchaseDryRunNeverCallsProvider(t *testing.T) {
 		Region:         "us-east-1",
 		Recommendation: testRecommendationWithCost(),
 		DryRun:         true,
-		Confirm:        true,
-		ResolveClient:  resolve,
+		Confirm:        true, CredentialScope: "test-scope",
+		ResolveClient: resolve,
 	})
 
 	require.NoError(t, err)
@@ -230,8 +230,8 @@ func TestExecutePurchaseRealPurchasePopulatesTermYears(t *testing.T) {
 		Region:         "us-east-1",
 		Recommendation: testRecommendation(),
 		DryRun:         false,
-		Confirm:        true,
-		ResolveClient:  func(_ context.Context) (provider.ServiceClient, error) { return fake, nil },
+		Confirm:        true, CredentialScope: "test-scope",
+		ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake, nil },
 	})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
@@ -307,7 +307,7 @@ func TestExecutePurchaseRealPurchaseGate(t *testing.T) {
 	rec := testRecommendation()
 	realPurchaseRequest := func(fake *fakeServiceClient, dryRun bool) PurchaseRequest {
 		return PurchaseRequest{
-			Region: "us-east-1", Recommendation: rec, DryRun: dryRun, Confirm: true,
+			Region: "us-east-1", Recommendation: rec, DryRun: dryRun, Confirm: true, CredentialScope: "test-scope",
 			ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake, nil },
 		}
 	}
@@ -397,8 +397,8 @@ func TestExecutePurchaseRealPurchaseCallsProviderWithMCPSource(t *testing.T) {
 		Region:         "us-east-1",
 		Recommendation: testRecommendation(),
 		DryRun:         false,
-		Confirm:        true,
-		ResolveClient:  resolve,
+		Confirm:        true, CredentialScope: "test-scope",
+		ResolveClient: resolve,
 	})
 
 	require.NoError(t, err)
@@ -422,13 +422,13 @@ func TestExecutePurchaseSameRequestDerivesSameToken(t *testing.T) {
 	fake2 := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true}}
 
 	_, err := ExecutePurchase(context.Background(), PurchaseRequest{
-		Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true,
+		Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true, CredentialScope: "test-scope",
 		ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake1, nil },
 	})
 	require.NoError(t, err)
 
 	_, err = ExecutePurchase(context.Background(), PurchaseRequest{
-		Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true,
+		Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true, CredentialScope: "test-scope",
 		ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake2, nil },
 	})
 	require.NoError(t, err)
@@ -441,7 +441,7 @@ func TestExecutePurchaseSameRequestDerivesSameToken(t *testing.T) {
 	rec2.Count = 4
 	fake3 := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true}}
 	_, err = ExecutePurchase(context.Background(), PurchaseRequest{
-		Region: "us-east-1", Recommendation: rec2, DryRun: false, Confirm: true,
+		Region: "us-east-1", Recommendation: rec2, DryRun: false, Confirm: true, CredentialScope: "test-scope",
 		ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake3, nil },
 	})
 	require.NoError(t, err)
@@ -460,8 +460,8 @@ func TestExecutePurchaseProviderErrorSurfaced(t *testing.T) {
 		Region:         "us-east-1",
 		Recommendation: testRecommendation(),
 		DryRun:         false,
-		Confirm:        true,
-		ResolveClient:  resolve,
+		Confirm:        true, CredentialScope: "test-scope",
+		ResolveClient: resolve,
 	})
 
 	require.Error(t, err)
@@ -481,8 +481,8 @@ func TestExecutePurchaseResolveClientErrorSurfaced(t *testing.T) {
 		Region:         "us-east-1",
 		Recommendation: testRecommendation(),
 		DryRun:         false,
-		Confirm:        true,
-		ResolveClient:  resolve,
+		Confirm:        true, CredentialScope: "test-scope",
+		ResolveClient: resolve,
 	})
 
 	require.Error(t, err)
@@ -596,14 +596,14 @@ func TestExecutePurchaseNonceThreadedThroughToToken(t *testing.T) {
 
 	fake1 := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true}}
 	_, err := ExecutePurchase(context.Background(), PurchaseRequest{
-		Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true, Nonce: "call-1",
+		Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true, Nonce: "call-1", CredentialScope: "test-scope",
 		ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake1, nil },
 	})
 	require.NoError(t, err)
 
 	fake2 := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true}}
 	_, err = ExecutePurchase(context.Background(), PurchaseRequest{
-		Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true, Nonce: "call-2",
+		Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true, Nonce: "call-2", CredentialScope: "test-scope",
 		ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake2, nil },
 	})
 	require.NoError(t, err)
@@ -613,7 +613,7 @@ func TestExecutePurchaseNonceThreadedThroughToToken(t *testing.T) {
 
 	fake3 := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true}}
 	_, err = ExecutePurchase(context.Background(), PurchaseRequest{
-		Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true, Nonce: "call-1",
+		Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true, Nonce: "call-1", CredentialScope: "test-scope",
 		ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake3, nil },
 	})
 	require.NoError(t, err)
@@ -773,7 +773,7 @@ func TestExecutePurchaseAuditLogging(t *testing.T) {
 		fake := &fakeServiceClient{purchaseErr: errors.New("insufficient capacity")}
 		out := capture(func() {
 			_, err := ExecutePurchase(context.Background(), PurchaseRequest{
-				Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true,
+				Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true, CredentialScope: "test-scope",
 				ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake, nil },
 			})
 			require.Error(t, err)
@@ -794,7 +794,7 @@ func TestExecutePurchaseAuditLogging(t *testing.T) {
 		fake := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: false, Error: nil}}
 		out := capture(func() {
 			_, err := ExecutePurchase(context.Background(), PurchaseRequest{
-				Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true,
+				Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true, CredentialScope: "test-scope",
 				ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake, nil },
 			})
 			require.NoError(t, err, "a provider-reported failure surfaces via the response, not a Go error")
@@ -878,7 +878,7 @@ func TestArcheraOfferOnlyAfterSuccessfulRealPurchase(t *testing.T) {
 			Error:   errors.New("insufficient capacity"),
 		}}
 		resp, err := ExecutePurchase(context.Background(), PurchaseRequest{
-			Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true,
+			Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true, CredentialScope: "test-scope",
 			ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake, nil },
 		})
 		require.NoError(t, err)
@@ -893,7 +893,7 @@ func TestArcheraOfferOnlyAfterSuccessfulRealPurchase(t *testing.T) {
 			CommitmentID: "ri-abc123",
 		}}
 		resp, err := ExecutePurchase(context.Background(), PurchaseRequest{
-			Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true,
+			Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true, CredentialScope: "test-scope",
 			ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake, nil },
 		})
 		require.NoError(t, err)
@@ -918,4 +918,156 @@ func TestArcheraOfferOnlyAfterSuccessfulRealPurchase(t *testing.T) {
 		assert.Contains(t, body, "non_gating_disclosure")
 		assert.Contains(t, body, "sponsorship_disclosure")
 	})
+}
+
+// TestExecutePurchaseAmbientScopeCannotDoubleBuy is the regression guard for
+// the credential-scope aliasing double-purchase found in the independent
+// re-review of #1495.
+//
+// idempotencyKeyFor folds CredentialScope into the token, and CredentialScope
+// returns "" when neither the explicit argument nor the ambient environment
+// variable is set. So the SAME target account reached two ways derived two
+// DIFFERENT tokens: omitting azure_subscription_id (ambient resolves to
+// sub-X) gave "", while passing azure_subscription_id="sub-X" gave "sub-X".
+// Every provider's dedupe is token-keyed -- Azure's
+// FindReservationOrderByIdempotencyToken, GCP's idempotentCommitmentName, and
+// on AWS the EC2/Redshift tag lookups, the RDS/ElastiCache/OpenSearch/MemoryDB
+// idempotencyGuard, and Savings Plans' ClientToken -- so the second call's
+// lookup missed and bought a SECOND commitment.
+//
+// The sequence below is the realistic one, not a contrived edge: a model
+// previews or purchases without naming the account, then re-calls the same
+// purchase with the account explicit (self-correction, or a retry after a
+// timeout). Before the fix that bought twice.
+//
+// The earlier review reasoned only about the opposite direction (one token
+// spanning two accounts) and concluded an empty scope was safe because a
+// purely-ambient provider is unambiguous for the process lifetime. That is
+// true and irrelevant: the hazard is two tokens for ONE account.
+func TestExecutePurchaseAmbientScopeCannotDoubleBuy(t *testing.T) {
+	t.Parallel()
+	rec := testRecommendation()
+	realPurchase := func(scope string, fake *fakeServiceClient) (*PurchaseResponse, error) {
+		return ExecutePurchase(context.Background(), PurchaseRequest{
+			Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true,
+			CredentialScope: scope,
+			ResolveClient:   func(_ context.Context) (provider.ServiceClient, error) { return fake, nil },
+		})
+	}
+
+	t.Run("explicit account then the same account omitted does not buy twice", func(t *testing.T) {
+		t.Parallel()
+		// Call 1: the account named explicitly. This is a real purchase.
+		first := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true, CommitmentID: "ri-1"}}
+		resp, err := realPurchase("sub-X", first)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		require.Equal(t, 1, first.purchaseCalls)
+
+		// Call 2: identical purchase, but the account left to ambient
+		// credentials. It resolves to the SAME sub-X, so this must not
+		// become a second commitment.
+		second := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true, CommitmentID: "ri-2"}}
+		_, err = realPurchase("", second)
+
+		require.Error(t, err, "an undeterminable account must not reach the provider on a real purchase")
+		assert.Equal(t, 0, second.purchaseCalls,
+			"the second call must not purchase: it targets the same account as the first and would double-buy")
+		assert.Contains(t, err.Error(), "aws_profile",
+			"the refusal must name the argument the caller has to pass")
+	})
+
+	t.Run("a real purchase with no determinable account is refused before any provider call", func(t *testing.T) {
+		t.Parallel()
+		resolveCalled := false
+		_, err := ExecutePurchase(context.Background(), PurchaseRequest{
+			Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true,
+			CredentialScope: "",
+			ResolveClient: func(_ context.Context) (provider.ServiceClient, error) {
+				resolveCalled = true
+				return nil, errors.New("ResolveClient must not be called when the scope is undeterminable")
+			},
+		})
+		require.Error(t, err)
+		assert.False(t, resolveCalled, "the refusal must not resolve credentials")
+	})
+
+	t.Run("whitespace-only scope counts as absent", func(t *testing.T) {
+		t.Parallel()
+		fake := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true}}
+		_, err := realPurchase("   ", fake)
+		require.Error(t, err)
+		assert.Equal(t, 0, fake.purchaseCalls)
+	})
+
+	t.Run("a dry run is unaffected and needs no account", func(t *testing.T) {
+		t.Parallel()
+		resolveCalled := false
+		resp, err := ExecutePurchase(context.Background(), PurchaseRequest{
+			Region: "us-east-1", Recommendation: rec, DryRun: true, Confirm: true,
+			CredentialScope: "",
+			ResolveClient: func(_ context.Context) (provider.ServiceClient, error) {
+				resolveCalled = true
+				return nil, errors.New("dry run must not resolve a client")
+			},
+		})
+		require.NoError(t, err, "previewing must not require naming an account")
+		require.NotNil(t, resp)
+		assert.True(t, resp.DryRun)
+		assert.False(t, resolveCalled)
+	})
+}
+
+// TestExecutePurchaseExplicitAndAmbientAccountDedupe is the other half of the
+// invariant TestExecutePurchaseAmbientScopeCannotDoubleBuy guards. Refusing an
+// undeterminable account removes the aliasing only if the two ways of naming a
+// KNOWN account still converge: CredentialScope falls back to the same
+// environment variable the provider factory itself consults, so passing
+// aws_profile="prod" and inheriting AWS_PROFILE=prod must derive ONE token.
+// Without this, the fix would merely move the aliasing rather than remove it.
+//
+// Deliberately not parallel: t.Setenv cannot be used by a test with a parallel
+// ancestor.
+func TestExecutePurchaseExplicitAndAmbientAccountDedupe(t *testing.T) {
+	const envVar = "CUDLY_TEST_ALIAS_PROFILE"
+	t.Setenv(envVar, "prod")
+	rec := testRecommendation()
+
+	realPurchase := func(scope string, fake *fakeServiceClient) error {
+		_, err := ExecutePurchase(context.Background(), PurchaseRequest{
+			Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true,
+			CredentialScope: scope,
+			ResolveClient:   func(_ context.Context) (provider.ServiceClient, error) { return fake, nil },
+		})
+		return err
+	}
+
+	explicit := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true}}
+	require.NoError(t, realPurchase(CredentialScope("prod", envVar), explicit))
+
+	ambient := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true}}
+	require.NoError(t, realPurchase(CredentialScope("", envVar), ambient))
+
+	assert.Equal(t, explicit.lastOpts.IdempotencyToken, ambient.lastOpts.IdempotencyToken,
+		"naming the account explicitly and inheriting it from the environment target the same account and must dedupe")
+}
+
+// TestCredentialScopeArgNamesEveryProvider pins that every provider a purchase
+// tool can build a Recommendation for has a scope argument to name in the
+// refusal, and that an unrecognized provider is an explicit internal error
+// rather than a refusal the caller cannot act on.
+func TestCredentialScopeArgNamesEveryProvider(t *testing.T) {
+	t.Parallel()
+	for prov, want := range map[common.ProviderType]string{
+		common.ProviderAWS:   "aws_profile",
+		common.ProviderAzure: "azure_subscription_id",
+		common.ProviderGCP:   "gcp_project_id",
+	} {
+		got, err := credentialScopeArg(prov)
+		require.NoErrorf(t, err, "provider %q must have a scope argument", prov)
+		assert.Equal(t, want, got)
+	}
+
+	_, err := credentialScopeArg(common.ProviderType("nimbus"))
+	require.Error(t, err, "an unknown provider must fail loud rather than emit an unactionable refusal")
 }

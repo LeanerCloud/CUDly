@@ -13,6 +13,7 @@ import (
 
 func validElastiCacheArgs() elasticacheRIPurchaseArgs {
 	return elasticacheRIPurchaseArgs{
+		AWSProfile:    "test-profile",
 		Region:        "us-east-1",
 		NodeType:      "cache.r6g.large",
 		Count:         3,

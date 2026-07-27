@@ -13,11 +13,12 @@ import (
 
 func validGCPCUDArgs() gcpComputeEngineCUDPurchaseArgs {
 	return gcpComputeEngineCUDPurchaseArgs{
-		Region:      "us-central1",
-		MachineType: "n2-standard-4",
-		VCPUCount:   4,
-		MemoryGB:    16,
-		TermYears:   1,
+		GCPProjectID: "test-project",
+		Region:       "us-central1",
+		MachineType:  "n2-standard-4",
+		VCPUCount:    4,
+		MemoryGB:     16,
+		TermYears:    1,
 	}
 }
 

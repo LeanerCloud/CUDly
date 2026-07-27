@@ -14,6 +14,7 @@ import (
 
 func validSavingsPlansArgs() savingsPlansPurchaseArgs {
 	return savingsPlansPurchaseArgs{
+		AWSProfile:       "test-profile",
 		SPType:           "Compute",
 		HourlyCommitment: 10.50,
 		TermYears:        3,

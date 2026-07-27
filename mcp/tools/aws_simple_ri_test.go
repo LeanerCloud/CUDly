@@ -25,6 +25,7 @@ func simpleToolConstructors() map[string]func() Registration {
 
 func validSimpleArgs() simpleAWSRIPurchaseArgs {
 	return simpleAWSRIPurchaseArgs{
+		AWSProfile:    "test-profile",
 		Region:        "us-east-1",
 		ResourceType:  "r6g.large",
 		Count:         2,

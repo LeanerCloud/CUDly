@@ -19,11 +19,12 @@ import (
 // don't care which honored schedule they exercise.
 func validAzureComputeArgs() azureComputeRIPurchaseArgs {
 	return azureComputeRIPurchaseArgs{
-		Region:        "eastus",
-		VMSize:        "Standard_D2s_v3",
-		Count:         2,
-		TermYears:     3,
-		PaymentOption: "all-upfront",
+		AzureSubscriptionID: "test-subscription",
+		Region:              "eastus",
+		VMSize:              "Standard_D2s_v3",
+		Count:               2,
+		TermYears:           3,
+		PaymentOption:       "all-upfront",
 	}
 }
 

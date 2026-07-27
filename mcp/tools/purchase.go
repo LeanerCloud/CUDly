@@ -124,6 +124,75 @@ func CredentialScope(explicit string, envVars ...string) string {
 	return ""
 }
 
+// credentialScopeArg names the tool argument that supplies the credential
+// scope for a provider, so requireCredentialScope's refusal can tell the
+// caller exactly which argument to pass. Unknown providers are an explicit
+// error rather than a generic message: a provider added without a scope
+// argument here would otherwise get a refusal it cannot act on
+// (feedback_no_silent_fallbacks).
+func credentialScopeArg(p common.ProviderType) (string, error) {
+	switch p {
+	case common.ProviderAWS:
+		return "aws_profile", nil
+	case common.ProviderAzure:
+		return "azure_subscription_id", nil
+	case common.ProviderGCP:
+		return "gcp_project_id", nil
+	default:
+		return "", fmt.Errorf("internal error: no credential-scope argument defined for provider %q", p)
+	}
+}
+
+// requireCredentialScope refuses a REAL purchase whose credential scope could
+// not be determined. Previews are unaffected (ExecutePurchase returns before
+// calling this), so a caller can still price a purchase without naming an
+// account.
+//
+// This exists because an empty scope is a DOUBLE-PURCHASE hazard, not merely
+// an imprecise audit line. idempotencyKeyFor folds the scope into the token,
+// and CredentialScope returns "" when neither the explicit argument nor the
+// ambient environment variable is set. The same target account reached two
+// ways therefore derives two DIFFERENT tokens:
+//
+//	omit azure_subscription_id (ambient resolves to sub-X) -> scope ""
+//	pass azure_subscription_id="sub-X"                     -> scope "sub-X"
+//
+// Both purchase into sub-X, but every provider's dedupe is token-keyed --
+// Azure's FindReservationOrderByIdempotencyToken, GCP's
+// idempotentCommitmentName, and on AWS the EC2/Redshift tag lookups
+// (findRIByIdempotencyToken), the RDS/ElastiCache/OpenSearch/MemoryDB
+// idempotencyGuard, and Savings Plans' CreateSavingsPlanInput.ClientToken --
+// so the second call's lookup misses and buys again. Previewing without the
+// account and then re-calling with it explicit is ordinary self-correcting
+// model behavior, which makes this a likely sequence rather than a corner
+// case.
+//
+// The fix is to make "" unreachable for a real purchase. Note that explicit
+// and ambient do NOT diverge once a value exists: CredentialScope falls back
+// to the same environment variable the provider factory itself consults, so
+// aws_profile="prod" and an ambient AWS_PROFILE=prod both yield "prod" and
+// dedupe correctly. Only the both-absent case aliases, and this closes it.
+//
+// Deriving the effective account from the resolved client would be the
+// stronger fix, but provider.ServiceClient exposes no account accessor
+// (pkg/provider/interface.go), so that needs an interface change across every
+// AWS/Azure/GCP service client and does not belong on this branch. Failing
+// closed removes the hazard by construction in the meantime: on an
+// LLM-driven money path, making the operator name the target account before
+// spending is the same posture as EnvEnableRealPurchases.
+func requireCredentialScope(p common.ProviderType, scope string) error {
+	if strings.TrimSpace(scope) != "" {
+		return nil
+	}
+	arg, err := credentialScopeArg(p)
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("refusing real purchase: the target account could not be determined, so pass %s explicitly. "+
+		"Leaving it to ambient credentials derives a different idempotency token than naming the same account "+
+		"explicitly, so a retry would not dedupe and could purchase twice. Dry runs do not require it", arg)
+}
+
 // ResolveDryRunConfirm applies the dry_run=true / confirm=false defaults to a
 // tool's optional flags. Go's zero value for bool cannot distinguish "caller
 // omitted the field" from "caller explicitly set it false", which is why both
@@ -411,14 +480,44 @@ func logPurchaseOutcome(rec common.Recommendation, token, commitmentID string, s
 		rec.Provider, rec.ResourceType, rec.Count, commitmentID, common.MaskToken(token))
 }
 
-// ExecutePurchase runs the shared dry_run/confirm safety gate, then the
-// operator's EnvEnableRealPurchases authorization gate, and for a real
-// purchase that clears both, resolves the service client and calls
-// PurchaseCommitment with PurchaseSourceMCP and a derived idempotency token.
-// It never calls ResolveClient in preview mode, so a preview makes zero
-// provider/SDK calls; it also never calls ResolveClient when
-// EnvEnableRealPurchases is not set, so a disabled server makes zero
-// provider/SDK calls for a would-be real purchase either.
+// authorizeRealPurchase runs every gate a real purchase must clear, in the
+// order that touches the least. It is only ever reached with mode ==
+// modeExecute (ExecutePurchase returns the preview before calling it), so a
+// dry run clears none of these and needs none of them.
+//
+// Gathered into one function rather than inlined so ExecutePurchase stays
+// under the repo's gocyclo:10 pre-commit gate as gates accumulate, and so
+// "what must be true before this server spends money" has a single place to
+// read. Order matters: both the operator opt-in and the credential-scope
+// check run before ResolveClient, so a refusal never resolves credentials or
+// contacts a provider.
+func authorizeRealPurchase(req PurchaseRequest, rec common.Recommendation) error {
+	// Operator authorization. See EnvEnableRealPurchases for why the
+	// model-supplied confirm flag alone is not enough.
+	if !realPurchasesEnabled() {
+		return fmt.Errorf("real purchases are disabled: set %s=1 to allow the MCP server to execute real purchases",
+			EnvEnableRealPurchases)
+	}
+	// Target account must be determinable. See requireCredentialScope for why
+	// an undeterminable one is a double-purchase hazard, not a cosmetic gap.
+	if err := requireCredentialScope(rec.Provider, req.CredentialScope); err != nil {
+		return err
+	}
+	if req.ResolveClient == nil {
+		return fmt.Errorf("internal error: no ResolveClient configured for real purchase")
+	}
+	return nil
+}
+
+// ExecutePurchase runs the shared dry_run/confirm safety gate, then every
+// gate in authorizeRealPurchase (operator opt-in via EnvEnableRealPurchases,
+// and a determinable target account), and for a real purchase that clears
+// them all, resolves the service client and calls PurchaseCommitment with
+// PurchaseSourceMCP and a derived idempotency token. It never calls
+// ResolveClient in preview mode, so a preview makes zero provider/SDK calls;
+// it also never calls ResolveClient when any authorizeRealPurchase gate
+// refuses, so a disabled server -- or one that cannot tell which account a
+// purchase would land in -- makes zero provider/SDK calls either.
 func ExecutePurchase(ctx context.Context, req PurchaseRequest) (*PurchaseResponse, error) {
 	mode, err := decidePurchaseMode(req.DryRun, req.Confirm)
 	if err != nil {
@@ -438,18 +537,14 @@ func ExecutePurchase(ctx context.Context, req PurchaseRequest) (*PurchaseRespons
 		}, nil
 	}
 
-	// Operator authorization gate: mode == modeExecute here (preview already
-	// returned above), so this is the single chokepoint every purchase tool
-	// funnels through before a provider is ever touched. See
-	// EnvEnableRealPurchases for why confirm alone is not enough.
-	if !realPurchasesEnabled() {
-		return nil, fmt.Errorf("real purchases are disabled: set %s=1 to allow the MCP server to execute real purchases",
-			EnvEnableRealPurchases)
+	// Named authErr rather than err: `err :=` here trips govet's shadow check
+	// against the err declared above, while `err =` trips gocritic's
+	// sloppyReassign. A distinct name satisfies both (same reason as
+	// validateSavingsPlanArgs' commitErr in aws_savingsplans.go).
+	if authErr := authorizeRealPurchase(req, rec); authErr != nil {
+		return nil, authErr
 	}
 
-	if req.ResolveClient == nil {
-		return nil, fmt.Errorf("internal error: no ResolveClient configured for real purchase")
-	}
 	client, err := req.ResolveClient(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("resolve %s service client: %w", rec.Provider, err)

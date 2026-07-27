@@ -15,6 +15,7 @@ func boolPtr(b bool) *bool { return &b }
 
 func validEC2Args() ec2RIPurchaseArgs {
 	return ec2RIPurchaseArgs{
+		AWSProfile:    "test-profile",
 		Region:        "us-east-1",
 		InstanceType:  "m5.large",
 		Count:         3,

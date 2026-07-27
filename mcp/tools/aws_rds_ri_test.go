@@ -13,6 +13,7 @@ import (
 
 func validRDSArgs() rdsRIPurchaseArgs {
 	return rdsRIPurchaseArgs{
+		AWSProfile:    "test-profile",
 		Region:        "us-east-1",
 		InstanceClass: "db.r6g.large",
 		Count:         2,
