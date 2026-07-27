@@ -462,6 +462,15 @@ func (h *Handler) authorizeAPIKeyAny(ctx context.Context, apiKey string, verbs [
 // AccountIDs constraint still matches via the empty-permission-side rule.
 const unattributedAccountConstraint = "unattributed"
 
+// requirePermissionConstraintsAction is the action every current caller of
+// requirePermissionConstraints checks (execute:purchases, execute:ri-exchange
+// for both AWS and Azure). Every constraint-gated operation today is an
+// irreversible execute; hardcoded rather than threaded as a parameter since
+// a parameter with only one real value across all call sites is dead
+// flexibility (a genuinely new action should add a real parameter back,
+// not resurrect an unused one).
+const requirePermissionConstraintsAction = "execute"
+
 // requirePermissionConstraints re-checks an already-authenticated session
 // against request-derived permission constraint sets, so the Constraints
 // (MaxPurchaseAmount, Providers, Services, Regions, AccountIDs) configured on
@@ -479,7 +488,7 @@ const unattributedAccountConstraint = "unattributed"
 // prevents a CI key with MaxPurchaseAmount=$100 from spending up to the
 // owning user's full group limit by inheriting the broader group permissions
 // (adversarial-review F2).
-func (h *Handler) requirePermissionConstraints(ctx context.Context, session *Session, action, resource string, constraintSets []auth.PermissionConstraints) error {
+func (h *Handler) requirePermissionConstraints(ctx context.Context, session *Session, resource string, constraintSets []auth.PermissionConstraints) error {
 	if session == nil {
 		return fmt.Errorf("internal error: nil session passed to requirePermissionConstraints")
 	}
@@ -492,21 +501,21 @@ func (h *Handler) requirePermissionConstraints(ctx context.Context, session *Ses
 	// User API key: evaluate constraints against the key's effective permissions,
 	// not the owning user's full group permissions.
 	if session.UserAPIKeyID != "" {
-		has, err := h.auth.HasAPIKeyPermissionForConstraintsAPI(ctx, session.UserAPIKeyID, session.UserID, action, resource, constraintSets)
+		has, err := h.auth.HasAPIKeyPermissionForConstraintsAPI(ctx, session.UserAPIKeyID, session.UserID, requirePermissionConstraintsAction, resource, constraintSets)
 		if err != nil {
 			return fmt.Errorf("permission constraint check failed: %w", err)
 		}
 		if !has {
-			return NewClientError(403, fmt.Sprintf("permission denied: this request exceeds the constraints configured on your %s permission for %s", action, resource))
+			return NewClientError(403, fmt.Sprintf("permission denied: this request exceeds the constraints configured on your %s permission for %s", requirePermissionConstraintsAction, resource))
 		}
 		return nil
 	}
-	has, err := h.auth.HasPermissionForConstraintsAPI(ctx, session.UserID, action, resource, constraintSets)
+	has, err := h.auth.HasPermissionForConstraintsAPI(ctx, session.UserID, requirePermissionConstraintsAction, resource, constraintSets)
 	if err != nil {
 		return fmt.Errorf("permission constraint check failed: %w", err)
 	}
 	if !has {
-		return NewClientError(403, fmt.Sprintf("permission denied: this request exceeds the constraints configured on your %s permission for %s", action, resource))
+		return NewClientError(403, fmt.Sprintf("permission denied: this request exceeds the constraints configured on your %s permission for %s", requirePermissionConstraintsAction, resource))
 	}
 	return nil
 }

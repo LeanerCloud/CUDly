@@ -2098,7 +2098,7 @@ func (h *Handler) enforcePurchaseConstraints(ctx context.Context, session *Sessi
 	if err := requireNonZeroCommitment(constraintSets); err != nil {
 		return err
 	}
-	return h.requirePermissionConstraints(ctx, session, "execute", "purchases", constraintSets)
+	return h.requirePermissionConstraints(ctx, session, "purchases", constraintSets)
 }
 
 // purchaseConstraintSets builds one auth.PermissionConstraints per
