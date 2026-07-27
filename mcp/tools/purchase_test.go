@@ -1129,11 +1129,59 @@ func TestCredentialScopeArgNamesEveryProvider(t *testing.T) {
 		common.ProviderAzure: "azure_subscription_id",
 		common.ProviderGCP:   "gcp_project_id",
 	} {
-		got, err := credentialScopeArg(prov)
-		require.NoErrorf(t, err, "provider %q must have a scope argument", prov)
-		assert.Equal(t, want, got)
+		got, err := credentialScopeSourceFor(prov)
+		require.NoErrorf(t, err, "provider %q must have a scope source", prov)
+		assert.Equal(t, want, got.arg)
 	}
 
-	_, err := credentialScopeArg(common.ProviderType("nimbus"))
+	_, err := credentialScopeSourceFor(common.ProviderType("nimbus"))
 	require.Error(t, err, "an unknown provider must fail loud rather than emit an unactionable refusal")
+}
+
+// TestRequireCredentialScopeGCPMessageIsActionable pins the GCP contract found
+// by review after the fail-closed gate landed.
+//
+// gcp_computeengine_cud.go calls CredentialScope(args.GCPProjectID) with no
+// environment fallback, so omitting gcp_project_id ALWAYS yields "" and the
+// gate refuses every real GCP purchase. That is the intended contract, not a
+// bug -- providers/gcp reads no project environment variable, and with none
+// configured it falls back to getDefaultProject, i.e. the first ACTIVE project
+// in the caller's ListProjects response. Spending money in "whichever project
+// happened to be listed first" is not a defensible default, and an
+// env-supplied scope would be worse still: it could name project A while the
+// purchase landed in project B, making the token assert an account it never
+// touched.
+//
+// Since the refusal is the contract, the message has to be actionable. Telling
+// a GCP caller their account "could not be determined" would send them looking
+// for an environment variable that does not exist, so GCP gets a plain
+// "required" instead.
+func TestRequireCredentialScopeGCPMessageIsActionable(t *testing.T) {
+	t.Parallel()
+
+	gcpErr := requireCredentialScope(common.ProviderGCP, "")
+	require.Error(t, gcpErr)
+	assert.Contains(t, gcpErr.Error(), "gcp_project_id", "the refusal must name the argument to pass")
+	assert.Contains(t, gcpErr.Error(), "is required",
+		"GCP has no environment fallback, so the message must say the argument is required")
+	assert.NotContains(t, gcpErr.Error(), "could not be determined",
+		"that phrasing implies an ambient source exists, sending a GCP caller after a variable nothing reads")
+
+	// Providers that DO have a fallback must still name it, so a caller who
+	// set the environment variable is not told to pass an argument they do
+	// not need.
+	for _, tc := range []struct {
+		provider common.ProviderType
+		arg      string
+		envVar   string
+	}{
+		{common.ProviderAWS, "aws_profile", "AWS_PROFILE"},
+		{common.ProviderAzure, "azure_subscription_id", "AZURE_SUBSCRIPTION_ID"},
+	} {
+		err := requireCredentialScope(tc.provider, "")
+		require.Errorf(t, err, "provider %q", tc.provider)
+		assert.Containsf(t, err.Error(), tc.arg, "provider %q must name its argument", tc.provider)
+		assert.Containsf(t, err.Error(), tc.envVar,
+			"provider %q has an ambient fallback and must name it", tc.provider)
+	}
 }

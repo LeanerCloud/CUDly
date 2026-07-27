@@ -124,22 +124,55 @@ func CredentialScope(explicit string, envVars ...string) string {
 	return ""
 }
 
-// credentialScopeArg names the tool argument that supplies the credential
-// scope for a provider, so requireCredentialScope's refusal can tell the
-// caller exactly which argument to pass. Unknown providers are an explicit
-// error rather than a generic message: a provider added without a scope
-// argument here would otherwise get a refusal it cannot act on
-// (feedback_no_silent_fallbacks).
-func credentialScopeArg(p common.ProviderType) (string, error) {
+// credentialScopeSource describes where a provider's credential scope can come
+// from: the tool argument that supplies it, and the ambient environment
+// variable that can supply it instead, if the provider has one.
+//
+// envVar must name a variable the matching provider factory ITSELF consults,
+// so a scope inherited from the environment always identifies the account the
+// purchase really lands in. A variable the factory ignores would make the
+// token positively assert the wrong account -- worse than having no fallback,
+// which is why gcp has none (see credentialScopeSourceFor).
+type credentialScopeSource struct {
+	arg    string
+	envVar string
+}
+
+// credentialScopeSourceFor returns how p's credential scope may be supplied,
+// so requireCredentialScope's refusal can name exactly what the caller has to
+// do. Unknown providers are an explicit error rather than a generic message: a
+// provider added without an entry here would otherwise get a refusal it cannot
+// act on (feedback_no_silent_fallbacks).
+//
+// GCP deliberately has NO environment fallback, and this is a decision rather
+// than an omission -- do not "fix" it by adding one:
+//
+//   - Nothing in providers/gcp reads GOOGLE_CLOUD_PROJECT or
+//     CLOUDSDK_CORE_PROJECT, so adding either here would invent a convention
+//     the provider does not honor.
+//   - Worse, it would be unsafe. When no project is configured, the provider
+//     falls back to getDefaultProject (providers/gcp/provider.go), which
+//     returns the FIRST ACTIVE PROJECT in the caller's ListProjects response
+//     -- an artifact of IAM visibility and API ordering, not a project anyone
+//     declared. An env-supplied scope could therefore name project A while the
+//     purchase landed in project B, making the idempotency token assert an
+//     account it never touched. That is the aliasing hazard
+//     requireCredentialScope exists to remove, in a worse form.
+//
+// So a real GCP purchase must name gcp_project_id. That is a stated contract
+// (documented in mcp/README.md and in the tool's own schema), not an accident
+// of the gate: "whichever project happens to be listed first" is not a
+// defensible default for spending money.
+func credentialScopeSourceFor(p common.ProviderType) (credentialScopeSource, error) {
 	switch p {
 	case common.ProviderAWS:
-		return "aws_profile", nil
+		return credentialScopeSource{arg: "aws_profile", envVar: "AWS_PROFILE"}, nil
 	case common.ProviderAzure:
-		return "azure_subscription_id", nil
+		return credentialScopeSource{arg: "azure_subscription_id", envVar: "AZURE_SUBSCRIPTION_ID"}, nil
 	case common.ProviderGCP:
-		return "gcp_project_id", nil
+		return credentialScopeSource{arg: "gcp_project_id"}, nil
 	default:
-		return "", fmt.Errorf("internal error: no credential-scope argument defined for provider %q", p)
+		return credentialScopeSource{}, fmt.Errorf("internal error: no credential-scope source defined for provider %q", p)
 	}
 }
 
@@ -184,13 +217,26 @@ func requireCredentialScope(p common.ProviderType, scope string) error {
 	if strings.TrimSpace(scope) != "" {
 		return nil
 	}
-	arg, err := credentialScopeArg(p)
+	src, err := credentialScopeSourceFor(p)
 	if err != nil {
 		return err
 	}
-	return fmt.Errorf("refusing real purchase: the target account could not be determined, so pass %s explicitly. "+
-		"Leaving it to ambient credentials derives a different idempotency token than naming the same account "+
-		"explicitly, so a retry would not dedupe and could purchase twice. Dry runs do not require it", arg)
+	// Providers with an ambient fallback get a "could not be determined"
+	// message naming both ways to supply it. GCP has none by design, so
+	// telling a caller their environment failed to provide something it never
+	// could would send them debugging the wrong thing; it gets a plain
+	// "required" instead.
+	if src.envVar == "" {
+		return fmt.Errorf("refusing real purchase: %s is required for a real %s purchase and was not supplied. "+
+			"There is no environment fallback: with no project named, the provider would spend in whichever "+
+			"project happens to be listed first for your credentials, and the idempotency token could not "+
+			"identify the account, so a retry might not dedupe and could purchase twice. Dry runs do not require it",
+			src.arg, p)
+	}
+	return fmt.Errorf("refusing real purchase: the target account could not be determined, so pass %s explicitly "+
+		"(or set %s). Leaving it to ambient credentials derives a different idempotency token than naming the "+
+		"same account explicitly, so a retry would not dedupe and could purchase twice. Dry runs do not require it",
+		src.arg, src.envVar)
 }
 
 // ResolveDryRunConfirm applies the dry_run=true / confirm=false defaults to a
