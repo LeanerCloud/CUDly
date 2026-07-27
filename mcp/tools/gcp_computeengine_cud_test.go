@@ -154,3 +154,19 @@ func TestGCPComputeEngineCUDPurchaseHandleRealPurchase(t *testing.T) {
 	assert.Equal(t, common.ServiceCompute, gotService)
 	assert.Equal(t, common.PurchaseSourceMCP, fake.lastOpts.Source)
 }
+
+// TestGCPComputeEngineRecommendationSetsMonthlyPaymentOption pins that the
+// CUD recommendation carries an explicit payment option. GCP Compute Engine
+// CUDs are monthly-only, so the tool exposes no payment_option argument, but
+// leaving Recommendation.PaymentOption empty is not neutral: the offering-
+// details switch in providers/gcp/services/computeengine/client.go falls
+// through to `default: upfrontCost = totalCost`, reporting the entire
+// commitment as an upfront charge for an empty payment option. "monthly" is
+// also the sole value config.ValidPaymentOptionsByProvider["gcp"] accepts.
+func TestGCPComputeEngineRecommendationSetsMonthlyPaymentOption(t *testing.T) {
+	t.Parallel()
+	rec, _, _, _, err := gcpComputeEngineRecommendationFromArgs(validGCPCUDArgs())
+	require.NoError(t, err)
+	assert.Equal(t, "monthly", rec.PaymentOption,
+		"an empty payment option is read downstream as an upfront charge")
+}

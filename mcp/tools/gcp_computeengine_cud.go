@@ -16,7 +16,14 @@ const gcpComputeEngineCUDPurchaseDescription = "Purchase a GCP Compute Engine Co
 	"SPENDS REAL MONEY when dry_run=false and confirm=true. Always call with dry_run=true first (the default) " +
 	"to validate your parameters before committing; a dry_run response never contacts GCP and never spends " +
 	"money. A CUD commits vCPUs and memory directly (not an instance count): vcpu_count is the number of vCPUs " +
-	"and memory_gb is the amount of memory to commit."
+	"and memory_gb is the amount of memory to commit. There is no payment_option parameter: GCP Compute Engine " +
+	"CUDs are billed monthly over the term, with no upfront option."
+
+// gcpPaymentOption is the only payment schedule GCP Compute Engine CUDs
+// offer, and the only value config.ValidPaymentOptionsByProvider["gcp"]
+// accepts. Named here rather than written as a bare literal at the one use
+// site so the constraint is stated once, next to its rationale.
+const gcpPaymentOption = "monthly"
 
 // gcpComputeEngineCUDPurchaseArgs is the input schema for
 // cudly_gcp_computeengine_cud_purchase. memory_gb is required: unlike AWS/
@@ -132,6 +139,16 @@ func gcpComputeEngineRecommendationFromArgs(args gcpComputeEngineCUDPurchaseArgs
 		Count:          args.VCPUCount,
 		CommitmentType: common.CommitmentCUD,
 		Term:           term.RecommendationTerm(),
+		// GCP Compute Engine CUDs have exactly one billing schedule: monthly
+		// over the term, with no upfront option. There is therefore no
+		// payment_option argument on this tool, but PaymentOption is still
+		// set explicitly rather than left "", because "" is not neutral
+		// downstream: providers/gcp/services/computeengine/client.go's
+		// offering-details switch falls through to `default: upfrontCost =
+		// totalCost`, reporting the whole commitment as an upfront charge
+		// for an empty payment option. gcpPaymentOption is the single value
+		// config.ValidPaymentOptionsByProvider["gcp"] recognises.
+		PaymentOption: gcpPaymentOption,
 		Details: common.ComputeDetails{
 			InstanceType: machineType,
 			MemoryGB:     args.MemoryGB,
