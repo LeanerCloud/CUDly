@@ -907,7 +907,7 @@ func (s *Scheduler) enabledAccounts(ctx context.Context, providerName string) []
 // The failed subscription IDs are named in the log so an operator can tell an
 // under-collected sweep from a genuinely shrinking savings opportunity. Any
 // other error is returned unchanged, preserving the existing fail-loud
-// behaviour.
+// behavior.
 //
 // NOTE: this records the incompleteness in the log only. Surfacing it in the
 // state table's last_collection_error (so the dashboard shows the sweep as

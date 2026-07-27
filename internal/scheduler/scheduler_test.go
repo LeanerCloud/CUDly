@@ -763,7 +763,7 @@ func TestScheduler_FetchAndConvert_KeepsPartialSweepData(t *testing.T) {
 }
 
 // The tolerance must be narrow: any error that is NOT a partial-subscription
-// failure keeps the existing fail-loud behaviour.
+// failure keeps the existing fail-loud behavior.
 func TestScheduler_FetchAndConvert_RealErrorStillFailsLoud(t *testing.T) {
 	ctx := context.Background()
 
