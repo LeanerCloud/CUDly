@@ -5,6 +5,7 @@ package azure
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"golang.org/x/sync/errgroup"
@@ -30,6 +31,68 @@ var newSubscriptionRecommendationsClientFn = func(cred azcore.TokenCredential, s
 type subscriptionClient struct {
 	subscriptionID string
 	client         provider.RecommendationsClient
+}
+
+// SubscriptionFailure records one subscription that could not be queried
+// during an org-wide fan-out.
+type SubscriptionFailure struct {
+	SubscriptionID string
+	Err            error
+}
+
+// PartialSubscriptionFailureError reports that an org-wide fan-out completed
+// with some subscriptions queried successfully and others not.
+//
+// It is returned ALONGSIDE the successful subscriptions' recommendations, so
+// a caller can keep the partial data and still know the sweep was
+// incomplete. Callers that want the data must inspect the error:
+//
+//	recs, err := client.GetAllRecommendations(ctx)
+//	var partial *azure.PartialSubscriptionFailureError
+//	if errors.As(err, &partial) {
+//	    // recs holds partial.Succeeded subscriptions' recommendations;
+//	    // partial.Failed says which subscriptions are missing and why.
+//	} else if err != nil {
+//	    return err
+//	}
+//
+// This exists because the alternative -- returning the partial results with
+// a nil error -- makes "these subscriptions have no savings available"
+// indistinguishable from "these subscriptions were never successfully
+// queried". On a collection path whose output is persisted and rendered as
+// a savings opportunity, that reads as a shrinking opportunity rather than a
+// failed sweep. A log line is not a programmatic signal; this is.
+//
+// Failing the whole sweep on one transient subscription error would be worse
+// than a partial result, which is why the successful data is still returned.
+type PartialSubscriptionFailureError struct {
+	// Attempted is how many subscriptions the fan-out queried.
+	Attempted int
+	// Succeeded is how many returned a result. Always < Attempted and > 0:
+	// an all-failed sweep is a plain error, not a partial one.
+	Succeeded int
+	// Failed carries every subscription that errored, with its cause.
+	Failed []SubscriptionFailure
+}
+
+func (e *PartialSubscriptionFailureError) Error() string {
+	ids := make([]string, 0, len(e.Failed))
+	for _, f := range e.Failed {
+		ids = append(ids, f.SubscriptionID)
+	}
+	return fmt.Sprintf(
+		"azure recommendations incomplete: %d of %d subscriptions succeeded; %d failed (%s): %v",
+		e.Succeeded, e.Attempted, len(e.Failed), strings.Join(ids, ", "), e.Failed[0].Err)
+}
+
+// Unwrap exposes the per-subscription causes so errors.Is/errors.As can match
+// against any of them (e.g. checking whether a throttling error is in play).
+func (e *PartialSubscriptionFailureError) Unwrap() []error {
+	errs := make([]error, 0, len(e.Failed))
+	for _, f := range e.Failed {
+		errs = append(errs, f.Err)
+	}
+	return errs
 }
 
 // MultiSubscriptionRecommendationsClient fans recommendation collection out
@@ -92,6 +155,13 @@ func NewMultiSubscriptionRecommendationsClient(cred azcore.TokenCredential, acco
 // all-attempted-failed guard used by mergeServiceResults, ported here so a
 // total credential/throttle failure isn't indistinguishable from "no
 // savings available across the whole tenant".
+//
+// If SOME subscriptions fail, it returns the successful subscriptions'
+// recommendations together with a *PartialSubscriptionFailureError. Callers
+// that want the partial data must inspect the error with errors.As; a caller
+// that treats any non-nil error as fatal gets a loud failure rather than a
+// silently incomplete sweep. Either way the incompleteness is visible in the
+// return values, not just in a log line.
 func (m *MultiSubscriptionRecommendationsClient) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	if params == nil {
 		return nil, fmt.Errorf("params cannot be nil")
@@ -184,22 +254,31 @@ func mergeSubscriptionResults(subs []subscriptionClient, results [][]common.Reco
 	}
 
 	out := make([]common.Recommendation, 0, total)
-	failures := 0
-	var lastErr error
+	failed := make([]SubscriptionFailure, 0, len(subs))
 	for i, err := range errs {
 		if err != nil {
-			failures++
-			lastErr = err
+			failed = append(failed, SubscriptionFailure{SubscriptionID: subs[i].subscriptionID, Err: err})
 			logging.Warnf("Azure subscription %s recommendations: %v", subs[i].subscriptionID, err)
 			continue
 		}
 		out = append(out, results[i]...)
 	}
 
-	if failures > 0 && failures == len(subs) {
-		return nil, fmt.Errorf("all %d Azure subscriptions failed to return recommendations: %w", failures, lastErr)
+	if len(failed) == 0 {
+		return out, nil
 	}
-	return out, nil
+	if len(failed) == len(subs) {
+		return nil, fmt.Errorf("all %d Azure subscriptions failed to return recommendations: %w", len(failed), failed[0].Err)
+	}
+
+	// Partial sweep: hand back what succeeded AND a typed error saying what
+	// did not, so the caller can tell an incomplete sweep from a complete one
+	// that happened to find nothing. See PartialSubscriptionFailureError.
+	return out, &PartialSubscriptionFailureError{
+		Attempted: len(subs),
+		Succeeded: len(subs) - len(failed),
+		Failed:    failed,
+	}
 }
 
 // GetRecommendationsForService retrieves recommendations for a single

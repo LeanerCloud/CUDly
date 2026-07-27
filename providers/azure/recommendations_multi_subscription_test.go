@@ -134,7 +134,11 @@ func TestMultiSubscriptionRecommendationsClient_GetRecommendations_MergesAcrossS
 	}, recs)
 }
 
-func TestMultiSubscriptionRecommendationsClient_GetRecommendations_PartialFailureStillSucceeds(t *testing.T) {
+// One subscription failing must not discard the others' results. It does,
+// however, produce a PartialSubscriptionFailureError so the caller knows the
+// sweep was incomplete -- see
+// TestMultiSubscriptionRecommendationsClient_PartialFailureIsDistinguishable.
+func TestMultiSubscriptionRecommendationsClient_GetRecommendations_PartialFailureStillReturnsData(t *testing.T) {
 	accounts := twoTestAccounts()
 	withFakeSubscriptionClients(t, map[string]*fakeRecommendationsClient{
 		"sub-1": {err: errors.New("sub-1 unreachable")},
@@ -145,8 +149,85 @@ func TestMultiSubscriptionRecommendationsClient_GetRecommendations_PartialFailur
 	require.NoError(t, err)
 
 	recs, err := client.GetAllRecommendations(context.Background())
-	require.NoError(t, err, "one subscription failing must not fail the whole fan-out")
-	assert.Equal(t, []common.Recommendation{{Account: "sub-2", Service: common.ServiceCache}}, recs)
+	var partial *PartialSubscriptionFailureError
+	require.ErrorAs(t, err, &partial, "a partial sweep must be reported as partial, not as success")
+	assert.Equal(t, []common.Recommendation{{Account: "sub-2", Service: common.ServiceCache}}, recs,
+		"one subscription failing must not discard the others' recommendations")
+}
+
+// TestMultiSubscriptionRecommendationsClient_PartialFailureIsDistinguishable
+// is the regression test for silent partial success.
+//
+// The two scenarios below produce IDENTICAL recommendation slices. The only
+// thing that can tell them apart is the error: a sweep where a subscription
+// was never successfully queried must not look like a complete sweep that
+// happened to find nothing there. Persisting the first as if it were the
+// second turns a failed collection into an apparently shrinking savings
+// opportunity.
+func TestMultiSubscriptionRecommendationsClient_PartialFailureIsDistinguishable(t *testing.T) {
+	newClient := func(t *testing.T, fakes map[string]*fakeRecommendationsClient) *MultiSubscriptionRecommendationsClient {
+		t.Helper()
+		withFakeSubscriptionClients(t, fakes)
+		c, err := NewMultiSubscriptionRecommendationsClient(&mockAzureTokenCredential{}, twoTestAccounts())
+		require.NoError(t, err)
+		return c
+	}
+
+	// Scenario A: sub-1 could not be queried, sub-2 returned nothing.
+	t.Run("partial failure reports which subscriptions were not queried", func(t *testing.T) {
+		boom := errors.New("sub-1 unreachable")
+		client := newClient(t, map[string]*fakeRecommendationsClient{
+			"sub-1": {err: boom},
+			"sub-2": {recs: nil},
+		})
+
+		recs, err := client.GetAllRecommendations(context.Background())
+		require.Error(t, err, "an incomplete sweep must not be reported as a complete one")
+
+		var partial *PartialSubscriptionFailureError
+		require.ErrorAs(t, err, &partial, "the error must be inspectable, not just a log line")
+		assert.Equal(t, 2, partial.Attempted)
+		assert.Equal(t, 1, partial.Succeeded)
+		require.Len(t, partial.Failed, 1)
+		assert.Equal(t, "sub-1", partial.Failed[0].SubscriptionID)
+		assert.ErrorIs(t, err, boom, "the underlying cause must remain matchable")
+
+		// The successful subscription's data is still returned, so a caller
+		// that inspects the error can keep it.
+		assert.Empty(t, recs)
+	})
+
+	// Scenario B: both subscriptions answered, neither had recommendations.
+	t.Run("complete sweep finding nothing is not an error", func(t *testing.T) {
+		client := newClient(t, map[string]*fakeRecommendationsClient{
+			"sub-1": {recs: nil},
+			"sub-2": {recs: nil},
+		})
+
+		recs, err := client.GetAllRecommendations(context.Background())
+		require.NoError(t, err, "a complete sweep that found nothing must not look like a failure")
+		assert.Empty(t, recs)
+	})
+}
+
+// A partial failure must still hand back the successful subscriptions' data,
+// so a caller that inspects the error loses nothing.
+func TestMultiSubscriptionRecommendationsClient_PartialFailureKeepsSuccessfulResults(t *testing.T) {
+	withFakeSubscriptionClients(t, map[string]*fakeRecommendationsClient{
+		"sub-1": {err: errors.New("sub-1 unreachable")},
+		"sub-2": {recs: []common.Recommendation{{Account: "sub-2", Service: common.ServiceCache}}},
+	})
+
+	client, err := NewMultiSubscriptionRecommendationsClient(&mockAzureTokenCredential{}, twoTestAccounts())
+	require.NoError(t, err)
+
+	recs, err := client.GetAllRecommendations(context.Background())
+
+	var partial *PartialSubscriptionFailureError
+	require.ErrorAs(t, err, &partial)
+	assert.Equal(t, 1, partial.Succeeded)
+	assert.Equal(t, []common.Recommendation{{Account: "sub-2", Service: common.ServiceCache}}, recs,
+		"the subscriptions that succeeded must still be returned alongside the partial-failure error")
 }
 
 func TestMultiSubscriptionRecommendationsClient_GetRecommendations_AllFail(t *testing.T) {
