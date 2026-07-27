@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"log"
@@ -426,11 +427,16 @@ func ParseScheduledEvent(rawEvent json.RawMessage) (ScheduledTaskType, Scheduled
 	// owner would leave the marker it belongs to stranded for the full
 	// 5-minute recovery window anyway, so a buried error log on the eventual
 	// clear is strictly worse than refusing the malformed event outright.
-	// uuid.Parse's error text describes the shape only and never echoes the
-	// token value, so wrapping it does not leak the token into logs.
+	//
+	// uuid.Parse's error is deliberately NOT wrapped: for a 45-character input
+	// it formats as "invalid urn prefix: %q" over the value's first nine bytes
+	// (google/uuid uuid.go), so propagating it would echo part of the rejected
+	// token into the error and from there into logs. The shape of the failure
+	// carries no diagnostic value the fixed message below does not already
+	// give, so the value is dropped rather than masked.
 	if event.OwnerToken != "" {
 		if _, err := uuid.Parse(event.OwnerToken); err != nil {
-			return "", ScheduledTaskParams{}, fmt.Errorf("invalid owner_token in scheduled event: %w", err)
+			return "", ScheduledTaskParams{}, errors.New("invalid owner_token in scheduled event: not a UUID")
 		}
 	}
 

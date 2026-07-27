@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -454,6 +455,29 @@ func TestHandleSQSMessage(t *testing.T) {
 				testutil.AssertNoError(t, err)
 			}
 		})
+	}
+}
+
+// TestParseScheduledEvent_MalformedTokenNotEchoedInError pins that the
+// rejection error for a malformed owner_token never carries any of the
+// rejected value. The 45-character input below is the one shape where
+// uuid.Parse formats its error as "invalid urn prefix: %q" over the value's
+// first nine bytes (google/uuid uuid.go), so wrapping that error with %w
+// would echo "OWNERTOK-" into the error string and from there into the
+// Lambda logs. Asserting on a shorter malformed token would pass with the
+// bug present, because uuid.Parse reports those as a bare length/format
+// error that happens to contain nothing sensitive.
+func TestParseScheduledEvent_MalformedTokenNotEchoedInError(t *testing.T) {
+	// 45 characters, so uuid.Parse takes its urn-prefix branch.
+	const leakyToken = "OWNERTOK-6b1f2c34-5d6e-4a7b-8c9d-0e1f2a3b4c5d"
+	testutil.AssertEqual(t, 45, len(leakyToken))
+
+	_, _, err := ParseScheduledEvent([]byte(
+		`{"source": "aws.events", "action": "collect_recommendations", "owner_token": "` + leakyToken + `"}`))
+
+	testutil.AssertError(t, err)
+	if strings.Contains(err.Error(), leakyToken[:9]) {
+		t.Fatalf("rejection error must not echo the token value, got: %s", err.Error())
 	}
 }
 
