@@ -4,6 +4,7 @@ package azure
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -111,8 +112,13 @@ type AzureProvider struct {
 	// in-flight subscriptions.List: the ARM call runs once (not once per
 	// caller) and, crucially, outside accountsMu so a slow or hung lookup
 	// can never block readers of the cache.
+	// accountsGen is bumped by InvalidateAccountsCache. It keys the
+	// singleflight call and gates the cache write, so an ARM fetch that
+	// started before an invalidation can neither publish its stale snapshot
+	// nor be joined by a caller that arrived after it.
 	accountsMu     sync.RWMutex
 	cachedAccounts []common.Account
+	accountsGen    uint64
 	accountsSF     singleflight.Group
 
 	// cache subsystem implementation (getOrFetchAccounts, fetchAccounts,
@@ -440,15 +446,30 @@ func (p *AzureProvider) newServiceClientForSubscription(service common.ServiceTy
 //
 // When no subscription is pinned, GetRecommendationsClient discovers every
 // subscription accessible to the authenticated principal (via the cached
-// getOrFetchAccounts) and, when 2+ are visible, fans recommendation
-// collection out across all of them via
-// MultiSubscriptionRecommendationsClient. Azure has no organization-wide
-// equivalent of AWS Cost Explorer's AccountScope=Linked -- the Consumption
-// Reservation Recommendations and Advisor APIs are subscription-scoped -- so
-// this client-side fan-out is what brings Azure to parity with the AWS
-// provider's automatic whole-organization coverage. A single discovered
-// subscription still returns the plain single-subscription client; no
-// fan-out machinery is needed for one subscription.
+// getOrFetchAccounts) and then narrows in the same order the rest of the
+// provider does, so widening the scope is never a side effect of adding
+// fan-out:
+//
+//  1. A default subscription resolvable from the discovered list -- the
+//     AZURE_SUBSCRIPTION_ID environment variable, or a lone visible
+//     subscription (see resolveDefaultSubscription) -- still scopes the
+//     client to that single subscription. Env-pinned callers keep the exact
+//     scope they had before org-wide fan-out existed; broadening them to
+//     every visible subscription would leak other subscriptions' data into a
+//     request that named one.
+//  2. A configured AZURE_SUBSCRIPTION_ID that names a subscription this
+//     principal cannot see is an error, not a request for org-wide coverage.
+//  3. Only when NO subscription was named at all -- an ambiguous
+//     multi-subscription principal with nothing configured, which previously
+//     produced the hard "multiple Azure subscriptions found; set
+//     AzureSubscriptionID or AZURE_SUBSCRIPTION_ID" error -- does the fan-out
+//     engage via MultiSubscriptionRecommendationsClient.
+//
+// Azure has no organization-wide equivalent of AWS Cost Explorer's
+// AccountScope=Linked -- the Consumption Reservation Recommendations and
+// Advisor APIs are subscription-scoped -- so this client-side fan-out is what
+// brings Azure to parity with the AWS provider's automatic whole-organization
+// coverage.
 func (p *AzureProvider) GetRecommendationsClient(ctx context.Context) (provider.RecommendationsClient, error) {
 	if !p.IsConfigured() {
 		return nil, fmt.Errorf("azure provider is not configured")
@@ -465,10 +486,25 @@ func (p *AzureProvider) GetRecommendationsClient(ctx context.Context) (provider.
 	if len(accounts) == 0 {
 		return nil, fmt.Errorf("no Azure subscriptions found")
 	}
-	if len(accounts) == 1 {
-		return NewRecommendationsClient(p.cred, accounts[0].ID)
+	// Step 1: an explicitly resolvable default still wins. This also covers
+	// the single-discovered-subscription case, which resolveDefaultSubscription
+	// marks as the default.
+	if defaultID := getDefaultSubscriptionID(accounts); defaultID != "" {
+		return NewRecommendationsClient(p.cred, defaultID)
 	}
 
+	// A configured target that resolved to nothing means the caller named a
+	// subscription this principal cannot see. That is a misconfiguration, not
+	// a request for org-wide coverage: widening it to every visible
+	// subscription would answer a narrow question with other subscriptions'
+	// data. Fail loud, as this path did before fan-out existed.
+	if target := os.Getenv(azureSubscriptionIDEnv); target != "" {
+		return nil, fmt.Errorf(
+			"%s is set to %q, which is not among the %d subscriptions visible to this principal",
+			azureSubscriptionIDEnv, target, len(accounts))
+	}
+
+	// Step 2: scope is genuinely ambiguous -- fan out across the whole org.
 	client, err := NewMultiSubscriptionRecommendationsClient(p.cred, accounts)
 	if err != nil {
 		return nil, err

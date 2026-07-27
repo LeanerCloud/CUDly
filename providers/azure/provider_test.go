@@ -3,6 +3,7 @@ package azure
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -1283,7 +1284,18 @@ func twoSubscriptionPages() *mockSubscriptionsClient {
 	}
 }
 
+// clearAzureSubscriptionEnv neutralizes AZURE_SUBSCRIPTION_ID for the calling
+// test. resolveDefaultSubscription reads it via os.Getenv, so a developer or
+// CI runner with it exported would otherwise flip IsDefault on one of the
+// fixture subscriptions and change what the cache/fan-out tests observe --
+// failing them for a reason unrelated to the behavior they guard.
+func clearAzureSubscriptionEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("AZURE_SUBSCRIPTION_ID", "")
+}
+
 func TestAzureProvider_GetAccounts_CacheHit(t *testing.T) {
+	clearAzureSubscriptionEnv(t)
 	counting := &countingSubscriptionsClient{mockSubscriptionsClient: twoSubscriptionPages()}
 
 	p := &AzureProvider{cred: &mockTokenCredential{}}
@@ -1302,6 +1314,7 @@ func TestAzureProvider_GetAccounts_CacheHit(t *testing.T) {
 }
 
 func TestAzureProvider_GetAccounts_CacheHit_ReturnsIndependentCopies(t *testing.T) {
+	clearAzureSubscriptionEnv(t)
 	p := &AzureProvider{cred: &mockTokenCredential{}}
 	p.SetSubscriptionsClient(twoSubscriptionPages())
 
@@ -1315,6 +1328,7 @@ func TestAzureProvider_GetAccounts_CacheHit_ReturnsIndependentCopies(t *testing.
 }
 
 func TestAzureProvider_InvalidateAccountsCache(t *testing.T) {
+	clearAzureSubscriptionEnv(t)
 	counting := &countingSubscriptionsClient{mockSubscriptionsClient: twoSubscriptionPages()}
 
 	p := &AzureProvider{cred: &mockTokenCredential{}}
@@ -1369,6 +1383,7 @@ func (c *gatedCountingSubscriptionsClient) NewListLocationsPager(subscriptionID 
 // this test detects via the atomic counter. Run under -race to also catch any
 // unguarded shared-state access on the cold-cache path.
 func TestAzureProvider_GetAccounts_ConcurrentColdCache_SingleARMCall(t *testing.T) {
+	clearAzureSubscriptionEnv(t)
 	gated := &gatedCountingSubscriptionsClient{
 		inner:         twoSubscriptionPages(),
 		firstInFlight: make(chan struct{}),
@@ -1380,10 +1395,21 @@ func TestAzureProvider_GetAccounts_ConcurrentColdCache_SingleARMCall(t *testing.
 
 	const n = 10
 	var wg sync.WaitGroup
+	// followersReady counts down once per follower that has entered
+	// GetAccounts. Waiting on it before releasing the held fetch is what makes
+	// the assertion deterministic: with only a runtime.Gosched() nudge, a
+	// follower that had not yet reached the cold-cache path when the leader
+	// finished would find a warm cache and never issue its own ARM call --
+	// so a genuinely broken (no single-flight) implementation could still
+	// report exactly one call and pass.
+	var followersReady sync.WaitGroup
 	errs := make(chan error, n)
 	results := make(chan []common.Account, n)
-	worker := func() {
+	worker := func(signalReady bool) {
 		defer wg.Done()
+		if signalReady {
+			followersReady.Done()
+		}
 		accts, err := p.GetAccounts(context.Background())
 		errs <- err
 		results <- accts
@@ -1392,15 +1418,18 @@ func TestAzureProvider_GetAccounts_ConcurrentColdCache_SingleARMCall(t *testing.
 	// Launch the leader and wait until its ARM fetch is actually in-flight
 	// before launching the followers, so they observe a cold cache.
 	wg.Add(1)
-	go worker()
+	go worker(false)
 	<-gated.firstInFlight
 
+	followersReady.Add(n - 1)
 	for i := 1; i < n; i++ {
 		wg.Add(1)
-		go worker()
+		go worker(true)
 	}
-	// Nudge the followers onto the cache/single-flight path, then release the
-	// held fetch so everything can complete.
+	// Wait until every follower goroutine is running and about to call
+	// GetAccounts, then give the scheduler a chance to drive them into the
+	// single-flight path before releasing the held fetch.
+	followersReady.Wait()
 	for i := 0; i < n; i++ {
 		runtime.Gosched()
 	}
@@ -1421,7 +1450,126 @@ func TestAzureProvider_GetAccounts_ConcurrentColdCache_SingleARMCall(t *testing.
 		"concurrent cold-cache GetAccounts must issue exactly one ARM list call (single-flight)")
 }
 
+// gatedGenerationSubscriptionsClient holds its first ARM list call open (like
+// gatedCountingSubscriptionsClient) but serves a DIFFERENT subscription on
+// each call, so a test can tell a re-fetched result apart from a resurrected
+// pre-invalidation snapshot.
+type gatedGenerationSubscriptionsClient struct {
+	calls         atomic.Int64
+	firstOnce     sync.Once
+	firstInFlight chan struct{}
+	release       chan struct{}
+}
+
+func (c *gatedGenerationSubscriptionsClient) NewListPager(_ *armsubscriptions.ClientListOptions) SubscriptionsPager {
+	n := c.calls.Add(1)
+	c.firstOnce.Do(func() {
+		close(c.firstInFlight)
+		<-c.release
+	})
+	id := fmt.Sprintf("sub-gen-%d", n)
+	name := fmt.Sprintf("Subscription generation %d", n)
+	return &mockSubscriptionsPager{
+		pages: []armsubscriptions.ClientListResponse{
+			{SubscriptionListResult: armsubscriptions.SubscriptionListResult{
+				Value: []*armsubscriptions.Subscription{{SubscriptionID: &id, DisplayName: &name}},
+			}},
+		},
+	}
+}
+
+func (c *gatedGenerationSubscriptionsClient) NewListLocationsPager(_ string, _ *armsubscriptions.ClientListLocationsOptions) LocationsPager {
+	return nil
+}
+
+// TestAzureProvider_InvalidateAccountsCache_DuringInFlightFetch guards the
+// cache-generation check.
+//
+// Interleaving: a fetch is in flight (holding the pre-invalidation snapshot)
+// when InvalidateAccountsCache lands. Without the generation gate the
+// in-flight fetch publishes its now-stale snapshot after the invalidation, so
+// the next read is served from cache and the caller is handed back exactly
+// the data it asked to discard -- silently, with no second ARM call.
+func TestAzureProvider_InvalidateAccountsCache_DuringInFlightFetch(t *testing.T) {
+	clearAzureSubscriptionEnv(t)
+	gated := &gatedGenerationSubscriptionsClient{
+		firstInFlight: make(chan struct{}),
+		release:       make(chan struct{}),
+	}
+
+	p := &AzureProvider{cred: &mockTokenCredential{}}
+	p.SetSubscriptionsClient(gated)
+
+	type fetchResult struct {
+		accounts []common.Account
+		err      error
+	}
+	done := make(chan fetchResult, 1)
+	go func() {
+		accts, err := p.GetAccounts(context.Background())
+		done <- fetchResult{accounts: accts, err: err}
+	}()
+
+	// The first fetch is now blocked inside the ARM call, holding generation-1
+	// data. Invalidate while it is still in flight.
+	<-gated.firstInFlight
+	p.InvalidateAccountsCache()
+	close(gated.release)
+
+	first := <-done
+	require.NoError(t, first.err)
+	require.Len(t, first.accounts, 1)
+	assert.Equal(t, "sub-gen-1", first.accounts[0].ID)
+
+	// The invalidated snapshot must not have been published: this read has to
+	// re-hit ARM and observe the current subscription list.
+	second, err := p.GetAccounts(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), gated.calls.Load(),
+		"a fetch that started before InvalidateAccountsCache must not populate the cache")
+	require.Len(t, second, 1)
+	assert.Equal(t, "sub-gen-2", second[0].ID,
+		"read after invalidation must see fresh data, not the resurrected pre-invalidation snapshot")
+}
+
 func TestAzureProvider_GetRecommendationsClient_MultiSubscriptionFanOut(t *testing.T) {
+	clearAzureSubscriptionEnv(t)
+
+	// Regression guard for the scoping rule: fan-out must be the fallback for
+	// an ambiguous principal, never an upgrade applied to a caller that
+	// already named its subscription. A principal that can see sub-1 and
+	// sub-2 but pinned sub-2 via AZURE_SUBSCRIPTION_ID must keep getting
+	// sub-2 only; returning the fan-out client here would hand that caller
+	// sub-1's recommendations too.
+	t.Run("AZURE_SUBSCRIPTION_ID still scopes to one subscription", func(t *testing.T) {
+		t.Setenv("AZURE_SUBSCRIPTION_ID", "sub-2")
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(twoSubscriptionPages())
+
+		client, err := p.GetRecommendationsClient(context.Background())
+		require.NoError(t, err)
+		require.IsType(t, &RecommendationsClientAdapter{}, client,
+			"an env-pinned subscription must not be widened to an org-wide fan-out")
+		assert.Equal(t, "sub-2", client.(*RecommendationsClientAdapter).subscriptionID)
+	})
+
+	// A configured AZURE_SUBSCRIPTION_ID that names a subscription this
+	// principal cannot see is a misconfiguration. Answering it with an
+	// org-wide fan-out would hand the caller every OTHER subscription's data
+	// in response to a request that named one, so this must stay the hard
+	// error it was before fan-out existed.
+	t.Run("AZURE_SUBSCRIPTION_ID naming an invisible subscription errors", func(t *testing.T) {
+		t.Setenv("AZURE_SUBSCRIPTION_ID", "sub-not-visible")
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(twoSubscriptionPages())
+
+		client, err := p.GetRecommendationsClient(context.Background())
+		require.Error(t, err, "an unresolvable explicit subscription must not silently widen to org-wide fan-out")
+		assert.Nil(t, client)
+		assert.Contains(t, err.Error(), "sub-not-visible")
+		assert.Contains(t, err.Error(), "not among the 2 subscriptions visible")
+	})
+
 	t.Run("multi-subscription returns MultiSubscriptionRecommendationsClient", func(t *testing.T) {
 		p := &AzureProvider{cred: &mockTokenCredential{}}
 		p.SetSubscriptionsClient(twoSubscriptionPages())

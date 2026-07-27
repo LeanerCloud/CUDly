@@ -33,8 +33,9 @@ type subscriptionClient struct {
 }
 
 // MultiSubscriptionRecommendationsClient fans recommendation collection out
-// across every Azure subscription accessible to the authenticated
-// principal.
+// across the Azure subscriptions accessible to the authenticated principal --
+// every one of them by default, or the subset named by
+// RecommendationParams.AccountFilter (see selectSubscriptions).
 //
 // Azure has no organization-wide equivalent of AWS Cost Explorer's
 // AccountScope=Linked: the Consumption Reservation Recommendations and
@@ -68,8 +69,10 @@ func NewMultiSubscriptionRecommendationsClient(cred azcore.TokenCredential, acco
 	return &MultiSubscriptionRecommendationsClient{subscriptions: subscriptions}, nil
 }
 
-// GetRecommendations fans params out to every subscription concurrently
-// (errgroup) and merges the results.
+// GetRecommendations fans params out concurrently (errgroup) to the
+// subscriptions selected by selectSubscriptions -- every accessible
+// subscription unless params.AccountFilter narrows it -- and merges the
+// results.
 //
 // Error isolation mirrors RecommendationsClientAdapter.GetRecommendations:
 // each per-subscription goroutine captures its own error and returns nil to
@@ -94,11 +97,16 @@ func (m *MultiSubscriptionRecommendationsClient) GetRecommendations(ctx context.
 		return nil, fmt.Errorf("params cannot be nil")
 	}
 
-	results := make([][]common.Recommendation, len(m.subscriptions))
-	errs := make([]error, len(m.subscriptions))
+	targets, err := m.selectSubscriptions(params.AccountFilter)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([][]common.Recommendation, len(targets))
+	errs := make([]error, len(targets))
 
 	g, gctx := errgroup.WithContext(ctx)
-	for i, sub := range m.subscriptions {
+	for i, sub := range targets {
 		i, sub := i, sub
 		g.Go(func() error {
 			recs, err := sub.client.GetRecommendations(gctx, params)
@@ -119,13 +127,57 @@ func (m *MultiSubscriptionRecommendationsClient) GetRecommendations(ctx context.
 		return nil, err
 	}
 
-	return m.mergeResults(results, errs)
+	return mergeSubscriptionResults(targets, results, errs)
 }
 
-// mergeResults concatenates successful per-subscription results, logging a
-// warning for each subscription that failed, and applies the
+// selectSubscriptions narrows the fan-out to params.AccountFilter.
+//
+// AccountFilter is a scoping control, not a display convenience: the AWS
+// provider applies it to every recommendation it returns (filterByAccounts in
+// providers/aws/service_client.go), so a caller that scopes a request to a
+// subset of accounts must not be handed another account's data by the Azure
+// path either. Before org-wide fan-out existed this was moot -- a
+// subscription-scoped client could only ever return its own subscription --
+// but a client covering every visible subscription has to honour the filter
+// or it silently widens the caller's scope.
+//
+// Filtering BEFORE the fan-out (rather than discarding rows afterwards, as
+// AWS does) also avoids issuing ARM calls against subscriptions the caller
+// never asked about.
+//
+// An empty filter means "every visible subscription" -- the org-wide default
+// this client exists to provide. A non-empty filter that matches nothing is
+// an error rather than an empty result: returning zero recommendations would
+// be indistinguishable from "these subscriptions have no savings available".
+func (m *MultiSubscriptionRecommendationsClient) selectSubscriptions(filter []string) ([]subscriptionClient, error) {
+	if len(filter) == 0 {
+		return m.subscriptions, nil
+	}
+
+	wanted := make(map[string]struct{}, len(filter))
+	for _, id := range filter {
+		wanted[id] = struct{}{}
+	}
+
+	selected := make([]subscriptionClient, 0, len(m.subscriptions))
+	for _, sub := range m.subscriptions {
+		if _, ok := wanted[sub.subscriptionID]; ok {
+			selected = append(selected, sub)
+		}
+	}
+	if len(selected) == 0 {
+		return nil, fmt.Errorf(
+			"azure multi-subscription recommendations: account filter %v matches none of the %d accessible subscriptions",
+			filter, len(m.subscriptions))
+	}
+	return selected, nil
+}
+
+// mergeSubscriptionResults concatenates successful per-subscription results,
+// logging a warning for each subscription that failed, and applies the
 // all-attempted-failed guard described in GetRecommendations' doc comment.
-func (m *MultiSubscriptionRecommendationsClient) mergeResults(results [][]common.Recommendation, errs []error) ([]common.Recommendation, error) {
+// subs, results and errs are index-aligned.
+func mergeSubscriptionResults(subs []subscriptionClient, results [][]common.Recommendation, errs []error) ([]common.Recommendation, error) {
 	total := 0
 	for _, r := range results {
 		total += len(r)
@@ -138,13 +190,13 @@ func (m *MultiSubscriptionRecommendationsClient) mergeResults(results [][]common
 		if err != nil {
 			failures++
 			lastErr = err
-			logging.Warnf("Azure subscription %s recommendations: %v", m.subscriptions[i].subscriptionID, err)
+			logging.Warnf("Azure subscription %s recommendations: %v", subs[i].subscriptionID, err)
 			continue
 		}
 		out = append(out, results[i]...)
 	}
 
-	if failures > 0 && failures == len(m.subscriptions) {
+	if failures > 0 && failures == len(subs) {
 		return nil, fmt.Errorf("all %d Azure subscriptions failed to return recommendations: %w", failures, lastErr)
 	}
 	return out, nil
