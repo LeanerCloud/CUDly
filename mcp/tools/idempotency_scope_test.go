@@ -58,15 +58,26 @@ func TestAccountLevelSavingsPlanRegionCannotForkIdempotencyToken(t *testing.T) {
 // reach both the resolved region and the token. Without this, pinning the
 // account-level region for every plan type would silently buy an EC2Instance
 // plan in the wrong region.
+//
+// The token assertion is the load-bearing one. Checking only rec.Region and
+// details.Region would leave the claim "the token is region-scoped" untested,
+// so a future change that canonicalized region for EC2Instance too would keep
+// those field assertions green while collapsing two genuinely different
+// purchases (m5 in eu-west-1 vs m5 in us-east-1) onto one token -- at which
+// point the second, legitimately distinct purchase would dedupe away and
+// never happen.
 func TestEC2InstanceSavingsPlanStillHonorsRegion(t *testing.T) {
 	t.Parallel()
 
-	args := validSavingsPlansArgs()
-	args.SPType = string(SPTypeEC2Instance)
-	args.InstanceFamily = "m5"
-	args.Region = "eu-west-1"
+	ec2InstanceArgs := func(region string) savingsPlansPurchaseArgs {
+		args := validSavingsPlansArgs()
+		args.SPType = string(SPTypeEC2Instance)
+		args.InstanceFamily = "m5"
+		args.Region = region
+		return args
+	}
 
-	rec, region, _, _, err := savingsPlanRecommendationFromArgs(args)
+	rec, region, _, _, err := savingsPlanRecommendationFromArgs(ec2InstanceArgs("eu-west-1"))
 	require.NoError(t, err)
 	assert.Equal(t, "eu-west-1", region)
 	assert.Equal(t, "eu-west-1", rec.Region)
@@ -74,6 +85,16 @@ func TestEC2InstanceSavingsPlanStillHonorsRegion(t *testing.T) {
 	details, ok := rec.Details.(*common.SavingsPlanDetails)
 	require.True(t, ok)
 	assert.Equal(t, "eu-west-1", details.Region)
+
+	otherRec, otherRegion, _, _, err := savingsPlanRecommendationFromArgs(ec2InstanceArgs("us-east-1"))
+	require.NoError(t, err)
+	assert.Equal(t, "us-east-1", otherRegion)
+
+	scope := CredentialScope(validSavingsPlansArgs().AWSProfile, "AWS_PROFILE")
+	assert.NotEqual(t,
+		idempotencyKeyFor(region, rec, scope, ""),
+		idempotencyKeyFor(otherRegion, otherRec, scope, ""),
+		"an EC2Instance plan is region-scoped, so two regions must derive DIFFERENT tokens -- collapsing them would dedupe away a legitimately distinct purchase")
 }
 
 // TestResolveClientTrimsCredentialScope is the regression guard for the
