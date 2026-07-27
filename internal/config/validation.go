@@ -100,8 +100,10 @@ func validPaymentOptionsFor(provider string) []string {
 //     normalized payment option drives the upfront-vs-monthly cost split in
 //     providers/azure/services/compute/client.go's GetOfferingDetails
 //     (the PaymentOption switch that allocates upfrontCost vs
-//     recurringCost), not a billingPlan request field; landing on monthly
-//     keeps the rec on the default schedule instead.
+//     recurringCost); the reservation-purchase billingPlan wiring being
+//     added in #1495/#1502 likewise maps only upfront/monthly tokens and
+//     hard-errors on partial-upfront, so landing on monthly keeps the rec
+//     on the default schedule instead.
 //   - GCP  : all-upfront → monthly, no-upfront → monthly,
 //     partial-upfront → monthly, upfront → monthly (GCP CUDs are
 //     inherently monthly-billed — every non-monthly token collapses to the
@@ -162,8 +164,10 @@ func crossProviderPaymentAlias(provider, raw string) (string, bool) {
 		// the web/API path's normalized payment option drives the
 		// upfront-vs-monthly cost split in
 		// providers/azure/services/compute/client.go's
-		// GetOfferingDetails (the PaymentOption switch), not a
-		// billingPlan request field.
+		// GetOfferingDetails (the PaymentOption switch), and the
+		// reservation-purchase billingPlan wiring being added in
+		// #1495/#1502 hard-errors on partial-upfront, so only the
+		// canonical upfront/monthly tokens survive to the purchase body.
 		switch raw {
 		case "all-upfront":
 			return "upfront", true
