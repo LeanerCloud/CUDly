@@ -263,13 +263,25 @@ func isTerminalCtxErr(err error) bool {
 }
 
 // checkCalculateExchangeResult validates that the raw LRO result represents
-// a genuinely priced exchange -- no operation-level failure, and a
-// non-empty SessionID actually present -- before the caller extracts a
-// preview from it. A nil-Properties or empty-SessionID response is an
-// explicit error rather than a fabricated empty preview.
+// a genuinely priced exchange -- no operation-level failure, a terminal
+// status of Succeeded, and a non-empty SessionID actually present -- before
+// the caller extracts a preview from it. A nil-Properties or
+// empty-SessionID response is an explicit error rather than a fabricated
+// empty preview.
+//
+// The Status check is not redundant with the Error check. Azure's contract
+// documents Error as "required if status == failed or status == canceled",
+// but a response that violates that contract (Failed/Cancelled with a nil
+// Error) would otherwise yield a preview the execute handler immediately
+// commits. Status is only asserted when Azure populated it: an absent
+// status leaves the SessionID check as the guard, rather than inventing a
+// failure Azure never reported.
 func checkCalculateExchangeResult(result armreservations.CalculateExchangeOperationResultResponse) (armreservations.CalculateExchangeResponseProperties, error) {
 	if result.Error != nil {
 		return armreservations.CalculateExchangeResponseProperties{}, fmt.Errorf("azure: CalculateExchange operation failed: %s", operationErrorMessage(result.Error))
+	}
+	if result.Status != nil && *result.Status != armreservations.CalculateExchangeOperationResultStatusSucceeded {
+		return armreservations.CalculateExchangeResponseProperties{}, fmt.Errorf("azure: CalculateExchange did not succeed: terminal status %q", string(*result.Status))
 	}
 	if result.Properties == nil || result.Properties.SessionID == nil || *result.Properties.SessionID == "" {
 		return armreservations.CalculateExchangeResponseProperties{}, fmt.Errorf("azure: CalculateExchange returned no session id")
@@ -303,6 +315,11 @@ func (c *ComputeClient) ExecuteExchange(ctx context.Context, sessionID string) (
 	if result.Error != nil {
 		return nil, fmt.Errorf("azure: ExecuteExchange operation failed: %s", operationErrorMessage(result.Error))
 	}
+	if result.Status != nil && !exchangeStatusAccepted(*result.Status) {
+		return nil, fmt.Errorf(
+			"azure: ExecuteExchange returned terminal status %q with no error detail; verify the reservation state in the Azure portal before retrying",
+			string(*result.Status))
+	}
 	if result.Properties == nil {
 		return nil, fmt.Errorf("azure: ExecuteExchange returned no properties")
 	}
@@ -316,6 +333,27 @@ func (c *ComputeClient) ExecuteExchange(ctx context.Context, sessionID string) (
 }
 
 // --- internal helpers ---
+
+// exchangeStatusAccepted reports whether an ExchangeOperationResultStatus
+// means Azure accepted and is carrying out the exchange. Succeeded is fully
+// settled; PendingRefunds/PendingPurchases mean the swap was committed and
+// Azure is still settling one leg, which the caller surfaces as-is.
+//
+// Everything else -- Failed, Cancelled, and any status a future API version
+// adds that this SDK does not know -- is refused rather than reported as a
+// successful exchange. An unrecognized status after a commit attempt is
+// genuinely ambiguous, so the error tells the operator to check the portal
+// instead of blindly retrying into a possible double exchange.
+func exchangeStatusAccepted(s armreservations.ExchangeOperationResultStatus) bool {
+	switch s {
+	case armreservations.ExchangeOperationResultStatusSucceeded,
+		armreservations.ExchangeOperationResultStatusPendingPurchases,
+		armreservations.ExchangeOperationResultStatusPendingRefunds:
+		return true
+	default:
+		return false
+	}
+}
 
 // operationErrorMessage extracts a human-readable message from an Azure LRO
 // error result, falling back to a generic label when Azure omits the message

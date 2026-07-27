@@ -195,6 +195,37 @@ func TestCalculateExchange_EmptySessionIDError(t *testing.T) {
 	assert.Contains(t, err.Error(), "no session id")
 }
 
+// TestCalculateExchange_NonSucceededStatusIsRefused pins the same invariant
+// on the quote side. A Failed/Cancelled quote that still carries a
+// SessionID would otherwise be handed to executeAzureExchange, which
+// commits whatever session its fresh quote returned.
+func TestCalculateExchange_NonSucceededStatusIsRefused(t *testing.T) {
+	for _, status := range []armreservations.CalculateExchangeOperationResultStatus{
+		armreservations.CalculateExchangeOperationResultStatusFailed,
+		armreservations.CalculateExchangeOperationResultStatusCancelled,
+		armreservations.CalculateExchangeOperationResultStatusPending,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			c := compute.NewClient(nil, "sub-1", "")
+			c.SetCalculateExchangeCaller(func(_ context.Context, _ armreservations.CalculateExchangeRequest) (armreservations.CalculateExchangeOperationResultResponse, error) {
+				return armreservations.CalculateExchangeOperationResultResponse{
+					Status: to.Ptr(status),
+					Properties: &armreservations.CalculateExchangeResponseProperties{
+						SessionID: to.Ptr("session-abc"),
+					},
+				}, nil
+			})
+
+			preview, _, err := c.CalculateExchange(context.Background(),
+				[]compute.ExchangeableReservation{validSource()},
+				[]compute.ExchangeTarget{validTarget()})
+			require.Error(t, err, "a %s quote must not yield an executable preview", status)
+			assert.Contains(t, err.Error(), string(status))
+			assert.Nil(t, preview)
+		})
+	}
+}
+
 func TestCalculateExchange_OperationError(t *testing.T) {
 	c := compute.NewClient(nil, "sub-1", "")
 	c.SetCalculateExchangeCaller(func(_ context.Context, _ armreservations.CalculateExchangeRequest) (armreservations.CalculateExchangeOperationResultResponse, error) {
@@ -354,6 +385,61 @@ func TestExecuteExchange_OperationError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "session expired")
 	assert.Nil(t, res)
+}
+
+// TestExecuteExchange_FailedStatusWithoutErrorIsRefused pins the money-path
+// invariant that a non-accepted terminal status is an error even when Azure
+// violates its own contract and omits the Error field ("required if status
+// == failed or status == canceled"). Without the status check the handler
+// returns HTTP 200 with status "Failed" and logs "exchange executed",
+// telling the caller a failed exchange succeeded.
+func TestExecuteExchange_FailedStatusWithoutErrorIsRefused(t *testing.T) {
+	for _, status := range []armreservations.ExchangeOperationResultStatus{
+		armreservations.ExchangeOperationResultStatusFailed,
+		armreservations.ExchangeOperationResultStatusCancelled,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			c := compute.NewClient(nil, "sub-1", "")
+			c.SetDoExchangeCaller(func(_ context.Context, _ string) (armreservations.ExchangeOperationResultResponse, error) {
+				return armreservations.ExchangeOperationResultResponse{
+					Status: to.Ptr(status),
+					Properties: &armreservations.ExchangeResponseProperties{
+						NetPayable: &armreservations.Price{Amount: to.Ptr(0.0), CurrencyCode: to.Ptr("USD")},
+					},
+				}, nil
+			})
+
+			res, err := c.ExecuteExchange(context.Background(), "session-abc")
+			require.Error(t, err, "a %s exchange must not be reported as a success", status)
+			assert.Contains(t, err.Error(), string(status))
+			assert.Nil(t, res)
+		})
+	}
+}
+
+// TestExecuteExchange_PendingStatusesAccepted guards the other side of the
+// allow-list: PendingPurchases/PendingRefunds mean Azure committed the swap
+// and is still settling one leg, so they must NOT be turned into errors.
+func TestExecuteExchange_PendingStatusesAccepted(t *testing.T) {
+	for _, status := range []armreservations.ExchangeOperationResultStatus{
+		armreservations.ExchangeOperationResultStatusPendingPurchases,
+		armreservations.ExchangeOperationResultStatusPendingRefunds,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			c := compute.NewClient(nil, "sub-1", "")
+			c.SetDoExchangeCaller(func(_ context.Context, _ string) (armreservations.ExchangeOperationResultResponse, error) {
+				return armreservations.ExchangeOperationResultResponse{
+					Status:     to.Ptr(status),
+					Properties: &armreservations.ExchangeResponseProperties{},
+				}, nil
+			})
+
+			res, err := c.ExecuteExchange(context.Background(), "session-abc")
+			require.NoError(t, err)
+			require.NotNil(t, res)
+			assert.Equal(t, string(status), res.Status)
+		})
+	}
 }
 
 func TestExecuteExchange_CtxCancelPassthrough(t *testing.T) {
