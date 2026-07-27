@@ -357,6 +357,26 @@ export interface DeploymentInfo {
 }
 
 // Purchase types
+
+/**
+ * PaymentAdjustment is one payment-option coercion notice returned by the
+ * purchase-execute endpoint (#1503 follow-up). Mirrors the backend
+ * PaymentAdjustment struct (internal/api/validation.go) field for field.
+ *
+ * Named (rather than inlined into PurchaseResult) so the presentation helper
+ * that turns these into user-facing copy
+ * (commitmentOptions.ts:formatPaymentAdjustmentNotice) can be typed and unit
+ * tested against the same shape the API actually returns.
+ */
+export interface PaymentAdjustment {
+  rec_index: number;
+  provider: string;
+  service: string;
+  requested_payment_option: string;
+  applied_payment_option: string;
+  reason: string;
+}
+
 export interface PurchaseResult {
   execution_id: string;
   status: string;
@@ -384,16 +404,8 @@ export interface PurchaseResult {
   // each entry names what was requested, what was actually applied, and why,
   // so the UI can tell the user instead of silently changing the billing
   // schedule. Absent (never an empty array) when every option was already
-  // canonical. Mirrors the backend PaymentAdjustment struct
-  // (internal/api/validation.go).
-  payment_adjustments?: Array<{
-    rec_index: number;
-    provider: string;
-    service: string;
-    requested_payment_option: string;
-    applied_payment_option: string;
-    reason: string;
-  }>;
+  // canonical.
+  payment_adjustments?: PaymentAdjustment[];
   results?: Array<{
     recommendation_id: string;
     status: string;

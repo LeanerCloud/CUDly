@@ -16,6 +16,7 @@ import { loadHistory, setupHistoryHandlers } from './history';
 import { initSavingsHistory } from './modules/savings-history';
 import { setupRIExchangeHandlers, saveAutomationSettings } from './riexchange';
 import { showToast } from './toast';
+import { formatPaymentAdjustmentNotice } from './commitmentOptions';
 import { confirmDialog } from './confirmDialog';
 import { handlePurchaseDeeplink } from './purchases-deeplink';
 import { handleArcheraDeeplink, openArcheraOfferModal } from './archera';
@@ -438,6 +439,16 @@ async function handleExecutePurchase(): Promise<void> {
         timeout: 10_000,
       });
     }
+    // Disclose any payment-option coercion the backend applied (#1503). This
+    // is a SEPARATE, non-expiring warning toast rather than an addition to the
+    // success copy above: the billing schedule changing is the one thing the
+    // user did not ask for, and on Azure it cannot be changed after purchase,
+    // so it must not scroll away inside a success message.
+    const paymentNotice = formatPaymentAdjustmentNotice(result.payment_adjustments);
+    if (paymentNotice) {
+      showToast({ message: paymentNotice, kind: 'warning', timeout: null });
+    }
+
     // Offer Archera Insurance immediately after the user approves the
     // pre-purchase confirmation and the approval-submission call succeeds
     // (issue #499 follow-up). Firing here, rather than after the async
@@ -549,6 +560,18 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
   closePurchaseModal();
   clearFanOutBuckets();
   clearPurchaseModalRecommendations();
+
+  // Disclose payment-option coercions across every bucket that reached the
+  // backend (#1503). Collected from all fulfilled responses, not just the
+  // truly-succeeded ones: a bucket whose approval email failed to send still
+  // created a pending execution carrying the coerced billing schedule, so the
+  // user needs to know before they approve it from History.
+  const fanOutNotice = formatPaymentAdjustmentNotice(
+    fulfilled.flatMap((r) => r.value.payment_adjustments ?? []),
+  );
+  if (fanOutNotice) {
+    showToast({ message: fanOutNotice, kind: 'warning', timeout: null });
+  }
 
   if (failed === 0) {
     // Collect the unique approval-recipient set from truly-succeeded responses

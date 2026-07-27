@@ -5,6 +5,8 @@
  * for each cloud provider and service combination.
  */
 
+import type { PaymentAdjustment } from './api/types';
+
 export interface PaymentOption {
   value: string;
   label: string;
@@ -325,4 +327,53 @@ export function normalizePaymentValue(value: string, provider: string): string {
     return 'monthly';
   }
   return value;
+}
+
+/**
+ * Turn the backend's payment-option coercion notices into one line of
+ * user-facing copy, or null when there is nothing to disclose.
+ *
+ * Why this exists (#1503): the backend does not reject a payment option that
+ * the target provider cannot express (e.g. Azure has exactly two billing
+ * plans, Upfront and Monthly, so an inherited AWS-style 'partial-upfront'
+ * token has nowhere to land). It coerces to the closest supported schedule
+ * and reports the change in `payment_adjustments`. Coercing is only
+ * defensible if the user is actually told, so every purchase-submit path
+ * MUST render this notice -- otherwise the user's billing schedule changes
+ * behind their back, which is exactly the failure #1503 reported.
+ *
+ * The applied value, not the requested one, is what the purchase carries;
+ * the copy leads with that because it is the fact the user has to act on.
+ * Azure's billing plan cannot be changed after purchase.
+ */
+export function formatPaymentAdjustmentNotice(
+  adjustments: PaymentAdjustment[] | undefined,
+): string | null {
+  if (!adjustments || adjustments.length === 0) return null;
+
+  const only = adjustments.length === 1 ? adjustments[0] : undefined;
+  if (only) {
+    return (
+      `Billing schedule adjusted: ${only.provider.toUpperCase()} ${only.service} does not offer ` +
+      `"${getPaymentLabel(only.requested_payment_option)}", so this purchase was applied as ` +
+      `"${getPaymentLabel(only.applied_payment_option)}".`
+    );
+  }
+
+  // Multiple recs: collapse to the distinct requested -> applied pairs so the
+  // toast stays short when a whole batch inherited the same legacy token,
+  // while still naming every distinct change that was made.
+  const pairs = [
+    ...new Set(
+      adjustments.map(
+        a =>
+          `"${getPaymentLabel(a.requested_payment_option)}" applied as ` +
+          `"${getPaymentLabel(a.applied_payment_option)}"`,
+      ),
+    ),
+  ];
+  return (
+    `Billing schedule adjusted on ${adjustments.length} recommendations ` +
+    `(unsupported payment option for the target provider): ${pairs.join('; ')}.`
+  );
 }
