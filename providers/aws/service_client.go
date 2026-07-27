@@ -142,8 +142,8 @@ func filterByAccounts(recs []common.Recommendation, accounts []string) []common.
 // EC2Instance SP recs on their real region instead of dropping them via an
 // always-empty top-level Region. Compute/SageMaker/Database SP recs are
 // genuinely region-agnostic (Details.Region stays "" for them), so this
-// still returns "" for those and callers must treat "" as "keep, do not
-// filter" rather than "belongs to no region" (see #1495).
+// still returns "" for those, and isRegionAgnostic is what decides that such
+// a rec is exempt from region filtering (see #1495).
 func effectiveRegion(rec common.Recommendation) string {
 	if rec.Region != "" {
 		return rec.Region
@@ -154,21 +154,55 @@ func effectiveRegion(rec common.Recommendation) string {
 	return ""
 }
 
-// filterByIncludedRegions filters recommendations to only included regions.
-// A recommendation whose effective region is empty is region-agnostic
-// (account-level Savings Plans recs -- see effectiveRegion) and is always
-// kept: an include filter narrows region-scoped recs, it must not silently
-// drop recs that carry no region at all.
-func filterByIncludedRegions(recs []common.Recommendation, regions []string) []common.Recommendation {
-	regionMap := make(map[string]bool)
+// isRegionAgnostic reports whether rec legitimately belongs to no single
+// region and must therefore be exempt from both region filters: an
+// account-level Savings Plan (Compute/SageMaker/Database), which
+// GetSavingsPlansPurchaseRecommendation returns without any region because
+// the plan applies account-wide.
+//
+// The CommitmentSavingsPlan check is load-bearing, not decorative. An empty
+// effective region is NOT by itself proof that a rec is region-agnostic:
+// every reservation parser in parser_services.go writes rec.Region only
+// under `if <svc>Details.Region != nil`, so an EC2/RDS/ElastiCache/
+// OpenSearch/Redshift/MemoryDB rec whose Cost Explorer payload omitted the
+// region field lands here with Region == "" while still being a
+// single-region purchase. Treating those as region-agnostic would let a rec
+// of unknown region survive an explicit "us-east-1 only" filter and be
+// bought in whatever region the service client happens to resolve. A
+// reservation rec with no region is dropped by an include filter (its region
+// cannot be shown to match) and kept by an exclude filter (it cannot be
+// shown to be excluded) -- the same conservative direction each filter had
+// before Savings Plans support was added.
+func isRegionAgnostic(rec common.Recommendation) bool {
+	return rec.CommitmentType == common.CommitmentSavingsPlan && effectiveRegion(rec) == ""
+}
+
+// regionSet builds the lookup set for a region filter, skipping blank
+// entries. A caller-supplied "" (or a whitespace-only value trimmed to "")
+// must never become a matching key: it matches no real region code, and
+// without this it would make the exclude filter drop every region-agnostic
+// rec via a key that was never a region in the first place.
+func regionSet(regions []string) map[string]bool {
+	set := make(map[string]bool, len(regions))
 	for _, region := range regions {
-		regionMap[region] = true
+		if region == "" {
+			continue
+		}
+		set[region] = true
 	}
+	return set
+}
+
+// filterByIncludedRegions filters recommendations to only included regions.
+// Region-agnostic recommendations (account-level Savings Plans -- see
+// isRegionAgnostic) are always kept: an include filter narrows region-scoped
+// recs, it must not silently drop recs that belong to no region at all.
+func filterByIncludedRegions(recs []common.Recommendation, regions []string) []common.Recommendation {
+	regionMap := regionSet(regions)
 
 	filtered := make([]common.Recommendation, 0, len(recs))
 	for _, rec := range recs {
-		effRegion := effectiveRegion(rec)
-		if effRegion == "" || regionMap[effRegion] {
+		if isRegionAgnostic(rec) || regionMap[effectiveRegion(rec)] {
 			filtered = append(filtered, rec)
 		}
 	}
@@ -177,19 +211,15 @@ func filterByIncludedRegions(recs []common.Recommendation, regions []string) []c
 }
 
 // filterByExcludedRegions filters out recommendations from excluded regions.
-// A recommendation with an empty effective region (region-agnostic,
-// account-level Savings Plans recs -- see effectiveRegion) is never
-// excluded: it does not belong to any of the excluded regions.
+// Region-agnostic recommendations (account-level Savings Plans -- see
+// isRegionAgnostic) are never excluded: they do not belong to any of the
+// excluded regions.
 func filterByExcludedRegions(recs []common.Recommendation, regions []string) []common.Recommendation {
-	regionMap := make(map[string]bool)
-	for _, region := range regions {
-		regionMap[region] = true
-	}
+	regionMap := regionSet(regions)
 
 	filtered := make([]common.Recommendation, 0, len(recs))
 	for _, rec := range recs {
-		effRegion := effectiveRegion(rec)
-		if effRegion == "" || !regionMap[effRegion] {
+		if isRegionAgnostic(rec) || !regionMap[effectiveRegion(rec)] {
 			filtered = append(filtered, rec)
 		}
 	}

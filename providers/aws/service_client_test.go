@@ -396,3 +396,76 @@ func TestApplyRecommendationFilters_SavingsPlanRegion(t *testing.T) {
 		require.Len(t, got, 2)
 	})
 }
+
+// TestApplyRecommendationFilters_RegionlessReservationNotExempt is the
+// regression guard for the over-broad exemption found reviewing #1495. The
+// Savings Plans fix above needs region-agnostic recs to survive a region
+// filter, but keying that exemption on "effective region is empty" alone
+// swept in reservation recs too: every parser in parser_services.go writes
+// rec.Region only under `if <svc>Details.Region != nil`, so an EC2/RDS/etc
+// rec whose Cost Explorer payload omitted the region field carries Region ==
+// "" while still being a single-region purchase.
+//
+// Exempting those let a recommendation of unknown region survive an explicit
+// "us-east-1 only" filter and reach the purchase path, to be bought in
+// whatever region the service client resolved. This test fails on the
+// empty-region-means-agnostic version and passes with the
+// CommitmentSavingsPlan-gated isRegionAgnostic.
+func TestApplyRecommendationFilters_RegionlessReservationNotExempt(t *testing.T) {
+	regionlessRI := common.Recommendation{
+		Account:        "111",
+		Region:         "",
+		CommitmentType: common.CommitmentReservedInstance,
+		ResourceType:   "m5.large",
+		Details:        &common.ComputeDetails{InstanceType: "m5.large"},
+	}
+
+	t.Run("region-less reservation rec is dropped by an include filter", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{regionlessRI}, common.RecommendationParams{Region: "us-east-1"})
+		assert.Empty(t, got, "a reservation rec of unknown region must not survive an explicit region filter")
+	})
+
+	t.Run("region-less reservation rec is dropped by include_regions too", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{regionlessRI},
+			common.RecommendationParams{IncludeRegions: []string{"us-east-1", "eu-west-1"}})
+		assert.Empty(t, got)
+	})
+
+	t.Run("region-less reservation rec survives when no region constraint is set", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{regionlessRI}, common.RecommendationParams{})
+		require.Len(t, got, 1, "with no region filter, nothing is dropped")
+	})
+
+	t.Run("region-less reservation rec is not excluded by exclude_regions", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{regionlessRI},
+			common.RecommendationParams{ExcludeRegions: []string{"us-east-1"}})
+		require.Len(t, got, 1, "a rec of unknown region cannot be shown to be in an excluded region")
+	})
+}
+
+// TestApplyRecommendationFilters_BlankRegionEntryIsNotAMatcher pins that a
+// blank entry in a region filter list is never treated as a matching region
+// code. Without regionSet's skip, a blank in ExcludeRegions would put "" in
+// the lookup set and drop every account-level Savings Plans rec via a key
+// that was never a region.
+func TestApplyRecommendationFilters_BlankRegionEntryIsNotAMatcher(t *testing.T) {
+	accountLevelSP := common.Recommendation{
+		Account:        "111",
+		CommitmentType: common.CommitmentSavingsPlan,
+		Details:        &common.SavingsPlanDetails{PlanType: "Compute"},
+	}
+	usEast := common.Recommendation{Account: "222", Region: "us-east-1"}
+
+	t.Run("blank exclude entry does not drop region-agnostic recs", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{accountLevelSP},
+			common.RecommendationParams{ExcludeRegions: []string{""}})
+		require.Len(t, got, 1)
+	})
+
+	t.Run("blank include entry does not match anything", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{usEast},
+			common.RecommendationParams{IncludeRegions: []string{"", "us-east-1"}})
+		require.Len(t, got, 1)
+		assert.Equal(t, "us-east-1", got[0].Region)
+	})
+}
