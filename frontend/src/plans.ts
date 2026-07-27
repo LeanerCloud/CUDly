@@ -909,7 +909,11 @@ function healthBadgeHtml(plan: BackendPlan): string {
   if (plan.health_score === null
       || typeof plan.health_score !== 'number'
       || !Number.isFinite(plan.health_score)) {
-    return `<span class="status-badge badge-muted" title="${escapeHtmlAttr('Plan health could not be computed: the plan\'s execution history was unavailable.')}">Health: unknown</span>`;
+    // Neutral wording on purpose: null means the backend could not read the
+    // execution history, while a non-finite value means the number itself
+    // arrived unusable. Naming only the first would send an operator
+    // chasing a database problem that may not exist.
+    return `<span class="status-badge badge-muted" title="${escapeHtmlAttr('Plan health is unavailable: this plan\'s score could not be determined.')}">Health: unknown</span>`;
   }
   const factors = plan.health_factors || [];
   const factorLines = factors.length > 0

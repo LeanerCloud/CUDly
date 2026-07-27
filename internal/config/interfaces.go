@@ -54,10 +54,11 @@ type StoreInterface interface {
 	// failed / expired rows.
 	GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]PurchaseExecution, error)
 	// CountExecutionsByPlanAndStatus returns, keyed by plan ID, the exact
-	// number of executions in each of the supplied statuses whose
-	// scheduled_date is at or after `since`. Rows with a NULL plan_id
-	// (direct-execute purchases, and executions orphaned by a deleted plan)
-	// belong to no plan and are excluded.
+	// number of executions in each of the supplied statuses that last
+	// changed state (updated_at) at or after `since` -- not those merely
+	// scheduled since then, which for a canceled row is a future date. Rows
+	// with a NULL plan_id (direct-execute purchases, and executions orphaned
+	// by a deleted plan) belong to no plan and are excluded.
 	//
 	// Deliberately NOT derived from a GetExecutionsByStatuses page: that
 	// method is capped by `limit` across ALL plans, so any caller counting

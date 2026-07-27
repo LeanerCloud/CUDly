@@ -51,7 +51,7 @@ func (h *Handler) listPlans(ctx context.Context, req *events.LambdaFunctionURLRe
 // attachPlanHealth computes the per-plan health-score badge (issue #340
 // follow-up) for every plan in the list, from exact per-plan execution
 // counts over the trailing planHealthLookbackDays
-// (config.ConfigStore.CountExecutionsByPlanAndStatus, aggregated in SQL)
+// (config.StoreInterface.CountExecutionsByPlanAndStatus, aggregated in SQL)
 // rather than from a capped page of execution rows, which would understate
 // plans whose executions fall outside the newest page.
 //

@@ -2452,11 +2452,24 @@ components:
       properties:
         code:
           type: string
+          description: >
+            Which check produced the penalty. The two execution-based codes
+            (failed_executions, canceled_executions) count only executions
+            that entered that state within the trailing execution-retention
+            window (30 days), not over all history, so they describe the
+            plan's recent behaviour rather than its lifetime record. The
+            remaining codes are derived from the plan's current attributes
+            and ramp schedule and are not time-windowed.
           enum: [overdue, failed_executions, canceled_executions, stalled, behind_schedule, disabled_midway]
         penalty:
           type: integer
+          description: Points subtracted from 100 by this factor.
         note:
           type: string
+          description: >
+            Human-readable reason for display in the badge tooltip. Free
+            text, and its wording may change; clients must branch on `code`
+            rather than parsing this.
 
     RampSchedule:
       type: object

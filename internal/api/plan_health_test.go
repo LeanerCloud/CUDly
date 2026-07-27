@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -127,6 +128,10 @@ func TestComputePlanHealth_FailedExecutionsPenaltyCapsAtFour(t *testing.T) {
 	assert.Equal(t, HealthFactorFailedExecutions, factors[0].Code)
 	assert.Equal(t, 40, factors[0].Penalty)
 	assert.Contains(t, factors[0].Note, "6 failed")
+	// The note must disclose its window: an operator reading "6 failed"
+	// with no period cannot tell a plan failing right now from one that
+	// failed six times years ago.
+	assert.Contains(t, factors[0].Note, fmt.Sprintf("last %d days", planHealthLookbackDays))
 	assert.Equal(t, 100-40, score)
 }
 
@@ -154,6 +159,7 @@ func TestComputePlanHealth_CanceledExecutionsPenaltyCapsAtFourAndCountsBothSpell
 	assert.Equal(t, HealthFactorCanceledExecutions, factors[0].Code)
 	assert.Equal(t, 20, factors[0].Penalty)
 	assert.Contains(t, factors[0].Note, "5 canceled")
+	assert.Contains(t, factors[0].Note, fmt.Sprintf("last %d days", planHealthLookbackDays))
 	assert.Equal(t, 100-20, score)
 }
 

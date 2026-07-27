@@ -55,17 +55,23 @@ const (
 	maxCountedCanceledExecs = 4
 
 	// planHealthLookbackDays bounds how far back the execution factors
-	// count, matching the retention.execution_history_days default in
-	// internal/config/defaults.go. Past that horizon execution rows are not
-	// guaranteed to still exist, so an all-time count is not a well-defined
-	// quantity: it would compare plans against differently-sized surviving
-	// histories, and -- because CleanupOldExecutions purges terminal rows
-	// but never "failed" ones -- would pin a plan that failed once, long
-	// ago, at a permanent penalty no amount of subsequent clean runs could
-	// clear. Health is a statement about the plan now, so the window has to
-	// end somewhere data is guaranteed present. Surfaced in every factor
-	// note so the number on screen is never ambiguous about its window.
-	planHealthLookbackDays = 90
+	// count. It is deliberately the SAME constant the execution-retention
+	// sweep uses (config.DefaultExecutionTTLDays, applied by
+	// CleanupOldExecutions via internal/server/handler.go), because the two
+	// have to agree for the score to mean anything:
+	//
+	// That sweep deletes canceled rows past the retention horizon but never
+	// deletes failed ones. Counting over any longer window would therefore
+	// measure the two factors over different spans -- canceled over the
+	// surviving retention period, failed over all of history -- and a plan
+	// that failed a few times years ago would stay penalized forever, with
+	// no number of subsequent clean runs able to clear it. Health is a
+	// statement about the plan now, so both factors count the same recent
+	// period, the one retention guarantees is fully populated.
+	//
+	// Every factor note names the window, so the number on screen is never
+	// ambiguous about what it covers.
+	planHealthLookbackDays = config.DefaultExecutionTTLDays
 )
 
 // planHealthStatusFailed mirrors the "failed" execution-status literal used
@@ -77,7 +83,7 @@ const planHealthStatusFailed = "failed"
 
 // planHealthExecutionStatuses selects the execution statuses
 // computePlanHealth needs (failed + both spellings of canceled). Passed to
-// config.ConfigStore.CountExecutionsByPlanAndStatus, which aggregates in
+// config.StoreInterface.CountExecutionsByPlanAndStatus, which aggregates in
 // SQL: the History handler's GetExecutionsByStatuses is capped at
 // config.DefaultListLimit across ALL plans, so counting rows out of it
 // would silently understate any plan whose executions fall outside the

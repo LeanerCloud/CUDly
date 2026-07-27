@@ -2792,7 +2792,7 @@ func TestPGXMock_CleanupOldExecutions_IncludesCanonicalStatus(t *testing.T) {
 // The counts must therefore come from a GROUP BY with no LIMIT: the result
 // set is bounded by plans x statuses, not by execution volume. The regex
 // anchors fail the test if a refactor reintroduces a LIMIT, drops the
-// aggregation, or drops the scheduled_date window.
+// aggregation, or drops the updated_at window.
 func TestPGXMock_CountExecutionsByPlanAndStatus_AggregatesInSQL(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
@@ -2802,7 +2802,7 @@ func TestPGXMock_CountExecutionsByPlanAndStatus_AggregatesInSQL(t *testing.T) {
 		AddRow("plan-a", "failed", 7).
 		AddRow("plan-a", StatusCanceled, 2).
 		AddRow("plan-b", LegacyStatusCanceled, 1)
-	mock.ExpectQuery(`(?s)SELECT plan_id, status, COUNT\(\*\).*FROM purchase_executions.*status = ANY\(\$1\).*plan_id IS NOT NULL.*scheduled_date >= \$2.*GROUP BY plan_id, status`).
+	mock.ExpectQuery(`(?s)SELECT plan_id, status, COUNT\(\*\).*FROM purchase_executions.*status = ANY\(\$1\).*plan_id IS NOT NULL.*updated_at >= \$2.*GROUP BY plan_id, status`).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
@@ -2823,16 +2823,19 @@ func TestPGXMock_CountExecutionsByPlanAndStatus_AggregatesInSQL(t *testing.T) {
 }
 
 // TestPGXMock_CountExecutionsByPlanAndStatus_PassesSinceBound pins that the
-// caller's window actually reaches SQL: without the bound the counts drift
-// with whatever history survived cleanup rather than covering a fixed,
-// documented period.
+// caller's window actually reaches SQL, and that it is applied to updated_at
+// rather than scheduled_date. The distinction is load-bearing: a plan's
+// executions are created up front for the whole ramp, so a canceled row
+// still carries a scheduled_date months in the future. Bounding on that
+// column would count a purchase cancelled today under next year's date and
+// make the "in the last N days" wording in the factor note a lie.
 func TestPGXMock_CountExecutionsByPlanAndStatus_PassesSinceBound(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
 	ctx := context.Background()
 
 	since := time.Date(2026, 4, 28, 0, 0, 0, 0, time.UTC)
-	mock.ExpectQuery(`scheduled_date >= \$2`).
+	mock.ExpectQuery(`updated_at >= \$2`).
 		WithArgs(pgxmock.AnyArg(), since).
 		WillReturnRows(pgxmock.NewRows([]string{"plan_id", "status", "count"}))
 
@@ -2841,15 +2844,19 @@ func TestPGXMock_CountExecutionsByPlanAndStatus_PassesSinceBound(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestPGXMock_CountExecutionsByPlanAndStatus_NullPlanIDRow is the regression
-// guard for the plan_id-nullability bug. plan_id has been nullable since
-// migration 000033 (direct-execute purchases have no originating plan, and
-// deleting a plan SET NULLs its executions), so GROUP BY plan_id emits a
-// NULL group as soon as one such row is failed or canceled. Scanning that
-// into a plain string returns "cannot scan NULL into *string", which
-// propagates as an error and blanks the health score for EVERY plan -- one
-// unrelated direct-execute failure silently switching the whole feature off.
-// The row must instead be skipped: it belongs to no plan.
+// TestPGXMock_CountExecutionsByPlanAndStatus_NullPlanIDRow guards the
+// plan_id-nullability bug. plan_id has been nullable since migration 000033
+// (direct-execute purchases have no originating plan, and deleting a plan
+// SET NULLs its executions), so GROUP BY plan_id emits a NULL group as soon
+// as one such row is failed or canceled. Such a row belongs to no plan and
+// must be dropped, never folded into a plan bucket.
+//
+// Scope note: pgxmock leaves the destination untouched on a NULL rather than
+// reproducing pgx's real "cannot scan NULL into *string" error, so what this
+// test proves is the narrower half -- that a NULL group does not become an
+// empty-string plan key. The production error path is closed by the
+// `plan_id IS NOT NULL` filter in the query itself, which
+// TestPGXMock_CountExecutionsByPlanAndStatus_AggregatesInSQL pins.
 func TestPGXMock_CountExecutionsByPlanAndStatus_NullPlanIDRow(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)

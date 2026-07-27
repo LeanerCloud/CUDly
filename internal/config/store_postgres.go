@@ -1205,7 +1205,8 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 }
 
 // CountExecutionsByPlanAndStatus returns, keyed by plan ID, the exact number
-// of executions in each of the supplied statuses.
+// of executions in each of the supplied statuses that last changed state at
+// or after `since`.
 //
 // Aggregated with GROUP BY rather than counted from a GetExecutionsByStatuses
 // page: that method's DESC + LIMIT truncation would silently understate any
@@ -1215,9 +1216,18 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 // set here is bounded by plans x statuses, not by execution volume, so it
 // needs no limit of its own.
 //
-// Only rows with scheduled_date >= `since` are counted, so the caller decides
-// how far back "recent" reaches instead of the answer drifting with however
-// much history happens to survive cleanup.
+// The window is on updated_at, NOT scheduled_date, because for the terminal
+// statuses this method exists to count those are different dates pointing in
+// opposite directions. A plan's executions are created up front for the whole
+// ramp, so a pending row carries a scheduled_date months in the FUTURE;
+// canceling it (CancelExecutionAtomic) leaves that future date untouched.
+// Windowing on scheduled_date would therefore count a purchase cancelled
+// today under a date next year, and answer "how many rows are scheduled
+// recently-or-later" instead of "how many changed state recently".
+// updated_at is stamped by CancelExecutionAtomic and
+// TransitionExecutionStatus, and backstopped by the
+// update_purchase_executions_updated_at trigger, so it is when the row
+// actually entered the status being counted.
 //
 // plan_id has been nullable since migration 000033 (direct-execute purchases
 // from the Recommendations page have no originating plan, and deleting a plan
@@ -1235,7 +1245,7 @@ func (s *PostgresStore) CountExecutionsByPlanAndStatus(ctx context.Context, stat
 		FROM purchase_executions
 		WHERE status = ANY($1)
 		  AND plan_id IS NOT NULL
-		  AND scheduled_date >= $2
+		  AND updated_at >= $2
 		GROUP BY plan_id, status
 	`, statuses, since)
 	if err != nil {
