@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -409,6 +410,71 @@ func TestExecutePurchaseRealPurchaseCallsProviderWithMCPSource(t *testing.T) {
 	assert.True(t, resp.Success)
 	assert.Equal(t, "ri-12345", resp.CommitmentID)
 	assert.False(t, resp.DryRun)
+}
+
+// TestExecutePurchaseUnsetTimestampOmitsEffectiveDate is the regression guard
+// for the fabricated start date found in review. common.PurchaseResult's
+// Timestamp is a plain time.Time that not every provider client populates,
+// and EffectiveDate used to be a plain string set from
+// result.Timestamp.Format(time.RFC3339). Formatting the zero time.Time
+// yields the literal "0001-01-01T00:00:00Z" rather than "", so `omitempty`
+// could never drop it and every such response advertised a real-looking
+// commitment start date in the year 1 -- a value the provider never
+// reported, on a field a caller may key billing or renewal reminders off.
+//
+// The assertion is made against the marshaled JSON, not just the Go field,
+// because the JSON payload is what actually crosses the MCP boundary to the
+// caller.
+func TestExecutePurchaseUnsetTimestampOmitsEffectiveDate(t *testing.T) {
+	t.Parallel()
+	// Timestamp deliberately left unset, exactly as a provider client that
+	// never populates it leaves it.
+	fake := &fakeServiceClient{
+		purchaseResult: common.PurchaseResult{Success: true, CommitmentID: "ri-no-timestamp"},
+	}
+
+	resp, err := ExecutePurchase(context.Background(), PurchaseRequest{
+		Region:         "us-east-1",
+		Recommendation: testRecommendation(),
+		DryRun:         false,
+		Confirm:        true, CredentialScope: "test-scope",
+		ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake, nil },
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Nil(t, resp.EffectiveDate,
+		"an unset provider timestamp must stay unknown, not become a formatted zero time")
+
+	payload, err := json.Marshal(resp)
+	require.NoError(t, err)
+	assert.NotContains(t, string(payload), "0001-01-01",
+		"the zero time.Time must never reach the caller as a start date: %s", payload)
+	assert.NotContains(t, string(payload), "effective_date",
+		"effective_date must be omitted entirely when the provider reported none: %s", payload)
+}
+
+// TestExecutePurchaseRealTimestampIsReported is the other half of the guard
+// above: suppressing the zero value must not suppress a genuine one.
+func TestExecutePurchaseRealTimestampIsReported(t *testing.T) {
+	t.Parallel()
+	stamp := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	fake := &fakeServiceClient{
+		purchaseResult: common.PurchaseResult{Success: true, CommitmentID: "ri-stamped", Timestamp: stamp},
+	}
+
+	resp, err := ExecutePurchase(context.Background(), PurchaseRequest{
+		Region:         "us-east-1",
+		Recommendation: testRecommendation(),
+		DryRun:         false,
+		Confirm:        true, CredentialScope: "test-scope",
+		ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake, nil },
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.EffectiveDate, "a populated provider timestamp must still be reported")
+	assert.Equal(t, stamp.Format(time.RFC3339), *resp.EffectiveDate)
 }
 
 // TestExecutePurchaseSameRequestDerivesSameToken proves idempotencyKeyFor

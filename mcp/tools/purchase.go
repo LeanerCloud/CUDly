@@ -232,6 +232,14 @@ func ResolveDryRunConfirm(dryRun, confirm *bool) (effectiveDryRun, effectiveConf
 // it never actually priced. A pointer that's nil (and omitted from the JSON
 // payload entirely) when no real value exists lets a caller tell "unknown"
 // apart from "confirmed zero" (feedback_nullable_not_zero).
+//
+// EffectiveDate is a pointer for the same reason, and it is not a
+// hypothetical concern: `omitempty` on a string only drops "", so a
+// PurchaseResult whose Timestamp was never populated formatted its zero
+// time.Time to the literal "0001-01-01T00:00:00Z" and shipped that as the
+// commitment's start date. That is a fabricated date presented as real, on
+// a field a caller may key billing or renewal reminders off. Nil (and
+// omitted) when the provider reported no timestamp.
 type PurchaseResponse struct {
 	Success           bool     `json:"success"`
 	DryRun            bool     `json:"dry_run"`
@@ -240,7 +248,7 @@ type PurchaseResponse struct {
 	OnDemandCost      *float64 `json:"on_demand_cost,omitempty"`
 	EstimatedSavings  *float64 `json:"estimated_savings,omitempty"`
 	SavingsPercentage *float64 `json:"savings_percentage,omitempty"`
-	EffectiveDate     string   `json:"effective_date,omitempty"`
+	EffectiveDate     *string  `json:"effective_date,omitempty"`
 	TermYears         int      `json:"term_years,omitempty"`
 	Error             string   `json:"error,omitempty"`
 
@@ -318,6 +326,22 @@ func nonZeroCostPtr(v float64) *float64 {
 		return nil
 	}
 	return &v
+}
+
+// rfc3339OrNil formats t as RFC3339, or returns nil when t is the zero
+// time.Time. This is the time analog of nonZeroCostPtr and exists for the
+// same reason: common.PurchaseResult.Timestamp is a plain time.Time that not
+// every provider client populates, and formatting an unset one yields the
+// literal "0001-01-01T00:00:00Z" rather than an empty string, so
+// `omitempty` on a string field could never drop it. Returning nil keeps
+// "the provider did not tell us when this starts" distinguishable from a
+// real date (feedback_nullable_not_zero).
+func rfc3339OrNil(t time.Time) *string {
+	if t.IsZero() {
+		return nil
+	}
+	s := t.Format(time.RFC3339)
+	return &s
 }
 
 // idempotencyKeyFor derives a stable per-request key from every field that
@@ -575,7 +599,7 @@ func ExecutePurchase(ctx context.Context, req PurchaseRequest) (*PurchaseRespons
 		OnDemandCost:      nonZeroCostPtr(rec.OnDemandCost),
 		EstimatedSavings:  nonZeroCostPtr(rec.EstimatedSavings),
 		SavingsPercentage: nonZeroCostPtr(rec.SavingsPercentage),
-		EffectiveDate:     result.Timestamp.Format(time.RFC3339),
+		EffectiveDate:     rfc3339OrNil(result.Timestamp),
 		TermYears:         termYearsFromRecommendationTerm(rec.Term),
 	}
 	if result.Error != nil {
