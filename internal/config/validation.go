@@ -96,14 +96,15 @@ func validPaymentOptionsFor(provider string) []string {
 //     partial-upfront → monthly (no semantic equivalent — coerce to the
 //     no-upfront tier, CUDly's default billing schedule for Azure, rather
 //     than drop the rec; caller may log). Coercing to upfront here would
-//     silently bill an all-upfront schedule the caller never chose: this
-//     normalized payment option drives the upfront-vs-monthly cost split in
-//     providers/azure/services/compute/client.go's GetOfferingDetails
-//     (the PaymentOption switch that allocates upfrontCost vs
-//     recurringCost); the reservation-purchase billingPlan wiring being
-//     added in #1495/#1502 likewise maps only upfront/monthly tokens and
-//     hard-errors on partial-upfront, so landing on monthly keeps the rec
-//     on the default schedule instead.
+//     silently bill an all-upfront schedule the caller never chose: the
+//     canonical token is persisted onto the execution and copied into
+//     common.Recommendation.PaymentOption (internal/purchase/execution.go),
+//     and the reservation-purchase billingPlan wiring being added in
+//     #1495/#1502 maps only upfront/monthly tokens and hard-errors on
+//     partial-upfront, so landing on monthly keeps the rec on the
+//     no-upfront schedule instead of an irreversible upfront charge —
+//     Azure does not allow changing a reservation's billing frequency
+//     after purchase.
 //   - GCP  : all-upfront → monthly, no-upfront → monthly,
 //     partial-upfront → monthly, upfront → monthly (GCP CUDs are
 //     inherently monthly-billed — every non-monthly token collapses to the
@@ -116,10 +117,25 @@ func validPaymentOptionsFor(provider string) []string {
 // The partial-upfront coercion is deliberate on both Azure and GCP: dropping
 // the rec would be a silent data loss for the user, while coercing to the
 // closest billing model the provider offers preserves the rec without
-// changing the money the caller committed to (Azure's no-upfront/monthly
-// schedule bills the same total as upfront, just spread monthly). The caller
-// is expected to log a warning when raw != canonical so an operator notices
-// the upstream input bug.
+// changing the total the caller committed to. Microsoft documents that
+// choice as cost-neutral: "The total cost of up-front and monthly
+// reservations is the same and you don't pay any extra fees when you choose
+// to pay monthly"
+// (https://learn.microsoft.com/en-us/azure/cost-management-billing/reservations/prepare-buy-reservation).
+// Caveat from the same page: monthly payments are NOT offered for SUSE Linux
+// reservations, Red Hat plans, Azure Red Hat OpenShift licenses, or
+// pre-purchase plans, so for those products the coerced token can make Azure
+// reject the purchase. That is the intended failure mode — a loud purchase-
+// time rejection is preferable to silently committing the caller to an
+// upfront charge they never chose and cannot undo.
+//
+// The caller is expected to log a warning when raw != canonical so an
+// operator notices the upstream input bug.
+//
+// The frontend mirrors this mapping in
+// frontend/src/commitmentOptions.ts:normalizePaymentValue (it decides which
+// option the plan/purchase dropdowns pre-select); the two must stay in
+// lockstep.
 //
 // Empty raw passes through as ("", true) — callers that distinguish "unset"
 // from "invalid" can check the returned bool only when raw is non-empty.
@@ -160,14 +176,13 @@ func crossProviderPaymentAlias(provider, raw string) (string, bool) {
 		// equivalent — coerce to the no-upfront (monthly) tier, CUDly's
 		// default billing schedule, so the rec survives validation rather
 		// than dropping silently (caller WARN-logs). Coercing to "upfront"
-		// would silently bill an upfront schedule the caller never chose:
-		// the web/API path's normalized payment option drives the
-		// upfront-vs-monthly cost split in
-		// providers/azure/services/compute/client.go's
-		// GetOfferingDetails (the PaymentOption switch), and the
-		// reservation-purchase billingPlan wiring being added in
+		// would silently bill an upfront schedule the caller never chose
+		// and cannot undo (Azure forbids changing a reservation's billing
+		// frequency after purchase), whereas monthly costs the same total.
+		// The reservation-purchase billingPlan wiring being added in
 		// #1495/#1502 hard-errors on partial-upfront, so only the
 		// canonical upfront/monthly tokens survive to the purchase body.
+		// Rationale and doc citations: see NormalizePaymentOption above.
 		switch raw {
 		case "all-upfront":
 			return "upfront", true
