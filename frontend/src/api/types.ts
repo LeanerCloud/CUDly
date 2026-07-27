@@ -378,6 +378,22 @@ export interface PurchaseResult {
   // True when the request was handled via the direct-execute path (issue
   // #289). Absent (undefined) on the standard approval-required flow.
   direct_execute?: boolean;
+  // Per-rec payment-option coercion notices (#1503 follow-up). Present only
+  // when the backend normalized a requested payment option onto a DIFFERENT
+  // provider-canonical token (e.g. Azure "partial-upfront" -> "monthly"):
+  // each entry names what was requested, what was actually applied, and why,
+  // so the UI can tell the user instead of silently changing the billing
+  // schedule. Absent (never an empty array) when every option was already
+  // canonical. Mirrors the backend PaymentAdjustment struct
+  // (internal/api/validation.go).
+  payment_adjustments?: Array<{
+    rec_index: number;
+    provider: string;
+    service: string;
+    requested_payment_option: string;
+    applied_payment_option: string;
+    reason: string;
+  }>;
   results?: Array<{
     recommendation_id: string;
     status: string;

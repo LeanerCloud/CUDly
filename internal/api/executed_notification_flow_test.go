@@ -295,7 +295,7 @@ func TestExecutedNotification_DirectExecutePath(t *testing.T) {
 	}
 	session := &Session{Email: adminEmail, UserID: "admin-uid"}
 
-	result, err := handler.directExecutePurchase(ctx, req, exec, session)
+	result, err := handler.directExecutePurchase(ctx, req, exec, session, nil)
 	require.NoError(t, err)
 	resultMap := result.(map[string]any)
 	assert.Equal(t, "completed", resultMap["status"])
@@ -336,7 +336,7 @@ func TestExecutedNotification_DirectExecute_NilNotifierNoPanic(t *testing.T) {
 	req := &events.LambdaFunctionURLRequest{}
 	session := &Session{Email: adminEmail, UserID: "admin-uid"}
 
-	result, err := handler.directExecutePurchase(ctx, req, exec, session)
+	result, err := handler.directExecutePurchase(ctx, req, exec, session, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "completed", result.(map[string]any)["status"])
 	mockPurchase.AssertExpectations(t)

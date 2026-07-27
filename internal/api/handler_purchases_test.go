@@ -4110,7 +4110,7 @@ func TestHandler_executePurchase_DirectExec_FourEyesOn_PerUserAPIKey_DeniesSelfE
 
 	realManager := purchase.NewManager(purchase.ManagerConfig{ConfigStore: mockStore})
 	handler := &Handler{config: mockStore, purchase: realManager}
-	_, err := handler.directExecutePurchase(ctx, &events.LambdaFunctionURLRequest{}, execution, ownerSession)
+	_, err := handler.directExecutePurchase(ctx, &events.LambdaFunctionURLRequest{}, execution, ownerSession, nil)
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "expected a clientError")

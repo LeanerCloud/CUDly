@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
@@ -39,10 +41,14 @@ func TestValidatePurchaseRecommendation(t *testing.T) {
 		return r
 	}
 	tests := []struct {
-		name        string
-		rec         config.RecommendationRecord
-		wantError   bool
-		wantPayment string // when non-empty, asserted against rec.Payment after a successful call
+		name      string
+		rec       config.RecommendationRecord
+		wantError bool
+		// wantPayment is set ONLY on rows whose input token gets coerced: it is
+		// asserted against rec.Payment after a successful call, and the row must
+		// also surface a matching PaymentAdjustment. Rows with "" must NOT
+		// surface an adjustment (canonical passthrough, incl. case-only changes).
+		wantPayment string
 	}{
 		// --- AWS canonical set ---
 		{"valid aws all-upfront 3y", validRec(), false, ""},
@@ -79,15 +85,15 @@ func TestValidatePurchaseRecommendation(t *testing.T) {
 		{"gcp accepts legacy upfront (coerced to monthly)", mutate(func(r *config.RecommendationRecord) {
 			r.Provider = "gcp"
 			r.Payment = "upfront"
-		}), false, ""},
+		}), false, "monthly"},
 		{"gcp accepts legacy all-upfront (coerced to monthly)", mutate(func(r *config.RecommendationRecord) {
 			r.Provider = "gcp"
 			r.Payment = "all-upfront"
-		}), false, ""},
+		}), false, "monthly"},
 		{"gcp accepts legacy no-upfront (coerced to monthly)", mutate(func(r *config.RecommendationRecord) {
 			r.Provider = "gcp"
 			r.Payment = "no-upfront"
-		}), false, ""},
+		}), false, "monthly"},
 		{"gcp rejects unknown token", mutate(func(r *config.RecommendationRecord) {
 			r.Provider = "gcp"
 			r.Payment = "foo"
@@ -118,13 +124,22 @@ func TestValidatePurchaseRecommendation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			rec := tt.rec
-			err := validatePurchaseRecommendation(&rec, 0)
+			adjustment, err := validatePurchaseRecommendation(&rec, 0)
 			if tt.wantError {
 				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
 				if tt.wantPayment != "" {
 					assert.Equal(t, tt.wantPayment, rec.Payment)
+					// wantPayment is only set on rows whose input token gets
+					// coerced, so each of those must also surface a caller-
+					// visible PaymentAdjustment consistent with the mutation
+					// (#1503 follow-up). Field-level assertions live in
+					// TestValidatePurchaseRecommendation_SurfacesPaymentAdjustment.
+					require.NotNil(t, adjustment, "coerced payment option must surface a PaymentAdjustment")
+					assert.Equal(t, tt.wantPayment, adjustment.AppliedPaymentOption)
+				} else {
+					assert.Nil(t, adjustment, "no coercion occurred, so no adjustment should be surfaced")
 				}
 			}
 		})
@@ -140,7 +155,7 @@ func TestValidatePurchaseRecommendation_ErrorMessage(t *testing.T) {
 	rec := validRec()
 	rec.Provider = "azure"
 	rec.Payment = "foo" // not in azure canonical set and has no normalization alias
-	err := validatePurchaseRecommendation(&rec, 0)
+	_, err := validatePurchaseRecommendation(&rec, 0)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "azure")
 	assert.Contains(t, err.Error(), "upfront")
@@ -170,7 +185,7 @@ func TestValidatePurchaseRecommendation_NormalizationWarning(t *testing.T) {
 	rec := validRec()
 	rec.Provider = "azure"
 	rec.Payment = "partial-upfront"
-	err := validatePurchaseRecommendation(&rec, 7)
+	_, err := validatePurchaseRecommendation(&rec, 7)
 	require.NoError(t, err)
 	// The money-affecting coercion itself must be unchanged by adding the log.
 	assert.Equal(t, "monthly", rec.Payment, "coercion behavior must stay partial-upfront -> monthly, not upfront")
@@ -194,11 +209,131 @@ func TestValidatePurchaseRecommendation_NoWarningWhenAlreadyCanonical(t *testing
 	rec := validRec()
 	rec.Provider = "azure"
 	rec.Payment = "monthly" // already canonical for azure; no normalization occurs
-	err := validatePurchaseRecommendation(&rec, 0)
+	adjustment, err := validatePurchaseRecommendation(&rec, 0)
 	require.NoError(t, err)
+	assert.Nil(t, adjustment, "already-canonical payment option must not surface an adjustment")
 	assert.Equal(t, "monthly", rec.Payment)
 
 	assert.Empty(t, logBuf.String(), "no normalization occurred, so nothing should be logged")
+}
+
+// TestValidatePurchaseRecommendation_SurfacesPaymentAdjustment pins the
+// caller-facing coercion notice (#1503 follow-up): when the web execute path
+// normalizes a payment option onto a DIFFERENT provider-canonical token, the
+// returned PaymentAdjustment must identify the rec and carry the requested
+// token, the applied token, and a reason naming both, so the API response can
+// tell the caller what actually happened to this money-affecting field instead
+// of only WARN-logging it for operators.
+func TestValidatePurchaseRecommendation_SurfacesPaymentAdjustment(t *testing.T) {
+	t.Parallel()
+	rec := validRec()
+	rec.Provider = "azure"
+	rec.Payment = "partial-upfront"
+	adjustment, err := validatePurchaseRecommendation(&rec, 3)
+	require.NoError(t, err)
+	require.NotNil(t, adjustment, "azure partial-upfront is coerced and must surface an adjustment")
+	assert.Equal(t, 3, adjustment.RecIndex)
+	assert.Equal(t, "azure", adjustment.Provider)
+	assert.Equal(t, rec.Service, adjustment.Service)
+	assert.Equal(t, "partial-upfront", adjustment.RequestedPaymentOption)
+	assert.Equal(t, "monthly", adjustment.AppliedPaymentOption)
+	// The reason must be self-explanatory to the caller: it names the rejected
+	// token, the applied token, and the provider whose billing model forced it.
+	assert.Contains(t, adjustment.Reason, `"partial-upfront"`)
+	assert.Contains(t, adjustment.Reason, `"monthly"`)
+	assert.Contains(t, adjustment.Reason, "azure")
+	// The adjustment must agree with the actual mutation applied to the rec:
+	// applied means applied, not merely advertised.
+	assert.Equal(t, adjustment.AppliedPaymentOption, rec.Payment)
+}
+
+// TestHandler_executePurchase_SurfacesPaymentAdjustments is the response-level
+// regression test for the #1503 follow-up: an Azure partial-upfront purchase
+// submitted through the real executePurchase handler must return a
+// payment_adjustments entry telling the caller the request was applied as
+// monthly; a green validator-level test alone could not prove the notice
+// survives to the response body the client actually sees.
+func TestHandler_executePurchase_SurfacesPaymentAdjustments(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() {
+		mockStore.AssertExpectations(t)
+		mockAuth.AssertExpectations(t)
+	})
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+	}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
+	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		// rec 0 is already canonical (azure/monthly); rec 1 carries the #1503
+		// partial-upfront token and must be the only rec surfaced.
+		Body: `{"recommendations": [` +
+			`{"id": "rec-1", "provider": "azure", "service": "vm", "count": 1, "term": 1, "payment": "monthly", "upfront_cost": 100.0, "savings": 50.0},` +
+			`{"id": "rec-2", "provider": "azure", "service": "vm", "count": 1, "term": 1, "payment": "partial-upfront", "upfront_cost": 200.0, "savings": 25.0}]}`,
+	}
+	result, err := handler.executePurchase(ctx, req)
+	require.NoError(t, err)
+
+	resultMap := result.(map[string]any)
+	adjustments, ok := resultMap["payment_adjustments"].([]PaymentAdjustment)
+	require.True(t, ok, "response must carry payment_adjustments when a coercion occurred")
+	require.Len(t, adjustments, 1, "only the coerced rec must be surfaced")
+	adj := adjustments[0]
+	assert.Equal(t, 1, adj.RecIndex, "adjustment must point at the coerced rec's position")
+	assert.Equal(t, "azure", adj.Provider)
+	assert.Equal(t, "vm", adj.Service)
+	assert.Equal(t, "partial-upfront", adj.RequestedPaymentOption)
+	assert.Equal(t, "monthly", adj.AppliedPaymentOption)
+	assert.NotEmpty(t, adj.Reason)
+}
+
+// TestHandler_executePurchase_NoAdjustmentsWhenCanonical guards the
+// backward-compat contract of the #1503 follow-up: when every payment option
+// is already provider-canonical, the payment_adjustments key must be ABSENT
+// (not an empty array), so existing clients see a byte-identical response on
+// the common case.
+func TestHandler_executePurchase_NoAdjustmentsWhenCanonical(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() {
+		mockStore.AssertExpectations(t)
+		mockAuth.AssertExpectations(t)
+	})
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+	}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
+	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    `{"recommendations": [{"id": "rec-1", "provider": "azure", "service": "vm", "count": 1, "term": 1, "payment": "monthly", "upfront_cost": 100.0, "savings": 50.0}]}`,
+	}
+	result, err := handler.executePurchase(ctx, req)
+	require.NoError(t, err)
+
+	resultMap := result.(map[string]any)
+	assert.NotContains(t, resultMap, "payment_adjustments",
+		"canonical-only request must not carry the payment_adjustments key at all")
 }
 
 // The per-rec #643 validation is wired into the web execute boundary
