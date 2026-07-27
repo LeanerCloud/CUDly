@@ -98,7 +98,14 @@ func TestRealPurchasePastProviderRegistration(t *testing.T) {
 	require.NoError(t, err, "CallTool itself must not return a transport-level error")
 	require.True(t, result.IsError, "a failed real purchase must surface as a tool error, not a transport error")
 
-	text := result.Content[0].(*gosdk.TextContent).Text
+	// Guard both the index and the type assertion: a bare
+	// result.Content[0].(*gosdk.TextContent) panics on an empty Content slice
+	// or a non-text block, which aborts the whole package's test run instead
+	// of failing this one assertion readably.
+	require.NotEmpty(t, result.Content, "tool error result must carry at least one content block")
+	textContent, ok := result.Content[0].(*gosdk.TextContent)
+	require.True(t, ok, "first content block must be text, got %T", result.Content[0])
+	text := textContent.Text
 	assert.NotContains(t, strings.ToLower(text), "not registered",
 		"provider must be registered for the cudly-mcp binary: got %q", text)
 	// providers/aws/provider.go's GetServiceClient (via AWSProvider.IsConfigured)
