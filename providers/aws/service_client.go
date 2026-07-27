@@ -173,8 +173,49 @@ func effectiveRegion(rec common.Recommendation) string {
 // cannot be shown to match) and kept by an exclude filter (it cannot be
 // shown to be excluded) -- the same conservative direction each filter had
 // before Savings Plans support was added.
+//
+// CommitmentSavingsPlan alone is likewise not enough. Only the account-level
+// plan types (Compute, SageMaker, Database) belong to no region; an
+// EC2Instance Savings Plan is region-SCOPED, and extractEC2SPFields
+// (recommendations/parser_sp.go) yields Region == "" whenever Cost Explorer
+// omitted SavingsPlansDetails or its Region field, because aws.ToString maps
+// a nil pointer to "". Exempting those would reopen exactly the hole the
+// paragraph above closes for reservations, just for EC2Instance SPs. So the
+// exemption requires POSITIVE evidence that the plan is account-level:
+// isAccountLevelSPPlanType must recognize the plan type, and anything
+// unknown (nil Details, a non-SavingsPlanDetails payload, a plan type this
+// build has never heard of) stays region-scoped and is filtered
+// conservatively rather than exempted.
 func isRegionAgnostic(rec common.Recommendation) bool {
-	return rec.CommitmentType == common.CommitmentSavingsPlan && effectiveRegion(rec) == ""
+	if rec.CommitmentType != common.CommitmentSavingsPlan || effectiveRegion(rec) != "" {
+		return false
+	}
+	sp, ok := rec.Details.(*common.SavingsPlanDetails)
+	return ok && sp != nil && isAccountLevelSPPlanType(sp.PlanType)
+}
+
+// isAccountLevelSPPlanType reports whether planType names a Savings Plans
+// product that applies account-wide rather than to one region. Compared
+// against the SDK's own sptypes.SavingsPlanType members rather than bare
+// string literals (feedback_sdk_enum_string_literals); those members are
+// exactly the display strings recommendations/parser_sp.go's
+// spPlanTypeDisplayString writes into SavingsPlanDetails.PlanType, so the two
+// vocabularies cannot drift silently.
+//
+// EC2Instance is the one plan type deliberately absent: it is region-scoped,
+// which is the whole point of this function.
+//
+// Unknown values deliberately return false: spPlanTypeDisplayString passes
+// unrecognised SDK plan types through verbatim for forward compatibility, and
+// a plan type this build does not know about must not be granted a
+// region-filter exemption on the strength of a name nobody has checked.
+func isAccountLevelSPPlanType(planType string) bool {
+	switch sptypes.SavingsPlanType(planType) {
+	case sptypes.SavingsPlanTypeCompute, sptypes.SavingsPlanTypeSagemaker, sptypes.SavingsPlanTypeDatabase:
+		return true
+	default:
+		return false
+	}
 }
 
 // regionSet builds the lookup set for a region filter, skipping blank
