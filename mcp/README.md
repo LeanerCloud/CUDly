@@ -99,6 +99,15 @@ Every other provider's purchase tool (`cudly_aws_savingsplans_purchase`, `cudly_
 - Every money-affecting parameter (region, resource type, count, term, payment option, and any provider-specific dimension such as RDS's `az_config`) is validated against an explicit enum or non-empty check before anything is built or sent. There is no silent default for a value that materially changes what gets purchased.
 - Every real purchase is tagged with a source identifying it came from this MCP server (never a user-suppliable string) and a deterministic idempotency token derived from the request's own parameters. By default, retrying an identical tool call -- however long after the original, and regardless of any clock boundary -- always derives the same token, so the provider dedupes the retry instead of buying twice; this is a fail-safe default, since the worst case of a false dedupe is a skipped intentional repeat, never a double purchase. To deliberately make a second, otherwise-identical purchase (e.g. "buy 3 RIs now" and "buy 3 more next week"), pass a fresh `idempotency_nonce` value on the second call; passing the same nonce on a retry of that same call still dedupes correctly.
 - Provider/SDK failures surface their full error text back to the caller; nothing is swallowed.
+- Every real purchase writes an `mcp purchase ATTEMPT` line and a matching `mcp purchase OK` / `mcp purchase FAILED` line to **stderr**, recording provider, target account, region, resource, count, term, payment option, the resulting commitment ID, and a masked idempotency token. Dry runs are not logged (they spend nothing). Capture your MCP client's stderr if you want this trail retained. Nothing is written to stdout, which the MCP stdio transport owns for JSON-RPC framing.
+
+### What this server does NOT give you
+
+Understand these before enabling real purchases, especially in a shared or production account:
+
+- **No approval workflow.** The web UI routes a purchase through `purchase_executions` with a scheduled date and, under 4-eyes mode, a second approver who cannot be the creator. This server has no such gate: `dry_run=false` plus `confirm=true` in a single tool call executes immediately. The `confirm` flag is a guardrail against an accidental call, not an authorization control, and the model driving the client supplies it.
+- **No persisted audit record.** The CLI writes a `common.AuditRecord` per purchase and the web path persists an execution row; this server writes only the stderr lines above. An MCP purchase does not appear in CUDly's own purchase history, so reconcile against the provider's console/billing data rather than against CUDly.
+- **Credentials are whatever launched the process.** `aws_profile` / `azure_subscription_id` / `gcp_project_id` are per-call arguments chosen by the model, so any account reachable from the ambient credentials is reachable from any tool call. Scope the credentials you launch `cudly-mcp` with to what you are willing to let it spend, rather than relying on the tool arguments to constrain it.
 
 ## Caveats and known gaps
 
