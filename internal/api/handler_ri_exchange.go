@@ -482,7 +482,7 @@ func targetLocations(targets []AzureExchangeTargetBody) []string {
 // preview, without committing anything. Requires "view:purchases" permission,
 // mirroring the AWS quote endpoint.
 //
-// POST /api/ri-exchange/azure-instances/compatible-offerings
+// POST /api/ri-exchange/azure-instances/compatible-offerings.
 func (h *Handler) getAzureCompatibleOfferings(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
 		return nil, err
@@ -601,7 +601,7 @@ func checkAzureExchangeMoneyGuardrails(preview *azurecompute.ExchangePreview, ma
 // client-supplied or stale session would bypass every guardrail below, so
 // the server always re-quotes immediately before committing.
 //
-// POST /api/ri-exchange/azure-instances/exchange
+// POST /api/ri-exchange/azure-instances/exchange.
 func (h *Handler) executeAzureExchange(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	session, err := h.requirePermission(ctx, req, "execute", "ri-exchange")
 	if err != nil {
@@ -609,10 +609,12 @@ func (h *Handler) executeAzureExchange(ctx context.Context, req *events.LambdaFu
 	}
 
 	var body AzureExecuteExchangeRequestBody
-	if err := json.Unmarshal([]byte(req.Body), &body); err != nil {
+	err = json.Unmarshal([]byte(req.Body), &body)
+	if err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
-	if err := validateAzureExecuteBody(body); err != nil {
+	err = validateAzureExecuteBody(body)
+	if err != nil {
 		return nil, err
 	}
 
@@ -637,7 +639,8 @@ func (h *Handler) executeAzureExchange(ctx context.Context, req *events.LambdaFu
 		return nil, mapAzureExchangeError("failed to price the exchange before execution", err)
 	}
 
-	if err := checkAzureExchangeMoneyGuardrails(preview, maxRat, body.Currency); err != nil {
+	err = checkAzureExchangeMoneyGuardrails(preview, maxRat, body.Currency)
+	if err != nil {
 		return nil, err
 	}
 

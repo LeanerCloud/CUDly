@@ -333,7 +333,8 @@ func validateExchangeSources(sources []ExchangeableReservation) error {
 	if len(sources) == 0 {
 		return fmt.Errorf("azure: CalculateExchange: at least one source reservation is required")
 	}
-	for i, s := range sources {
+	for i := range sources {
+		s := &sources[i]
 		if s.ReservationID == "" {
 			return fmt.Errorf("azure: CalculateExchange: sources[%d].reservation_id is required", i)
 		}
@@ -431,16 +432,14 @@ func buildCalculateExchangeRequest(sources []ExchangeableReservation, targets []
 // extractPrice reads the optional Amount/CurrencyCode pointer fields from an
 // armreservations.Price, returning a nil amount (never a fabricated 0) when
 // Azure did not report one.
-func extractPrice(p *armreservations.Price) (*float64, string) {
+func extractPrice(p *armreservations.Price) (amount *float64, currency string) {
 	if p == nil {
 		return nil, ""
 	}
-	var amount *float64
 	if p.Amount != nil {
 		v := *p.Amount
 		amount = &v
 	}
-	var currency string
 	if p.CurrencyCode != nil {
 		currency = *p.CurrencyCode
 	}

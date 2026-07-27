@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/pkg/exchange"
@@ -1785,4 +1786,625 @@ func TestExecuteApprovedExchange_LedgerWriteFailure_ReturnsError(t *testing.T) {
 		"error must describe the ledger failure for operator triage")
 	assert.Contains(t, err.Error(), "exch-h4-test",
 		"error must include the exchange ID for operator correlation with AWS")
+}
+
+// --- Azure compatible-offerings / execute exchange tests (issue #596) ---
+
+// mockAzureExchangeOpsClient is a testify mock implementing the widened
+// azureExchangeClient interface. Used by the compatible-offerings and
+// execute handler tests below to control exactly what Azure "returns"
+// without any live credentials or network calls.
+type mockAzureExchangeOpsClient struct {
+	mock.Mock
+}
+
+func (m *mockAzureExchangeOpsClient) ListExchangeableReservations(ctx context.Context) ([]azurecompute.ExchangeableReservation, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]azurecompute.ExchangeableReservation), args.Error(1)
+}
+
+func (m *mockAzureExchangeOpsClient) CalculateExchange(ctx context.Context, sources []azurecompute.ExchangeableReservation, targets []azurecompute.ExchangeTarget) (*azurecompute.ExchangePreview, []azurecompute.CompatibleOffering, error) {
+	args := m.Called(ctx, sources, targets)
+	preview, _ := args.Get(0).(*azurecompute.ExchangePreview)
+	offerings, _ := args.Get(1).([]azurecompute.CompatibleOffering)
+	return preview, offerings, args.Error(2)
+}
+
+func (m *mockAzureExchangeOpsClient) ExecuteExchange(ctx context.Context, sessionID string) (*azurecompute.ExchangeResult, error) {
+	args := m.Called(ctx, sessionID)
+	result, _ := args.Get(0).(*azurecompute.ExchangeResult)
+	return result, args.Error(1)
+}
+
+// validAzureOfferingsBody is a request body satisfying every field
+// validateAzureOfferingsBody checks. Individual tests below build on it.
+const validAzureOfferingsBody = `{
+	"subscription_id": "sub-1",
+	"sources": [{"reservation_id": "res-1", "quantity": 1}],
+	"targets": [{"sku": "Standard_D4s_v3", "location": "eastus", "term": "P1Y", "quantity": 1, "billing_scope_id": "/subscriptions/sub-1"}]
+}`
+
+// validAzureExecuteBody additionally satisfies the execute endpoint's
+// mandatory spend-cap and currency guardrails.
+const validAzureExecuteBody = `{
+	"subscription_id": "sub-1",
+	"sources": [{"reservation_id": "res-1", "quantity": 1}],
+	"targets": [{"sku": "Standard_D4s_v3", "location": "eastus", "term": "P1Y", "quantity": 1, "billing_scope_id": "/subscriptions/sub-1"}],
+	"max_payment_due": "100.00",
+	"currency": "USD"
+}`
+
+func azureOfferingsSource() AzureExchangeSourceBody {
+	return AzureExchangeSourceBody{ReservationID: "res-1", Quantity: 1}
+}
+
+func azureOfferingsTarget() AzureExchangeTargetBody {
+	return AzureExchangeTargetBody{SKU: "Standard_D4s_v3", Location: "eastus", Term: "P1Y", Quantity: 1, BillingScopeID: "/subscriptions/sub-1"}
+}
+
+// --- validateAzureOfferingsBody / validateAzureExecuteBody ---
+
+func TestValidateAzureOfferingsBody(t *testing.T) {
+	manySources := make([]AzureExchangeSourceBody, maxAzureExchangeItems+1)
+	for i := range manySources {
+		manySources[i] = azureOfferingsSource()
+	}
+	manyTargets := make([]AzureExchangeTargetBody, maxAzureExchangeItems+1)
+	for i := range manyTargets {
+		manyTargets[i] = azureOfferingsTarget()
+	}
+
+	missingReservationID := azureOfferingsSource()
+	missingReservationID.ReservationID = ""
+	zeroSourceQty := azureOfferingsSource()
+	zeroSourceQty.Quantity = 0
+
+	missingSKU := azureOfferingsTarget()
+	missingSKU.SKU = ""
+	missingLocation := azureOfferingsTarget()
+	missingLocation.Location = ""
+	missingBillingScope := azureOfferingsTarget()
+	missingBillingScope.BillingScopeID = ""
+	zeroTargetQty := azureOfferingsTarget()
+	zeroTargetQty.Quantity = 0
+	unknownTerm := azureOfferingsTarget()
+	unknownTerm.Term = "P2Y"
+
+	tests := []struct {
+		name    string
+		body    AzureCompatibleOfferingsRequestBody
+		wantErr string
+	}{
+		{
+			"missing subscription_id",
+			AzureCompatibleOfferingsRequestBody{Sources: []AzureExchangeSourceBody{azureOfferingsSource()}, Targets: []AzureExchangeTargetBody{azureOfferingsTarget()}},
+			"subscription_id is required",
+		},
+		{
+			"empty sources",
+			AzureCompatibleOfferingsRequestBody{SubscriptionID: "sub-1", Targets: []AzureExchangeTargetBody{azureOfferingsTarget()}},
+			"sources is required",
+		},
+		{
+			"empty targets",
+			AzureCompatibleOfferingsRequestBody{SubscriptionID: "sub-1", Sources: []AzureExchangeSourceBody{azureOfferingsSource()}},
+			"targets is required",
+		},
+		{
+			"too many sources",
+			AzureCompatibleOfferingsRequestBody{SubscriptionID: "sub-1", Sources: manySources, Targets: []AzureExchangeTargetBody{azureOfferingsTarget()}},
+			"sources exceeds the maximum",
+		},
+		{
+			"too many targets",
+			AzureCompatibleOfferingsRequestBody{SubscriptionID: "sub-1", Sources: []AzureExchangeSourceBody{azureOfferingsSource()}, Targets: manyTargets},
+			"targets exceeds the maximum",
+		},
+		{
+			"source missing reservation_id",
+			AzureCompatibleOfferingsRequestBody{SubscriptionID: "sub-1", Sources: []AzureExchangeSourceBody{missingReservationID}, Targets: []AzureExchangeTargetBody{azureOfferingsTarget()}},
+			"sources[0].reservation_id is required",
+		},
+		{
+			"source quantity zero",
+			AzureCompatibleOfferingsRequestBody{SubscriptionID: "sub-1", Sources: []AzureExchangeSourceBody{zeroSourceQty}, Targets: []AzureExchangeTargetBody{azureOfferingsTarget()}},
+			"sources[0].quantity must be >= 1",
+		},
+		{
+			"target missing sku",
+			AzureCompatibleOfferingsRequestBody{SubscriptionID: "sub-1", Sources: []AzureExchangeSourceBody{azureOfferingsSource()}, Targets: []AzureExchangeTargetBody{missingSKU}},
+			"targets[0].sku is required",
+		},
+		{
+			"target missing location",
+			AzureCompatibleOfferingsRequestBody{SubscriptionID: "sub-1", Sources: []AzureExchangeSourceBody{azureOfferingsSource()}, Targets: []AzureExchangeTargetBody{missingLocation}},
+			"targets[0].location is required",
+		},
+		{
+			"target missing billing_scope_id",
+			AzureCompatibleOfferingsRequestBody{SubscriptionID: "sub-1", Sources: []AzureExchangeSourceBody{azureOfferingsSource()}, Targets: []AzureExchangeTargetBody{missingBillingScope}},
+			"targets[0].billing_scope_id is required",
+		},
+		{
+			"target quantity zero",
+			AzureCompatibleOfferingsRequestBody{SubscriptionID: "sub-1", Sources: []AzureExchangeSourceBody{azureOfferingsSource()}, Targets: []AzureExchangeTargetBody{zeroTargetQty}},
+			"targets[0].quantity must be >= 1",
+		},
+		{
+			"target unknown term",
+			AzureCompatibleOfferingsRequestBody{SubscriptionID: "sub-1", Sources: []AzureExchangeSourceBody{azureOfferingsSource()}, Targets: []AzureExchangeTargetBody{unknownTerm}},
+			`targets[0].term: unsupported term "P2Y"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateAzureOfferingsBody(tt.body)
+			require.Error(t, err)
+			ce, ok := IsClientError(err)
+			require.True(t, ok, "expected a ClientError, got: %v", err)
+			assert.Equal(t, 400, ce.code)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestValidateAzureExecuteBody_RequiresCapAndCurrency(t *testing.T) {
+	base := AzureExecuteExchangeRequestBody{
+		SubscriptionID: "sub-1",
+		Sources:        []AzureExchangeSourceBody{azureOfferingsSource()},
+		Targets:        []AzureExchangeTargetBody{azureOfferingsTarget()},
+	}
+
+	missingCap := base
+	missingCap.Currency = "USD"
+	err := validateAzureExecuteBody(missingCap)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "max_payment_due is required")
+
+	missingCurrency := base
+	missingCurrency.MaxPaymentDue = "100.00"
+	err = validateAzureExecuteBody(missingCurrency)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "currency is required")
+}
+
+// --- getAzureCompatibleOfferings ---
+
+func TestGetAzureCompatibleOfferings_NoAuth(t *testing.T) {
+	h := &Handler{}
+	_, err := h.getAzureCompatibleOfferings(context.Background(), &events.LambdaFunctionURLRequest{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "authentication")
+}
+
+func TestGetAzureCompatibleOfferings_InvalidJSON(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "view", "purchases").Return(true, nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	h := &Handler{auth: mockAuth}
+	_, err := h.getAzureCompatibleOfferings(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    "not json",
+	})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+}
+
+// TestGetAzureCompatibleOfferings_UnregisteredSubscription mirrors
+// TestListExchangeableAzureRIs_NoAzureAccountRegistered but asserts the
+// stricter D5 contract for the offerings/execute endpoints: an
+// unregistered subscription is a 404, not a graceful empty state (unlike
+// the list endpoint, these endpoints cannot silently do nothing -- the
+// caller asked to price a specific exchange).
+func TestGetAzureCompatibleOfferings_UnregisteredSubscription(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "view", "purchases").Return(true, nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	mockStore := &MockConfigStore{}
+	mockStore.GetCloudAccountByExternalIDFn = func(_ context.Context, provider, externalID string) (*config.CloudAccount, error) {
+		require.Equal(t, "azure", provider)
+		require.Equal(t, "sub-1", externalID)
+		return nil, nil
+	}
+
+	h := &Handler{auth: mockAuth, config: mockStore}
+	_, err := h.getAzureCompatibleOfferings(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureOfferingsBody,
+	})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 404, ce.code)
+	assert.Contains(t, err.Error(), `no Azure account registered for subscription "sub-1"`)
+}
+
+func TestGetAzureCompatibleOfferings_AzureClientFault(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "view", "purchases").Return(true, nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	opsClient := new(mockAzureExchangeOpsClient)
+	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).
+		Return(nil, nil, &azcore.ResponseError{StatusCode: 400, ErrorCode: "ReservationNotFound"})
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := &Handler{
+		auth:                 mockAuth,
+		azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient },
+	}
+	_, err := h.getAzureCompatibleOfferings(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureOfferingsBody,
+	})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+}
+
+func TestGetAzureCompatibleOfferings_TransientErrorIs500(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "view", "purchases").Return(true, nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	opsClient := new(mockAzureExchangeOpsClient)
+	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).
+		Return(nil, nil, fmt.Errorf("azure: CalculateExchange: transport timeout"))
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := &Handler{
+		auth:                 mockAuth,
+		azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient },
+	}
+	_, err := h.getAzureCompatibleOfferings(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureOfferingsBody,
+	})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 500, ce.code, "a non-Azure-client-fault error must map to 500, not 400")
+}
+
+// TestGetAzureCompatibleOfferings_HappyPath asserts the response carries a
+// nil (not zero-coerced) NetPayable when Azure omits it, alongside a
+// populated offering, proving the pointer money-field plumbing end to end.
+func TestGetAzureCompatibleOfferings_HappyPath(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "view", "purchases").Return(true, nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	preview := &azurecompute.ExchangePreview{SessionID: "sess-preview-1"} // NetPayable intentionally nil
+	offerings := []azurecompute.CompatibleOffering{
+		{SKU: "Standard_D4s_v3", Location: "eastus", Term: "P1Y", Quantity: 1, BillingCurrencyTotal: toPtr(42.5), CurrencyCode: "USD"},
+	}
+	opsClient := new(mockAzureExchangeOpsClient)
+	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(preview, offerings, nil)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := &Handler{
+		auth:                 mockAuth,
+		azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient },
+	}
+	res, err := h.getAzureCompatibleOfferings(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureOfferingsBody,
+	})
+	require.NoError(t, err)
+	resp, ok := res.(*AzureCompatibleOfferingsResponse)
+	require.True(t, ok)
+	require.NotNil(t, resp.Preview)
+	assert.Nil(t, resp.Preview.NetPayable, "an omitted Azure NetPayable must surface as nil, never coerced to 0")
+	require.Len(t, resp.Offerings, 1)
+	require.NotNil(t, resp.Offerings[0].BillingCurrencyTotal)
+	assert.InDelta(t, 42.5, *resp.Offerings[0].BillingCurrencyTotal, 0.0001)
+}
+
+// --- executeAzureExchange: auth fail-closed ---
+
+func TestExecuteAzureExchange_NoAuth(t *testing.T) {
+	h := &Handler{}
+	_, err := h.executeAzureExchange(context.Background(), &events.LambdaFunctionURLRequest{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "authentication")
+}
+
+func TestExecuteAzureExchange_MissingExecutePermission(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(false, nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	h := &Handler{auth: mockAuth}
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody,
+	})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+}
+
+// TestExecuteAzureExchange_ConstraintExceeded proves the fail-closed
+// requirePermissionConstraints gate blocks execution BEFORE any pricing
+// call: CalculateExchange must not be invoked when the constraint check
+// denies the request.
+func TestExecuteAzureExchange_ConstraintExceeded(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange", mock.Anything).Return(false, nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	mockStore := &MockConfigStore{}
+	mockStore.GetCloudAccountByExternalIDFn = func(_ context.Context, _, _ string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: "acct-1"}, nil
+	}
+
+	opsClient := new(mockAzureExchangeOpsClient) // no CalculateExchange/ExecuteExchange expectations set
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := &Handler{
+		auth:                 mockAuth,
+		config:               mockStore,
+		azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient },
+	}
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody,
+	})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.Error(), "constraints")
+}
+
+// --- executeAzureExchange: validation ---
+
+func TestExecuteAzureExchange_MalformedJSON(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	h := &Handler{auth: mockAuth}
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    "not json",
+	})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+}
+
+func TestExecuteAzureExchange_MissingMaxPaymentDue(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	h := &Handler{auth: mockAuth}
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureOfferingsBody, // no max_payment_due / currency
+	})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, err.Error(), "max_payment_due is required")
+}
+
+func TestExecuteAzureExchange_InvalidMaxPaymentDue(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	h := &Handler{auth: mockAuth}
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    `{"subscription_id":"sub-1","sources":[{"reservation_id":"res-1","quantity":1}],"targets":[{"sku":"Standard_D4s_v3","location":"eastus","term":"P1Y","quantity":1,"billing_scope_id":"/subscriptions/sub-1"}],"max_payment_due":"not-a-number","currency":"USD"}`,
+	})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, err.Error(), "invalid max_payment_due")
+}
+
+// --- executeAzureExchange: money-path guardrails ---
+//
+// Each test below asserts BOTH the response status and that
+// client.ExecuteExchange was never called (no matching mock expectation is
+// registered, so testify panics -- failing the test -- the instant a code
+// change removes the guard and lets execution reach ExecuteExchange).
+
+// newAzureExecuteMoneyPathHandler builds a Handler wired for the money-path
+// guardrail tests: auth grants execute:ri-exchange and passes the
+// constraint check unconditionally, and the Azure client factory returns
+// opsClient. Shared by every guardrail test below so each one only sets up
+// the CalculateExchange response under test.
+func newAzureExecuteMoneyPathHandler(t *testing.T, opsClient azureExchangeClient) *Handler {
+	t.Helper()
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange", mock.Anything).Return(true, nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	mockStore := &MockConfigStore{}
+	mockStore.GetCloudAccountByExternalIDFn = func(_ context.Context, _, _ string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: "acct-1"}, nil
+	}
+
+	return &Handler{
+		auth:                 mockAuth,
+		config:               mockStore,
+		azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient },
+	}
+}
+
+func TestExecuteAzureExchange_CapExceeded(t *testing.T) {
+	ctx := context.Background()
+	opsClient := new(mockAzureExchangeOpsClient)
+	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
+		&azurecompute.ExchangePreview{SessionID: "sess-fresh", NetPayable: toPtr(500.00), NetPayableCurrency: "USD"},
+		[]azurecompute.CompatibleOffering{}, nil,
+	)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := newAzureExecuteMoneyPathHandler(t, opsClient)
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody, // max_payment_due: "100.00"
+	})
+	require.Error(t, err, "a quoted net payable above the cap must refuse to execute")
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 422, ce.code)
+	assert.Contains(t, err.Error(), "exceeds max_payment_due")
+}
+
+func TestExecuteAzureExchange_PolicyErrorsBlockExecution(t *testing.T) {
+	ctx := context.Background()
+	opsClient := new(mockAzureExchangeOpsClient)
+	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
+		&azurecompute.ExchangePreview{
+			SessionID:          "sess-fresh",
+			NetPayable:         toPtr(10.00),
+			NetPayableCurrency: "USD",
+			PolicyErrors:       []string{"reservations must share a billing account"},
+		},
+		[]azurecompute.CompatibleOffering{}, nil,
+	)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := newAzureExecuteMoneyPathHandler(t, opsClient)
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody,
+	})
+	require.Error(t, err, "a non-empty PolicyErrors preview must refuse to execute")
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 422, ce.code)
+	assert.Contains(t, err.Error(), "reservations must share a billing account")
+}
+
+func TestExecuteAzureExchange_CurrencyMismatchBlocksExecution(t *testing.T) {
+	ctx := context.Background()
+	opsClient := new(mockAzureExchangeOpsClient)
+	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
+		&azurecompute.ExchangePreview{SessionID: "sess-fresh", NetPayable: toPtr(10.00), NetPayableCurrency: "EUR"},
+		[]azurecompute.CompatibleOffering{}, nil,
+	)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := newAzureExecuteMoneyPathHandler(t, opsClient)
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody, // requests "currency":"USD"
+	})
+	require.Error(t, err, "a quoted currency that does not match the requested currency must refuse to execute")
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 422, ce.code)
+	assert.Contains(t, err.Error(), `quoted currency "EUR" does not match requested currency "USD"`)
+}
+
+func TestExecuteAzureExchange_NilNetPayableRefused(t *testing.T) {
+	ctx := context.Background()
+	opsClient := new(mockAzureExchangeOpsClient)
+	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
+		&azurecompute.ExchangePreview{SessionID: "sess-fresh"}, // NetPayable intentionally nil
+		[]azurecompute.CompatibleOffering{}, nil,
+	)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := newAzureExecuteMoneyPathHandler(t, opsClient)
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody,
+	})
+	require.Error(t, err, "a nil NetPayable must never be treated as a free exchange")
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 422, ce.code)
+	assert.Contains(t, err.Error(), "did not return a net payable amount")
+}
+
+// TestExecuteAzureExchange_HappyPath is the central proof of the D2
+// server-re-quote design: ExecuteExchange must receive EXACTLY the
+// SessionID this test's CalculateExchange mock returned, never a
+// client-supplied value (the request body carries none).
+func TestExecuteAzureExchange_HappyPath(t *testing.T) {
+	ctx := context.Background()
+	const freshSessionID = "sess-server-issued-99"
+
+	opsClient := new(mockAzureExchangeOpsClient)
+	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
+		&azurecompute.ExchangePreview{
+			SessionID:          freshSessionID,
+			NetPayable:         toPtr(75.00),
+			NetPayableCurrency: "USD",
+			RefundsTotal:       toPtr(20.00),
+			PurchasesTotal:     toPtr(95.00),
+		},
+		[]azurecompute.CompatibleOffering{}, nil,
+	)
+	opsClient.On("ExecuteExchange", ctx, mock.MatchedBy(func(sessionID string) bool {
+		return sessionID == freshSessionID
+	})).Return(&azurecompute.ExchangeResult{
+		SessionID:          freshSessionID,
+		NetPayable:         toPtr(75.00),
+		NetPayableCurrency: "USD",
+		Status:             "Succeeded",
+	}, nil)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := newAzureExecuteMoneyPathHandler(t, opsClient)
+	res, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody, // cap "100.00" USD >= quoted 75.00 USD
+	})
+	require.NoError(t, err)
+	resp, ok := res.(*AzureExecuteExchangeResponse)
+	require.True(t, ok)
+	assert.Equal(t, freshSessionID, resp.SessionID)
+	assert.Equal(t, "Succeeded", resp.Status)
+	require.NotNil(t, resp.NetPayable)
+	assert.InDelta(t, 75.00, *resp.NetPayable, 0.0001)
+	assert.Equal(t, "USD", resp.NetPayableCurrency)
+	require.NotNil(t, resp.RefundsTotal)
+	assert.InDelta(t, 20.00, *resp.RefundsTotal, 0.0001)
+	require.NotNil(t, resp.PurchasesTotal)
+	assert.InDelta(t, 95.00, *resp.PurchasesTotal, 0.0001)
 }
