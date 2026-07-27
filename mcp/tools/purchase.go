@@ -371,8 +371,15 @@ func logPurchaseAttempt(req PurchaseRequest, rec common.Recommendation, token st
 		rec.Term, rec.PaymentOption, common.MaskToken(token))
 }
 
-func logPurchaseOutcome(rec common.Recommendation, token, commitmentID string, err error) {
-	if err != nil {
+// logPurchaseOutcome logs FAILED whenever success is false, even if err is
+// nil: a provider can report PurchaseResult{Success: false, Error: nil} (no
+// Go error, no result.Error, just a plain "did not buy anything"), and that
+// case must never be misrecorded as "mcp purchase OK" in the audit trail.
+func logPurchaseOutcome(rec common.Recommendation, token, commitmentID string, success bool, err error) {
+	if !success {
+		if err == nil {
+			err = fmt.Errorf("provider reported failure with no error detail")
+		}
 		log.Printf("mcp purchase FAILED: provider=%s resource=%s token=%s: %v",
 			rec.Provider, rec.ResourceType, common.MaskToken(token), err)
 		return
@@ -422,12 +429,12 @@ func ExecutePurchase(ctx context.Context, req PurchaseRequest) (*PurchaseRespons
 
 	result, err := client.PurchaseCommitment(ctx, rec, opts)
 	if err != nil {
-		logPurchaseOutcome(rec, token, "", err)
+		logPurchaseOutcome(rec, token, "", false, err)
 		// Full provider error text surfaces to the caller (feedback:
 		// providers must never swallow the underlying SDK/HTTP error).
 		return nil, fmt.Errorf("purchase commitment failed: %w", err)
 	}
-	logPurchaseOutcome(rec, token, result.CommitmentID, result.Error)
+	logPurchaseOutcome(rec, token, result.CommitmentID, result.Success, result.Error)
 
 	resp := &PurchaseResponse{
 		Success:           result.Success,

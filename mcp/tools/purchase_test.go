@@ -649,6 +649,28 @@ func TestExecutePurchaseAuditLogging(t *testing.T) {
 		assert.Contains(t, out, "mcp purchase FAILED")
 		assert.Contains(t, out, "insufficient capacity")
 	})
+
+	// TestExecutePurchaseAuditLogging/a_provider-reported_failure_is_never_
+	// logged_as_OK is the regression guard for the audit-line bug found in
+	// review: PurchaseCommitment can return a nil Go error alongside
+	// PurchaseResult{Success: false, Error: nil} (the provider ran the call
+	// but reports it did not actually buy anything), and before this fix that
+	// combination fell through to the "mcp purchase OK" line because
+	// logPurchaseOutcome only inspected the (nil) error, never
+	// result.Success.
+	t.Run("a provider-reported failure is never logged as OK", func(t *testing.T) {
+		fake := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: false, Error: nil}}
+		out := capture(func() {
+			_, err := ExecutePurchase(context.Background(), PurchaseRequest{
+				Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true,
+				ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake, nil },
+			})
+			require.NoError(t, err, "a provider-reported failure surfaces via the response, not a Go error")
+		})
+		assert.Contains(t, out, "mcp purchase FAILED",
+			"Success=false must be logged as a failure even with a nil result.Error")
+		assert.NotContains(t, out, "mcp purchase OK")
+	})
 }
 
 // TestResolveDryRunConfirm pins the shared default resolution now used by
