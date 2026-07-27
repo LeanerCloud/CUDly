@@ -426,11 +426,11 @@ func adjustRecommendationForExcludedVersions(rec common.Recommendation, instance
 		return rec
 	}
 
-	// Get the engine name from the recommendation
+	// Get the engine name from the recommendation. DatabaseDetails is
+	// always a pointer (every producer constructs it that way; see
+	// pkg/common/service_details_codec.go's package doc).
 	var recEngine string
 	switch details := rec.Details.(type) {
-	case common.DatabaseDetails:
-		recEngine = details.Engine
 	case *common.DatabaseDetails:
 		recEngine = details.Engine
 	default:

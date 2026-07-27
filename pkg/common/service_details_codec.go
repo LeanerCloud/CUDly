@@ -18,6 +18,15 @@
 // type definitions (ComputeDetails / DatabaseDetails / …). internal/config
 // (where RecommendationRecord lives) is deliberately kept free of
 // pkg/common imports so the dependency graph stays a strict DAG.
+//
+// Pointer invariant: this codec always reconstructs *DatabaseDetails /
+// *CacheDetails, and every other producer (AWS, Azure, the CSV loader)
+// constructs them as pointers too, so Recommendation.Details never holds a
+// bare DatabaseDetails / CacheDetails value anywhere in the codebase.
+// Consumers that type-switch on Details only need the pointer case for
+// these two types. ComputeDetails is the one remaining exception: the GCP
+// compute-engine client still constructs it as a value, so consumers that
+// handle ComputeDetails must keep accepting both forms.
 package common
 
 import (

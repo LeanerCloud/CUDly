@@ -40,19 +40,18 @@ func NormalizeEngineName(engine string) string {
 	return strings.ToLower(engine)
 }
 
-// EngineFromDetails extracts and normalizes the engine name from recommendation details.
-// Returns an empty string for non-database/cache service types.
+// EngineFromDetails extracts and normalizes the engine name from
+// recommendation details. Returns an empty string for non-database/cache
+// service types. DatabaseDetails/CacheDetails are always pointers (every
+// producer constructs them that way; see service_details_codec.go's
+// package doc for the invariant).
 func EngineFromDetails(details ServiceDetails) string {
 	if details == nil {
 		return ""
 	}
 	var engine string
 	switch d := details.(type) {
-	case DatabaseDetails:
-		engine = d.Engine
 	case *DatabaseDetails:
-		engine = d.Engine
-	case CacheDetails:
 		engine = d.Engine
 	case *CacheDetails:
 		engine = d.Engine

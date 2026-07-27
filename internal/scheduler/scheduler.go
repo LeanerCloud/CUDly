@@ -1244,21 +1244,18 @@ func nonZeroPtr(v float64) *float64 {
 }
 
 // extractEngine pulls the engine string out of a polymorphic
-// common.ServiceDetails value when one is present, supporting both value
-// and pointer receivers as the provider parsers historically used either
-// shape. Returns "" for any other Details type (or nil). Extracted from
-// convertRecommendations to keep that function under the gocyclo budget
-// (min-complexity: 10 in .pre-commit-config.yaml).
+// common.ServiceDetails value when one is present. DatabaseDetails/
+// CacheDetails are always pointers (every producer constructs them that
+// way; see pkg/common/service_details_codec.go's package doc for the
+// invariant). Returns "" for any other Details type (or nil). Extracted
+// from convertRecommendations to keep that function under the gocyclo
+// budget (min-complexity: 10 in .pre-commit-config.yaml).
 func extractEngine(details common.ServiceDetails) string {
 	if details == nil {
 		return ""
 	}
 	switch d := details.(type) {
-	case common.DatabaseDetails:
-		return d.Engine
 	case *common.DatabaseDetails:
-		return d.Engine
-	case common.CacheDetails:
 		return d.Engine
 	case *common.CacheDetails:
 		return d.Engine

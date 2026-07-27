@@ -690,17 +690,17 @@ func adjustSingleRecommendation(rec common.Recommendation, existingMap map[strin
 }
 
 // getEngineFromRecommendation extracts the engine from recommendation details.
+// DatabaseDetails/CacheDetails are always pointers (every producer -- AWS,
+// Azure, the CSV loader, and the JSON codec -- constructs them that way); see
+// pkg/common/service_details_codec.go's package doc for the pointer
+// invariant.
 func getEngineFromRecommendation(rec common.Recommendation) string {
 	if rec.Details == nil {
 		return ""
 	}
 	var engine string
 	switch details := rec.Details.(type) {
-	case common.DatabaseDetails:
-		engine = details.Engine
 	case *common.DatabaseDetails:
-		engine = details.Engine
-	case common.CacheDetails:
 		engine = details.Engine
 	case *common.CacheDetails:
 		engine = details.Engine
