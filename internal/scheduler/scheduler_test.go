@@ -277,6 +277,13 @@ func TestScheduler_CollectRecommendations_EmptyTokenSkipsClear(t *testing.T) {
 
 	globalCfg := &config.GlobalConfig{EnabledProviders: []string{}}
 	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
+	// The expectation is registered (as Maybe) purely so an unwanted call is
+	// RECORDED. MockConfigStore short-circuits methods with no registered
+	// expectation before reaching mock.Called, so the call never lands in
+	// m.Calls and the AssertNotCalled below would pass vacuously: deleting the
+	// empty-token guard in clearCollectionStartedBestEffort kept this test
+	// green until this line was added.
+	mockStore.On("ClearCollectionStarted", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	scheduler := &Scheduler{
 		config:       mockStore,

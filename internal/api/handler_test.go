@@ -627,6 +627,11 @@ func TestRunMarkedCollection_AsyncInvokeSuccess_PayloadCarriesOwnerToken(t *test
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetRecommendationsFreshness", mock.Anything).
 		Return(&config.RecommendationsFreshness{}, nil)
+	// Registered (as Maybe) so an unwanted clear is RECORDED: MockConfigStore
+	// short-circuits methods with no registered expectation before reaching
+	// mock.Called, so without this the AssertNotCalled below would pass even
+	// if the happy path did clear the marker.
+	mockStore.On("ClearCollectionStarted", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	var capturedPayload map[string]string
 	invoker := &stubLambdaInvoker{
