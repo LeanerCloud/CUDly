@@ -79,9 +79,11 @@ type Handler struct {
 	targetOfferingsEC2Factory func(aws.Config) targetOfferingsEC2Client
 
 	// Optional Azure exchange client factory injected by tests. When nil
-	// (the production default), buildAzureExchangeClient uses
-	// azidentity.NewDefaultAzureCredential to construct a real
-	// armreservations-backed client.
+	// (the production default), buildAzureExchangeClient resolves the
+	// registered CloudAccount's per-subscription credentials and constructs
+	// a real armreservations-backed client. The azureExchangeClient
+	// interface covers listing exchangeable reservations plus pricing
+	// (CalculateExchange) and committing (ExecuteExchange) an exchange.
 	azureExchangeFactory func(subscriptionID string) azureExchangeClient
 
 	// Optional marketplace EC2 client factory injected by tests. When nil

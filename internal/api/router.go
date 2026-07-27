@@ -301,6 +301,8 @@ func (r *Router) registerRoutes() {
 		// each handler calls requirePermission so the per-handler check is
 		// the real gate. approve/reject stay AuthPublic (token-based).
 		{ExactPath: "/api/ri-exchange/azure-instances", Method: "GET", Handler: r.listExchangeableAzureRIsHandler, Auth: AuthUser},
+		{ExactPath: "/api/ri-exchange/azure-instances/compatible-offerings", Method: "POST", Handler: r.getAzureCompatibleOfferingsHandler, Auth: AuthUser},
+		{ExactPath: "/api/ri-exchange/azure-instances/exchange", Method: "POST", Handler: r.executeAzureExchangeHandler, Auth: AuthUser},
 		{ExactPath: "/api/ri-exchange/instances", Method: "GET", Handler: r.listConvertibleRIsHandler, Auth: AuthUser},
 		{ExactPath: "/api/ri-exchange/target-offerings", Method: "GET", Handler: r.listTargetOfferingsHandler, Auth: AuthUser},
 		{ExactPath: "/api/ri-exchange/utilization", Method: "GET", Handler: r.getRIUtilizationHandler, Auth: AuthUser},
@@ -816,6 +818,14 @@ func (r *Router) getCoverageBreakdownHandler(ctx context.Context, req *events.La
 
 func (r *Router) listExchangeableAzureRIsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.listExchangeableAzureRIs(ctx, req)
+}
+
+func (r *Router) getAzureCompatibleOfferingsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.getAzureCompatibleOfferings(ctx, req)
+}
+
+func (r *Router) executeAzureExchangeHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.executeAzureExchange(ctx, req)
 }
 
 func (r *Router) listConvertibleRIsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

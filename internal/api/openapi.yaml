@@ -699,6 +699,112 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
 
+  /api/ri-exchange/azure-instances/compatible-offerings:
+    post:
+      operationId: getAzureCompatibleOfferings
+      tags: [RIExchange]
+      summary: Price a proposed Azure RI exchange and list compatible offerings
+      description: >
+        Requires `view:purchases` permission. Runs Azure CalculateExchange
+        against the given source reservations and target SKUs and returns
+        the priced candidate offerings plus a cost preview, without
+        committing any financial transaction.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subscription_id, sources, targets]
+              properties:
+                subscription_id:
+                  type: string
+                sources:
+                  type: array
+                  items:
+                    type: object
+                targets:
+                  type: array
+                  items:
+                    type: object
+      responses:
+        '200':
+          description: Compatible offerings and cost preview
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+
+  /api/ri-exchange/azure-instances/exchange:
+    post:
+      operationId: executeAzureExchange
+      tags: [RIExchange]
+      summary: Execute an Azure RI exchange (irreversible)
+      description: >
+        Requires `execute:ri-exchange` permission (deliberately separate from
+        `execute:purchases`, mirroring the AWS execute endpoint). The server
+        re-runs CalculateExchange itself against the given sources/targets
+        and only executes the fresh session that call returns -- a
+        client-supplied session is never trusted. Execution is refused when
+        the fresh quote carries policy errors, omits a net payable amount,
+        is denominated in a different currency than requested, or exceeds
+        `max_payment_due`.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subscription_id, sources, targets, max_payment_due, currency]
+              properties:
+                subscription_id:
+                  type: string
+                sources:
+                  type: array
+                  items:
+                    type: object
+                targets:
+                  type: array
+                  items:
+                    type: object
+                max_payment_due:
+                  type: string
+                  description: Spend-cap guardrail (decimal string, e.g. "1000.00")
+                currency:
+                  type: string
+                  description: ISO 4217 currency code the cap is denominated in
+      responses:
+        '200':
+          description: Exchange executed
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+
   /api/ri-exchange/target-offerings:
     get:
       operationId: listTargetOfferings
@@ -1724,6 +1830,12 @@ components:
             $ref: '#/components/schemas/Error'
     NotFound:
       description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    UnprocessableEntity:
+      description: Request understood but rejected by a business-rule guardrail
       content:
         application/json:
           schema:

@@ -704,7 +704,10 @@ var _ = config.RIExchangeRecord{}
 // --- Azure exchangeable RI tests ---
 
 // stubAzureExchangeClient is a minimal implementation of azureExchangeClient
-// for unit tests.
+// for unit tests. It only exercises ListExchangeableReservations; the
+// CalculateExchange/ExecuteExchange methods exist solely to satisfy the
+// widened interface and are not used by the listing tests below (the
+// dedicated mockAzureExchangeOpsClient in this file covers those).
 type stubAzureExchangeClient struct {
 	err          error
 	reservations []azurecompute.ExchangeableReservation
@@ -712,6 +715,14 @@ type stubAzureExchangeClient struct {
 
 func (s *stubAzureExchangeClient) ListExchangeableReservations(_ context.Context) ([]azurecompute.ExchangeableReservation, error) {
 	return s.reservations, s.err
+}
+
+func (s *stubAzureExchangeClient) CalculateExchange(_ context.Context, _ []azurecompute.ExchangeableReservation, _ []azurecompute.ExchangeTarget) (*azurecompute.ExchangePreview, []azurecompute.CompatibleOffering, error) {
+	return nil, nil, fmt.Errorf("stubAzureExchangeClient.CalculateExchange not implemented")
+}
+
+func (s *stubAzureExchangeClient) ExecuteExchange(_ context.Context, _ string) (*azurecompute.ExchangeResult, error) {
+	return nil, fmt.Errorf("stubAzureExchangeClient.ExecuteExchange not implemented")
 }
 
 func TestListExchangeableAzureRIs_RequiresPermission(t *testing.T) {
