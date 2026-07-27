@@ -101,6 +101,29 @@ func CredentialScope(explicit string, envVars ...string) string {
 	return ""
 }
 
+// ResolveDryRunConfirm applies the dry_run=true / confirm=false defaults to a
+// tool's optional flags. Go's zero value for bool cannot distinguish "caller
+// omitted the field" from "caller explicitly set it false", which is why both
+// arrive as *bool; this is the single place that resolves them to concrete
+// booleans.
+//
+// Shared by every purchase tool rather than reimplemented per tool. This is
+// the gate that decides whether real money moves, so seven hand-copied
+// versions of it were seven chances for one to drift: a copy that defaulted
+// dryRun to false would turn an unconfirmed preview into a live purchase, and
+// nothing but review would catch it.
+func ResolveDryRunConfirm(dryRun, confirm *bool) (effectiveDryRun, effectiveConfirm bool) {
+	// Absent dry_run means preview. Never the reverse.
+	effectiveDryRun = true
+	if dryRun != nil {
+		effectiveDryRun = *dryRun
+	}
+	if confirm != nil {
+		effectiveConfirm = *confirm
+	}
+	return effectiveDryRun, effectiveConfirm
+}
+
 // PurchaseResponse is the structured result returned to the MCP caller for
 // both preview and real-purchase outcomes. Error is a string (not the Go
 // error) because it crosses the MCP JSON-RPC boundary as tool output, not a
