@@ -68,7 +68,16 @@ export function renderApiKeysUsageSummary(stats: APIKeysUsageStats): void {
   tiles.className = 'apikeys-usage-tiles';
   tiles.appendChild(buildSummaryTile('Active keys', String(stats.total_active)));
   tiles.appendChild(buildSummaryTile('Requests (window)', formatCount(stats.total_requests_window)));
-  tiles.appendChild(buildSummaryTile('Requests (lifetime)', formatCount(stats.total_requests_lifetime)));
+  // A "+" suffix marks the lifetime total as a lower bound: at least one key
+  // was in use before the counters existed, so its share is unrecoverable and
+  // showing the sum unqualified would present an undercount as exact.
+  const lifetime = formatCount(stats.total_requests_lifetime);
+  tiles.appendChild(
+    buildSummaryTile(
+      'Requests (lifetime)',
+      stats.lifetime_partial ? `${lifetime}+` : lifetime
+    )
+  );
   card.appendChild(tiles);
 
   if (stats.top_keys && stats.top_keys.length > 0) {

@@ -414,7 +414,9 @@ export interface APIKeyInfo {
   // a true rolling 24h total -- request_count_window_start says exactly
   // which period it covers, and both come back as 0 / absent once that
   // window has closed.
-  request_count_total?: number;
+  // null when the key predates migration 000093, i.e. the lifetime volume is
+  // unknown rather than zero.
+  request_count_total?: number | null;
   request_count_window?: number;
   request_count_window_start?: string;
 }

@@ -50,6 +50,28 @@ func effectiveWindowUsage(key *UserAPIKey, now time.Time) (int64, *time.Time) {
 	return key.RequestCountWindow, key.RequestCountWindowStart
 }
 
+// effectiveLifetimeUsage returns the lifetime request count to report, or nil
+// when the true count is not known.
+//
+// Migration 000093 added request_count_total with DEFAULT 0, so every key that
+// already existed reads as zero no matter how much traffic it actually served.
+// RecordAPIKeyUsage is the only writer of last_used_at on the request path and
+// it always bumps the counter in the same statement, so "has been used at
+// least once, yet carries a zero lifetime count" can only mean the usage
+// predates the counter. Reporting that as 0 would assert a request volume we
+// do not have; nil says "unknown" and lets the UI show it as such.
+//
+// This relies on last_used_at and request_count_total moving together. Any new
+// caller of the legacy UpdateAPIKeyLastUsed (which bumps only the timestamp)
+// would break the invariant and make a genuinely-unused key look unknown.
+func effectiveLifetimeUsage(key *UserAPIKey) *int64 {
+	if key.RequestCountTotal == 0 && key.LastUsedAt != nil {
+		return nil
+	}
+	total := key.RequestCountTotal
+	return &total
+}
+
 // API wrapper methods for API key operations
 // These methods return API-friendly types and handle type conversions
 
@@ -80,8 +102,14 @@ type APIKeyInfo struct {
 	// is a fixed/tumbling window count, not a true rolling 24h total, and is
 	// zero once that window has closed -- see effectiveWindowUsage,
 	// PostgresStore.RecordAPIKeyUsage and RequestCountWindowStart above.
-	RequestCountTotal  int64 `json:"request_count_total"`
-	RequestCountWindow int64 `json:"request_count_window"`
+	//
+	// RequestCountTotal is a pointer because "unknown" and "zero" are
+	// different answers: a key that was already in use before migration 000093
+	// added the counter has no recoverable lifetime figure, and reporting 0
+	// for it would be a fabricated number. nil means unknown; see
+	// effectiveLifetimeUsage.
+	RequestCountTotal  *int64 `json:"request_count_total"`
+	RequestCountWindow int64  `json:"request_count_window"`
 }
 
 // APIKeysUsageStatsTopKey is one entry in the top-keys list returned by
@@ -105,10 +133,16 @@ type APIKeysUsageStatsTopKey struct {
 //
 // TotalActive counts the keys the authentication path would accept, so a
 // key that is unrevoked but past its expiry is not counted.
+//
+// TotalRequestsLifetime sums only the keys whose lifetime count is known.
+// LifetimePartial reports whether any key was left out because its usage
+// predates migration 000093 (see effectiveLifetimeUsage), so the UI can show
+// the total as a lower bound instead of presenting an undercount as exact.
 type APIKeysUsageStatsResponse struct {
 	TotalActive           int                       `json:"total_active"`
 	TotalRequestsWindow   int64                     `json:"total_requests_window"`
 	TotalRequestsLifetime int64                     `json:"total_requests_lifetime"`
+	LifetimePartial       bool                      `json:"lifetime_partial"`
 	TopKeys               []APIKeysUsageStatsTopKey `json:"top_keys"`
 }
 
@@ -170,7 +204,7 @@ func (s *Service) CreateAPIKeyAPI(ctx context.Context, userID string, req any) (
 			CreatedAt:               keyInfo.CreatedAt,
 			LastUsedAt:              keyInfo.LastUsedAt,
 			IsActive:                keyInfo.IsActive,
-			RequestCountTotal:       keyInfo.RequestCountTotal,
+			RequestCountTotal:       effectiveLifetimeUsage(keyInfo),
 			RequestCountWindow:      keyInfo.RequestCountWindow,
 			RequestCountWindowStart: keyInfo.RequestCountWindowStart,
 		},
@@ -200,7 +234,7 @@ func (s *Service) ListUserAPIKeysAPI(ctx context.Context, userID string) (any, e
 			CreatedAt:               key.CreatedAt,
 			LastUsedAt:              key.LastUsedAt,
 			IsActive:                key.IsActive,
-			RequestCountTotal:       key.RequestCountTotal,
+			RequestCountTotal:       effectiveLifetimeUsage(key),
 			RequestCountWindow:      windowCount,
 			RequestCountWindowStart: windowStart,
 		})
@@ -248,7 +282,13 @@ func (s *Service) GetAPIKeysUsageStatsAPI(ctx context.Context, userID string) (a
 			resp.TotalActive++
 		}
 		resp.TotalRequestsWindow += windowCount
-		resp.TotalRequestsLifetime += k.RequestCountTotal
+		if lifetime := effectiveLifetimeUsage(k); lifetime != nil {
+			resp.TotalRequestsLifetime += *lifetime
+		} else {
+			// Pre-000093 key: its real lifetime count is unrecoverable, so
+			// the total is a lower bound rather than an exact figure.
+			resp.LifetimePartial = true
+		}
 		activity = append(activity, apiKeyActivity{key: k, window: windowCount})
 	}
 

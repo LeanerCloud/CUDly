@@ -43,6 +43,24 @@ describe('renderApiKeysUsageSummary', () => {
     expect(tileValues(container)).toEqual(['2', '42', '1.2k']);
   });
 
+  // Regression: a lifetime total that excludes keys predating the counters is
+  // a lower bound. Rendering it bare would present an undercount as exact.
+  test('marks a partial lifetime total as a lower bound', () => {
+    const container = setupContainer();
+
+    renderApiKeysUsageSummary(stats({ lifetime_partial: true }));
+
+    expect(tileValues(container)[2]).toBe('1.2k+');
+  });
+
+  test('leaves a complete lifetime total unqualified', () => {
+    const container = setupContainer();
+
+    renderApiKeysUsageSummary(stats({ lifetime_partial: false }));
+
+    expect(tileValues(container)[2]).toBe('1.2k');
+  });
+
   test('renders the top-keys list when keys have window activity', () => {
     const container = setupContainer();
 

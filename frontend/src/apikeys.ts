@@ -15,6 +15,14 @@ import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 let currentApiKeys: APIKeyInfo[] = [];
 
 /**
+ * Cell content for a request count the backend cannot report, i.e. a key
+ * already in use before migration 000093 introduced the counters. Static
+ * markup with no interpolated data, matching the "Never" treatment the
+ * Last Used and Expires columns already use for absent values.
+ */
+const NO_COUNT_DATA = '<span class="text-muted" title="Not recorded for this key">n/a</span>';
+
+/**
  * Load and display API keys.
  *
  * Defensive parsing (issue #9): the previous implementation read
@@ -440,11 +448,13 @@ function showError(message: string): void {
  * uses a separate `formatCount` that abbreviates large values to fit
  * the tile width.
  *
- * Defends against missing fields (older cached responses without the
- * counters from migration 000093) and non-finite inputs by coercing
- * to 0 — never returns "undefined" or "NaN" to the rendered table.
+ * `null` means the backend does not know the count (a key already in use
+ * before migration 000093 added the counters) and renders as an em dash
+ * rather than "0", which would state a request volume nobody measured.
+ * `undefined` (an older cached response with no counter fields at all) is
+ * treated the same way, as is any non-finite or negative value.
  */
-function formatRequestCount(n: number | undefined): string {
-  if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return '0';
+function formatRequestCount(n: number | null | undefined): string {
+  if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return NO_COUNT_DATA;
   return Math.trunc(n).toLocaleString('en-US');
 }

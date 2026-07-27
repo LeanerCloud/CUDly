@@ -2285,7 +2285,13 @@ components:
         request_count_total:
           type: integer
           format: int64
-          description: Lifetime request count since the key was created.
+          nullable: true
+          description: |
+            Lifetime request count since the key was created. Null when the
+            count is unknown: keys already in use before migration 000093
+            introduced the counter have no recoverable lifetime figure, and
+            reporting 0 for them would assert a volume nobody measured. A key
+            that has genuinely never been used reports 0, not null.
         request_count_window:
           type: integer
           format: int64
@@ -2332,7 +2338,15 @@ components:
         total_requests_lifetime:
           type: integer
           format: int64
-          description: Sum of request_count_total across the caller's keys.
+          description: |
+            Sum of request_count_total across the caller's keys, counting only
+            the keys whose lifetime count is known. See lifetime_partial.
+        lifetime_partial:
+          type: boolean
+          description: |
+            True when at least one key was excluded from total_requests_lifetime
+            because its usage predates the counters, making that total a lower
+            bound rather than an exact figure.
         top_keys:
           type: array
           description: |

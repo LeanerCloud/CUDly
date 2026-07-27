@@ -242,7 +242,8 @@ func TestService_ListUserAPIKeysAPI(t *testing.T) {
 		assert.Equal(t, int64(0), resp.APIKeys[0].RequestCountWindow)
 		assert.Nil(t, resp.APIKeys[0].RequestCountWindowStart)
 		// Lifetime is unaffected by the window expiring.
-		assert.Equal(t, int64(900), resp.APIKeys[0].RequestCountTotal)
+		require.NotNil(t, resp.APIKeys[0].RequestCountTotal)
+		assert.Equal(t, int64(900), *resp.APIKeys[0].RequestCountTotal)
 
 		// Live window passes through untouched.
 		assert.Equal(t, int64(11), resp.APIKeys[1].RequestCountWindow)
@@ -252,6 +253,44 @@ func TestService_ListUserAPIKeysAPI(t *testing.T) {
 		// Never used: zero, with no window start.
 		assert.Equal(t, int64(0), resp.APIKeys[2].RequestCountWindow)
 		assert.Nil(t, resp.APIKeys[2].RequestCountWindowStart)
+	})
+
+	// Regression: migration 000093 added request_count_total with DEFAULT 0,
+	// so a key that was already serving traffic reads as zero. Reporting that
+	// as "0 requests" states a volume nobody measured. It must come back as
+	// unknown (nil) instead, while a genuinely-unused key still reports 0.
+	t.Run("reports an unmeasured lifetime count as unknown, not zero", func(t *testing.T) {
+		mockStore := new(MockStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+		service := &Service{store: mockStore}
+
+		usedAt := time.Now().Add(-1 * time.Hour)
+		keys := []*UserAPIKey{
+			// Used before the counters existed: zero here means "not recorded".
+			{ID: "pre-migration", LastUsedAt: &usedAt, RequestCountTotal: 0},
+			// Never used at all: zero is the true count.
+			{ID: "never-used", RequestCountTotal: 0},
+			// Counted normally.
+			{ID: "counted", LastUsedAt: &usedAt, RequestCountTotal: 12},
+		}
+		user := &User{ID: "user-123", Email: "test@example.com", Active: true}
+		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+		mockStore.On("ListAPIKeysByUser", ctx, "user-123").Return(keys, nil)
+
+		result, err := service.ListUserAPIKeysAPI(ctx, "user-123")
+		require.NoError(t, err)
+
+		resp, ok := result.(*APIListAPIKeysResponse)
+		require.True(t, ok)
+		require.Len(t, resp.APIKeys, 3)
+
+		assert.Nil(t, resp.APIKeys[0].RequestCountTotal, "pre-migration key must report unknown, not 0")
+
+		require.NotNil(t, resp.APIKeys[1].RequestCountTotal)
+		assert.Equal(t, int64(0), *resp.APIKeys[1].RequestCountTotal)
+
+		require.NotNil(t, resp.APIKeys[2].RequestCountTotal)
+		assert.Equal(t, int64(12), *resp.APIKeys[2].RequestCountTotal)
 	})
 
 	// #492: last_used_at must round-trip through ListUserAPIKeysAPI so the
@@ -683,6 +722,55 @@ func TestService_GetAPIKeysUsageStatsAPI(t *testing.T) {
 		resp, ok := result.(*APIKeysUsageStatsResponse)
 		require.True(t, ok)
 		assert.Equal(t, 2, resp.TotalActive)
+	})
+
+	// Regression: an unmeasured key must not contribute a fabricated 0 to the
+	// lifetime total silently. It is excluded and the response says so, so the
+	// UI can show a lower bound instead of an exact-looking undercount.
+	t.Run("flags the lifetime total as partial when a key predates the counters", func(t *testing.T) {
+		mockStore := new(MockStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+		service := &Service{store: mockStore}
+
+		usedAt := time.Now().Add(-1 * time.Hour)
+		user := &User{ID: "user-123", Email: "test@example.com", Active: true}
+		keys := []*UserAPIKey{
+			{ID: "pre-migration", IsActive: true, LastUsedAt: &usedAt, RequestCountTotal: 0},
+			{ID: "counted", IsActive: true, LastUsedAt: &usedAt, RequestCountTotal: 40},
+		}
+		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+		mockStore.On("ListAPIKeysByUser", ctx, "user-123").Return(keys, nil)
+
+		result, err := service.GetAPIKeysUsageStatsAPI(ctx, "user-123")
+		require.NoError(t, err)
+
+		resp, ok := result.(*APIKeysUsageStatsResponse)
+		require.True(t, ok)
+		assert.Equal(t, int64(40), resp.TotalRequestsLifetime)
+		assert.True(t, resp.LifetimePartial)
+	})
+
+	t.Run("does not flag the total as partial when every key is measured", func(t *testing.T) {
+		mockStore := new(MockStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+		service := &Service{store: mockStore}
+
+		usedAt := time.Now().Add(-1 * time.Hour)
+		user := &User{ID: "user-123", Email: "test@example.com", Active: true}
+		keys := []*UserAPIKey{
+			{ID: "counted", IsActive: true, LastUsedAt: &usedAt, RequestCountTotal: 40},
+			{ID: "never-used", IsActive: true, RequestCountTotal: 0},
+		}
+		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+		mockStore.On("ListAPIKeysByUser", ctx, "user-123").Return(keys, nil)
+
+		result, err := service.GetAPIKeysUsageStatsAPI(ctx, "user-123")
+		require.NoError(t, err)
+
+		resp, ok := result.(*APIKeysUsageStatsResponse)
+		require.True(t, ok)
+		assert.Equal(t, int64(40), resp.TotalRequestsLifetime)
+		assert.False(t, resp.LifetimePartial)
 	})
 
 	t.Run("returns empty stats when user has no keys", func(t *testing.T) {

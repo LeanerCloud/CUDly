@@ -1104,7 +1104,7 @@ describe('API Keys Module', () => {
       expect(container?.innerHTML).toContain('apikeys-count-cell');
     });
 
-    test('falls back to 0 when counter fields are missing from the response', async () => {
+    test('shows no data when counter fields are missing from the response', async () => {
       (api.getApiKeys as jest.Mock).mockResolvedValue({
         api_keys: [
           // No request_count_* fields — simulates a cached older response.
@@ -1117,8 +1117,48 @@ describe('API Keys Module', () => {
       const container = document.getElementById('apikeys-list');
       const cells = container?.querySelectorAll('.apikeys-count-cell');
       expect(cells?.length).toBe(2);
+      expect(cells?.[0]?.textContent).toBe('n/a');
+      expect(cells?.[1]?.textContent).toBe('n/a');
+    });
+
+    // Regression: a key already in use before migration 000093 has no
+    // recoverable lifetime count. The backend sends null for it; rendering
+    // "0" would state a request volume nobody measured. A genuinely-unused
+    // key still shows 0.
+    test('renders an unknown lifetime count as no data, and a real zero as 0', async () => {
+      (api.getApiKeys as jest.Mock).mockResolvedValue({
+        api_keys: [
+          {
+            id: 'pre-migration',
+            name: 'old',
+            key_prefix: 'abc12345',
+            is_active: true,
+            created_at: '2024-01-15T10:00:00Z',
+            request_count_window: 0,
+            request_count_total: null,
+          },
+          {
+            id: 'never-used',
+            name: 'fresh',
+            key_prefix: 'def67890',
+            is_active: true,
+            created_at: '2024-01-15T10:00:00Z',
+            request_count_window: 0,
+            request_count_total: 0,
+          },
+        ],
+      });
+
+      await loadApiKeys();
+
+      const cells = document.getElementById('apikeys-list')?.querySelectorAll('.apikeys-count-cell');
+      expect(cells?.length).toBe(4);
+      // Row 1: window 0 is a real value, lifetime is unknown.
       expect(cells?.[0]?.textContent).toBe('0');
-      expect(cells?.[1]?.textContent).toBe('0');
+      expect(cells?.[1]?.textContent).toBe('n/a');
+      // Row 2: never used, so both are a genuine zero.
+      expect(cells?.[2]?.textContent).toBe('0');
+      expect(cells?.[3]?.textContent).toBe('0');
     });
 
     test('list-fetch failure clears summary skeleton and shows error', async () => {
