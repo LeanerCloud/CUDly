@@ -151,6 +151,53 @@ type PurchaseResponse struct {
 	EffectiveDate     string   `json:"effective_date,omitempty"`
 	TermYears         int      `json:"term_years,omitempty"`
 	Error             string   `json:"error,omitempty"`
+
+	// Archera is the optional underutilization-insurance offer, populated
+	// ONLY after a real purchase actually succeeds. See archeraOffer.
+	Archera *ArcheraOffer `json:"archera,omitempty"`
+}
+
+// ArcheraOffer is the post-purchase Archera underutilization-insurance offer.
+//
+// Both disclosure fields are non-optional parts of the payload, not
+// decoration: CUDly commits to surfacing the sponsorship AND the fact that it
+// works fully without Archera everywhere the signup link appears (the CLI's
+// printArcheraPitch does the same after a real purchase). An MCP client
+// renders this JSON through a model, so shipping the link without the
+// disclosures alongside it would let the model present a sponsored
+// recommendation as a neutral one.
+type ArcheraOffer struct {
+	// Pitch is what the coverage does and why it is relevant right now.
+	Pitch string `json:"pitch"`
+	// SignupURL is the Archera signup link carrying CUDly attribution.
+	SignupURL string `json:"signup_url"`
+	// EnrollmentWindowDays is how long from THIS purchase the buyer has to
+	// enroll it. Surfaced as a number so a client can compute the deadline
+	// from effective_date rather than parsing it out of prose.
+	EnrollmentWindowDays int `json:"enrollment_window_days"`
+	// NonGatingDisclosure states the offer is optional and CUDly works
+	// without it.
+	NonGatingDisclosure string `json:"non_gating_disclosure"`
+	// SponsorshipDisclosure states the financial relationship behind the
+	// recommendation.
+	SponsorshipDisclosure string `json:"sponsorship_disclosure"`
+}
+
+// archeraOffer builds the post-purchase Archera offer.
+//
+// Deliberately NOT attached to a preview: dry_run contacts no provider and
+// buys nothing, so there is no commitment to insure and no enrollment window
+// running. Deliberately NOT attached to a failed purchase either, for the
+// same reason. This mirrors the CLI, which calls printArcheraPitch only under
+// `else if riSuccess > 0` (cmd/multi_service_stats.go).
+func archeraOffer() *ArcheraOffer {
+	return &ArcheraOffer{
+		Pitch:                 common.ArcheraPitch,
+		SignupURL:             common.ArcheraSignupURL,
+		EnrollmentWindowDays:  common.ArcheraEnrollmentWindowDays,
+		NonGatingDisclosure:   common.ArcheraNonGatingDisclosure,
+		SponsorshipDisclosure: common.ArcheraSponsorshipDisclosure,
+	}
 }
 
 // termYearsFromRecommendationTerm extracts the integer commitment length in
@@ -395,6 +442,14 @@ func ExecutePurchase(ctx context.Context, req PurchaseRequest) (*PurchaseRespons
 	}
 	if result.Error != nil {
 		resp.Error = result.Error.Error()
+	}
+	// Offer the insurance only once there is a real commitment to insure and
+	// the enrollment window has actually started. A provider that reports
+	// Success=false (or carries an Error) bought nothing, so pitching a
+	// 7-day window against a purchase that did not happen would be wrong on
+	// the facts, not merely premature.
+	if result.Success && result.Error == nil {
+		resp.Archera = archeraOffer()
 	}
 	return resp, nil
 }
