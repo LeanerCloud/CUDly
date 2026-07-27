@@ -70,7 +70,12 @@ func (c *Client) getSavingsPlansRecommendations(ctx context.Context, params *com
 			if len(planTypes) == 1 {
 				return nil, fmt.Errorf("failed to get %s recommendations: %w", planType, err)
 			}
-			fmt.Printf("Warning: Failed to get %s recommendations: %v\n", planType, err)
+			// log (stderr), never fmt.Print (stdout): see the identical note
+			// in parser_ri.go's parseRecommendations. cmd/cudly-mcp frames
+			// JSON-RPC on stdout, and this branch fires whenever ONE plan
+			// type fails while others succeed (e.g. Database SP unavailable
+			// in an account) -- a routine condition, not a rare one.
+			log.Printf("Warning: Failed to get %s recommendations: %v", planType, err)
 			continue
 		}
 
