@@ -87,11 +87,15 @@ func (t *searchRecommendationsTool) Register(s *mcp.Server) error {
 }
 
 func (t *searchRecommendationsTool) handle(ctx context.Context, _ *mcp.CallToolRequest, args searchRecommendationsArgs) (*mcp.CallToolResult, searchRecommendationsResult, error) {
+	// Trim BEFORE validating: validateSearchArgs matches service against the
+	// Savings Plans family predicate and rejects blank filter-list entries,
+	// both of which must see the normalized values the rest of the call will
+	// actually use.
+	args = trimSearchArgsIdentifiers(args)
 	providerType, term, args, err := validateSearchArgs(args)
 	if err != nil {
 		return nil, searchRecommendationsResult{}, err
 	}
-	args = trimSearchArgsIdentifiers(args)
 
 	prov, err := t.createProvider(string(providerType), providerConfigFromArgs(providerType, args))
 	if err != nil {
@@ -134,6 +138,25 @@ func validateSearchArgs(args searchRecommendationsArgs) (common.ProviderType, st
 	}
 	args = applySavingsPlansSearchDefaults(providerType, args)
 
+	term, errs := collectSearchFieldErrors(providerType, args)
+	if len(errs) > 0 {
+		return "", "", args, errors.Join(errs...)
+	}
+
+	return providerType, term, args, nil
+}
+
+// collectSearchFieldErrors validates every per-field constraint on args
+// (payment option, lookback window, term, Savings Plans type filters, blank
+// filter-list entries, and the Savings Plans required-field safety net) and
+// returns the normalised Recommendation term alongside EVERY error found,
+// rather than stopping at the first. A caller that got several fields wrong
+// then fixes them in one round instead of one call at a time.
+//
+// Split out of validateSearchArgs so that function stays under the repo's
+// gocyclo gate (the pre-commit hook is -over 10, stricter than golangci's
+// min-complexity 15).
+func collectSearchFieldErrors(providerType common.ProviderType, args searchRecommendationsArgs) (string, []error) {
 	var errs []error
 
 	if args.PaymentOption != "" {
@@ -159,15 +182,15 @@ func validateSearchArgs(args searchRecommendationsArgs) (common.ProviderType, st
 		errs = append(errs, err)
 	}
 
+	if err := validateFilterListEntries(args); err != nil {
+		errs = append(errs, err)
+	}
+
 	if err := requireSavingsPlansSearchFields(providerType, args); err != nil {
 		errs = append(errs, err)
 	}
 
-	if len(errs) > 0 {
-		return "", "", args, errors.Join(errs...)
-	}
-
-	return providerType, term, args, nil
+	return term, errs
 }
 
 // isAWSSavingsPlansSearch reports whether args targets an AWS Savings Plans
@@ -254,13 +277,20 @@ func validateSPTypeFilters(include, exclude []string) error {
 
 // trimSearchArgsIdentifiers returns args with surrounding whitespace
 // stripped from every free-text identifier field that flows into
-// providerConfigFromArgs/recommendationParamsFromArgs (region,
+// providerConfigFromArgs/recommendationParamsFromArgs (service, region,
 // include_regions, exclude_regions, account_filter). Unlike the purchase
 // tools' requireNonBlank, region is optional here, so trimming rather than
 // rejecting a blank/whitespace value is correct: " us-east-1 " must resolve
 // and search the same region as "us-east-1" instead of silently searching
 // the wrong (or account-default) region.
+//
+// This runs before validateSearchArgs so service is already trimmed when
+// isAWSSavingsPlansSearch and validateSupportedService match on it: without
+// that, " savingsplans-compute" would both miss the Savings Plans defaulting
+// branch and fail the supported-service check for a reason (a stray space)
+// the error message would not explain.
 func trimSearchArgsIdentifiers(args searchRecommendationsArgs) searchRecommendationsArgs {
+	args.Service = strings.TrimSpace(args.Service)
 	args.Region = strings.TrimSpace(args.Region)
 	args.IncludeRegions = trimAll(args.IncludeRegions)
 	args.ExcludeRegions = trimAll(args.ExcludeRegions)
@@ -279,6 +309,44 @@ func trimAll(ss []string) []string {
 		out[i] = strings.TrimSpace(s)
 	}
 	return out
+}
+
+// rejectBlankListEntries fails loud when any entry of a supplied filter list
+// is empty or whitespace-only. A blank entry cannot match a real region code
+// or account ID, but a non-empty list still switches the corresponding
+// filter ON: include_regions=["  "] would activate region filtering with a
+// set that matches nothing and silently return zero recommendations, which
+// reads as "your account has nothing to buy" rather than "your filter was
+// malformed". Naming the offending index makes the malformed entry
+// actionable instead of leaving the caller to guess which one it was.
+func rejectBlankListEntries(field string, values []string) error {
+	for i, v := range values {
+		if v == "" {
+			return fmt.Errorf("%s[%d] is blank: every entry must be a non-empty identifier", field, i)
+		}
+	}
+	return nil
+}
+
+// validateFilterListEntries runs rejectBlankListEntries over every
+// caller-supplied filter list. Split out of validateSearchArgs to keep that
+// function under the repo's gocyclo gate (the pre-commit hook is -over 10,
+// stricter than golangci's min-complexity 15).
+func validateFilterListEntries(args searchRecommendationsArgs) error {
+	lists := []struct {
+		field  string
+		values []string
+	}{
+		{"include_regions", args.IncludeRegions},
+		{"exclude_regions", args.ExcludeRegions},
+		{"account_filter", args.AccountFilter},
+	}
+	for _, list := range lists {
+		if err := rejectBlankListEntries(list.field, list.values); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // providerConfigFromArgs builds the provider.ProviderConfig for the given

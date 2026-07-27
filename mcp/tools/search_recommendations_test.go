@@ -358,3 +358,73 @@ func TestSearchRecommendationsMultipleInvalidFieldsJoinedInOneError(t *testing.T
 	assert.Contains(t, err.Error(), "invalid lookback_period")
 	assert.Contains(t, err.Error(), "include_sp_types")
 }
+
+// TestSearchBlankFilterListEntriesRejected is the regression guard for the
+// silent empty-result path found in review. A blank entry cannot match any
+// real region code or account ID, but a non-empty list still switches the
+// corresponding filter ON: include_regions=["  "] activated region
+// filtering with a set matching nothing and returned zero recommendations,
+// which reads as "your account has nothing worth buying" rather than "your
+// filter was malformed".
+func TestSearchBlankFilterListEntriesRejected(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		mutate  func(*searchRecommendationsArgs)
+		wantSub string
+	}{
+		{"blank include_regions entry", func(a *searchRecommendationsArgs) {
+			a.IncludeRegions = []string{"  "}
+		}, "include_regions[0] is blank"},
+		{"blank exclude_regions entry among valid ones", func(a *searchRecommendationsArgs) {
+			a.ExcludeRegions = []string{"us-east-1", ""}
+		}, "exclude_regions[1] is blank"},
+		{"blank account_filter entry", func(a *searchRecommendationsArgs) {
+			a.AccountFilter = []string{"111111111111", "\t"}
+		}, "account_filter[1] is blank"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			args := searchRecommendationsArgs{Provider: string(common.ProviderAWS), Service: "ec2"}
+			tc.mutate(&args)
+
+			tool := &searchRecommendationsTool{
+				createProvider: func(_ string, _ *provider.ProviderConfig) (provider.Provider, error) {
+					t.Fatal("provider must not be created for malformed filter input")
+					return nil, nil
+				},
+			}
+			_, _, err := tool.handle(context.Background(), nil, args)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantSub)
+		})
+	}
+}
+
+// TestSearchAcceptsWhitespacePaddedService pins that service is trimmed
+// before it is matched, like every other identifier field. Untrimmed, a
+// " savingsplans-compute" both missed the AWS Savings Plans defaulting
+// branch (isAWSSavingsPlansSearch) and failed the supported-service check
+// for a reason the error text would not have explained.
+func TestSearchAcceptsWhitespacePaddedService(t *testing.T) {
+	t.Parallel()
+	args := searchRecommendationsArgs{Provider: string(common.ProviderAWS), Service: "  ec2  "}
+
+	recClient := &fakeRecommendationsClient{}
+	tool := &searchRecommendationsTool{
+		createProvider: func(_ string, _ *provider.ProviderConfig) (provider.Provider, error) {
+			return &fakeProvider{
+				name:      "aws",
+				services:  []common.ServiceType{common.ServiceEC2},
+				recClient: recClient,
+			}, nil
+		},
+	}
+
+	_, _, err := tool.handle(context.Background(), nil, args)
+	require.NoError(t, err)
+	require.NotNil(t, recClient.lastParams)
+	assert.Equal(t, common.ServiceEC2, recClient.lastParams.Service,
+		"service must be trimmed before it reaches the provider")
+}
