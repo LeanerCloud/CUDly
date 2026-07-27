@@ -16,6 +16,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
+// markedCollectionRollbackTimeout bounds the detached best-effort clear issued
+// when the async self-invoke fails. Matches the scheduler's deferred clear and
+// Application.releaseSkippedCollectionMarker budgets.
+const markedCollectionRollbackTimeout = 5 * time.Second
+
 // LambdaInvokerInterface is the narrow subset of lambda.Client used by the
 // async refresh handler. Extracted so tests can inject a stub without
 // standing up a real Lambda client.
@@ -115,9 +120,7 @@ func (h *Handler) runMarkedCollection(ctx context.Context, token string) (*confi
 	schedulerARN := os.Getenv("SCHEDULER_LAMBDA_ARN")
 	if schedulerARN != "" {
 		if invokeErr := h.asyncInvokeSelf(ctx, schedulerARN, token); invokeErr != nil {
-			if clearErr := h.config.ClearCollectionStarted(ctx, token); clearErr != nil {
-				logging.Warnf("runMarkedCollection: failed to clear collection started marker: %v", clearErr)
-			}
+			h.rollbackMarkedCollection(token)
 			return nil, fmt.Errorf("failed to trigger async collection: %w", invokeErr)
 		}
 		freshness, err := h.config.GetRecommendationsFreshness(ctx)
@@ -137,6 +140,31 @@ func (h *Handler) runMarkedCollection(ctx context.Context, token string) (*confi
 		return nil, fmt.Errorf("failed to read freshness after collect: %w", err)
 	}
 	return freshness, nil
+}
+
+// rollbackMarkedCollection releases this caller's own in-flight marker after
+// the async self-invoke failed and no collection will ever run to release it.
+//
+// Deliberately detached from the request context. The dominant cause of an
+// asyncInvokeSelf failure is the request context itself expiring or being
+// canceled (API Gateway deadline, client disconnect, a slow SDK credential
+// refresh), so reusing that context here would fail the rollback in exactly
+// the case that produced it. The marker would then sit stranded for the full
+// 5-minute auto-recovery window in MarkCollectionStarted, rejecting every
+// refresh the user attempts with 409 while no collection is running. Matches
+// the detached-clear pattern in the scheduler's deferred clear and in
+// Application.releaseSkippedCollectionMarker.
+//
+// Scoped by token, so it can only ever release the marker this caller owns.
+// Best effort: a failure only defers cleanup to the 5-minute window, and the
+// caller already returns the underlying invoke error, so it is logged rather
+// than masking that error.
+func (h *Handler) rollbackMarkedCollection(token string) {
+	clearCtx, cancel := context.WithTimeout(context.Background(), markedCollectionRollbackTimeout)
+	defer cancel()
+	if err := h.config.ClearCollectionStarted(clearCtx, token); err != nil {
+		logging.Warnf("rollbackMarkedCollection: failed to clear collection started marker: %v", err)
+	}
 }
 
 // asyncInvokeSelf fires an InvocationType=Event invoke of the given Lambda

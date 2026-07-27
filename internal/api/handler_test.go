@@ -574,6 +574,46 @@ func TestRunMarkedCollection_AsyncInvokeFailure_RollsBackOwnerToken(t *testing.T
 	mockStore.AssertCalled(t, "ClearCollectionStarted", mock.Anything, "tok-xyz")
 }
 
+// TestRunMarkedCollection_AsyncInvokeFailure_RollbackSurvivesCanceledCtx pins
+// the rollback clear to a DETACHED context. The dominant cause of an
+// asyncInvokeSelf failure is the request context itself expiring or being
+// canceled, so a rollback reusing that context would fail in exactly the case
+// that produced it, stranding this caller's marker for the full 5-minute
+// auto-recovery window and 409-ing every refresh in between.
+//
+// The context matcher lives on the expectation itself rather than in a
+// trailing AssertCalled: testify's AssertCalled compares arguments by value
+// and does not honor MatchedBy, whereas an unmatched expectation makes the
+// mock fail the call outright. Pre-fix the clear still happened, just with
+// the already-canceled request context, so asserting only that Clear was
+// called would pass with the bug present.
+func TestRunMarkedCollection_AsyncInvokeFailure_RollbackSurvivesCanceledCtx(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Setenv("SCHEDULER_LAMBDA_ARN", "arn:aws:lambda:us-east-1:123456789012:function:cudly")
+
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	liveDeadlineCtx := mock.MatchedBy(func(clearCtx context.Context) bool {
+		_, hasDeadline := clearCtx.Deadline()
+		return hasDeadline && clearCtx.Err() == nil
+	})
+	mockStore.On("ClearCollectionStarted", liveDeadlineCtx, "tok-xyz").Return(nil)
+
+	invoker := &stubLambdaInvoker{
+		invokeFn: func(invokeCtx context.Context, _ *lambda.InvokeInput) (*lambda.InvokeOutput, error) {
+			// Model the real failure mode: the request context dies mid-invoke
+			// and the SDK surfaces that as the invoke error.
+			cancel()
+			return nil, invokeCtx.Err()
+		},
+	}
+
+	handler := &Handler{config: mockStore, lambdaInvoker: invoker}
+
+	_, err := handler.runMarkedCollection(ctx, "tok-xyz")
+	require.Error(t, err)
+}
+
 // TestRunMarkedCollection_AsyncInvokeSuccess_PayloadCarriesOwnerToken pins
 // issue #261: the async-invoke payload must carry this run's owner token so
 // the scheduler receiving the event can scope its own clear to this run;
