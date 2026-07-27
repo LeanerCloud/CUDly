@@ -1287,8 +1287,8 @@ func (m *MockConfigStore) GetExecutionsByStatuses(ctx context.Context, statuses 
 }
 
 // CountExecutionsByPlanAndStatus mocks the CountExecutionsByPlanAndStatus operation.
-func (m *MockConfigStore) CountExecutionsByPlanAndStatus(ctx context.Context, statuses []string) (map[string]config.ExecutionStatusCounts, error) {
-	args := m.Called(ctx, statuses)
+func (m *MockConfigStore) CountExecutionsByPlanAndStatus(ctx context.Context, statuses []string, since time.Time) (map[string]config.ExecutionStatusCounts, error) {
+	args := m.Called(ctx, statuses, since)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

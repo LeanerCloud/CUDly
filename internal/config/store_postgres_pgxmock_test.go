@@ -2791,8 +2791,8 @@ func TestPGXMock_CleanupOldExecutions_IncludesCanonicalStatus(t *testing.T) {
 // the newest page, so an unhealthy plan renders a confident "healthy" badge.
 // The counts must therefore come from a GROUP BY with no LIMIT: the result
 // set is bounded by plans x statuses, not by execution volume. The regex
-// anchors fail the test if a refactor reintroduces a LIMIT or drops the
-// aggregation.
+// anchors fail the test if a refactor reintroduces a LIMIT, drops the
+// aggregation, or drops the scheduled_date window.
 func TestPGXMock_CountExecutionsByPlanAndStatus_AggregatesInSQL(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
@@ -2802,12 +2802,13 @@ func TestPGXMock_CountExecutionsByPlanAndStatus_AggregatesInSQL(t *testing.T) {
 		AddRow("plan-a", "failed", 7).
 		AddRow("plan-a", StatusCanceled, 2).
 		AddRow("plan-b", LegacyStatusCanceled, 1)
-	mock.ExpectQuery(`(?s)SELECT plan_id, status, COUNT\(\*\).*FROM purchase_executions.*status = ANY\(\$1\).*GROUP BY plan_id, status`).
-		WithArgs(pgxmock.AnyArg()).
+	mock.ExpectQuery(`(?s)SELECT plan_id, status, COUNT\(\*\).*FROM purchase_executions.*status = ANY\(\$1\).*plan_id IS NOT NULL.*scheduled_date >= \$2.*GROUP BY plan_id, status`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
 	counts, err := store.CountExecutionsByPlanAndStatus(ctx,
-		[]string{"failed", StatusCanceled, LegacyStatusCanceled})
+		[]string{"failed", StatusCanceled, LegacyStatusCanceled},
+		time.Now().AddDate(0, 0, -90))
 	require.NoError(t, err)
 
 	// The counts are exact, not capped: 7 failures survive intact even
@@ -2818,6 +2819,53 @@ func TestPGXMock_CountExecutionsByPlanAndStatus_AggregatesInSQL(t *testing.T) {
 	// Absent statuses read as a zero count rather than needing a guard.
 	assert.Equal(t, 0, counts["plan-b"]["failed"])
 	assert.Equal(t, 0, counts["plan-missing"]["failed"])
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_CountExecutionsByPlanAndStatus_PassesSinceBound pins that the
+// caller's window actually reaches SQL: without the bound the counts drift
+// with whatever history survived cleanup rather than covering a fixed,
+// documented period.
+func TestPGXMock_CountExecutionsByPlanAndStatus_PassesSinceBound(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	since := time.Date(2026, 4, 28, 0, 0, 0, 0, time.UTC)
+	mock.ExpectQuery(`scheduled_date >= \$2`).
+		WithArgs(pgxmock.AnyArg(), since).
+		WillReturnRows(pgxmock.NewRows([]string{"plan_id", "status", "count"}))
+
+	_, err := store.CountExecutionsByPlanAndStatus(ctx, []string{"failed"}, since)
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_CountExecutionsByPlanAndStatus_NullPlanIDRow is the regression
+// guard for the plan_id-nullability bug. plan_id has been nullable since
+// migration 000033 (direct-execute purchases have no originating plan, and
+// deleting a plan SET NULLs its executions), so GROUP BY plan_id emits a
+// NULL group as soon as one such row is failed or canceled. Scanning that
+// into a plain string returns "cannot scan NULL into *string", which
+// propagates as an error and blanks the health score for EVERY plan -- one
+// unrelated direct-execute failure silently switching the whole feature off.
+// The row must instead be skipped: it belongs to no plan.
+func TestPGXMock_CountExecutionsByPlanAndStatus_NullPlanIDRow(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	rows := pgxmock.NewRows([]string{"plan_id", "status", "count"}).
+		AddRow(nil, "failed", 5).
+		AddRow("plan-a", "failed", 2)
+	mock.ExpectQuery(`GROUP BY plan_id, status`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnRows(rows)
+
+	counts, err := store.CountExecutionsByPlanAndStatus(ctx, []string{"failed"}, time.Now().AddDate(0, 0, -90))
+	require.NoError(t, err)
+	assert.Len(t, counts, 1)
+	assert.Equal(t, 2, counts["plan-a"]["failed"])
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -2838,11 +2886,14 @@ func TestPGXMock_CountExecutionsByPlanAndStatus_NoLimitInQuery(t *testing.T) {
 	ctx := context.Background()
 
 	mock.ExpectQuery(`GROUP BY plan_id, status`).
-		WithArgs(pgxmock.AnyArg()).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"plan_id", "status", "count"}))
 
-	_, err = store.CountExecutionsByPlanAndStatus(ctx, []string{"failed"})
+	_, err = store.CountExecutionsByPlanAndStatus(ctx, []string{"failed"}, time.Now().AddDate(0, 0, -90))
 	require.NoError(t, err)
+	// Without this the assertion below would pass vacuously on the empty
+	// string if the matcher were never invoked.
+	require.NotEmpty(t, executedSQL)
 	assert.NotContains(t, strings.ToUpper(executedSQL), "LIMIT")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -2855,7 +2906,7 @@ func TestPGXMock_CountExecutionsByPlanAndStatus_EmptyStatuses(t *testing.T) {
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	counts, err := store.CountExecutionsByPlanAndStatus(ctx, nil)
+	counts, err := store.CountExecutionsByPlanAndStatus(ctx, nil, time.Now())
 	require.NoError(t, err)
 	require.NotNil(t, counts)
 	assert.Empty(t, counts)
@@ -2871,10 +2922,10 @@ func TestPGXMock_CountExecutionsByPlanAndStatus_QueryError(t *testing.T) {
 	ctx := context.Background()
 
 	mock.ExpectQuery(`GROUP BY plan_id, status`).
-		WithArgs(pgxmock.AnyArg()).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnError(errors.New("connection reset"))
 
-	counts, err := store.CountExecutionsByPlanAndStatus(ctx, []string{"failed"})
+	counts, err := store.CountExecutionsByPlanAndStatus(ctx, []string{"failed"}, time.Now().AddDate(0, 0, -90))
 	require.Error(t, err)
 	assert.Nil(t, counts)
 	assert.Contains(t, err.Error(), "failed to count executions by plan and status")

@@ -77,7 +77,7 @@ func (m *mockConfigStoreForHealth) GetExecutionsByStatuses(ctx context.Context, 
 	return nil, nil
 }
 
-func (m *mockConfigStoreForHealth) CountExecutionsByPlanAndStatus(ctx context.Context, statuses []string) (map[string]config.ExecutionStatusCounts, error) {
+func (m *mockConfigStoreForHealth) CountExecutionsByPlanAndStatus(ctx context.Context, statuses []string, since time.Time) (map[string]config.ExecutionStatusCounts, error) {
 	return nil, nil
 }
 

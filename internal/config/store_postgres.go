@@ -1214,7 +1214,17 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 // newer rows from other plans push its failures out of the window. The result
 // set here is bounded by plans x statuses, not by execution volume, so it
 // needs no limit of its own.
-func (s *PostgresStore) CountExecutionsByPlanAndStatus(ctx context.Context, statuses []string) (map[string]ExecutionStatusCounts, error) {
+//
+// Only rows with scheduled_date >= `since` are counted, so the caller decides
+// how far back "recent" reaches instead of the answer drifting with however
+// much history happens to survive cleanup.
+//
+// plan_id has been nullable since migration 000033 (direct-execute purchases
+// from the Recommendations page have no originating plan, and deleting a plan
+// SET NULLs its executions). Those rows belong to no plan and are excluded in
+// SQL; the scan still goes through sql.NullString so a NULL can never turn a
+// per-plan count into a scan error that blanks the score for every plan.
+func (s *PostgresStore) CountExecutionsByPlanAndStatus(ctx context.Context, statuses []string, since time.Time) (map[string]ExecutionStatusCounts, error) {
 	counts := make(map[string]ExecutionStatusCounts)
 	if len(statuses) == 0 {
 		return counts, nil
@@ -1224,23 +1234,29 @@ func (s *PostgresStore) CountExecutionsByPlanAndStatus(ctx context.Context, stat
 		SELECT plan_id, status, COUNT(*)
 		FROM purchase_executions
 		WHERE status = ANY($1)
+		  AND plan_id IS NOT NULL
+		  AND scheduled_date >= $2
 		GROUP BY plan_id, status
-	`, statuses)
+	`, statuses, since)
 	if err != nil {
 		return nil, fmt.Errorf("failed to count executions by plan and status: %w", err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var planID, status string
+		var planID sql.NullString
+		var status string
 		var n int
 		if scanErr := rows.Scan(&planID, &status, &n); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan execution status count: %w", scanErr)
 		}
-		if counts[planID] == nil {
-			counts[planID] = ExecutionStatusCounts{}
+		if !planID.Valid {
+			continue
 		}
-		counts[planID][status] = n
+		if counts[planID.String] == nil {
+			counts[planID.String] = ExecutionStatusCounts{}
+		}
+		counts[planID.String][status] = n
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("failed to iterate execution status counts: %w", err)

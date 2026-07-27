@@ -36,7 +36,7 @@ func TestHandler_listPlans(t *testing.T) {
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
 	// listPlans now also counts each plan's failed/canceled executions to
 	// compute its health-score badge (issue #340 follow-up).
-	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses).
+	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses, mock.AnythingOfType("time.Time")).
 		Return(map[string]config.ExecutionStatusCounts{}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -78,7 +78,7 @@ func TestHandler_listPlans_AccountIDsFilter(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
 	mockStore.On("ListPurchasePlans", ctx, expectedFilter).Return(plans, nil)
-	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses).
+	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses, mock.AnythingOfType("time.Time")).
 		Return(map[string]config.ExecutionStatusCounts{}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -118,7 +118,7 @@ func TestHandler_listPlans_HealthScoreReflectsFailedExecutions(t *testing.T) {
 		{ID: otherPlanID, Name: "Other Plan", Enabled: true},
 	}
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
-	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses).
+	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses, mock.AnythingOfType("time.Time")).
 		Return(map[string]config.ExecutionStatusCounts{
 			troubledPlanID: {"failed": 2},
 			otherPlanID:    {config.StatusCanceled: 1},
@@ -170,7 +170,7 @@ func TestHandler_listPlans_HealthScoreUnknownOnCountsFetchError(t *testing.T) {
 		{ID: "11111111-1111-1111-1111-111111111111", Name: "Some Plan", Enabled: true},
 	}
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
-	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses).
+	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses, mock.AnythingOfType("time.Time")).
 		Return(nil, errors.New("db unavailable"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -208,7 +208,7 @@ func TestHandler_listPlans_HealthUsesExactCountsNotTruncatedPage(t *testing.T) {
 	planID := "11111111-1111-1111-1111-111111111111"
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).
 		Return([]config.PurchasePlan{{ID: planID, Name: "Old Failures", Enabled: true}}, nil)
-	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses).
+	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses, mock.AnythingOfType("time.Time")).
 		Return(map[string]config.ExecutionStatusCounts{planID: {"failed": 3}}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -223,6 +223,43 @@ func TestHandler_listPlans_HealthUsesExactCountsNotTruncatedPage(t *testing.T) {
 	// The capped page must not be consulted at all: reintroducing it would
 	// silently reinstate the truncation.
 	mockStore.AssertNotCalled(t, "GetExecutionsByStatuses", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestHandler_listPlans_HealthCountsUseTheLookbackWindow pins that the
+// documented window actually reaches the store. Without a bound the counts
+// cover whatever history happened to survive cleanup, and since
+// CleanupOldExecutions purges terminal rows but never "failed" ones, a plan
+// that failed once years ago would stay penalized forever.
+func TestHandler_listPlans_HealthCountsUseTheLookbackWindow(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).
+		Return([]config.PurchasePlan{{ID: "11111111-1111-1111-1111-111111111111", Enabled: true}}, nil)
+
+	var gotSince time.Time
+	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses, mock.MatchedBy(func(since time.Time) bool {
+		gotSince = since
+		return true
+	})).Return(map[string]config.ExecutionStatusCounts{}, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-token"}}
+
+	before := time.Now()
+	_, err := handler.listPlans(ctx, req, map[string]string{})
+	require.NoError(t, err)
+
+	// The window opens planHealthLookbackDays before the request, give or
+	// take the wall-clock time the handler itself took.
+	expected := before.AddDate(0, 0, -planHealthLookbackDays)
+	assert.WithinDuration(t, expected, gotSince, time.Minute)
+	assert.True(t, gotSince.Before(before), "since must be in the past, got %v", gotSince)
 }
 
 // TestHandler_listPlans_EmptyListSkipsCountsQuery: with no plans to score
@@ -245,7 +282,7 @@ func TestHandler_listPlans_EmptyListSkipsCountsQuery(t *testing.T) {
 	result, err := handler.listPlans(ctx, req, map[string]string{})
 	require.NoError(t, err)
 	assert.Empty(t, result.Plans)
-	mockStore.AssertNotCalled(t, "CountExecutionsByPlanAndStatus", mock.Anything, mock.Anything)
+	mockStore.AssertNotCalled(t, "CountExecutionsByPlanAndStatus", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestHandler_createPlan(t *testing.T) {

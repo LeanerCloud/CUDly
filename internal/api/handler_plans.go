@@ -50,9 +50,10 @@ func (h *Handler) listPlans(ctx context.Context, req *events.LambdaFunctionURLRe
 
 // attachPlanHealth computes the per-plan health-score badge (issue #340
 // follow-up) for every plan in the list, from exact per-plan execution
-// counts (config.ConfigStore.CountExecutionsByPlanAndStatus, aggregated in
-// SQL) rather than from a capped page of execution rows, which would
-// understate plans whose executions fall outside the newest page.
+// counts over the trailing planHealthLookbackDays
+// (config.ConfigStore.CountExecutionsByPlanAndStatus, aggregated in SQL)
+// rather than from a capped page of execution rows, which would understate
+// plans whose executions fall outside the newest page.
 //
 // If the counts fetch fails, every plan's HealthScore is left nil, which
 // serializes as `"health_score": null` and renders as an explicit "unknown"
@@ -71,7 +72,8 @@ func (h *Handler) attachPlanHealth(ctx context.Context, plans []config.PurchaseP
 		return result
 	}
 
-	countsByPlan, err := h.config.CountExecutionsByPlanAndStatus(ctx, planHealthExecutionStatuses)
+	since := now.AddDate(0, 0, -planHealthLookbackDays)
+	countsByPlan, err := h.config.CountExecutionsByPlanAndStatus(ctx, planHealthExecutionStatuses, since)
 	if err != nil {
 		logging.Warnf("listPlans: CountExecutionsByPlanAndStatus failed, plan health reported as unknown: %v", err)
 		return result

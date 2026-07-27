@@ -3164,6 +3164,22 @@ describe('Plans Module', () => {
       expect(list?.innerHTML).not.toContain('Health: 100');
     });
 
+    // A garbled score off the wire is an uncomputable score, so it must
+    // reach the same "unknown" badge rather than silently vanishing (which
+    // reads as "this deploy predates the feature").
+    test('renders unknown rather than dropping the badge for a non-finite score', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{ ...basePlan, health_score: NaN }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      expect(list?.innerHTML).toContain('Health: unknown');
+      expect(list?.innerHTML).not.toContain('Health: NaN');
+    });
+
     test('escapes health factor notes in the tooltip (XSS regression)', async () => {
       const maliciousNote = '"><img src=x onerror=alert(1)>';
       (api.getPlans as jest.Mock).mockResolvedValue({

@@ -53,6 +53,19 @@ const (
 	// (-40 / -20 respectively).
 	maxCountedFailedExecs   = 4
 	maxCountedCanceledExecs = 4
+
+	// planHealthLookbackDays bounds how far back the execution factors
+	// count, matching the retention.execution_history_days default in
+	// internal/config/defaults.go. Past that horizon execution rows are not
+	// guaranteed to still exist, so an all-time count is not a well-defined
+	// quantity: it would compare plans against differently-sized surviving
+	// histories, and -- because CleanupOldExecutions purges terminal rows
+	// but never "failed" ones -- would pin a plan that failed once, long
+	// ago, at a permanent penalty no amount of subsequent clean runs could
+	// clear. Health is a statement about the plan now, so the window has to
+	// end somewhere data is guaranteed present. Surfaced in every factor
+	// note so the number on screen is never ambiguous about its window.
+	planHealthLookbackDays = 90
 )
 
 // planHealthStatusFailed mirrors the "failed" execution-status literal used
@@ -141,9 +154,10 @@ func overdueFactor(plan config.PurchasePlan, now time.Time) (PlanHealthFactor, b
 	}, true
 }
 
-// failedExecutionsFactor: -10 per failed execution, capped at 4 (-40 max).
-// The note reports the true (uncapped) count so an operator can see the
-// full extent even when the penalty itself is capped.
+// failedExecutionsFactor: -10 per failed execution in the last
+// planHealthLookbackDays, capped at 4 (-40 max). The note reports the true
+// (uncapped) count and the window it covers, so an operator can see the full
+// extent even when the penalty itself is capped.
 func failedExecutionsFactor(counts config.ExecutionStatusCounts) (PlanHealthFactor, bool) {
 	count := counts[planHealthStatusFailed]
 	if count == 0 {
@@ -156,14 +170,14 @@ func failedExecutionsFactor(counts config.ExecutionStatusCounts) (PlanHealthFact
 	return PlanHealthFactor{
 		Code:    HealthFactorFailedExecutions,
 		Penalty: counted * penaltyPerFailedExec,
-		Note:    fmt.Sprintf("%d failed execution(s)", count),
+		Note:    fmt.Sprintf("%d failed execution(s) in the last %d days", count, planHealthLookbackDays),
 	}, true
 }
 
-// canceledExecutionsFactor: -5 per canceled execution, capped at 4 (-20
-// max). Counts both spellings of "canceled" (config.StatusCanceled and the
-// legacy config.LegacyStatusCanceled) so pre-#1278 rows aren't invisible to
-// scoring.
+// canceledExecutionsFactor: -5 per canceled execution in the last
+// planHealthLookbackDays, capped at 4 (-20 max). Counts both spellings of
+// "canceled" (config.StatusCanceled and the legacy
+// config.LegacyStatusCanceled) so pre-#1278 rows aren't invisible to scoring.
 func canceledExecutionsFactor(counts config.ExecutionStatusCounts) (PlanHealthFactor, bool) {
 	count := counts[config.StatusCanceled] + counts[config.LegacyStatusCanceled]
 	if count == 0 {
@@ -176,7 +190,7 @@ func canceledExecutionsFactor(counts config.ExecutionStatusCounts) (PlanHealthFa
 	return PlanHealthFactor{
 		Code:    HealthFactorCanceledExecutions,
 		Penalty: counted * penaltyPerCanceledExec,
-		Note:    fmt.Sprintf("%d canceled execution(s)", count),
+		Note:    fmt.Sprintf("%d canceled execution(s) in the last %d days", count, planHealthLookbackDays),
 	}, true
 }
 

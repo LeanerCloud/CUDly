@@ -892,7 +892,10 @@ function healthBadgeClass(score: number): string {
 //   - field null: the backend could not compute the score (execution counts
 //     unavailable). Render an explicit "unknown" badge -- never a stand-in
 //     number, which an operator could not tell apart from a measured score.
-//   - a number: the score, banded into the green/amber/red palette.
+//   - a finite number: the score, banded into the green/amber/red palette.
+//   - anything else (NaN, Infinity, a non-number off the wire): also
+//     "unknown". A garbled score is an uncomputable score; silently dropping
+//     the badge would instead read as "this deploy predates the feature".
 //
 // The tooltip enumerates every penalty factor so a bad score is actionable
 // instead of opaque; every factor note is escaped since it renders inside an
@@ -901,12 +904,13 @@ function healthBadgeClass(score: number): string {
 // these notes itself).
 function healthBadgeHtml(plan: BackendPlan): string {
   if (plan.health_score === undefined) return '';
-  if (plan.health_score === null) {
+  // The typeof/isFinite check is defensive: the type says number, but this
+  // value comes off the wire and is interpolated into innerHTML below.
+  if (plan.health_score === null
+      || typeof plan.health_score !== 'number'
+      || !Number.isFinite(plan.health_score)) {
     return `<span class="status-badge badge-muted" title="${escapeHtmlAttr('Plan health could not be computed: the plan\'s execution history was unavailable.')}">Health: unknown</span>`;
   }
-  // Defensive: the type says number, but this value comes off the wire and
-  // is interpolated into innerHTML below.
-  if (typeof plan.health_score !== 'number' || !Number.isFinite(plan.health_score)) return '';
   const factors = plan.health_factors || [];
   const factorLines = factors.length > 0
     ? factors.map(f => `-${f.penalty}: ${f.note}`)
