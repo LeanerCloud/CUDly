@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -274,6 +275,42 @@ func savingsPlanDetailsKey(d *common.SavingsPlanDetails) string {
 		d.PlanType, d.HourlyCommitment, d.Coverage, d.InstanceFamily, d.Region, d.OfferingID)
 }
 
+// logPurchaseAttempt and logPurchaseOutcome write the MCP server's audit
+// trail for real, money-spending purchases. Without them an MCP purchase
+// left no record anywhere: the CLI path emits a common.AuditRecord per
+// purchase (cmd/multi_service.go) and the web path persists a
+// purchase_executions row that also carries the approval history, but this
+// server has neither, so an operator asking "what did the assistant buy?"
+// had nothing to read. These lines are that record.
+//
+// They go to the standard logger, which writes to STDERR. That is load
+// bearing: the MCP stdio transport owns stdout for JSON-RPC framing, so
+// anything written there would corrupt the protocol stream.
+//
+// Preview calls are deliberately not logged: they contact no provider and
+// spend nothing, and logging every dry run would bury the real purchases in
+// the noise they need to stand out from.
+//
+// The idempotency token is masked (common.MaskToken) rather than written in
+// full, matching how every provider client logs it: it is a stable
+// per-request identifier, and the prefix is enough to correlate an attempt
+// with its outcome.
+func logPurchaseAttempt(req PurchaseRequest, rec common.Recommendation, token string) {
+	log.Printf("mcp purchase ATTEMPT: provider=%s scope=%q region=%s service=%s resource=%s count=%d term=%s payment=%s token=%s",
+		rec.Provider, req.CredentialScope, req.Region, rec.Service, rec.ResourceType, rec.Count,
+		rec.Term, rec.PaymentOption, common.MaskToken(token))
+}
+
+func logPurchaseOutcome(rec common.Recommendation, token, commitmentID string, err error) {
+	if err != nil {
+		log.Printf("mcp purchase FAILED: provider=%s resource=%s token=%s: %v",
+			rec.Provider, rec.ResourceType, common.MaskToken(token), err)
+		return
+	}
+	log.Printf("mcp purchase OK: provider=%s resource=%s count=%d commitment_id=%s token=%s",
+		rec.Provider, rec.ResourceType, rec.Count, commitmentID, common.MaskToken(token))
+}
+
 // ExecutePurchase runs the shared dry_run/confirm safety gate and, for a
 // real purchase, resolves the service client and calls PurchaseCommitment
 // with PurchaseSourceMCP and a derived idempotency token. It never calls
@@ -311,12 +348,16 @@ func ExecutePurchase(ctx context.Context, req PurchaseRequest) (*PurchaseRespons
 		IdempotencyToken: token,
 	}
 
+	logPurchaseAttempt(req, rec, token)
+
 	result, err := client.PurchaseCommitment(ctx, rec, opts)
 	if err != nil {
+		logPurchaseOutcome(rec, token, "", err)
 		// Full provider error text surfaces to the caller (feedback:
 		// providers must never swallow the underlying SDK/HTTP error).
 		return nil, fmt.Errorf("purchase commitment failed: %w", err)
 	}
+	logPurchaseOutcome(rec, token, result.CommitmentID, result.Error)
 
 	resp := &PurchaseResponse{
 		Success:           result.Success,

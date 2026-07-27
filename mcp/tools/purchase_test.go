@@ -1,9 +1,11 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -573,5 +575,79 @@ func TestCredentialScopeResolution(t *testing.T) {
 
 	t.Run("empty when neither override nor environment is set", func(t *testing.T) {
 		assert.Empty(t, CredentialScope("", envVar))
+	})
+}
+
+// TestExecutePurchaseAuditLogging pins the MCP server's only record of a
+// real purchase. The CLI path emits a common.AuditRecord per purchase
+// (cmd/multi_service.go) and the web path persists a purchase_executions row
+// carrying the approval history; this server has neither, so before these
+// log lines an operator asking "what did the assistant actually buy?" had
+// nothing at all to read.
+//
+// It also pins that a preview stays silent (it contacts no provider and
+// spends nothing, so logging every dry run would bury the real purchases)
+// and that the idempotency token is masked rather than written in full.
+func TestExecutePurchaseAuditLogging(t *testing.T) {
+	// Not parallel: this test swaps the shared standard-logger output.
+	capture := func(fn func()) string {
+		var buf bytes.Buffer
+		prevOut, prevFlags := log.Writer(), log.Flags()
+		log.SetOutput(&buf)
+		log.SetFlags(0)
+		defer func() {
+			log.SetOutput(prevOut)
+			log.SetFlags(prevFlags)
+		}()
+		fn()
+		return buf.String()
+	}
+
+	rec := testRecommendation()
+
+	t.Run("a preview logs nothing", func(t *testing.T) {
+		out := capture(func() {
+			_, err := ExecutePurchase(context.Background(), PurchaseRequest{
+				Region: "us-east-1", Recommendation: rec, DryRun: true,
+			})
+			require.NoError(t, err)
+		})
+		assert.Empty(t, out, "a dry run spends nothing and must not pollute the purchase audit trail")
+	})
+
+	t.Run("a real purchase logs the attempt and the outcome", func(t *testing.T) {
+		fake := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true, CommitmentID: "ri-abc123"}}
+		var out string
+		out = capture(func() {
+			_, err := ExecutePurchase(context.Background(), PurchaseRequest{
+				Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true,
+				CredentialScope: "subscription-a",
+				ResolveClient:   func(_ context.Context) (provider.ServiceClient, error) { return fake, nil },
+			})
+			require.NoError(t, err)
+		})
+
+		assert.Contains(t, out, "mcp purchase ATTEMPT")
+		assert.Contains(t, out, "mcp purchase OK")
+		assert.Contains(t, out, "subscription-a", "the audit line must record which account was billed")
+		assert.Contains(t, out, "ri-abc123", "the audit line must record the resulting commitment ID")
+
+		token := fake.lastOpts.IdempotencyToken
+		require.NotEmpty(t, token)
+		assert.NotContains(t, out, token, "the full idempotency token must never be logged")
+		assert.Contains(t, out, common.MaskToken(token), "the masked token must be logged to correlate attempt with outcome")
+	})
+
+	t.Run("a failed purchase logs the failure", func(t *testing.T) {
+		fake := &fakeServiceClient{purchaseErr: errors.New("insufficient capacity")}
+		out := capture(func() {
+			_, err := ExecutePurchase(context.Background(), PurchaseRequest{
+				Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true,
+				ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake, nil },
+			})
+			require.Error(t, err)
+		})
+		assert.Contains(t, out, "mcp purchase FAILED")
+		assert.Contains(t, out, "insufficient capacity")
 	})
 }
