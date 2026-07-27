@@ -684,3 +684,84 @@ func TestResolveDryRunConfirm(t *testing.T) {
 		})
 	}
 }
+
+// TestArcheraOfferOnlyAfterSuccessfulRealPurchase pins when the Archera
+// underutilization-insurance offer is attached, and that it always carries
+// both partnership disclosures.
+//
+// The offer must appear ONLY after a real purchase actually succeeds: a dry
+// run bought nothing and a failed purchase bought nothing, so in both cases
+// there is no commitment to insure and no enrollment window running. This
+// mirrors the CLI, which calls printArcheraPitch only under `riSuccess > 0`.
+//
+// Both disclosures are asserted because CUDly commits to surfacing the
+// sponsorship AND the works-fine-without-it fact everywhere the signup link
+// appears. An MCP client renders this payload through a model, so a link
+// without its disclosures would let a sponsored recommendation be presented
+// as a neutral one.
+func TestArcheraOfferOnlyAfterSuccessfulRealPurchase(t *testing.T) {
+	t.Parallel()
+	rec := testRecommendation()
+
+	t.Run("a dry run carries no offer", func(t *testing.T) {
+		t.Parallel()
+		resp, err := ExecutePurchase(context.Background(), PurchaseRequest{
+			Region: "us-east-1", Recommendation: rec, DryRun: true,
+		})
+		require.NoError(t, err)
+		assert.Nil(t, resp.Archera, "nothing was bought, so there is nothing to insure")
+
+		raw, err := json.Marshal(resp)
+		require.NoError(t, err)
+		assert.NotContains(t, string(raw), "archera",
+			"the offer must be omitted from the payload entirely, not sent empty")
+	})
+
+	t.Run("a failed purchase carries no offer", func(t *testing.T) {
+		t.Parallel()
+		fake := &fakeServiceClient{purchaseResult: common.PurchaseResult{
+			Success: false,
+			Error:   errors.New("insufficient capacity"),
+		}}
+		resp, err := ExecutePurchase(context.Background(), PurchaseRequest{
+			Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true,
+			ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake, nil },
+		})
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		assert.Nil(t, resp.Archera, "a purchase that did not happen has no enrollment window")
+	})
+
+	t.Run("a successful real purchase carries the offer and both disclosures", func(t *testing.T) {
+		t.Parallel()
+		fake := &fakeServiceClient{purchaseResult: common.PurchaseResult{
+			Success:      true,
+			CommitmentID: "ri-abc123",
+		}}
+		resp, err := ExecutePurchase(context.Background(), PurchaseRequest{
+			Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true,
+			ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake, nil },
+		})
+		require.NoError(t, err)
+		require.NotNil(t, resp.Archera, "a completed purchase must surface the insurance option")
+
+		assert.Equal(t, common.ArcheraSignupURL, resp.Archera.SignupURL)
+		assert.Equal(t, common.ArcheraEnrollmentWindowDays, resp.Archera.EnrollmentWindowDays)
+		assert.NotEmpty(t, resp.Archera.Pitch)
+
+		// The two disclosures CUDly commits to keeping visible wherever the
+		// signup link is shown.
+		assert.Equal(t, common.ArcheraNonGatingDisclosure, resp.Archera.NonGatingDisclosure)
+		assert.Equal(t, common.ArcheraSponsorshipDisclosure, resp.Archera.SponsorshipDisclosure)
+		assert.Contains(t, resp.Archera.NonGatingDisclosure, "work fully without Archera")
+		assert.Contains(t, resp.Archera.SponsorshipDisclosure, "sponsors")
+
+		// Whatever a client renders, the link never travels without them.
+		raw, err := json.Marshal(resp)
+		require.NoError(t, err)
+		body := string(raw)
+		require.Contains(t, body, common.ArcheraSignupURL)
+		assert.Contains(t, body, "non_gating_disclosure")
+		assert.Contains(t, body, "sponsorship_disclosure")
+	})
+}
