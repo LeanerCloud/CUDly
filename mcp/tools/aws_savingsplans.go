@@ -248,14 +248,18 @@ const commitmentEpsilon = 1e-9
 // bill identically (10.001 and 10.004, both "10.00") would derive different
 // tokens and could purchase twice.
 func validateHourlyCommitment(hourlyCommitment float64) error {
+	if math.IsNaN(hourlyCommitment) || math.IsInf(hourlyCommitment, 0) {
+		return fmt.Errorf("hourly_commitment must be a finite number, got %v", hourlyCommitment)
+	}
 	if hourlyCommitment <= 0 {
 		return fmt.Errorf("hourly_commitment must be > 0, got %v", hourlyCommitment)
 	}
 	rendered := fmt.Sprintf(commitmentFormat, hourlyCommitment)
 	billed, err := strconv.ParseFloat(rendered, 64)
 	if err != nil {
-		// Unreachable for a finite float64 rendered with %.2f; a NaN or Inf
-		// commitment is rejected by the > 0 check above.
+		// Unreachable: hourlyCommitment is finite here (NaN/Inf rejected
+		// above), and %.2f on a finite float64 always renders as a plain
+		// decimal string that strconv.ParseFloat accepts.
 		return fmt.Errorf("hourly_commitment %v is not a billable amount: %w", hourlyCommitment, err)
 	}
 	if math.Abs(hourlyCommitment-billed) > commitmentEpsilon*math.Max(1, hourlyCommitment) {

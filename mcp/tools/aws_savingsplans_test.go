@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -474,6 +475,21 @@ func TestValidateHourlyCommitmentRejectsSubCentAmounts(t *testing.T) {
 			err := validateHourlyCommitment(v)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "must be > 0")
+		}
+	})
+
+	// NaN and +Inf both fail the "<= 0" check (NaN compares false to
+	// everything, +Inf compares true to > 0) and %.2f renders them as "NaN"
+	// and "+Inf" respectively, both of which strconv.ParseFloat happily
+	// re-parses -- so neither used to hit any rejection path. Pin that they
+	// are now refused explicitly rather than silently passed through to a
+	// real AWS purchase call.
+	t.Run("NaN and Inf are rejected", func(t *testing.T) {
+		t.Parallel()
+		for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+			err := validateHourlyCommitment(v)
+			require.Error(t, err, "%v must be rejected as a non-finite commitment", v)
+			assert.Contains(t, err.Error(), "finite")
 		}
 	})
 }
