@@ -75,12 +75,24 @@ resource "aws_iam_policy" "compute_b" {
         # prevents the deploy SA from reading key policies of unrelated
         # workloads sharing the account. Split from policy_compute.tf
         # because the 6144-char managed-policy limit was reached.
+        #
+        # Uses StringEqualsIgnoreCase for the same reason as
+        # KMSMutateTaggedOnly in policy_compute.tf (see PR #1496): the
+        # OIDC signing key's Project tag comes from local.common_tags
+        # (Project = var.project_name), which defaults to lowercase
+        # "cudly" and overrides the provider default_tags value "CUDly"
+        # for that resource. The AWS provider reads the key policy
+        # (kms:GetKeyPolicy) on every aws_kms_key refresh, so a
+        # case-sensitive StringEquals against "CUDly" would deny the
+        # deploy role from refreshing/replacing the signing key
+        # (AccessDenied: kms:GetKeyPolicy), blocking the ECC replace this
+        # grant exists to support.
         Sid      = "KMSReadTaggedOnly"
         Effect   = "Allow"
         Action   = ["kms:GetKeyPolicy"]
         Resource = "*"
         Condition = {
-          StringEquals = {
+          StringEqualsIgnoreCase = {
             "aws:ResourceTag/Project" = "CUDly"
           }
         }
