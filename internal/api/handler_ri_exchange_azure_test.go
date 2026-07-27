@@ -201,13 +201,31 @@ func TestValidateAzureExecuteBody_RequiresCapAndCurrency(t *testing.T) {
 	missingCap.Currency = "USD"
 	err := validateAzureExecuteBody(missingCap)
 	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "a missing guardrail is a client fault, not a 500")
+	assert.Equal(t, 400, ce.code)
 	assert.Contains(t, err.Error(), "max_payment_due is required")
 
 	missingCurrency := base
 	missingCurrency.MaxPaymentDue = "100.00"
 	err = validateAzureExecuteBody(missingCurrency)
 	require.Error(t, err)
+	ce, ok = IsClientError(err)
+	require.True(t, ok, "a missing guardrail is a client fault, not a 500")
+	assert.Equal(t, 400, ce.code)
 	assert.Contains(t, err.Error(), "currency is required")
+}
+
+// TestValidateAzureExchangeTargets_BillingScopeCaseInsensitive pins the
+// EqualFold comparison in validateAzureExchangeTargets. ARM returns resource
+// IDs in mixed casing, so a client echoing back the scope Azure gave it must
+// not be 400'd; an exact-match comparison would reject every such request
+// while the rest of the suite (which only sends exact-case or deliberately
+// foreign scopes) stayed green.
+func TestValidateAzureExchangeTargets_BillingScopeCaseInsensitive(t *testing.T) {
+	caseVariant := azureOfferingsTarget()
+	caseVariant.BillingScopeID = "/SUBSCRIPTIONS/Sub-1"
+	require.NoError(t, validateAzureExchangeTargets([]AzureExchangeTargetBody{caseVariant}, "sub-1"))
 }
 
 // --- getAzureCompatibleOfferings ---
@@ -1125,4 +1143,286 @@ func TestExecuteAzureExchange_HappyPath(t *testing.T) {
 	assert.InDelta(t, 20.00, *resp.RefundsTotal, 0.0001)
 	require.NotNil(t, resp.PurchasesTotal)
 	assert.InDelta(t, 95.00, *resp.PurchasesTotal, 0.0001)
+}
+
+// --- executeAzureExchange: the SEC-01 constraint set's own contents ---
+
+// validAzureExecuteBodyMultiRegion targets two locations plus a duplicate,
+// so the Regions dimension asserted below also pins targetLocations' dedup.
+const validAzureExecuteBodyMultiRegion = `{
+	"subscription_id": "sub-1",
+	"sources": [{"reservation_id": "res-1", "quantity": 1}],
+	"targets": [
+		{"sku": "Standard_D4s_v3", "location": "eastus", "term": "P1Y", "quantity": 1},
+		{"sku": "Standard_D8s_v3", "location": "westeurope", "term": "P3Y", "quantity": 2},
+		{"sku": "Standard_D2s_v3", "location": "eastus", "term": "P1Y", "quantity": 1}
+	],
+	"max_payment_due": "100.00",
+	"currency": "USD"
+}`
+
+// TestExecuteAzureExchange_ConstraintSetPinsAllDimensions asserts the FULL
+// constraint set checkAzureExecuteConstraints submits, not just its amount
+// dimension.
+//
+// The other four dimensions are what confine an irreversible exchange to
+// the caller's authorized blast radius: AccountIDs to the CloudAccount
+// resolved from the request's subscription_id (the subscription the money
+// actually lands in), Providers/Services to azure/compute, and Regions to
+// every target location. Every other execute test matches the constraint
+// argument with mock.Anything or an amount-only MatchedBy, so dropping
+// Regions -- letting a permission scoped to one region commit an exchange
+// into another -- or pointing AccountIDs at the wrong account would leave
+// the whole suite green.
+func TestExecuteAzureExchange_ConstraintSetPinsAllDimensions(t *testing.T) {
+	ctx := context.Background()
+	var captured []auth.PermissionConstraints
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
+	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange",
+		mock.MatchedBy(func(sets []auth.PermissionConstraints) bool {
+			captured = sets
+			return true
+		})).Return(true, nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	mockStore := &MockConfigStore{}
+	mockStore.GetCloudAccountByExternalIDFn = func(_ context.Context, provider, externalID string) (*config.CloudAccount, error) {
+		assert.Equal(t, "azure", provider)
+		assert.Equal(t, "sub-1", externalID, "the account gating the exchange must be resolved from the request's own subscription_id")
+		return &config.CloudAccount{ID: "acct-sub-1"}, nil
+	}
+
+	opsClient := new(mockAzureExchangeOpsClient)
+	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
+		&azurecompute.ExchangePreview{SessionID: "sess-dims", NetPayable: toPtr(10.00), NetPayableCurrency: "USD"},
+		[]azurecompute.CompatibleOffering{}, nil,
+	)
+	opsClient.On("ExecuteExchange", ctx, "sess-dims").Return(
+		&azurecompute.ExchangeResult{SessionID: "sess-dims", Status: "Succeeded"}, nil,
+	)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := &Handler{auth: mockAuth, config: mockStore, azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient }}
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBodyMultiRegion,
+	})
+	require.NoError(t, err)
+
+	require.Len(t, captured, 1)
+	c := captured[0]
+	assert.Equal(t, []string{"acct-sub-1"}, c.AccountIDs, "AccountIDs must name the CloudAccount the exchange is billed to")
+	assert.Equal(t, []string{"azure"}, c.Providers)
+	assert.Equal(t, []string{"compute"}, c.Services)
+	assert.Equal(t, []string{"eastus", "westeurope"}, c.Regions, "Regions must cover every target location, de-duplicated in first-seen order")
+	assert.InDelta(t, 100.00, c.MaxPurchaseAmount, 0.0001)
+}
+
+// TestExecuteAzureExchange_LowercaseUSDTakesUSDCapPath closes the other half
+// of the currency case-insensitivity pairing.
+//
+// TestCheckAzureExchangeMoneyGuardrails_CurrencyCaseInsensitive calls the
+// guardrail helper directly, so it never exercises the isUSD test in
+// checkAzureExecuteConstraints. With an exact-match isUSD, a "usd" request
+// would take the non-USD sentinel path and be 403'd against any
+// MaxPurchaseAmount-carrying permission. Asserting the constraint check
+// receives the REAL 100.00 cap (not math.MaxFloat64) pins the USD path.
+func TestExecuteAzureExchange_LowercaseUSDTakesUSDCapPath(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
+	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange",
+		mock.MatchedBy(func(sets []auth.PermissionConstraints) bool {
+			return len(sets) == 1 && sets[0].MaxPurchaseAmount == 100.00
+		})).Return(true, nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	mockStore := &MockConfigStore{}
+	mockStore.GetCloudAccountByExternalIDFn = func(_ context.Context, _, _ string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: "acct-1"}, nil
+	}
+
+	opsClient := new(mockAzureExchangeOpsClient)
+	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
+		&azurecompute.ExchangePreview{SessionID: "sess-lower-usd", NetPayable: toPtr(50.00), NetPayableCurrency: "USD"},
+		[]azurecompute.CompatibleOffering{}, nil,
+	)
+	opsClient.On("ExecuteExchange", ctx, "sess-lower-usd").Return(
+		&azurecompute.ExchangeResult{SessionID: "sess-lower-usd", Status: "Succeeded"}, nil,
+	)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := &Handler{auth: mockAuth, config: mockStore, azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient }}
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body: `{
+			"subscription_id": "sub-1",
+			"sources": [{"reservation_id": "res-1", "quantity": 1}],
+			"targets": [{"sku": "Standard_D4s_v3", "location": "eastus", "term": "P1Y", "quantity": 1}],
+			"max_payment_due": "100.00",
+			"currency": "usd"
+		}`,
+	})
+	require.NoError(t, err, `a lowercase "usd" request must take the USD cap path in both the constraint check and the money guardrails`)
+}
+
+// TestExecuteAzureExchange_NonUSDDeniedOnOtherDimension pins the other half
+// of checkAzureExecuteConstraints' disambiguation branch: when the
+// amount-neutralized retry ALSO denies, some other dimension
+// (account/provider/service/region) is the real cause and its generic error
+// must be returned unchanged. Reporting the currency-specific 403 there
+// would send an operator chasing an FX problem that does not exist.
+func TestExecuteAzureExchange_NonUSDDeniedOnOtherDimension(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
+	// Both the sentinel-amount call and the amount-neutralized retry deny.
+	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange", mock.Anything).Return(false, nil).Twice()
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	mockStore := &MockConfigStore{}
+	mockStore.GetCloudAccountByExternalIDFn = func(_ context.Context, _, _ string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: "acct-1"}, nil
+	}
+
+	opsClient := new(mockAzureExchangeOpsClient) // neither pricing nor execution may be reached
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := &Handler{auth: mockAuth, config: mockStore, azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient }}
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBodyKWD,
+	})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, err.Error(), "constraints")
+	assert.NotContains(t, err.Error(), "USD-denominated",
+		"a denial caused by another dimension must not be reported as a currency problem")
+}
+
+// --- executeAzureExchange: failure classification on the money path ---
+
+// TestExecuteAzureExchange_RequoteFailureAbortsBeforeCommit pins the
+// invariant that a failed server-side re-quote aborts before ExecuteExchange
+// is ever reached. No ExecuteExchange expectation is registered, so testify
+// fails the test the instant a code change lets execution proceed on an
+// unpriced exchange.
+func TestExecuteAzureExchange_RequoteFailureAbortsBeforeCommit(t *testing.T) {
+	tests := []struct {
+		name     string
+		quoteErr error
+		wantCode int
+	}{
+		{"azure client fault", &azcore.ResponseError{StatusCode: 400, ErrorCode: "ReservationNotFound"}, 400},
+		{"transient failure", fmt.Errorf("azure: CalculateExchange: transport timeout"), 500},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			opsClient := new(mockAzureExchangeOpsClient)
+			opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(nil, nil, tt.quoteErr)
+			t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+			h := newAzureExecuteMoneyPathHandler(t, opsClient)
+			_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+				Headers: map[string]string{"authorization": "Bearer tok"},
+				Body:    validAzureExecuteBody,
+			})
+			require.Error(t, err)
+			ce, ok := IsClientError(err)
+			require.True(t, ok)
+			assert.Equal(t, tt.wantCode, ce.code)
+			opsClient.AssertNotCalled(t, "ExecuteExchange", mock.Anything, mock.Anything)
+		})
+	}
+}
+
+// TestExecuteAzureExchange_CommitFailureClassification covers the status
+// mapping on the irreversible commit call itself, which every other execute
+// test resolves successfully. An Azure 4xx must surface as a 400 carrying
+// Azure's own message (the caller's input was wrong); anything else must
+// stay a 500 with the generic operation message, so a transient failure is
+// never mislabelled as a permanent client fault the caller should not retry.
+func TestExecuteAzureExchange_CommitFailureClassification(t *testing.T) {
+	tests := []struct {
+		name       string
+		commitErr  error
+		wantCode   int
+		wantDetail string
+	}{
+		{"azure client fault", &azcore.ResponseError{StatusCode: 409, ErrorCode: "ReservationAlreadyExchanged"}, 400, "ReservationAlreadyExchanged"},
+		{"transient failure", fmt.Errorf("azure: ExecuteExchange: transport timeout"), 500, "exchange execution failed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			opsClient := new(mockAzureExchangeOpsClient)
+			opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
+				&azurecompute.ExchangePreview{SessionID: "sess-commit-fail", NetPayable: toPtr(10.00), NetPayableCurrency: "USD"},
+				[]azurecompute.CompatibleOffering{}, nil,
+			)
+			opsClient.On("ExecuteExchange", ctx, "sess-commit-fail").Return(nil, tt.commitErr)
+			t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+			h := newAzureExecuteMoneyPathHandler(t, opsClient)
+			_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+				Headers: map[string]string{"authorization": "Bearer tok"},
+				Body:    validAzureExecuteBody,
+			})
+			require.Error(t, err)
+			ce, ok := IsClientError(err)
+			require.True(t, ok)
+			assert.Equal(t, tt.wantCode, ce.code)
+			assert.Contains(t, err.Error(), tt.wantDetail)
+		})
+	}
+}
+
+// --- checkAzureExchangeMoneyGuardrails: cap boundary and refunds ---
+
+// TestCheckAzureExchangeMoneyGuardrails_CapBoundaryAndRefunds pins the cap
+// comparison at the two points the existing 75-vs-100 / 500-vs-100 tests
+// leave open: a quote landing exactly ON the cap must be allowed (a `>=`
+// comparison would reject every exactly-budgeted exchange), and a negative
+// NetPayable -- the refund side of a downgrade, and a common Azure exchange
+// outcome -- must never be treated as exceeding a positive cap.
+func TestCheckAzureExchangeMoneyGuardrails_CapBoundaryAndRefunds(t *testing.T) {
+	tests := []struct {
+		name       string
+		netPayable float64
+		wantErr    bool
+	}{
+		{"exactly at cap", 100.00, false},
+		{"one cent over cap", 100.01, true},
+		{"negative net payable is a refund", -250.00, false},
+		{"zero net payable", 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			preview := &azurecompute.ExchangePreview{
+				SessionID:          "sess-1",
+				NetPayable:         toPtr(tt.netPayable),
+				NetPayableCurrency: "USD",
+			}
+			err := checkAzureExchangeMoneyGuardrails(preview, big.NewRat(100, 1), "USD")
+			if tt.wantErr {
+				require.Error(t, err)
+				ce, ok := IsClientError(err)
+				require.True(t, ok)
+				assert.Equal(t, 422, ce.code)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
 }
