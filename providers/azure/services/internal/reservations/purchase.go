@@ -94,12 +94,25 @@ func ParseTermYears(term string) (int, error) {
 // cannot express at all) is a hard error rather than a silent default: the
 // default belongs at the caller (CLI/MCP) layer, never silently applied on
 // this money-affecting path (feedback_no_silent_fallbacks).
+//
+// Empty gets its own message rather than sharing the unrecognized-value one.
+// It is a reachable state with a different remedy: migration 000032 added
+// recommendations.payment_option as TEXT NOT NULL defaulting to the empty
+// string, so a row predating that migration reaches
+// internal/purchase/execution.go with rec.Payment == "" and lands here.
+// Blaming partial-upfront for a value that is simply missing sends whoever
+// reads that error looking in the wrong place.
 func BillingPlanForPaymentOption(paymentOption string) (armreservations.ReservationBillingPlan, error) {
 	switch strings.ToLower(strings.TrimSpace(paymentOption)) {
 	case "all-upfront", "upfront":
 		return armreservations.ReservationBillingPlanUpfront, nil
 	case "no-upfront", "monthly":
 		return armreservations.ReservationBillingPlanMonthly, nil
+	case "":
+		return "", fmt.Errorf(
+			"azure reservations support only upfront or monthly billing, and no payment option was supplied; " +
+				"set it explicitly (upfront or monthly) rather than relying on a default, because Azure's own " +
+				"default is upfront and would charge the whole commitment immediately")
 	default:
 		return "", fmt.Errorf(
 			"azure reservations support only upfront or monthly billing; %q is not available (partial-upfront has no azure equivalent)",
@@ -128,9 +141,19 @@ func PurchaseURL(reservationOrderID string) string {
 
 // ReservationOrdersListURL returns the list-reservation-orders endpoint URL.
 // The endpoint is tenant-wide (no subscription prefix): the caller's bearer
-// token determines visibility, and the idempotency-token tag is globally
-// unique per (execution, rec), so a tenant-wide search returns the correct
+// token determines visibility, so a tenant-wide search returns the correct
 // order regardless of which subscription executed the purchase.
+//
+// That correctness rests entirely on the idempotency token being unique per
+// (target subscription, request), and it is the CALLER's job to make it so.
+// The CLI/web paths satisfy this by deriving the token from a UUID execution
+// ID (common.DeriveIdempotencyToken), which is unique by construction. A
+// caller that instead derives a token from the request's own parameters must
+// fold the target subscription into it, or two subscriptions in the same
+// tenant ordering the same SKU will collide here: the second purchase would
+// match the first subscription's order, short-circuit, and report success
+// without buying anything. See mcp/tools/purchase.go's idempotencyKeyFor,
+// which folds in PurchaseRequest.CredentialScope for exactly this reason.
 func ReservationOrdersListURL() string {
 	return BaseURL + "/providers/Microsoft.Capacity/reservationOrders?api-version=" + apiVersion
 }

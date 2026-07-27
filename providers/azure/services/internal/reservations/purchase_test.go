@@ -748,3 +748,31 @@ func TestBillingPlanForPaymentOption(t *testing.T) {
 		}
 	}
 }
+
+// TestBillingPlanForPaymentOption_EmptyHasItsOwnMessage pins that a missing
+// payment option is diagnosed as missing, not as an unsupported
+// partial-upfront. Empty is a reachable state with a different remedy: the
+// recommendations table has carried `payment_option TEXT NOT NULL DEFAULT
+// ”` since migration 000032, so a row predating that migration reaches
+// internal/purchase/execution.go with rec.Payment == "" and lands here.
+// Before this split, the operator reading that failure was told
+// partial-upfront had no Azure equivalent, which is true but has nothing to
+// do with why their purchase failed.
+func TestBillingPlanForPaymentOption_EmptyHasItsOwnMessage(t *testing.T) {
+	t.Parallel()
+
+	_, emptyErr := BillingPlanForPaymentOption("")
+	require.Error(t, emptyErr)
+	assert.Contains(t, emptyErr.Error(), "no payment option was supplied")
+	assert.NotContains(t, emptyErr.Error(), "partial-upfront",
+		"a missing value must not be blamed on partial-upfront")
+
+	_, partialErr := BillingPlanForPaymentOption("partial-upfront")
+	require.Error(t, partialErr)
+	assert.Contains(t, partialErr.Error(), "partial-upfront has no azure equivalent")
+
+	// Whitespace-only is the same failure as empty, since the switch trims.
+	_, blankErr := BillingPlanForPaymentOption("   ")
+	require.Error(t, blankErr)
+	assert.Contains(t, blankErr.Error(), "no payment option was supplied")
+}
