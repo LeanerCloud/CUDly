@@ -96,6 +96,17 @@ type AzureProvider struct {
 	region              string // Default region for operations
 	subscriptionsClient SubscriptionsClient
 	credProvider        CredentialProvider
+
+	// accountsMu guards cachedAccounts. GetAccounts, GetServiceClient, and
+	// GetRecommendationsClient all resolve the subscription list on the hot
+	// path; without caching, a single logical operation (e.g. a
+	// multi-subscription recommendations sweep) would re-issue the ARM
+	// subscriptions.List call once per internal caller. cachedAccounts is
+	// nil until the first successful fetch; InvalidateAccountsCache resets
+	// it so tests (and long-lived callers that expect subscription
+	// membership to change) can force a refresh.
+	accountsMu     sync.RWMutex
+	cachedAccounts []common.Account
 }
 
 // NewAzureProvider creates a new Azure provider instance.
@@ -253,7 +264,71 @@ func (p *AzureProvider) GetAccounts(ctx context.Context) ([]common.Account, erro
 	if !p.IsConfigured() {
 		return nil, fmt.Errorf("azure provider is not configured")
 	}
+	return p.getOrFetchAccounts(ctx)
+}
 
+// getOrFetchAccounts returns the cached subscription list, populating it via
+// fetchAccountsLocked on first use. Safe for concurrent callers: a read lock
+// guards the fast path (cache already populated); a write lock guards the
+// fetch-and-populate path, with a re-check after acquiring it so concurrent
+// callers that lost the race to the lock don't issue a redundant ARM call.
+//
+// Callers must have already verified IsConfigured(); this method assumes a
+// usable credential is present (mirrors GetAccounts, its only production
+// caller alongside GetServiceClient/GetRecommendationsClient which check
+// IsConfigured() themselves before resolving accounts).
+func (p *AzureProvider) getOrFetchAccounts(ctx context.Context) ([]common.Account, error) {
+	p.accountsMu.RLock()
+	cached := p.cachedAccounts
+	p.accountsMu.RUnlock()
+	if cached != nil {
+		return cloneAccounts(cached), nil
+	}
+
+	p.accountsMu.Lock()
+	defer p.accountsMu.Unlock()
+	// Re-check: another goroutine may have populated the cache while this
+	// one was waiting on the write lock.
+	if p.cachedAccounts != nil {
+		return cloneAccounts(p.cachedAccounts), nil
+	}
+
+	accounts, err := p.fetchAccountsLocked(ctx)
+	if err != nil {
+		return nil, err
+	}
+	p.cachedAccounts = accounts
+	return cloneAccounts(accounts), nil
+}
+
+// cloneAccounts returns a shallow copy of accounts backed by a fresh array.
+// common.Account has no nested slices/maps, so a shallow per-element copy is
+// sufficient to stop a caller mutating a returned slice (e.g. flipping
+// IsDefault) from corrupting the shared cache -- the same class of bug
+// flagged for getters returning nested state.
+func cloneAccounts(accounts []common.Account) []common.Account {
+	out := make([]common.Account, len(accounts))
+	copy(out, accounts)
+	return out
+}
+
+// InvalidateAccountsCache clears the cached subscription list so the next
+// getOrFetchAccounts call re-fetches from the ARM subscriptions API. Exposed
+// for tests that need to assert cache-miss behavior; production callers
+// currently rely on the cache living for the lifetime of the AzureProvider
+// instance (one instance is constructed per collection/purchase run).
+func (p *AzureProvider) InvalidateAccountsCache() {
+	p.accountsMu.Lock()
+	defer p.accountsMu.Unlock()
+	p.cachedAccounts = nil
+}
+
+// fetchAccountsLocked performs the actual ARM subscriptions.List call and
+// resolves the default subscription. Must only be called while holding
+// accountsMu for writing (via getOrFetchAccounts) -- it does not lock itself
+// so getOrFetchAccounts can do its cache-populate-and-return in one critical
+// section.
+func (p *AzureProvider) fetchAccountsLocked(ctx context.Context) ([]common.Account, error) {
 	// Use injected client if available (for testing)
 	var subClient SubscriptionsClient
 	if p.subscriptionsClient != nil {
@@ -501,27 +576,49 @@ func (p *AzureProvider) newServiceClientForSubscription(service common.ServiceTy
 	}
 }
 
-// GetRecommendationsClient returns a recommendations client for the default
-// subscription.
+// GetRecommendationsClient returns a recommendations client.
 //
-// When operating across multiple subscriptions (fan-out), prefer
-// GetRecommendationsClientForAccount.
+// When a subscription is pinned (p.subscriptionID set, e.g. by the scheduler
+// or purchase-execution paths that always operate on one registered
+// account), the returned client is scoped to that single subscription --
+// unchanged from previous behavior.
+//
+// When no subscription is pinned, GetRecommendationsClient discovers every
+// subscription accessible to the authenticated principal (via the cached
+// getOrFetchAccounts) and, when 2+ are visible, fans recommendation
+// collection out across all of them via
+// MultiSubscriptionRecommendationsClient. Azure has no organization-wide
+// equivalent of AWS Cost Explorer's AccountScope=Linked -- the Consumption
+// Reservation Recommendations and Advisor APIs are subscription-scoped -- so
+// this client-side fan-out is what brings Azure to parity with the AWS
+// provider's automatic whole-organization coverage. A single discovered
+// subscription still returns the plain single-subscription client; no
+// fan-out machinery is needed for one subscription.
 func (p *AzureProvider) GetRecommendationsClient(ctx context.Context) (provider.RecommendationsClient, error) {
 	if !p.IsConfigured() {
 		return nil, fmt.Errorf("azure provider is not configured")
 	}
 
-	// Use explicit subscription ID if configured; otherwise resolve from accounts.
-	subscriptionID := p.subscriptionID
-	if subscriptionID == "" {
-		var err error
-		subscriptionID, err = p.resolveSubscriptionIDFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+	if p.subscriptionID != "" {
+		return NewRecommendationsClient(p.cred, p.subscriptionID)
 	}
 
-	return NewRecommendationsClient(p.cred, subscriptionID)
+	accounts, err := p.getOrFetchAccounts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve Azure subscriptions: %w", err)
+	}
+	if len(accounts) == 0 {
+		return nil, fmt.Errorf("no Azure subscriptions found")
+	}
+	if len(accounts) == 1 {
+		return NewRecommendationsClient(p.cred, accounts[0].ID)
+	}
+
+	client, err := NewMultiSubscriptionRecommendationsClient(p.cred, accounts)
+	if err != nil {
+		return nil, err
+	}
+	return client, nil
 }
 
 // GetRecommendationsClientForAccount returns a recommendations client scoped to

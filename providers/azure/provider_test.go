@@ -1241,3 +1241,148 @@ func TestAzureProvider_GetRecommendationsClientForAccount(t *testing.T) {
 		assert.Contains(t, err.Error(), "azure provider is not configured")
 	})
 }
+
+// countingSubscriptionsClient wraps mockSubscriptionsClient and counts how
+// many times NewListPager is invoked, so cache-hit tests can assert the
+// underlying ARM API is only called once.
+type countingSubscriptionsClient struct {
+	*mockSubscriptionsClient
+	calls int
+}
+
+func (c *countingSubscriptionsClient) NewListPager(options *armsubscriptions.ClientListOptions) SubscriptionsPager {
+	c.calls++
+	return c.mockSubscriptionsClient.NewListPager(options)
+}
+
+// twoSubscriptionPages returns a mockSubscriptionsClient listing the same
+// two fixed subscriptions ("sub-1"/"sub-2") every test in this file needs;
+// none of the cache/fan-out tests care about the actual subscription
+// identifiers, so a fixed pair keeps call sites short.
+func twoSubscriptionPages() *mockSubscriptionsClient {
+	sub1ID, sub1Name := "sub-1", "Subscription 1"
+	sub2ID, sub2Name := "sub-2", "Subscription 2"
+	return &mockSubscriptionsClient{
+		listPagerFunc: func(options *armsubscriptions.ClientListOptions) SubscriptionsPager {
+			return &mockSubscriptionsPager{
+				pages: []armsubscriptions.ClientListResponse{
+					{
+						SubscriptionListResult: armsubscriptions.SubscriptionListResult{
+							Value: []*armsubscriptions.Subscription{
+								{SubscriptionID: &sub1ID, DisplayName: &sub1Name},
+								{SubscriptionID: &sub2ID, DisplayName: &sub2Name},
+							},
+						},
+					},
+				},
+			}
+		},
+	}
+}
+
+func TestAzureProvider_GetAccounts_CacheHit(t *testing.T) {
+	counting := &countingSubscriptionsClient{mockSubscriptionsClient: twoSubscriptionPages()}
+
+	p := &AzureProvider{cred: &mockTokenCredential{}}
+	p.SetSubscriptionsClient(counting)
+
+	first, err := p.GetAccounts(context.Background())
+	require.NoError(t, err)
+	require.Len(t, first, 2)
+	assert.Equal(t, 1, counting.calls, "first GetAccounts call should hit the API once")
+
+	second, err := p.GetAccounts(context.Background())
+	require.NoError(t, err)
+	require.Len(t, second, 2)
+	assert.Equal(t, 1, counting.calls, "second GetAccounts call should be served from cache, not the API")
+	assert.Equal(t, first, second)
+}
+
+func TestAzureProvider_GetAccounts_CacheHit_ReturnsIndependentCopies(t *testing.T) {
+	p := &AzureProvider{cred: &mockTokenCredential{}}
+	p.SetSubscriptionsClient(twoSubscriptionPages())
+
+	first, err := p.GetAccounts(context.Background())
+	require.NoError(t, err)
+	first[0].IsDefault = true // mutate the caller's copy
+
+	second, err := p.GetAccounts(context.Background())
+	require.NoError(t, err)
+	assert.False(t, second[0].IsDefault, "mutating a returned slice must not corrupt the cache")
+}
+
+func TestAzureProvider_InvalidateAccountsCache(t *testing.T) {
+	counting := &countingSubscriptionsClient{mockSubscriptionsClient: twoSubscriptionPages()}
+
+	p := &AzureProvider{cred: &mockTokenCredential{}}
+	p.SetSubscriptionsClient(counting)
+
+	_, err := p.GetAccounts(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, counting.calls)
+
+	p.InvalidateAccountsCache()
+
+	_, err = p.GetAccounts(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 2, counting.calls, "GetAccounts after InvalidateAccountsCache should re-hit the API")
+}
+
+func TestAzureProvider_GetRecommendationsClient_MultiSubscriptionFanOut(t *testing.T) {
+	t.Run("multi-subscription returns MultiSubscriptionRecommendationsClient", func(t *testing.T) {
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(twoSubscriptionPages())
+
+		client, err := p.GetRecommendationsClient(context.Background())
+		require.NoError(t, err)
+		require.IsType(t, &MultiSubscriptionRecommendationsClient{}, client)
+		assert.Len(t, client.(*MultiSubscriptionRecommendationsClient).subscriptions, 2)
+	})
+
+	t.Run("single discovered subscription returns RecommendationsClientAdapter", func(t *testing.T) {
+		subID, subName := "sub-solo", "Solo Subscription"
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(&mockSubscriptionsClient{
+			listPagerFunc: func(options *armsubscriptions.ClientListOptions) SubscriptionsPager {
+				return &mockSubscriptionsPager{
+					pages: []armsubscriptions.ClientListResponse{
+						{SubscriptionListResult: armsubscriptions.SubscriptionListResult{
+							Value: []*armsubscriptions.Subscription{{SubscriptionID: &subID, DisplayName: &subName}},
+						}},
+					},
+				}
+			},
+		})
+
+		client, err := p.GetRecommendationsClient(context.Background())
+		require.NoError(t, err)
+		require.IsType(t, &RecommendationsClientAdapter{}, client)
+		assert.Equal(t, subID, client.(*RecommendationsClientAdapter).subscriptionID)
+	})
+
+	t.Run("pinned subscription always returns single adapter regardless of discovered count", func(t *testing.T) {
+		p := &AzureProvider{cred: &mockTokenCredential{}, subscriptionID: "pinned-sub"}
+		// Deliberately do not set a subscriptions client: a pinned subscription
+		// must never trigger subscription discovery.
+		client, err := p.GetRecommendationsClient(context.Background())
+		require.NoError(t, err)
+		require.IsType(t, &RecommendationsClientAdapter{}, client)
+		assert.Equal(t, "pinned-sub", client.(*RecommendationsClientAdapter).subscriptionID)
+	})
+
+	// The zero-subscription "no Azure subscriptions found" case is already
+	// covered by TestAzureProvider_GetRecommendationsClient_WithSubscriptionLookup.
+
+	t.Run("subscription discovery failure is propagated", func(t *testing.T) {
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(&mockSubscriptionsClient{
+			listPagerFunc: func(options *armsubscriptions.ClientListOptions) SubscriptionsPager {
+				return &mockSubscriptionsPager{nextErr: errors.New("boom")}
+			},
+		})
+
+		_, err := p.GetRecommendationsClient(context.Background())
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to resolve Azure subscriptions")
+	})
+}
