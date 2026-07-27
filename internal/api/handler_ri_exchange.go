@@ -605,16 +605,23 @@ const azureMaxPurchaseAmountCurrency = "USD"
 // configured on execute:ri-exchange (SEC-01, issue #1141). Extracted from
 // executeAzureExchange to keep that function under the gocyclo limit.
 func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *Session, body AzureExecuteExchangeRequestBody, maxRat *big.Rat) (azureExchangeClient, error) {
+	// Scope check MUST precede building the client (mirrors
+	// getAzureCompatibleOfferings): otherwise an unregistered subscription
+	// (distinguishable 404: "no Azure account registered...") and a
+	// registered-but-out-of-scope one (generic errNotFound) would leak an
+	// enumeration signal to a scoped caller about which subscriptions exist,
+	// and credentials for an out-of-scope account could be resolved before
+	// the denial.
+	if scopeErr := h.requireAzureSubscriptionScope(ctx, session, body.SubscriptionID); scopeErr != nil {
+		return nil, scopeErr
+	}
+
 	client, err := h.buildAzureExchangeClient(ctx, body.SubscriptionID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build Azure exchange client: %w", err)
 	}
 	if client == nil {
 		return nil, NewClientError(404, fmt.Sprintf("no Azure account registered for subscription %q", body.SubscriptionID))
-	}
-
-	if scopeErr := h.requireAzureSubscriptionScope(ctx, session, body.SubscriptionID); scopeErr != nil {
-		return nil, scopeErr
 	}
 
 	accountID, err := h.resolveAzureExchangeAccountID(ctx, body.SubscriptionID)

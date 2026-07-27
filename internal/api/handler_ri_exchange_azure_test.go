@@ -547,6 +547,118 @@ func TestExecuteAzureExchange_InScopeSubscriptionAllowed(t *testing.T) {
 	assert.Equal(t, "sess-fresh", resp.SessionID)
 }
 
+// TestExecuteAzureExchange_ScopeCheckPrecedesClientBuild_Unregistered proves
+// the fix for the authz-ordering finding: requireAzureSubscriptionScope must
+// run BEFORE buildAzureExchangeClient, exactly like getAzureCompatibleOfferings.
+// Without that ordering, an unregistered subscription_id short-circuits in
+// buildAzureExchangeClient with a distinguishable 404 ("no Azure account
+// registered for subscription %q") before the scope check ever runs -- an
+// enumeration oracle letting a scoped caller learn which subscription IDs
+// are registered at all. This test exercises the REAL buildAzureExchangeClient
+// path (no azureExchangeFactory), so the distinguishable message is only
+// avoided when the scope check genuinely runs first.
+func TestExecuteAzureExchange_ScopeCheckPrecedesClientBuild_Unregistered(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := scopedAzureAuth(t, "execute", "ri-exchange", []string{"acct-mine"})
+
+	store := &MockConfigStore{}
+	store.GetCloudAccountByExternalIDFn = func(_ context.Context, provider, externalID string) (*config.CloudAccount, error) {
+		require.Equal(t, "azure", provider)
+		require.Equal(t, "sub-1", externalID)
+		return nil, nil // unregistered: no account for this subscription at all
+	}
+
+	// No azureExchangeFactory: the real buildAzureExchangeClient path runs,
+	// so a pre-fix reorder would reach its distinguishable 404 message.
+	h := &Handler{auth: mockAuth, config: store}
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody,
+	})
+	require.Error(t, err, "a scoped session must not learn whether an unregistered subscription exists")
+	assert.ErrorIs(t, err, errNotFound, "must be the generic scope-check 404, not buildAzureExchangeClient's subscription-specific message")
+	assert.NotContains(t, err.Error(), "sub-1", "the error must not echo the subscription id back (that itself would be an enumeration signal)")
+}
+
+// TestExecuteAzureExchange_ScopeCheckPrecedesClientBuild_RegisteredOutOfScope
+// is the other half of the same finding: a registered-but-out-of-scope
+// subscription must produce the IDENTICAL generic errNotFound as the
+// unregistered case above, with no credential resolution attempted first.
+// The account here uses client_secret auth mode with no stored secret
+// (MockCredentialStore.LoadRaw always returns nil), so if the client were
+// built before the scope check, credential resolution would fail with a
+// DIFFERENT (non-404) error -- that divergence is exactly the signal this
+// test catches if the ordering regresses.
+func TestExecuteAzureExchange_ScopeCheckPrecedesClientBuild_RegisteredOutOfScope(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := scopedAzureAuth(t, "execute", "ri-exchange", []string{"acct-mine"})
+
+	store := &MockConfigStore{}
+	store.GetCloudAccountByExternalIDFn = func(_ context.Context, provider, externalID string) (*config.CloudAccount, error) {
+		require.Equal(t, "azure", provider)
+		require.Equal(t, "sub-1", externalID)
+		return &config.CloudAccount{
+			ID:                  "acct-other",
+			Name:                "Other Team",
+			Provider:            "azure",
+			ExternalID:          externalID,
+			AzureSubscriptionID: externalID,
+			AzureTenantID:       "tenant-other",
+			AzureClientID:       "client-other",
+			AzureAuthMode:       "client_secret",
+			Enabled:             true,
+		}, nil
+	}
+
+	// No azureExchangeFactory, and a credential store that always fails
+	// client_secret resolution: if buildAzureExchangeClient ran before the
+	// scope check, this would surface as a credential-resolution error
+	// instead of the generic scope-denial.
+	h := &Handler{auth: mockAuth, config: store, credStore: &MockCredentialStore{}}
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody,
+	})
+	require.Error(t, err, "a scoped session must not execute against an out-of-scope subscription")
+	assert.ErrorIs(t, err, errNotFound, "must be the generic scope-check 404, not a credential-resolution error from building the client first")
+}
+
+// TestExecuteAzureExchange_ScopeCheckDenialsAreIndistinguishable directly
+// compares the two scenarios above: the unregistered and the
+// registered-but-out-of-scope subscription must produce the EXACT same
+// error (same sentinel, same message), so a scoped caller cannot tell them
+// apart by probing subscription IDs.
+func TestExecuteAzureExchange_ScopeCheckDenialsAreIndistinguishable(t *testing.T) {
+	ctx := context.Background()
+
+	unregisteredAuth := scopedAzureAuth(t, "execute", "ri-exchange", []string{"acct-mine"})
+	unregisteredStore := &MockConfigStore{}
+	unregisteredStore.GetCloudAccountByExternalIDFn = func(_ context.Context, _, _ string) (*config.CloudAccount, error) {
+		return nil, nil
+	}
+	hUnregistered := &Handler{auth: unregisteredAuth, config: unregisteredStore}
+	_, unregisteredErr := hUnregistered.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody,
+	})
+
+	outOfScopeAuth := scopedAzureAuth(t, "execute", "ri-exchange", []string{"acct-mine"})
+	outOfScopeStore := scopedAzureStore()
+	outOfScopeOpsClient := new(mockAzureExchangeOpsClient)
+	t.Cleanup(func() { outOfScopeOpsClient.AssertExpectations(t) }) // no expectations: must never be called
+	hOutOfScope := &Handler{auth: outOfScopeAuth, config: outOfScopeStore, azureExchangeFactory: func(_ string) azureExchangeClient { return outOfScopeOpsClient }}
+	_, outOfScopeErr := hOutOfScope.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody,
+	})
+
+	require.Error(t, unregisteredErr)
+	require.Error(t, outOfScopeErr)
+	assert.Equal(t, unregisteredErr.Error(), outOfScopeErr.Error(), "an unregistered subscription and a registered-but-out-of-scope one must be indistinguishable to the caller")
+	assert.ErrorIs(t, unregisteredErr, errNotFound)
+	assert.ErrorIs(t, outOfScopeErr, errNotFound)
+}
+
 // --- executeAzureExchange: auth fail-closed ---
 
 func TestExecuteAzureExchange_NoAuth(t *testing.T) {
