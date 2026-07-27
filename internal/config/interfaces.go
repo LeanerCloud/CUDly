@@ -330,14 +330,21 @@ type StoreInterface interface {
 	SetRecommendationsCollectionError(ctx context.Context, errMsg string) error
 	// MarkCollectionStarted atomically sets last_collection_started_at = now
 	// only when no in-flight collection is running (last_collection_started_at IS NULL
-	// OR older than 5 minutes). Returns true when this caller won the race and
-	// should proceed with the async invoke; false when another collection is
-	// already in flight and the caller should return 409.
-	MarkCollectionStarted(ctx context.Context) (bool, error)
-	// ClearCollectionStarted clears last_collection_started_at. Called by the
-	// scheduler at the end of every CollectRecommendations run, whether it
-	// succeeded or failed, so the UI knows the collection has finished.
-	ClearCollectionStarted(ctx context.Context) error
+	// OR older than 5 minutes), and stamps a freshly generated owner token
+	// alongside it. Returns the token and true when this caller won the race
+	// and should proceed with the async invoke, passing the token through so
+	// only this caller can later clear the marker; ("", false, nil) when
+	// another collection is already in flight and the caller should return
+	// 409.
+	MarkCollectionStarted(ctx context.Context) (token string, ok bool, err error)
+	// ClearCollectionStarted clears last_collection_started_at, but only if
+	// last_collection_owner_id still matches token: a compare-and-clear
+	// guard (issue #261) so a caller that never won MarkCollectionStarted
+	// (cron, cold-start) cannot wipe another caller's in-flight marker. A
+	// mismatched token is a documented silent no-op (the marker belongs to
+	// someone else); an empty token is a boundary error, since only a
+	// caller that actually owns a marker should ever call Clear.
+	ClearCollectionStarted(ctx context.Context, token string) error
 
 	// RI utilization cache. Postgres-backed TTL cache for Cost Explorer
 	// GetReservationUtilization; shared across Lambda containers so

@@ -294,7 +294,7 @@ func testBaselineLowWater(lowWater float64) pkgladder.UsageBaseline {
 // ============================================================
 
 func TestHandleLadderRun_ParseScheduledEvent(t *testing.T) {
-	taskType, err := ParseScheduledEvent([]byte(`{"action":"ladder_run"}`))
+	taskType, _, err := ParseScheduledEvent([]byte(`{"action":"ladder_run"}`))
 	require.NoError(t, err)
 	assert.Equal(t, TaskLadderRun, taskType)
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -509,10 +510,10 @@ func TestHandler_HandleRequest_RefreshRecommendations(t *testing.T) {
 	mockAuth.grantAdmin()
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
-	mockScheduler.On("CollectRecommendations", mock.Anything).Return(&scheduler.CollectResult{Recommendations: 0, TotalSavings: 0}, nil)
+	mockScheduler.On("CollectRecommendations", mock.Anything, mock.Anything).Return(&scheduler.CollectResult{Recommendations: 0, TotalSavings: 0}, nil)
 	mockStore.On("GetRecommendationsFreshness", mock.Anything).
 		Return(&config.RecommendationsFreshness{}, nil)
-	mockStore.On("MarkCollectionStarted", mock.Anything).Return(true, nil)
+	mockStore.On("MarkCollectionStarted", mock.Anything).Return("tok-xyz", true, nil)
 
 	handler := &Handler{config: mockStore, scheduler: mockScheduler, auth: mockAuth, apiKey: "test-key"}
 
@@ -535,7 +536,73 @@ func TestHandler_HandleRequest_RefreshRecommendations(t *testing.T) {
 	require.NoError(t, err)
 	// Sync-fallback path returns the response body fully populated, so 200.
 	assert.Equal(t, 200, resp.StatusCode)
-	mockScheduler.AssertCalled(t, "CollectRecommendations", mock.Anything)
+	mockScheduler.AssertCalled(t, "CollectRecommendations", mock.Anything, "tok-xyz")
+}
+
+// stubLambdaInvoker is a minimal LambdaInvokerInterface for exercising the
+// async-invoke path in runMarkedCollection without a real Lambda client.
+type stubLambdaInvoker struct {
+	invokeFn func(ctx context.Context, params *lambda.InvokeInput) (*lambda.InvokeOutput, error)
+}
+
+func (s *stubLambdaInvoker) Invoke(ctx context.Context, params *lambda.InvokeInput, _ ...func(*lambda.Options)) (*lambda.InvokeOutput, error) {
+	return s.invokeFn(ctx, params)
+}
+
+// TestRunMarkedCollection_AsyncInvokeFailure_RollsBackOwnerToken pins issue
+// #261: when the async self-invoke fails, the rollback clear must use the
+// same token MarkCollectionStarted returned to this caller (not an
+// unconditional clear that could wipe an unrelated in-flight run).
+func TestRunMarkedCollection_AsyncInvokeFailure_RollsBackOwnerToken(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("SCHEDULER_LAMBDA_ARN", "arn:aws:lambda:us-east-1:123456789012:function:cudly")
+
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	mockStore.On("ClearCollectionStarted", mock.Anything, "tok-xyz").Return(nil)
+
+	invoker := &stubLambdaInvoker{
+		invokeFn: func(ctx context.Context, params *lambda.InvokeInput) (*lambda.InvokeOutput, error) {
+			return nil, assert.AnError
+		},
+	}
+
+	handler := &Handler{config: mockStore, lambdaInvoker: invoker}
+
+	_, err := handler.runMarkedCollection(ctx, "tok-xyz")
+	require.Error(t, err)
+	mockStore.AssertCalled(t, "ClearCollectionStarted", mock.Anything, "tok-xyz")
+}
+
+// TestRunMarkedCollection_AsyncInvokeSuccess_PayloadCarriesOwnerToken pins
+// issue #261: the async-invoke payload must carry this run's owner token so
+// the scheduler receiving the event can scope its own clear to this run;
+// on the happy path this handler must NOT call Clear itself (the
+// scheduler's own deferred clear owns that once collection finishes).
+func TestRunMarkedCollection_AsyncInvokeSuccess_PayloadCarriesOwnerToken(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("SCHEDULER_LAMBDA_ARN", "arn:aws:lambda:us-east-1:123456789012:function:cudly")
+
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	mockStore.On("GetRecommendationsFreshness", mock.Anything).
+		Return(&config.RecommendationsFreshness{}, nil)
+
+	var capturedPayload map[string]string
+	invoker := &stubLambdaInvoker{
+		invokeFn: func(ctx context.Context, params *lambda.InvokeInput) (*lambda.InvokeOutput, error) {
+			require.NoError(t, json.Unmarshal(params.Payload, &capturedPayload))
+			return &lambda.InvokeOutput{}, nil
+		},
+	}
+
+	handler := &Handler{config: mockStore, lambdaInvoker: invoker}
+
+	_, err := handler.runMarkedCollection(ctx, "tok-xyz")
+	require.NoError(t, err)
+
+	assert.Equal(t, "tok-xyz", capturedPayload["owner_token"])
+	mockStore.AssertNotCalled(t, "ClearCollectionStarted", mock.Anything, mock.Anything)
 }
 
 func TestHandler_HandleRequest_ListPlans(t *testing.T) {

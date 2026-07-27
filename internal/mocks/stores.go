@@ -13,6 +13,11 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
+// MockOwnerToken is the default token MockConfigStore.MarkCollectionStarted
+// returns when no expectation is registered, so existing tests that call it
+// implicitly keep getting a non-empty token to thread through.
+const MockOwnerToken = "mock-owner-token"
+
 // MockConfigStore is a shared testify-based mock for config.StoreInterface.
 //
 // Most methods dispatch through m.Called only when an expectation has been
@@ -1339,22 +1344,22 @@ func (m *MockConfigStore) GetScheduledExecutionsDue(ctx context.Context) ([]conf
 }
 
 // MarkCollectionStarted mocks the MarkCollectionStarted operation.
-// Defaults to (true, nil) when no expectation is registered.
-func (m *MockConfigStore) MarkCollectionStarted(ctx context.Context) (bool, error) {
+// Defaults to (MockOwnerToken, true, nil) when no expectation is registered.
+func (m *MockConfigStore) MarkCollectionStarted(ctx context.Context) (token string, ok bool, err error) {
 	if !isExpected(&m.Mock, "MarkCollectionStarted") {
-		return true, nil
+		return MockOwnerToken, true, nil
 	}
 	args := m.Called(ctx)
-	return args.Bool(0), args.Error(1)
+	return args.String(0), args.Bool(1), args.Error(2)
 }
 
 // ClearCollectionStarted mocks the ClearCollectionStarted operation.
 // Defaults to nil when no expectation is registered.
-func (m *MockConfigStore) ClearCollectionStarted(ctx context.Context) error {
+func (m *MockConfigStore) ClearCollectionStarted(ctx context.Context, token string) error {
 	if !isExpected(&m.Mock, "ClearCollectionStarted") {
 		return nil
 	}
-	return m.Called(ctx).Error(0)
+	return m.Called(ctx, token).Error(0)
 }
 
 // StampRIExchangeApprovedBy mocks the StampRIExchangeApprovedBy operation.

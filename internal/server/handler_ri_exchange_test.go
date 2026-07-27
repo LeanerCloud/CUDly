@@ -59,7 +59,7 @@ func TestHandleRIExchangeReshape_ConfigLoadFailure(t *testing.T) {
 }
 
 func TestParseScheduledEvent_RIExchangeReshape(t *testing.T) {
-	taskType, err := ParseScheduledEvent([]byte(`{"action": "ri_exchange_reshape"}`))
+	taskType, _, err := ParseScheduledEvent([]byte(`{"action": "ri_exchange_reshape"}`))
 	testutil.AssertNoError(t, err)
 	testutil.AssertEqual(t, TaskRIExchangeReshape, taskType)
 }

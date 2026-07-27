@@ -66,7 +66,10 @@ func (h *Handler) postRefreshRecommendations(ctx context.Context, req *events.La
 
 	// Atomically mark collection as started. Returns false (409) if another
 	// collection is already in flight (started_at set within the last 5 minutes).
-	ok, err := h.config.MarkCollectionStarted(ctx)
+	// The returned token identifies this caller as the marker's owner; it is
+	// threaded through the async invoke (or the sync collect call) so only
+	// this run can later clear the marker (issue #261 compare-and-clear guard).
+	token, ok, err := h.config.MarkCollectionStarted(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to mark collection started: %w", err)
 	}
@@ -74,7 +77,7 @@ func (h *Handler) postRefreshRecommendations(ctx context.Context, req *events.La
 		return nil, NewClientError(409, "recommendation collection already in progress; try again in a few minutes")
 	}
 
-	freshness, err := h.runMarkedCollection(ctx)
+	freshness, err := h.runMarkedCollection(ctx, token)
 	if err != nil {
 		return nil, err
 	}
@@ -103,11 +106,16 @@ func (h *Handler) postRefreshRecommendations(ctx context.Context, req *events.La
 //
 // Extracted from postRefreshRecommendations to keep that function under the
 // project's cyclomatic-complexity gate after the post-async re-read was added.
-func (h *Handler) runMarkedCollection(ctx context.Context) (*config.RecommendationsFreshness, error) {
+//
+// token is the owner token MarkCollectionStarted returned to the caller; it
+// is passed to the async invoke payload (so the scheduler can thread it
+// back into ClearCollectionStarted) and to the rollback clear on this
+// handler's own failure path.
+func (h *Handler) runMarkedCollection(ctx context.Context, token string) (*config.RecommendationsFreshness, error) {
 	schedulerARN := os.Getenv("SCHEDULER_LAMBDA_ARN")
 	if schedulerARN != "" {
-		if invokeErr := h.asyncInvokeSelf(ctx, schedulerARN); invokeErr != nil {
-			if clearErr := h.config.ClearCollectionStarted(ctx); clearErr != nil {
+		if invokeErr := h.asyncInvokeSelf(ctx, schedulerARN, token); invokeErr != nil {
+			if clearErr := h.config.ClearCollectionStarted(ctx, token); clearErr != nil {
 				logging.Warnf("runMarkedCollection: failed to clear collection started marker: %v", clearErr)
 			}
 			return nil, fmt.Errorf("failed to trigger async collection: %w", invokeErr)
@@ -119,8 +127,9 @@ func (h *Handler) runMarkedCollection(ctx context.Context) (*config.Recommendati
 		return freshness, nil
 	}
 	// Non-Lambda (HTTP) mode: collect synchronously. ClearCollectionStarted
-	// is called by the scheduler's deferred clearCollectionStartedBestEffort.
-	if _, collectErr := h.scheduler.CollectRecommendations(ctx); collectErr != nil {
+	// is called by the scheduler's deferred clearCollectionStartedBestEffort,
+	// passed this same token so the clear is scoped to this run.
+	if _, collectErr := h.scheduler.CollectRecommendations(ctx, token); collectErr != nil {
 		return nil, fmt.Errorf("collection failed: %w", collectErr)
 	}
 	freshness, err := h.config.GetRecommendationsFreshness(ctx)
@@ -135,7 +144,7 @@ func (h *Handler) runMarkedCollection(ctx context.Context) (*config.Recommendati
 // recognizes as a "collect recommendations" job. The call returns immediately;
 // the Lambda runtime delivers the event to the next available container
 // (which may be this same container's next invocation).
-func (h *Handler) asyncInvokeSelf(ctx context.Context, functionARN string) error {
+func (h *Handler) asyncInvokeSelf(ctx context.Context, functionARN, ownerToken string) error {
 	invoker, err := h.getLambdaInvoker(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to build Lambda client: %w", err)
@@ -159,8 +168,9 @@ func (h *Handler) asyncInvokeSelf(ctx context.Context, functionARN string) error
 	// Action != "") classifies this consistently with EventBridge cron
 	// deliveries that already exercise this code path.
 	payload, marshalErr := json.Marshal(map[string]string{
-		"source": "aws.events",
-		"action": "collect_recommendations",
+		"source":      "aws.events",
+		"action":      "collect_recommendations",
+		"owner_token": ownerToken,
 	})
 	if marshalErr != nil {
 		return fmt.Errorf("asyncInvokeSelf: failed to marshal payload: %w", marshalErr)

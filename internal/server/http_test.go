@@ -245,7 +245,7 @@ func TestHandleScheduledHTTP(t *testing.T) {
 			path:   "/api/scheduled/collect_recommendations",
 			setupApp: func(_ *testing.T, app *Application) {
 				app.Scheduler = &testutil.MockScheduler{
-					CollectRecommendationsFunc: func(ctx context.Context) (*scheduler.CollectResult, error) {
+					CollectRecommendationsFunc: func(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
 						return &scheduler.CollectResult{
 							Recommendations: 10,
 							TotalSavings:    1000.0,
@@ -289,7 +289,7 @@ func TestHandleScheduledHTTP(t *testing.T) {
 			setupApp: func(t *testing.T, app *Application) {
 				app.scheduledAuth = newBearerValidator(t, "my-secret")
 				app.Scheduler = &testutil.MockScheduler{
-					CollectRecommendationsFunc: func(ctx context.Context) (*scheduler.CollectResult, error) {
+					CollectRecommendationsFunc: func(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
 						return &scheduler.CollectResult{}, nil
 					},
 				}

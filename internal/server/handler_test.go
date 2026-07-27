@@ -39,7 +39,7 @@ func TestHandleScheduledTask(t *testing.T) {
 			name:     "collect_recommendations success",
 			taskType: TaskCollectRecommendations,
 			setupMocks: func(s *testutil.MockScheduler, p *testutil.MockPurchaseManager) {
-				s.CollectRecommendationsFunc = func(ctx context.Context) (*scheduler.CollectResult, error) {
+				s.CollectRecommendationsFunc = func(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
 					return &scheduler.CollectResult{}, nil
 				}
 			},
@@ -49,7 +49,7 @@ func TestHandleScheduledTask(t *testing.T) {
 			name:     "collect_recommendations failure",
 			taskType: TaskCollectRecommendations,
 			setupMocks: func(s *testutil.MockScheduler, p *testutil.MockPurchaseManager) {
-				s.CollectRecommendationsFunc = func(ctx context.Context) (*scheduler.CollectResult, error) {
+				s.CollectRecommendationsFunc = func(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
 					return nil, errors.New("collection failed")
 				}
 			},
@@ -181,7 +181,7 @@ func TestHandleScheduledTask(t *testing.T) {
 				Purchase:  mockPurchase,
 			}
 
-			_, err := app.HandleScheduledTask(ctx, tt.taskType)
+			_, err := app.HandleScheduledTask(ctx, tt.taskType, ScheduledTaskParams{})
 
 			if tt.expectError {
 				testutil.AssertError(t, err)
@@ -230,7 +230,7 @@ func TestHandleScheduledTaskSkipsWhenDBNil(t *testing.T) {
 	ctx := testutil.TestContext(t)
 
 	mockScheduler := &testutil.MockScheduler{}
-	mockScheduler.CollectRecommendationsFunc = func(ctx context.Context) (*scheduler.CollectResult, error) {
+	mockScheduler.CollectRecommendationsFunc = func(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
 		return &scheduler.CollectResult{Recommendations: 5}, nil
 	}
 
@@ -240,7 +240,7 @@ func TestHandleScheduledTaskSkipsWhenDBNil(t *testing.T) {
 		DB:        nil, // No DB — lock path skipped
 	}
 
-	result, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations)
+	result, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations, ScheduledTaskParams{})
 	testutil.AssertNoError(t, err)
 	if result == nil {
 		t.Fatal("expected non-nil result")
@@ -258,7 +258,7 @@ func TestHandleScheduledTaskAdvisoryLock(t *testing.T) {
 			TaskLocker: locker,
 		}
 
-		_, err := app.HandleScheduledTask(ctx, TaskCleanupExpiredRecords)
+		_, err := app.HandleScheduledTask(ctx, TaskCleanupExpiredRecords, ScheduledTaskParams{})
 		testutil.AssertNoError(t, err)
 		testutil.AssertEqual(t, 1, locker.lockCalls)
 		testutil.AssertEqual(t, 1, locker.unlockCalls)
@@ -274,7 +274,7 @@ func TestHandleScheduledTaskAdvisoryLock(t *testing.T) {
 			TaskLocker: locker,
 		}
 
-		result, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations)
+		result, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations, ScheduledTaskParams{})
 		testutil.AssertNoError(t, err)
 		testutil.AssertEqual(t, 1, locker.lockCalls)
 		testutil.AssertEqual(t, 0, locker.unlockCalls)
@@ -297,7 +297,7 @@ func TestHandleScheduledTaskAdvisoryLock(t *testing.T) {
 			TaskLocker: locker,
 		}
 
-		_, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations)
+		_, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations, ScheduledTaskParams{})
 		testutil.AssertError(t, err)
 		testutil.AssertContains(t, err.Error(), "failed to check task lock")
 	})
@@ -356,15 +356,25 @@ func TestHandleSQSMessage(t *testing.T) {
 
 func TestParseScheduledEvent(t *testing.T) {
 	tests := []struct {
-		name         string
-		rawEvent     string
-		expectedTask ScheduledTaskType
-		expectError  bool
+		name          string
+		rawEvent      string
+		expectedTask  ScheduledTaskType
+		expectedToken string
+		expectError   bool
 	}{
 		{
 			name:         "collect_recommendations event",
 			rawEvent:     `{"action": "collect_recommendations"}`,
 			expectedTask: TaskCollectRecommendations,
+		},
+		{
+			// Async self-invoke payload carries the owner token so the
+			// scheduler can scope ClearCollectionStarted to this run
+			// (issue #261 compare-and-clear guard).
+			name:          "collect_recommendations event with owner_token",
+			rawEvent:      `{"source": "aws.events", "action": "collect_recommendations", "owner_token": "tok-1"}`,
+			expectedTask:  TaskCollectRecommendations,
+			expectedToken: "tok-1",
 		},
 		{
 			name:         "process_scheduled_purchases event",
@@ -420,12 +430,13 @@ func TestParseScheduledEvent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			taskType, err := ParseScheduledEvent([]byte(tt.rawEvent))
+			taskType, params, err := ParseScheduledEvent([]byte(tt.rawEvent))
 			if tt.expectError {
 				testutil.AssertError(t, err)
 			} else {
 				testutil.AssertNoError(t, err)
 				testutil.AssertEqual(t, tt.expectedTask, taskType)
+				testutil.AssertEqual(t, tt.expectedToken, params.OwnerToken)
 			}
 		})
 	}

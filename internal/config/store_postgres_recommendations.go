@@ -448,39 +448,62 @@ func (s *PostgresStore) SetRecommendationsCollectionError(ctx context.Context, e
 // only when no in-flight collection is currently running. The WHERE clause
 // treats a started_at older than 5 minutes as stale (the scheduler Lambda
 // must have crashed) so a new collection can proceed rather than being
-// permanently blocked.
+// permanently blocked. A fresh owner token is stamped into
+// last_collection_owner_id alongside the timestamp so the caller that wins
+// the race is the only one that can later clear the marker (issue #261
+// compare-and-clear guard; see ClearCollectionStarted).
 //
-// Returns true when this caller won the race (rowsAffected == 1) and should
-// proceed with the async invoke. Returns false when another collection is
-// already in flight (rowsAffected == 0), signaling the handler to return
-// 409 Conflict.
-func (s *PostgresStore) MarkCollectionStarted(ctx context.Context) (bool, error) {
+// Returns the token and true when this caller won the race (rowsAffected ==
+// 1) and should proceed with the async invoke, threading the token through
+// so it can be passed to ClearCollectionStarted later. Returns ("", false,
+// nil) when another collection is already in flight (rowsAffected == 0),
+// signaling the handler to return 409 Conflict.
+func (s *PostgresStore) MarkCollectionStarted(ctx context.Context) (token string, ok bool, err error) {
+	token = uuid.New().String()
 	tag, err := s.db.Exec(ctx, `
 		UPDATE recommendations_state
-		   SET last_collection_started_at = NOW()
+		   SET last_collection_started_at = NOW(),
+		       last_collection_owner_id    = $1
 		 WHERE id = 1
 		   AND (
 		           last_collection_started_at IS NULL
 		        OR last_collection_started_at < NOW() - INTERVAL '5 minutes'
 		       )
-	`)
+	`, token)
 	if err != nil {
-		return false, fmt.Errorf("failed to mark collection started: %w", err)
+		return "", false, fmt.Errorf("failed to mark collection started: %w", err)
 	}
-	return tag.RowsAffected() == 1, nil
+	if tag.RowsAffected() != 1 {
+		return "", false, nil
+	}
+	return token, true, nil
 }
 
-// ClearCollectionStarted clears last_collection_started_at so the frontend
-// knows an async collection has finished. Called by the scheduler on both
-// success and failure paths. On the success path, last_collected_at and
-// last_collection_error are updated by UpsertRecommendations/ReplaceRecommendations,
-// so this method only touches started_at.
-func (s *PostgresStore) ClearCollectionStarted(ctx context.Context) error {
+// ClearCollectionStarted clears last_collection_started_at (and the owner
+// token) so the frontend knows an async collection has finished. Called by
+// the scheduler on both success and failure paths. On the success path,
+// last_collected_at and last_collection_error are updated by
+// UpsertRecommendations/ReplaceRecommendations, so this method only touches
+// started_at and the owner column.
+//
+// The clear is scoped to rows where last_collection_owner_id still matches
+// token (issue #261): a caller whose token no longer matches (another run
+// has since started and won the race) has nothing left to clear and this is
+// a documented silent no-op, not an error. An empty token is a boundary
+// error: only a caller that actually won MarkCollectionStarted should ever
+// call Clear; callers with no marker to own (cron, cold-start) must skip
+// the call entirely rather than pass an empty token.
+func (s *PostgresStore) ClearCollectionStarted(ctx context.Context, token string) error {
+	if token == "" {
+		return fmt.Errorf("owner token must not be empty")
+	}
 	if _, err := s.db.Exec(ctx, `
 		UPDATE recommendations_state
-		   SET last_collection_started_at = NULL
+		   SET last_collection_started_at = NULL,
+		       last_collection_owner_id    = NULL
 		 WHERE id = 1
-	`); err != nil {
+		   AND last_collection_owner_id = $1
+	`, token); err != nil {
 		return fmt.Errorf("failed to clear collection started: %w", err)
 	}
 	return nil

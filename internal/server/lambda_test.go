@@ -223,7 +223,7 @@ func TestHandleLambdaScheduledEvent(t *testing.T) {
 			name:     "collect_recommendations event",
 			rawEvent: `{"action": "collect_recommendations"}`,
 			setupMocks: func(s *testutil.MockScheduler) {
-				s.CollectRecommendationsFunc = func(ctx context.Context) (*scheduler.CollectResult, error) {
+				s.CollectRecommendationsFunc = func(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
 					return &scheduler.CollectResult{
 						Recommendations: 10,
 						TotalSavings:    500.0,
@@ -236,7 +236,7 @@ func TestHandleLambdaScheduledEvent(t *testing.T) {
 			name:     "EventBridge format",
 			rawEvent: `{"source": "aws.events", "action": "collect_recommendations"}`,
 			setupMocks: func(s *testutil.MockScheduler) {
-				s.CollectRecommendationsFunc = func(ctx context.Context) (*scheduler.CollectResult, error) {
+				s.CollectRecommendationsFunc = func(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
 					return &scheduler.CollectResult{
 						Recommendations: 5,
 						TotalSavings:    250.0,
@@ -328,7 +328,7 @@ func TestHandleLambdaEvent(t *testing.T) {
 			rawEvent: `{"action": "collect_recommendations"}`,
 			setupApp: func(app *Application) {
 				app.Scheduler = &testutil.MockScheduler{
-					CollectRecommendationsFunc: func(ctx context.Context) (*scheduler.CollectResult, error) {
+					CollectRecommendationsFunc: func(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
 						return &scheduler.CollectResult{}, nil
 					},
 				}

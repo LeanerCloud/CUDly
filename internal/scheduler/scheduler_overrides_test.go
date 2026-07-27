@@ -42,10 +42,10 @@ func (m *mockOverrideStore) GetRecommendationsFreshness(_ context.Context) (*con
 	now := time.Now()
 	return &config.RecommendationsFreshness{LastCollectedAt: &now}, nil
 }
-func (m *mockOverrideStore) MarkCollectionStarted(_ context.Context) (bool, error) {
-	return true, nil
+func (m *mockOverrideStore) MarkCollectionStarted(_ context.Context) (string, bool, error) {
+	return "mock-owner-token", true, nil
 }
-func (m *mockOverrideStore) ClearCollectionStarted(_ context.Context) error {
+func (m *mockOverrideStore) ClearCollectionStarted(_ context.Context, _ string) error {
 	return nil
 }
 func (m *mockOverrideStore) GetServiceConfig(_ context.Context, provider, service string) (*config.ServiceConfig, error) {

@@ -230,7 +230,7 @@ func TestHandleProcessScheduledPurchases_Error(t *testing.T) {
 		},
 	}
 
-	_, err := app.HandleScheduledTask(ctx, TaskProcessScheduledPurchases)
+	_, err := app.HandleScheduledTask(ctx, TaskProcessScheduledPurchases, ScheduledTaskParams{})
 	testutil.AssertError(t, err)
 }
 
@@ -244,7 +244,7 @@ func TestHandleSendNotifications_Error(t *testing.T) {
 		},
 	}
 
-	_, err := app.HandleScheduledTask(ctx, TaskSendNotifications)
+	_, err := app.HandleScheduledTask(ctx, TaskSendNotifications, ScheduledTaskParams{})
 	testutil.AssertError(t, err)
 }
 
@@ -252,7 +252,7 @@ func TestHandleCollectRecommendations_WithResults(t *testing.T) {
 	ctx := testutil.TestContext(t)
 	app := &Application{
 		Scheduler: &testutil.MockScheduler{
-			CollectRecommendationsFunc: func(ctx context.Context) (*scheduler.CollectResult, error) {
+			CollectRecommendationsFunc: func(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
 				return &scheduler.CollectResult{
 					Recommendations: 15,
 					TotalSavings:    2500.50,
@@ -261,7 +261,7 @@ func TestHandleCollectRecommendations_WithResults(t *testing.T) {
 		},
 	}
 
-	result, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations)
+	result, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations, ScheduledTaskParams{})
 	testutil.AssertNoError(t, err)
 	testutil.AssertTrue(t, result != nil, "Result should not be nil")
 }

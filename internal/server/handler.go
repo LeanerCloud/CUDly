@@ -81,7 +81,7 @@ var scheduledEventActions = map[string]ScheduledTaskType{
 
 // HandleScheduledTask processes a scheduled task by type.
 // It acquires a PostgreSQL advisory lock to prevent concurrent execution of the same task.
-func (app *Application) HandleScheduledTask(ctx context.Context, taskType ScheduledTaskType) (any, error) {
+func (app *Application) HandleScheduledTask(ctx context.Context, taskType ScheduledTaskType, params ScheduledTaskParams) (any, error) {
 	log.Printf("Handling scheduled task: %q", taskType) // #nosec G706 -- taskType is looked up from a known-value map; %q quotes the value to prevent CR/LF log injection
 
 	if err := app.ensureDB(ctx); err != nil {
@@ -102,32 +102,39 @@ func (app *Application) HandleScheduledTask(ctx context.Context, taskType Schedu
 		defer locker.ReleaseAdvisoryLock(ctx, lockID)
 	}
 
-	return app.dispatchTask(ctx, taskType)
+	return app.dispatchTask(ctx, taskType, params)
 }
 
 // dispatchTask routes a scheduled task to its handler.
-func (app *Application) dispatchTask(ctx context.Context, taskType ScheduledTaskType) (any, error) {
+func (app *Application) dispatchTask(ctx context.Context, taskType ScheduledTaskType, params ScheduledTaskParams) (any, error) {
 	// Map-based dispatch (rather than a switch) keeps this function under the
 	// cyclomatic-complexity limit as the task roster grows. Each handler adapts
-	// its concrete return type to (any, error) at the call site.
-	handlers := map[ScheduledTaskType]func(context.Context) (any, error){
-		TaskCollectRecommendations:    func(c context.Context) (any, error) { return app.handleCollectRecommendations(c) },
-		TaskProcessScheduledPurchases: func(c context.Context) (any, error) { return app.handleProcessScheduledPurchases(c) },
-		TaskSendNotifications:         func(c context.Context) (any, error) { return app.handleSendNotifications(c) },
-		TaskCleanupExpiredRecords:     func(c context.Context) (any, error) { return app.handleCleanupExpiredRecords(c) },
-		TaskRefreshAnalytics:          func(c context.Context) (any, error) { return app.handleRefreshAnalytics(c) },
-		TaskCollectAnalytics:          func(c context.Context) (any, error) { return app.handleCollectAnalytics(c) },
-		TaskRIExchangeReshape:         func(c context.Context) (any, error) { return app.handleRIExchangeReshape(c) },
-		TaskReapStuckPurchases:        func(c context.Context) (any, error) { return app.handleReapStuckPurchases(c) },
-		TaskFireScheduledPurchases:    func(c context.Context) (any, error) { return app.handleFireScheduledPurchases(c) },
-		TaskFinalizeRevocations:       func(c context.Context) (any, error) { return app.handleFinalizeRevocations(c) },
-		TaskLadderRun:                 func(c context.Context) (any, error) { return app.handleLadderRun(c) },
+	// its concrete return type to (any, error) at the call site. Only
+	// TaskCollectRecommendations reads params; every other closure ignores it.
+	handlers := map[ScheduledTaskType]func(context.Context, ScheduledTaskParams) (any, error){
+		TaskCollectRecommendations: func(c context.Context, p ScheduledTaskParams) (any, error) {
+			return app.handleCollectRecommendations(c, p.OwnerToken)
+		},
+		TaskProcessScheduledPurchases: func(c context.Context, _ ScheduledTaskParams) (any, error) {
+			return app.handleProcessScheduledPurchases(c)
+		},
+		TaskSendNotifications:     func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleSendNotifications(c) },
+		TaskCleanupExpiredRecords: func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleCleanupExpiredRecords(c) },
+		TaskRefreshAnalytics:      func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleRefreshAnalytics(c) },
+		TaskCollectAnalytics:      func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleCollectAnalytics(c) },
+		TaskRIExchangeReshape:     func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleRIExchangeReshape(c) },
+		TaskReapStuckPurchases:    func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleReapStuckPurchases(c) },
+		TaskFireScheduledPurchases: func(c context.Context, _ ScheduledTaskParams) (any, error) {
+			return app.handleFireScheduledPurchases(c)
+		},
+		TaskFinalizeRevocations: func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleFinalizeRevocations(c) },
+		TaskLadderRun:           func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleLadderRun(c) },
 	}
 	handler, ok := handlers[taskType]
 	if !ok {
 		return nil, fmt.Errorf("unknown scheduled task type: %s", taskType)
 	}
-	return handler(ctx)
+	return handler(ctx, params)
 }
 
 // taskLocker returns the configured TaskLocker, falling back to DB if set.
@@ -149,9 +156,11 @@ func taskLockID(taskType ScheduledTaskType) int64 {
 }
 
 // handleCollectRecommendations collects cost optimization recommendations.
-func (app *Application) handleCollectRecommendations(ctx context.Context) (*scheduler.CollectResult, error) {
+// ownerToken threads through to CollectRecommendations's compare-and-clear
+// guard (issue #261); it is empty for cron-triggered runs.
+func (app *Application) handleCollectRecommendations(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
 	log.Println("Collecting recommendations...")
-	result, err := app.Scheduler.CollectRecommendations(ctx)
+	result, err := app.Scheduler.CollectRecommendations(ctx, ownerToken)
 	if err != nil {
 		log.Printf("Failed to collect recommendations: %v", err)
 		return nil, err
@@ -333,18 +342,33 @@ type ScheduledEvent struct {
 	DetailType string          `json:"detail-type"`
 	Action     string          `json:"action"`
 	Detail     json.RawMessage `json:"detail"`
+	// OwnerToken carries the collection-marker owner token (issue #261
+	// compare-and-clear guard) for TaskCollectRecommendations events fired
+	// by the async self-invoke in handler_recommendations_refresh.go.
+	// EventBridge cron deliveries and the --task CLI never set this field,
+	// so it decodes to "" and the scheduler treats the run as owning no
+	// marker (see ScheduledTaskParams / clearCollectionStartedBestEffort).
+	OwnerToken string `json:"owner_token"`
 }
 
-// ParseScheduledEvent parses a scheduled event and returns the task type.
-func ParseScheduledEvent(rawEvent json.RawMessage) (ScheduledTaskType, error) {
+// ScheduledTaskParams carries per-task-type data extracted from a
+// ScheduledEvent. Only TaskCollectRecommendations currently reads a field
+// (OwnerToken); other task types receive a zero-value struct.
+type ScheduledTaskParams struct {
+	OwnerToken string
+}
+
+// ParseScheduledEvent parses a scheduled event and returns the task type
+// plus any per-task parameters.
+func ParseScheduledEvent(rawEvent json.RawMessage) (ScheduledTaskType, ScheduledTaskParams, error) {
 	var event ScheduledEvent
 	if err := json.Unmarshal(rawEvent, &event); err != nil {
-		return "", fmt.Errorf("failed to parse scheduled event: %w", err)
+		return "", ScheduledTaskParams{}, fmt.Errorf("failed to parse scheduled event: %w", err)
 	}
 
 	// Map action to task type
 	if taskType, ok := scheduledEventActions[event.Action]; ok {
-		return taskType, nil
+		return taskType, ScheduledTaskParams{OwnerToken: event.OwnerToken}, nil
 	}
-	return "", fmt.Errorf("unknown scheduled task action: %q", event.Action)
+	return "", ScheduledTaskParams{}, fmt.Errorf("unknown scheduled task action: %q", event.Action)
 }
