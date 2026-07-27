@@ -770,6 +770,17 @@ func (s *Scheduler) collectAzureRecommendations(ctx context.Context, _ *config.G
 }
 
 func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+	// Every recommendation returned below is tagged with THIS account's UUID
+	// (see tagAccount at the end of this function), so the provider must be
+	// pinned to this account's subscription. An empty AzureSubscriptionID
+	// leaves the provider unpinned, and an unpinned provider now fans out
+	// across every subscription the credential can see -- which would file
+	// other subscriptions' recommendations under this account and expose them
+	// to anyone authorized for it. Fail loud instead; the row is misconfigured.
+	if acct.AzureSubscriptionID == "" {
+		return nil, fmt.Errorf("cloud account %s has no azure_subscription_id configured", acct.ID)
+	}
+
 	azCred, err := credentials.ResolveAzureTokenCredentialWithOpts(ctx, &acct, s.credStore, credentials.AzureResolveOptions{
 		Signer:    s.oidcSigner,
 		IssuerURL: s.oidcIssuerURL,

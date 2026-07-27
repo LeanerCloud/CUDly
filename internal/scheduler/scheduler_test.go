@@ -1647,6 +1647,36 @@ func TestScheduler_CollectAzureRecommendations_AllAccountsFailLoud(t *testing.T)
 		"the failed account must not land in SucceededAccountIDs (stale-row eviction guard)")
 }
 
+// An Azure cloud_accounts row with no azure_subscription_id must be rejected
+// before a provider is built.
+//
+// collectAzureForAccount tags every recommendation it returns with THIS
+// account's UUID, so the provider has to be pinned to this account's
+// subscription. Leaving AzureSubscriptionID empty leaves the provider
+// unpinned, and an unpinned provider fans out across every subscription the
+// credential can see -- filing other subscriptions' recommendations under
+// this account, where anyone authorized for it can read them. The row is
+// misconfigured; fail loud and name the missing field rather than collecting
+// data that will be attributed to the wrong account.
+func TestScheduler_CollectAzureForAccount_MissingSubscriptionIDFailsLoud(t *testing.T) {
+	ctx := context.Background()
+	scheduler := &Scheduler{config: new(MockConfigStore)}
+
+	recs, err := scheduler.collectAzureForAccount(ctx, config.CloudAccount{
+		ID:            "az-no-sub",
+		Provider:      "azure",
+		AzureAuthMode: "managed_identity",
+		Enabled:       true,
+		// AzureSubscriptionID deliberately empty.
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, recs)
+	assert.Contains(t, err.Error(), "no azure_subscription_id configured",
+		"an unpinned Azure account must be rejected by name, not fall through to an unscoped org-wide collection")
+	assert.Contains(t, err.Error(), "az-no-sub", "the error must identify the misconfigured account")
+}
+
 // Test GCP recommendations with no accounts — should skip gracefully.
 func TestScheduler_CollectGCPRecommendations_NoAccounts(t *testing.T) {
 	ctx := context.Background()
