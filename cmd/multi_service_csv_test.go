@@ -525,7 +525,8 @@ func TestExtractDeployment(t *testing.T) {
 // ComputeDetails (EC2 platform), and unset/other Details (blank).
 // DatabaseDetails/CacheDetails are always pointers (every producer
 // constructs them that way); ComputeDetails still accepts a value because
-// the GCP compute-engine client constructs it that way.
+// the Azure compute client and the GCP compute-engine client both construct
+// it that way.
 func TestExtractEngine(t *testing.T) {
 	tests := []struct {
 		name string
@@ -535,8 +536,9 @@ func TestExtractEngine(t *testing.T) {
 		{"*DatabaseDetails -> Engine", common.Recommendation{Details: &common.DatabaseDetails{Engine: "aurora-postgresql"}}, "aurora-postgresql"},
 		{"*CacheDetails -> Engine", common.Recommendation{Details: &common.CacheDetails{Engine: "redis"}}, "redis"},
 		{"*ComputeDetails -> Platform", common.Recommendation{Details: &common.ComputeDetails{Platform: "Linux/UNIX"}}, "Linux/UNIX"},
-		// GCP's compute-engine client still constructs ComputeDetails as a
-		// value; keep coverage for that form.
+		// The Azure compute client and GCP's compute-engine client both
+		// still construct ComputeDetails as a value; keep coverage for
+		// that form.
 		{"ComputeDetails (value) -> Platform", common.Recommendation{Details: common.ComputeDetails{Platform: "Windows"}}, "Windows"},
 		// Fallbacks.
 		{"nil Details -> empty", common.Recommendation{}, ""},

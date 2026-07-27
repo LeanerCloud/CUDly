@@ -24,9 +24,12 @@
 // constructs them as pointers too, so Recommendation.Details never holds a
 // bare DatabaseDetails / CacheDetails value anywhere in the codebase.
 // Consumers that type-switch on Details only need the pointer case for
-// these two types. ComputeDetails is the one remaining exception: the GCP
-// compute-engine client still constructs it as a value, so consumers that
-// handle ComputeDetails must keep accepting both forms.
+// these two types. ComputeDetails is the one remaining exception: the
+// Azure compute client (providers/azure/services/compute) and the GCP
+// compute-engine client (providers/gcp/services/computeengine) both still
+// construct it as a value, so consumers that handle ComputeDetails must
+// keep accepting both forms. Dropping the value case would silently blank
+// every Azure VM and GCP compute row instead of failing to compile.
 package common
 
 import (

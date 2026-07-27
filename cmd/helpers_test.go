@@ -628,6 +628,23 @@ func TestGetEngineFromRecommendation(t *testing.T) {
 			},
 			expected: "",
 		},
+		// Typed nils: rec.Details != nil (the interface holds a type) but the
+		// pointer inside is nil, so the `rec.Details == nil` guard does not
+		// catch it and the field read would panic without the per-case check.
+		{
+			name: "typed nil *DatabaseDetails - returns empty, no panic",
+			rec: common.Recommendation{
+				Details: (*common.DatabaseDetails)(nil),
+			},
+			expected: "",
+		},
+		{
+			name: "typed nil *CacheDetails - returns empty, no panic",
+			rec: common.Recommendation{
+				Details: (*common.CacheDetails)(nil),
+			},
+			expected: "",
+		},
 	}
 
 	for _, tt := range tests {

@@ -403,8 +403,9 @@ func extractDeployment(rec common.Recommendation) string {
 //
 // DatabaseDetails/CacheDetails are always pointers (see extractDeployment's
 // godoc for the invariant). ComputeDetails is still accepted as a value
-// because the GCP compute-engine client constructs it that way; without that
-// case the column silently blanks every GCP compute row.
+// because the Azure compute client and the GCP compute-engine client both
+// construct it that way; without that case the column silently blanks every
+// Azure VM and GCP compute row.
 func extractEngine(rec common.Recommendation) string {
 	switch details := rec.Details.(type) {
 	case *common.DatabaseDetails:

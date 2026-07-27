@@ -2343,3 +2343,38 @@ func TestScheduler_ResolveAmbientAccountID_StoreError(t *testing.T) {
 	got := sched.resolveAmbientAccountID(context.Background(), "gcp", "some-project")
 	assert.Empty(t, got, "store error must collapse to empty (don't fail the collection)")
 }
+
+// TestExtractEngine covers the pointer-only dispatch documented in
+// pkg/common/service_details_codec.go's package doc, plus the typed-nil
+// guard. The typed-nil cases are the regression bar: the `details == nil`
+// check only catches an untyped nil, so a (*common.DatabaseDetails)(nil)
+// stored in the interface reaches the type switch and the field read
+// panics without the per-case guard. extractEngine feeds the persisted
+// engine column and the scheduler recommendation ID, so a panic here
+// aborts an entire collection run.
+func TestExtractEngine(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		details common.ServiceDetails
+		name    string
+		want    string
+	}{
+		{name: "nil interface", details: nil, want: ""},
+		{name: "*DatabaseDetails", details: &common.DatabaseDetails{Engine: "mysql"}, want: "mysql"},
+		{name: "*CacheDetails", details: &common.CacheDetails{Engine: "redis"}, want: "redis"},
+		{name: "*ComputeDetails carries no engine", details: &common.ComputeDetails{Platform: "Linux/UNIX"}, want: ""},
+		{name: "typed nil *DatabaseDetails", details: (*common.DatabaseDetails)(nil), want: ""},
+		{name: "typed nil *CacheDetails", details: (*common.CacheDetails)(nil), want: ""},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.NotPanics(t, func() {
+				assert.Equal(t, tt.want, extractEngine(tt.details))
+			})
+		})
+	}
+}

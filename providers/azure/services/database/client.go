@@ -890,7 +890,7 @@ func (c *DatabaseClient) createServersPager() (SQLServersPager, error) {
 }
 
 // detailsFromSQLSKU parses an Azure SQL SKU string into a
-// common.DatabaseDetails value. The Azure Reservation Recommendations
+// *common.DatabaseDetails. The Azure Reservation Recommendations
 // API returns SKU strings like "GeneralPurpose_Gen5_2" (edition, compute
 // generation, vcore count) or "BusinessCritical_Gen5_4". The parser is
 // permissive: unknown formats populate InstanceClass and leave the rest

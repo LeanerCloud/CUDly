@@ -1247,17 +1247,26 @@ func nonZeroPtr(v float64) *float64 {
 // common.ServiceDetails value when one is present. DatabaseDetails/
 // CacheDetails are always pointers (every producer constructs them that
 // way; see pkg/common/service_details_codec.go's package doc for the
-// invariant). Returns "" for any other Details type (or nil). Extracted
-// from convertRecommendations to keep that function under the gocyclo
-// budget (min-complexity: 10 in .pre-commit-config.yaml).
+// invariant). Returns "" for any other Details type (or nil). The
+// nil-pointer guards are not dead code: the `details == nil` check above
+// only catches an untyped nil, so a typed nil reaches the switch and would
+// panic on the field read. Extracted from convertRecommendations to keep
+// that function under the gocyclo budget (min-complexity: 10 in
+// .pre-commit-config.yaml).
 func extractEngine(details common.ServiceDetails) string {
 	if details == nil {
 		return ""
 	}
 	switch d := details.(type) {
 	case *common.DatabaseDetails:
+		if d == nil {
+			return ""
+		}
 		return d.Engine
 	case *common.CacheDetails:
+		if d == nil {
+			return ""
+		}
 		return d.Engine
 	}
 	return ""

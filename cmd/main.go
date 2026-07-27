@@ -283,8 +283,9 @@ func effectiveSizingPct(cfg Config) float64 {
 // polymorphic Details field. DatabaseDetails/CacheDetails are always
 // pointers (every producer constructs them that way; see
 // pkg/common/service_details_codec.go's package doc for the pointer
-// invariant). ComputeDetails is still accepted as a value because the GCP
-// compute-engine client constructs it that way.
+// invariant). ComputeDetails is still accepted as a value because the
+// Azure compute client and the GCP compute-engine client both construct
+// it that way.
 func extractEngineLabel(details interface{}) string {
 	switch d := details.(type) {
 	case *common.DatabaseDetails:
