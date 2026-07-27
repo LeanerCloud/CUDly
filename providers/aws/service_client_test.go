@@ -445,21 +445,40 @@ func TestApplyRecommendationFilters_RegionlessReservationNotExempt(t *testing.T)
 
 // TestApplyRecommendationFilters_BlankRegionEntryIsNotAMatcher pins that a
 // blank entry in a region filter list is never treated as a matching region
-// code. Without regionSet's skip, a blank in ExcludeRegions would put "" in
-// the lookup set and drop every account-level Savings Plans rec via a key
-// that was never a region.
+// code. Without regionSet's skip, a blank in ExcludeRegions puts "" in the
+// lookup set, and any rec whose effective region is also "" then matches that
+// key and is wrongly excluded.
+//
+// The subject must be a rec that is NOT region-agnostic but still has an
+// empty effective region, i.e. a region-less reservation (see
+// TestApplyRecommendationFilters_RegionlessReservationNotExempt for why those
+// exist). An account-level Savings Plan would NOT pin this: it
+// short-circuits on isRegionAgnostic before the map is ever consulted, so
+// that subtest would pass with or without the blank skip and prove nothing.
 func TestApplyRecommendationFilters_BlankRegionEntryIsNotAMatcher(t *testing.T) {
-	accountLevelSP := common.Recommendation{
+	// Not region-agnostic (a reservation), but carries no region because
+	// Cost Explorer omitted the field. effectiveRegion is "" and
+	// isRegionAgnostic is false, so this rec reaches the map lookup.
+	regionlessRI := common.Recommendation{
 		Account:        "111",
-		CommitmentType: common.CommitmentSavingsPlan,
-		Details:        &common.SavingsPlanDetails{PlanType: "Compute"},
+		CommitmentType: common.CommitmentReservedInstance,
+		ResourceType:   "m5.large",
+		Details:        &common.ComputeDetails{InstanceType: "m5.large"},
 	}
 	usEast := common.Recommendation{Account: "222", Region: "us-east-1"}
 
-	t.Run("blank exclude entry does not drop region-agnostic recs", func(t *testing.T) {
-		got := applyRecommendationFilters([]common.Recommendation{accountLevelSP},
+	t.Run("blank exclude entry does not drop a rec with no region", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{regionlessRI},
 			common.RecommendationParams{ExcludeRegions: []string{""}})
-		require.Len(t, got, 1)
+		require.Len(t, got, 1,
+			`a blank exclude entry must not become a lookup key that matches an empty effective region`)
+	})
+
+	t.Run("blank exclude entry alongside a real one still excludes the real one", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{regionlessRI, usEast},
+			common.RecommendationParams{ExcludeRegions: []string{"", "us-east-1"}})
+		require.Len(t, got, 1, "us-east-1 is excluded; the region-less rec is not")
+		assert.Empty(t, got[0].Region)
 	})
 
 	t.Run("blank include entry does not match anything", func(t *testing.T) {
