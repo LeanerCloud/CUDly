@@ -212,12 +212,18 @@ func TestHandleLambdaSQSEvent(t *testing.T) {
 	}
 }
 
+// testOwnerToken is a fixed, well-formed collection owner token. It has to be
+// a real UUID because ParseScheduledEvent rejects malformed non-empty tokens
+// at the boundary rather than letting them reach the UUID-typed column.
+const testOwnerToken = "6b1f2c34-5d6e-4a7b-8c9d-0e1f2a3b4c5d"
+
 func TestHandleLambdaScheduledEvent(t *testing.T) {
 	tests := []struct {
-		setupMocks  func(*testutil.MockScheduler)
-		name        string
-		rawEvent    string
-		expectError bool
+		setupMocks    func(*testutil.MockScheduler)
+		name          string
+		rawEvent      string
+		expectedToken string
+		expectError   bool
 	}{
 		{
 			name:     "collect_recommendations event",
@@ -245,6 +251,28 @@ func TestHandleLambdaScheduledEvent(t *testing.T) {
 			},
 			expectError: false,
 		},
+		{
+			// Issue #261: the async self-invoke payload's owner_token must
+			// survive parsing and reach CollectRecommendations, which is what
+			// scopes the deferred clear to this run. Asserting the token the
+			// scheduler actually received (rather than only that the event
+			// parses) means dropping it anywhere between ParseScheduledEvent
+			// and the scheduler fails the test instead of silently stranding
+			// the marker for the full 5-minute recovery window.
+			name:          "async self-invoke carries owner_token through to the scheduler",
+			rawEvent:      `{"source": "aws.events", "action": "collect_recommendations", "owner_token": "` + testOwnerToken + `"}`,
+			expectedToken: testOwnerToken,
+			expectError:   false,
+		},
+		{
+			// A non-empty owner_token that is not a UUID can only come from a
+			// corrupt payload (asyncInvokeSelf always sends a uuid.New()), and
+			// could never match a marker owner, so it is rejected at the
+			// boundary rather than reaching the UUID-typed persistence layer.
+			name:        "malformed owner_token is rejected at the boundary",
+			rawEvent:    `{"source": "aws.events", "action": "collect_recommendations", "owner_token": "not-a-uuid"}`,
+			expectError: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -252,7 +280,19 @@ func TestHandleLambdaScheduledEvent(t *testing.T) {
 			ctx := testutil.TestContext(t)
 
 			mockScheduler := &testutil.MockScheduler{}
-			tt.setupMocks(mockScheduler)
+			// Capture the token the scheduler was handed and assert on it from
+			// the subtest goroutine rather than inside the mock callback, so a
+			// failed assertion never calls FailNow off the owning goroutine.
+			gotToken := ""
+			collected := false
+			mockScheduler.CollectRecommendationsFunc = func(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
+				gotToken = ownerToken
+				collected = true
+				return &scheduler.CollectResult{}, nil
+			}
+			if tt.setupMocks != nil {
+				tt.setupMocks(mockScheduler)
+			}
 
 			app := &Application{
 				Scheduler: mockScheduler,
@@ -262,8 +302,14 @@ func TestHandleLambdaScheduledEvent(t *testing.T) {
 
 			if tt.expectError {
 				testutil.AssertError(t, err)
-			} else {
-				testutil.AssertNoError(t, err)
+				return
+			}
+			testutil.AssertNoError(t, err)
+			if tt.expectedToken != "" {
+				if !collected {
+					t.Fatal("expected CollectRecommendations to be called")
+				}
+				testutil.AssertEqual(t, tt.expectedToken, gotToken)
 			}
 		})
 	}

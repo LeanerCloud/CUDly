@@ -475,9 +475,28 @@ func TestParseScheduledEvent(t *testing.T) {
 			// scheduler can scope ClearCollectionStarted to this run
 			// (issue #261 compare-and-clear guard).
 			name:          "collect_recommendations event with owner_token",
-			rawEvent:      `{"source": "aws.events", "action": "collect_recommendations", "owner_token": "tok-1"}`,
+			rawEvent:      `{"source": "aws.events", "action": "collect_recommendations", "owner_token": "` + testOwnerToken + `"}`,
 			expectedTask:  TaskCollectRecommendations,
-			expectedToken: "tok-1",
+			expectedToken: testOwnerToken,
+		},
+		{
+			// A non-empty owner_token is validated at the boundary: the only
+			// legitimate producer is asyncInvokeSelf, which always sends a
+			// uuid.New(), so a non-UUID value means a corrupt payload. It
+			// could never match a marker owner, and letting it through would
+			// strand that marker for the full 5-minute recovery window with
+			// only a buried error log to show for it.
+			name:        "collect_recommendations event with malformed owner_token",
+			rawEvent:    `{"source": "aws.events", "action": "collect_recommendations", "owner_token": "tok-1"}`,
+			expectError: true,
+		},
+		{
+			// An absent owner_token stays legitimate: cron, the
+			// /api/scheduled/ HTTP path and the --task CLI never win
+			// MarkCollectionStarted and own no marker to clear.
+			name:         "collect_recommendations event with empty owner_token",
+			rawEvent:     `{"source": "aws.events", "action": "collect_recommendations", "owner_token": ""}`,
+			expectedTask: TaskCollectRecommendations,
 		},
 		{
 			name:         "process_scheduled_purchases event",

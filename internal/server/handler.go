@@ -10,6 +10,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/purchase"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
+	"github.com/google/uuid"
 )
 
 // skippedCollectionMarkerClearTimeout bounds the detached best-effort clear
@@ -413,6 +414,24 @@ func ParseScheduledEvent(rawEvent json.RawMessage) (ScheduledTaskType, Scheduled
 	var event ScheduledEvent
 	if err := json.Unmarshal(rawEvent, &event); err != nil {
 		return "", ScheduledTaskParams{}, fmt.Errorf("failed to parse scheduled event: %w", err)
+	}
+
+	// Validate the owner token at the boundary rather than letting a malformed
+	// value reach the UUID-typed persistence layer. Empty is legitimate and
+	// expected (EventBridge cron, the /api/scheduled/ HTTP path, the --task
+	// CLI): those callers never won MarkCollectionStarted and own no marker.
+	// A non-empty value, though, can only have come from asyncInvokeSelf,
+	// which always sends a uuid.New(), so anything else means the payload is
+	// corrupt. Failing loud here is deliberate: a token that cannot match any
+	// owner would leave the marker it belongs to stranded for the full
+	// 5-minute recovery window anyway, so a buried error log on the eventual
+	// clear is strictly worse than refusing the malformed event outright.
+	// uuid.Parse's error text describes the shape only and never echoes the
+	// token value, so wrapping it does not leak the token into logs.
+	if event.OwnerToken != "" {
+		if _, err := uuid.Parse(event.OwnerToken); err != nil {
+			return "", ScheduledTaskParams{}, fmt.Errorf("invalid owner_token in scheduled event: %w", err)
+		}
 	}
 
 	// Map action to task type
