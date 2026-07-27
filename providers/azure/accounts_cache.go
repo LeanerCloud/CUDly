@@ -255,6 +255,21 @@ func resolveDefaultSubscription(accounts []common.Account, explicitSubID string)
 	}
 }
 
+// accountsContain reports whether id is one of the discovered subscriptions.
+//
+// Used to validate an explicitly configured subscription against what the
+// principal can actually see, without going through IsDefault -- which
+// resolveDefaultSubscription may have set on a DIFFERENT subscription via its
+// single-visible-subscription rule.
+func accountsContain(accounts []common.Account, id string) bool {
+	for i := range accounts {
+		if accounts[i].ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 // getDefaultSubscriptionID returns the ID of the default subscription from a
 // pre-fetched account list, or an empty string when no account is marked
 // default (e.g. ambiguous multi-subscription tenants with no explicit config).

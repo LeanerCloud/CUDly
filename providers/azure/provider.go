@@ -501,25 +501,36 @@ func (p *AzureProvider) GetRecommendationsClient(ctx context.Context) (provider.
 	if len(accounts) == 0 {
 		return nil, fmt.Errorf("no Azure subscriptions found")
 	}
-	// Step 1: an explicitly resolvable default still wins. This also covers
+	// Step 1: an explicitly configured target is validated against the
+	// discovered subscriptions FIRST, before any default resolution.
+	//
+	// This ordering is load-bearing. getDefaultSubscriptionID reads the
+	// IsDefault flags set by resolveDefaultSubscription, whose rule 3 marks a
+	// lone visible subscription as the default even when a target was
+	// configured and did not match it. Consulting that result first would let
+	// an invisible target (an operator typo, or a credential that lost access
+	// to the intended subscription) silently resolve to whichever single
+	// subscription happens to be visible -- a misconfiguration answered with
+	// a plausible wrong subscription instead of an error. Validating the
+	// target up front makes it fail loud regardless of how many subscriptions
+	// are visible.
+	if target := os.Getenv(azureSubscriptionIDEnv); target != "" {
+		if !accountsContain(accounts, target) {
+			return nil, fmt.Errorf(
+				"%s is set to %q, which is not among the %d subscriptions visible to this principal",
+				azureSubscriptionIDEnv, target, len(accounts))
+		}
+		return NewRecommendationsClient(p.cred, target)
+	}
+
+	// Step 2: no explicit target, but a default may still resolve -- notably
 	// the single-discovered-subscription case, which resolveDefaultSubscription
 	// marks as the default.
 	if defaultID := getDefaultSubscriptionID(accounts); defaultID != "" {
 		return NewRecommendationsClient(p.cred, defaultID)
 	}
 
-	// A configured target that resolved to nothing means the caller named a
-	// subscription this principal cannot see. That is a misconfiguration, not
-	// a request for org-wide coverage: widening it to every visible
-	// subscription would answer a narrow question with other subscriptions'
-	// data. Fail loud, as this path did before fan-out existed.
-	if target := os.Getenv(azureSubscriptionIDEnv); target != "" {
-		return nil, fmt.Errorf(
-			"%s is set to %q, which is not among the %d subscriptions visible to this principal",
-			azureSubscriptionIDEnv, target, len(accounts))
-	}
-
-	// Step 2: scope is genuinely ambiguous -- fan out across the whole org.
+	// Step 3: scope is genuinely ambiguous -- fan out across the whole org.
 	client, err := NewMultiSubscriptionRecommendationsClient(p.cred, accounts)
 	if err != nil {
 		return nil, err

@@ -1623,6 +1623,49 @@ func TestAzureProvider_GetRecommendationsClient_MultiSubscriptionFanOut(t *testi
 		assert.Contains(t, err.Error(), "not among the 2 subscriptions visible")
 	})
 
+	// The single-visible-subscription case is the dangerous one, and the
+	// reason the target has to be validated BEFORE getDefaultSubscriptionID:
+	// resolveDefaultSubscription's rule 3 marks a lone subscription as the
+	// default even when a target was configured and did not match it. Reading
+	// that default first would resolve an invisible target to whichever one
+	// subscription happens to be visible and collect against it silently.
+	t.Run("AZURE_SUBSCRIPTION_ID invisible with one visible subscription errors", func(t *testing.T) {
+		t.Setenv("AZURE_SUBSCRIPTION_ID", "sub-not-visible")
+		soloID, soloName := "sub-solo", "Solo Subscription"
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(&mockSubscriptionsClient{
+			listPagerFunc: func(_ *armsubscriptions.ClientListOptions) SubscriptionsPager {
+				return &mockSubscriptionsPager{
+					pages: []armsubscriptions.ClientListResponse{
+						{SubscriptionListResult: armsubscriptions.SubscriptionListResult{
+							Value: []*armsubscriptions.Subscription{{SubscriptionID: &soloID, DisplayName: &soloName}},
+						}},
+					},
+				}
+			},
+		})
+
+		client, err := p.GetRecommendationsClient(context.Background())
+		require.Error(t, err,
+			"an invisible configured subscription must not silently resolve to the one visible subscription")
+		assert.Nil(t, client)
+		assert.Contains(t, err.Error(), "sub-not-visible")
+		assert.Contains(t, err.Error(), "not among the 1 subscriptions visible")
+	})
+
+	// The happy path for the same branch: a target the principal CAN see is
+	// honoured, and scopes the client to exactly that subscription.
+	t.Run("AZURE_SUBSCRIPTION_ID matching a visible subscription is honoured", func(t *testing.T) {
+		t.Setenv("AZURE_SUBSCRIPTION_ID", "sub-1")
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(twoSubscriptionPages())
+
+		client, err := p.GetRecommendationsClient(context.Background())
+		require.NoError(t, err)
+		require.IsType(t, &RecommendationsClientAdapter{}, client)
+		assert.Equal(t, "sub-1", client.(*RecommendationsClientAdapter).subscriptionID)
+	})
+
 	t.Run("multi-subscription returns MultiSubscriptionRecommendationsClient", func(t *testing.T) {
 		p := &AzureProvider{cred: &mockTokenCredential{}}
 		p.SetSubscriptionsClient(twoSubscriptionPages())
