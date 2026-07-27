@@ -567,7 +567,7 @@ func (h *Handler) requireAzureSubscriptionScope(ctx context.Context, session *Se
 // the correct discriminator even for AppliedScopeType == Shared, which
 // governs which subscriptions receive the discount rather than which one
 // paid; an AppliedScopes-based check would pass for nearly every
-// reservation and be security theatre.
+// reservation and be security theater.
 //
 // Fails closed on every uncertainty: a reservation absent from the listing,
 // or one Azure reports without a billing scope, is refused rather than
@@ -578,8 +578,8 @@ func (h *Handler) requireAzureSubscriptionScope(ctx context.Context, session *Se
 func requireAzureSourceOwnership(owned []azurecompute.ExchangeableReservation, sources []AzureExchangeSourceBody, subscriptionID string) error {
 	scope := azureBillingScopeID(subscriptionID)
 	byID := make(map[string]string, len(owned))
-	for _, r := range owned {
-		byID[strings.ToLower(r.ReservationID)] = r.BillingScopeID
+	for i := range owned {
+		byID[strings.ToLower(owned[i].ReservationID)] = owned[i].BillingScopeID
 	}
 	for i, s := range sources {
 		billingScope, found := byID[strings.ToLower(s.ReservationID)]
