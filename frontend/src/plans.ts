@@ -878,6 +878,12 @@ interface BackendPlan {
 const HEALTH_SCORE_GOOD_THRESHOLD = 80;
 const HEALTH_SCORE_WARN_THRESHOLD = 50;
 
+// Inclusive bounds of the score the API contracts to send (openapi.yaml
+// PlanWithHealth.health_score: minimum 0, maximum 100). Anything outside is
+// treated as unusable rather than banded.
+const HEALTH_SCORE_MIN = 0;
+const HEALTH_SCORE_MAX = 100;
+
 function healthBadgeClass(score: number): string {
   if (score >= HEALTH_SCORE_GOOD_THRESHOLD) return 'badge-success';
   if (score >= HEALTH_SCORE_WARN_THRESHOLD) return 'badge-warning';
@@ -892,10 +898,14 @@ function healthBadgeClass(score: number): string {
 //   - field null: the backend could not compute the score (execution counts
 //     unavailable). Render an explicit "unknown" badge -- never a stand-in
 //     number, which an operator could not tell apart from a measured score.
-//   - a finite number: the score, banded into the green/amber/red palette.
-//   - anything else (NaN, Infinity, a non-number off the wire): also
-//     "unknown". A garbled score is an uncomputable score; silently dropping
-//     the badge would instead read as "this deploy predates the feature".
+//   - a number within the contract's 0-100 range: the score, banded into the
+//     green/amber/red palette.
+//   - anything else (NaN, Infinity, out of range, a non-number off the wire):
+//     also "unknown". A score outside 0-100 violates the range the API
+//     declares, so it is no more trustworthy than a NaN, and banding it would
+//     paint -1 red and 101 green as though both were measured. Silently
+//     dropping the badge instead would read as "this deploy predates the
+//     feature".
 //
 // The tooltip enumerates every penalty factor so a bad score is actionable
 // instead of opaque; every factor note is escaped since it renders inside an
@@ -908,7 +918,9 @@ function healthBadgeHtml(plan: BackendPlan): string {
   // value comes off the wire and is interpolated into innerHTML below.
   if (plan.health_score === null
       || typeof plan.health_score !== 'number'
-      || !Number.isFinite(plan.health_score)) {
+      || !Number.isFinite(plan.health_score)
+      || plan.health_score < HEALTH_SCORE_MIN
+      || plan.health_score > HEALTH_SCORE_MAX) {
     // Neutral wording on purpose: null means the backend could not read the
     // execution history, while a non-finite value means the number itself
     // arrived unusable. Naming only the first would send an operator

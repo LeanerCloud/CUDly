@@ -3073,6 +3073,12 @@ describe('Plans Module', () => {
 
   // Issue #340 follow-up (PR #376): per-plan health-score badge.
   describe('plan health-score badge', () => {
+    // Mirror of the band thresholds in plans.ts. Declared here rather than
+    // imported because plans.ts does not export them; if they diverge the
+    // boundary cases below fail, which is the point.
+    const HEALTH_SCORE_GOOD_BOUNDARY = 80;
+    const HEALTH_SCORE_WARN_BOUNDARY = 50;
+
     const basePlan = {
       id: 'plan-1',
       name: 'Test Plan',
@@ -3162,6 +3168,44 @@ describe('Plans Module', () => {
       // Critically, it must NOT be dressed up as a healthy score.
       expect(list?.innerHTML).not.toContain('badge-success');
       expect(list?.innerHTML).not.toContain('Health: 100');
+    });
+
+    // Band boundaries, not just mid-band samples: with only 90/65/30 the
+    // suite cannot tell `>=` from `>`, so flipping either comparison would
+    // silently reclassify every plan sitting exactly on a threshold.
+    test.each([
+      [HEALTH_SCORE_GOOD_BOUNDARY, 'badge-success'],
+      [HEALTH_SCORE_GOOD_BOUNDARY - 1, 'badge-warning'],
+      [HEALTH_SCORE_WARN_BOUNDARY, 'badge-warning'],
+      [HEALTH_SCORE_WARN_BOUNDARY - 1, 'badge-danger'],
+    ])('score %i sits in the %s band', async (score, expectedClass) => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{ ...basePlan, health_score: score, health_factors: [] }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      expect(list?.innerHTML).toContain(expectedClass);
+      expect(list?.innerHTML).toContain(`Health: ${score}`);
+    });
+
+    // A score outside the 0-100 the API contracts to send is no more
+    // trustworthy than a NaN. Banding it would paint -1 red and 101 green as
+    // though both had been measured.
+    test.each([-1, 101, 1000])('renders unknown for out-of-range score %i', async (score) => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{ ...basePlan, health_score: score }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      expect(list?.innerHTML).toContain('Health: unknown');
+      expect(list?.innerHTML).toContain('badge-muted');
+      expect(list?.innerHTML).not.toContain(`Health: ${score}`);
     });
 
     // A garbled score off the wire is an uncomputable score, so it must
