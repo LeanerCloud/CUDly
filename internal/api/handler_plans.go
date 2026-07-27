@@ -45,7 +45,44 @@ func (h *Handler) listPlans(ctx context.Context, req *events.LambdaFunctionURLRe
 		}
 	}
 
-	return &PlansResponse{Plans: plans}, nil
+	return &PlansResponse{Plans: h.attachPlanHealth(ctx, plans, now)}, nil
+}
+
+// attachPlanHealth computes the per-plan health-score badge (issue #340
+// follow-up) for every plan in the list. Reuses the existing
+// GetExecutionsByStatuses call shape -- the same set the History handler
+// already uses (handler_history.go), capped at config.DefaultListLimit --
+// instead of adding a new plan-scoped store method.
+//
+// If the executions fetch fails, the failure is logged and every plan
+// defaults to a perfect score with no factors, rather than computing a
+// partial score from attributes alone (which would look complete but
+// silently omit the failed/canceled-execution factors) or failing the
+// whole request with a 500. A degraded-but-visible plans list beats an
+// opaque failure on a page that isn't primarily about purchase executions.
+func (h *Handler) attachPlanHealth(ctx context.Context, plans []config.PurchasePlan, now time.Time) []PlanWithHealth {
+	result := make([]PlanWithHealth, len(plans))
+
+	execs, err := h.config.GetExecutionsByStatuses(ctx, planHealthExecutionStatuses, config.DefaultListLimit)
+	if err != nil {
+		logging.Warnf("listPlans: GetExecutionsByStatuses failed, plan health scores default to 100: %v", err)
+		for i := range plans {
+			result[i] = PlanWithHealth{PurchasePlan: plans[i], HealthScore: planHealthScoreMax}
+		}
+		return result
+	}
+
+	execsByPlan := make(map[string][]config.PurchaseExecution, len(execs))
+	for _rvc := range execs {
+		e := execs[_rvc]
+		execsByPlan[e.PlanID] = append(execsByPlan[e.PlanID], e)
+	}
+
+	for i := range plans {
+		score, factors := computePlanHealth(plans[i], now, execsByPlan[plans[i].ID])
+		result[i] = PlanWithHealth{PurchasePlan: plans[i], HealthScore: score, HealthFactors: factors}
+	}
+	return result
 }
 
 // calculateNextExecutionDate calculates the next execution date for a plan.

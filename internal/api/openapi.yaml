@@ -2339,7 +2339,7 @@ components:
         plans:
           type: array
           items:
-            $ref: '#/components/schemas/PurchasePlan'
+            $ref: '#/components/schemas/PlanWithHealth'
 
     PlanRequest:
       type: object
@@ -2421,6 +2421,37 @@ components:
           type: string
           format: date-time
           nullable: true
+
+    # PlanWithHealth wraps PurchasePlan with a read-time-only health-score
+    # badge (issue #340 follow-up): score/factors are computed from the
+    # plan's attributes and recent executions, never persisted, so they
+    # can't drift into the PurchasePlan schema above.
+    PlanWithHealth:
+      allOf:
+        - $ref: '#/components/schemas/PurchasePlan'
+        - type: object
+          properties:
+            health_score:
+              type: integer
+              minimum: 0
+              maximum: 100
+              description: 0-100 plan health score. Green >= 80, amber 50-79, red < 50.
+            health_factors:
+              type: array
+              items:
+                $ref: '#/components/schemas/PlanHealthFactor'
+
+    PlanHealthFactor:
+      type: object
+      description: One penalty subtracted from a plan's health score, named so a bad score is actionable instead of opaque.
+      properties:
+        code:
+          type: string
+          enum: [overdue, failed_executions, canceled_executions, stalled, behind_schedule, disabled_midway]
+        penalty:
+          type: integer
+        note:
+          type: string
 
     RampSchedule:
       type: object

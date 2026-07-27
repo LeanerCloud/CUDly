@@ -33,6 +33,10 @@ func TestHandler_listPlans(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
+	// listPlans now also fetches recent failed/canceled executions to
+	// compute each plan's health-score badge (issue #340 follow-up).
+	mockStore.On("GetExecutionsByStatuses", ctx, planHealthExecutionStatuses, config.DefaultListLimit).
+		Return([]config.PurchaseExecution{}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -45,6 +49,10 @@ func TestHandler_listPlans(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Len(t, result.Plans, 2)
+	// Neither seeded plan has ramp-schedule or execution data that would
+	// trigger a penalty, so both default to a perfect score.
+	assert.Equal(t, 100, result.Plans[0].HealthScore)
+	assert.Equal(t, 100, result.Plans[1].HealthScore)
 }
 
 func TestHandler_listPlans_AccountIDsFilter(t *testing.T) {
@@ -67,6 +75,8 @@ func TestHandler_listPlans_AccountIDsFilter(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
 	mockStore.On("ListPurchasePlans", ctx, expectedFilter).Return(plans, nil)
+	mockStore.On("GetExecutionsByStatuses", ctx, planHealthExecutionStatuses, config.DefaultListLimit).
+		Return([]config.PurchaseExecution{}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -81,6 +91,91 @@ func TestHandler_listPlans_AccountIDsFilter(t *testing.T) {
 
 	assert.Len(t, result.Plans, 1)
 	assert.Equal(t, "Account Plan", result.Plans[0].Name)
+}
+
+// TestHandler_listPlans_HealthScoreReflectsFailedExecutions is the
+// end-to-end wiring check for the issue #340 health-score badge: a plan
+// with failed executions in the store must come back from listPlans with a
+// penalized HealthScore and the matching HealthFactors entry, and a
+// failed execution belonging to a DIFFERENT plan must not bleed into this
+// plan's score.
+func TestHandler_listPlans_HealthScoreReflectsFailedExecutions(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+
+	troubledPlanID := "11111111-1111-1111-1111-111111111111"
+	otherPlanID := "22222222-2222-2222-2222-222222222222"
+	plans := []config.PurchasePlan{
+		{ID: troubledPlanID, Name: "Troubled Plan", Enabled: true},
+		{ID: otherPlanID, Name: "Other Plan", Enabled: true},
+	}
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
+	mockStore.On("GetExecutionsByStatuses", ctx, planHealthExecutionStatuses, config.DefaultListLimit).
+		Return([]config.PurchaseExecution{
+			{PlanID: troubledPlanID, Status: "failed"},
+			{PlanID: troubledPlanID, Status: "failed"},
+			{PlanID: otherPlanID, Status: config.StatusCanceled},
+		}, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-token"}}
+
+	result, err := handler.listPlans(ctx, req, map[string]string{})
+	require.NoError(t, err)
+	require.Len(t, result.Plans, 2)
+
+	byID := make(map[string]PlanWithHealth, 2)
+	for _, p := range result.Plans {
+		byID[p.ID] = p
+	}
+
+	troubled := byID[troubledPlanID]
+	assert.Equal(t, 100-2*penaltyPerFailedExec, troubled.HealthScore)
+	require.Len(t, troubled.HealthFactors, 1)
+	assert.Equal(t, HealthFactorFailedExecutions, troubled.HealthFactors[0].Code)
+
+	other := byID[otherPlanID]
+	assert.Equal(t, 100-penaltyPerCanceledExec, other.HealthScore)
+	require.Len(t, other.HealthFactors, 1)
+	assert.Equal(t, HealthFactorCanceledExecutions, other.HealthFactors[0].Code)
+}
+
+// TestHandler_listPlans_HealthScoreDegradesToDefaultOnExecutionsFetchError
+// verifies the documented degraded-mode behavior in attachPlanHealth: if
+// GetExecutionsByStatuses fails, listPlans still succeeds (never a 500 on
+// a page that isn't primarily about purchase executions) and every plan
+// gets a perfect default score with no factors, rather than a partially
+// computed score that would look complete but silently omit the
+// execution-based factors.
+func TestHandler_listPlans_HealthScoreDegradesToDefaultOnExecutionsFetchError(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+
+	plans := []config.PurchasePlan{
+		{ID: "11111111-1111-1111-1111-111111111111", Name: "Some Plan", Enabled: true},
+	}
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
+	mockStore.On("GetExecutionsByStatuses", ctx, planHealthExecutionStatuses, config.DefaultListLimit).
+		Return(nil, errors.New("db unavailable"))
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-token"}}
+
+	result, err := handler.listPlans(ctx, req, map[string]string{})
+	require.NoError(t, err)
+	require.Len(t, result.Plans, 1)
+	assert.Equal(t, 100, result.Plans[0].HealthScore)
+	assert.Empty(t, result.Plans[0].HealthFactors)
 }
 
 func TestHandler_createPlan(t *testing.T) {
