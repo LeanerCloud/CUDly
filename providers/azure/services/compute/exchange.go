@@ -45,7 +45,10 @@ type ExchangeableReservation struct {
 	// reservations with AppliedScopeType == Shared.
 	Region string `json:"region,omitempty"`
 
-	// Term is the reservation term in ISO 8601 duration format ("P1Y" or "P3Y").
+	// Term is the reservation term in ISO 8601 duration format, stringified
+	// from armreservations.PossibleReservationTermValues() ("P1Y", "P3Y" or
+	// "P5Y"). Consumers must not treat a term outside the one/three-year
+	// pair as unsupported.
 	Term string `json:"term,omitempty"`
 
 	// ExpiryDate is when the reservation expires. Zero if not set by Azure.
