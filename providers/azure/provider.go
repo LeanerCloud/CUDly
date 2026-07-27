@@ -4,7 +4,6 @@ package azure
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armsubscriptions"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
@@ -104,9 +104,19 @@ type AzureProvider struct {
 	// subscriptions.List call once per internal caller. cachedAccounts is
 	// nil until the first successful fetch; InvalidateAccountsCache resets
 	// it so tests (and long-lived callers that expect subscription
-	// membership to change) can force a refresh.
+	// membership to change) can force a refresh. The mutex is held only to
+	// read/write cachedAccounts, never across the ARM network round-trip.
+	//
+	// accountsSF collapses concurrent cold-cache callers into a single
+	// in-flight subscriptions.List: the ARM call runs once (not once per
+	// caller) and, crucially, outside accountsMu so a slow or hung lookup
+	// can never block readers of the cache.
 	accountsMu     sync.RWMutex
 	cachedAccounts []common.Account
+	accountsSF     singleflight.Group
+
+	// cache subsystem implementation (getOrFetchAccounts, fetchAccounts,
+	// cloneAccounts, InvalidateAccountsCache) lives in accounts_cache.go.
 }
 
 // NewAzureProvider creates a new Azure provider instance.
@@ -265,161 +275,6 @@ func (p *AzureProvider) GetAccounts(ctx context.Context) ([]common.Account, erro
 		return nil, fmt.Errorf("azure provider is not configured")
 	}
 	return p.getOrFetchAccounts(ctx)
-}
-
-// getOrFetchAccounts returns the cached subscription list, populating it via
-// fetchAccountsLocked on first use. Safe for concurrent callers: a read lock
-// guards the fast path (cache already populated); a write lock guards the
-// fetch-and-populate path, with a re-check after acquiring it so concurrent
-// callers that lost the race to the lock don't issue a redundant ARM call.
-//
-// Callers must have already verified IsConfigured(); this method assumes a
-// usable credential is present (mirrors GetAccounts, its only production
-// caller alongside GetServiceClient/GetRecommendationsClient which check
-// IsConfigured() themselves before resolving accounts).
-func (p *AzureProvider) getOrFetchAccounts(ctx context.Context) ([]common.Account, error) {
-	p.accountsMu.RLock()
-	cached := p.cachedAccounts
-	p.accountsMu.RUnlock()
-	if cached != nil {
-		return cloneAccounts(cached), nil
-	}
-
-	p.accountsMu.Lock()
-	defer p.accountsMu.Unlock()
-	// Re-check: another goroutine may have populated the cache while this
-	// one was waiting on the write lock.
-	if p.cachedAccounts != nil {
-		return cloneAccounts(p.cachedAccounts), nil
-	}
-
-	accounts, err := p.fetchAccountsLocked(ctx)
-	if err != nil {
-		return nil, err
-	}
-	p.cachedAccounts = accounts
-	return cloneAccounts(accounts), nil
-}
-
-// cloneAccounts returns a shallow copy of accounts backed by a fresh array.
-// common.Account has no nested slices/maps, so a shallow per-element copy is
-// sufficient to stop a caller mutating a returned slice (e.g. flipping
-// IsDefault) from corrupting the shared cache -- the same class of bug
-// flagged for getters returning nested state.
-func cloneAccounts(accounts []common.Account) []common.Account {
-	out := make([]common.Account, len(accounts))
-	copy(out, accounts)
-	return out
-}
-
-// InvalidateAccountsCache clears the cached subscription list so the next
-// getOrFetchAccounts call re-fetches from the ARM subscriptions API. Exposed
-// for tests that need to assert cache-miss behavior; production callers
-// currently rely on the cache living for the lifetime of the AzureProvider
-// instance (one instance is constructed per collection/purchase run).
-func (p *AzureProvider) InvalidateAccountsCache() {
-	p.accountsMu.Lock()
-	defer p.accountsMu.Unlock()
-	p.cachedAccounts = nil
-}
-
-// fetchAccountsLocked performs the actual ARM subscriptions.List call and
-// resolves the default subscription. Must only be called while holding
-// accountsMu for writing (via getOrFetchAccounts) -- it does not lock itself
-// so getOrFetchAccounts can do its cache-populate-and-return in one critical
-// section.
-func (p *AzureProvider) fetchAccountsLocked(ctx context.Context) ([]common.Account, error) {
-	// Use injected client if available (for testing)
-	var subClient SubscriptionsClient
-	if p.subscriptionsClient != nil {
-		subClient = p.subscriptionsClient
-	} else {
-		client, err := armsubscriptions.NewClient(p.cred, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create subscriptions client: %w", err)
-		}
-		subClient = &realSubscriptionsClient{client: client}
-	}
-
-	accounts := make([]common.Account, 0)
-	pager := subClient.NewListPager(nil)
-
-	for pager.More() {
-		page, err := pager.NextPage(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to list subscriptions: %w", err)
-		}
-
-		for _, sub := range page.Value {
-			if sub.SubscriptionID == nil || sub.DisplayName == nil {
-				continue
-			}
-
-			accounts = append(accounts, common.Account{
-				Provider:    common.ProviderAzure,
-				ID:          *sub.SubscriptionID,
-				Name:        *sub.DisplayName,
-				DisplayName: *sub.DisplayName,
-				// IsDefault resolved below once the full list is available.
-				IsDefault: false,
-			})
-		}
-	}
-
-	// Resolve which subscription is the default.
-	resolveDefaultSubscription(accounts, p.subscriptionID)
-
-	return accounts, nil
-}
-
-// resolveDefaultSubscription sets IsDefault on the matching account in-place.
-//
-// Priority:
-//  1. explicitSubID (from ProviderConfig.AzureSubscriptionID / Profile).
-//  2. AZURE_SUBSCRIPTION_ID environment variable.
-//  3. When exactly one subscription is visible, mark it default (mirrors AWS
-//     behaviour where the STS-identified account is always the default).
-func resolveDefaultSubscription(accounts []common.Account, explicitSubID string) {
-	if len(accounts) == 0 {
-		return
-	}
-
-	target := explicitSubID
-	if target == "" {
-		target = os.Getenv("AZURE_SUBSCRIPTION_ID")
-	}
-
-	if target != "" {
-		for i := range accounts {
-			if accounts[i].ID == target {
-				accounts[i].IsDefault = true
-				return
-			}
-		}
-		// target was configured but not found in the visible subscriptions;
-		// fall through to the single-subscription rule rather than leaving
-		// all accounts as non-default.
-	}
-
-	// Rule 3: single visible subscription.
-	if len(accounts) == 1 {
-		accounts[0].IsDefault = true
-	}
-}
-
-// getDefaultSubscriptionID returns the ID of the default subscription from a
-// pre-fetched account list, or an empty string when no account is marked
-// default (e.g. ambiguous multi-subscription tenants with no explicit config).
-func getDefaultSubscriptionID(accounts []common.Account) string {
-	if len(accounts) == 0 {
-		return ""
-	}
-	for _, a := range accounts {
-		if a.IsDefault {
-			return a.ID
-		}
-	}
-	return ""
 }
 
 // resolveSubscriptionIDFromCtx calls GetAccounts and returns the default

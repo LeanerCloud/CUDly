@@ -3,6 +3,9 @@ package azure
 import (
 	"context"
 	"errors"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -1247,11 +1250,11 @@ func TestAzureProvider_GetRecommendationsClientForAccount(t *testing.T) {
 // underlying ARM API is only called once.
 type countingSubscriptionsClient struct {
 	*mockSubscriptionsClient
-	calls int
+	calls atomic.Int64
 }
 
 func (c *countingSubscriptionsClient) NewListPager(options *armsubscriptions.ClientListOptions) SubscriptionsPager {
-	c.calls++
+	c.calls.Add(1)
 	return c.mockSubscriptionsClient.NewListPager(options)
 }
 
@@ -1289,12 +1292,12 @@ func TestAzureProvider_GetAccounts_CacheHit(t *testing.T) {
 	first, err := p.GetAccounts(context.Background())
 	require.NoError(t, err)
 	require.Len(t, first, 2)
-	assert.Equal(t, 1, counting.calls, "first GetAccounts call should hit the API once")
+	assert.Equal(t, int64(1), counting.calls.Load(), "first GetAccounts call should hit the API once")
 
 	second, err := p.GetAccounts(context.Background())
 	require.NoError(t, err)
 	require.Len(t, second, 2)
-	assert.Equal(t, 1, counting.calls, "second GetAccounts call should be served from cache, not the API")
+	assert.Equal(t, int64(1), counting.calls.Load(), "second GetAccounts call should be served from cache, not the API")
 	assert.Equal(t, first, second)
 }
 
@@ -1319,13 +1322,103 @@ func TestAzureProvider_InvalidateAccountsCache(t *testing.T) {
 
 	_, err := p.GetAccounts(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, 1, counting.calls)
+	assert.Equal(t, int64(1), counting.calls.Load())
 
 	p.InvalidateAccountsCache()
 
 	_, err = p.GetAccounts(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, 2, counting.calls, "GetAccounts after InvalidateAccountsCache should re-hit the API")
+	assert.Equal(t, int64(2), counting.calls.Load(), "GetAccounts after InvalidateAccountsCache should re-hit the API")
+}
+
+// gatedCountingSubscriptionsClient counts ARM list calls and holds the first
+// one open until released, so a test can guarantee the single in-flight fetch
+// is genuinely in progress while additional cold-cache callers pile up behind
+// it. This is what makes the single-flight assertion deterministic for both a
+// correct impl (exactly one call) and a naive per-caller fetch (several calls).
+type gatedCountingSubscriptionsClient struct {
+	inner         *mockSubscriptionsClient
+	calls         atomic.Int64
+	firstOnce     sync.Once
+	firstInFlight chan struct{} // closed when the first fetch has entered
+	release       chan struct{} // closed by the test to let held fetches proceed
+}
+
+func (c *gatedCountingSubscriptionsClient) NewListPager(options *armsubscriptions.ClientListOptions) SubscriptionsPager {
+	c.calls.Add(1)
+	c.firstOnce.Do(func() { close(c.firstInFlight) })
+	<-c.release
+	return c.inner.NewListPager(options)
+}
+
+func (c *gatedCountingSubscriptionsClient) NewListLocationsPager(subscriptionID string, options *armsubscriptions.ClientListLocationsOptions) LocationsPager {
+	return c.inner.NewListLocationsPager(subscriptionID, options)
+}
+
+// TestAzureProvider_GetAccounts_ConcurrentColdCache_SingleARMCall guards the
+// single-flight cold-cache contract: many goroutines hitting an empty cache at
+// once must collapse into exactly one ARM subscriptions.List call, not one per
+// caller.
+//
+// The staged launch makes this deterministic: the leader's fetch is held
+// in-flight (blocked on release) before the followers start, so the followers
+// hit a cold cache while the single fetch is open. A correct impl collapses
+// them via single-flight (and the closure's cache re-check), yielding exactly
+// one call regardless of scheduling; a naive "fetch outside the lock without
+// single-flight" fix lets the followers each issue their own ARM call, which
+// this test detects via the atomic counter. Run under -race to also catch any
+// unguarded shared-state access on the cold-cache path.
+func TestAzureProvider_GetAccounts_ConcurrentColdCache_SingleARMCall(t *testing.T) {
+	gated := &gatedCountingSubscriptionsClient{
+		inner:         twoSubscriptionPages(),
+		firstInFlight: make(chan struct{}),
+		release:       make(chan struct{}),
+	}
+
+	p := &AzureProvider{cred: &mockTokenCredential{}}
+	p.SetSubscriptionsClient(gated)
+
+	const n = 10
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	results := make(chan []common.Account, n)
+	worker := func() {
+		defer wg.Done()
+		accts, err := p.GetAccounts(context.Background())
+		errs <- err
+		results <- accts
+	}
+
+	// Launch the leader and wait until its ARM fetch is actually in-flight
+	// before launching the followers, so they observe a cold cache.
+	wg.Add(1)
+	go worker()
+	<-gated.firstInFlight
+
+	for i := 1; i < n; i++ {
+		wg.Add(1)
+		go worker()
+	}
+	// Nudge the followers onto the cache/single-flight path, then release the
+	// held fetch so everything can complete.
+	for i := 0; i < n; i++ {
+		runtime.Gosched()
+	}
+	close(gated.release)
+
+	wg.Wait()
+	close(errs)
+	close(results)
+
+	// require.* only from the test goroutine, never the workers.
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	for accts := range results {
+		require.Len(t, accts, 2)
+	}
+	assert.Equal(t, int64(1), gated.calls.Load(),
+		"concurrent cold-cache GetAccounts must issue exactly one ARM list call (single-flight)")
 }
 
 func TestAzureProvider_GetRecommendationsClient_MultiSubscriptionFanOut(t *testing.T) {
