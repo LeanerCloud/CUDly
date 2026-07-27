@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -505,14 +506,24 @@ func (s *PostgresStore) ClearCollectionStarted(ctx context.Context, token string
 	if token == "" {
 		return fmt.Errorf("owner token must not be empty")
 	}
-	if _, err := s.db.Exec(ctx, `
+	tag, err := s.db.Exec(ctx, `
 		UPDATE recommendations_state
 		   SET last_collection_started_at = NULL,
 		       last_collection_owner_id    = NULL
 		 WHERE id = 1
 		   AND last_collection_owner_id = $1
-	`, token); err != nil {
+	`, token)
+	if err != nil {
 		return fmt.Errorf("failed to clear collection started: %w", err)
+	}
+	// The no-op branch IS the safety mechanism issue #261 adds, so surface it
+	// at debug level: without this there is no signal in production
+	// distinguishing "cleared" from "declined to clear someone else's marker",
+	// and a guard that never fires looks identical to a guard that is broken.
+	// The token is deliberately not logged: it is the capability that controls
+	// the marker, and the repo forbids putting token material in logs.
+	if tag.RowsAffected() == 0 {
+		logging.Debugf("ClearCollectionStarted: no-op, caller's token no longer owns the collection marker")
 	}
 	return nil
 }
