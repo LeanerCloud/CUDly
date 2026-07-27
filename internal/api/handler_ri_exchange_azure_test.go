@@ -1426,3 +1426,68 @@ func TestCheckAzureExchangeMoneyGuardrails_CapBoundaryAndRefunds(t *testing.T) {
 		})
 	}
 }
+
+// TestGetAzureCompatibleOfferings_ScopeCheckPrecedesClientBuild mirrors the
+// execute endpoint's ordering tests on the read-only quote endpoint, which
+// had none.
+//
+// TestGetAzureCompatibleOfferings_OutOfScopeSubscription injects an
+// azureExchangeFactory, so the client build always succeeds there and a
+// reordering of requireAzureSubscriptionScope past buildAzureExchangeClient
+// would still surface errNotFound -- leaving the same enumeration oracle the
+// execute endpoint is explicitly guarded against. These two exercise the
+// REAL buildAzureExchangeClient path so the distinguishable 404 ("no Azure
+// account registered for subscription %q") is only avoided when the scope
+// check genuinely runs first, and require both denials to be identical.
+func TestGetAzureCompatibleOfferings_ScopeCheckPrecedesClientBuild(t *testing.T) {
+	ctx := context.Background()
+
+	unregisteredStore := &MockConfigStore{}
+	unregisteredStore.GetCloudAccountByExternalIDFn = func(_ context.Context, provider, externalID string) (*config.CloudAccount, error) {
+		require.Equal(t, "azure", provider)
+		require.Equal(t, "sub-1", externalID)
+		return nil, nil // unregistered: no account for this subscription at all
+	}
+	hUnregistered := &Handler{auth: scopedAzureAuth(t, "view", "purchases", []string{"acct-mine"}), config: unregisteredStore}
+	_, unregisteredErr := hUnregistered.getAzureCompatibleOfferings(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureOfferingsBody,
+	})
+	require.Error(t, unregisteredErr, "a scoped session must not learn whether an unregistered subscription exists")
+	assert.ErrorIs(t, unregisteredErr, errNotFound)
+	assert.NotContains(t, unregisteredErr.Error(), "sub-1",
+		"the error must not echo the subscription id back (that itself would be an enumeration signal)")
+
+	// Registered but out of scope, with a credential store that always fails
+	// client_secret resolution: building the client first would surface a
+	// credential-resolution error instead of the generic scope denial.
+	outOfScopeStore := &MockConfigStore{}
+	outOfScopeStore.GetCloudAccountByExternalIDFn = func(_ context.Context, _, externalID string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{
+			ID:                  "acct-other",
+			Name:                "Other Team",
+			Provider:            "azure",
+			ExternalID:          externalID,
+			AzureSubscriptionID: externalID,
+			AzureTenantID:       "tenant-other",
+			AzureClientID:       "client-other",
+			AzureAuthMode:       "client_secret",
+			Enabled:             true,
+		}, nil
+	}
+	hOutOfScope := &Handler{
+		auth:      scopedAzureAuth(t, "view", "purchases", []string{"acct-mine"}),
+		config:    outOfScopeStore,
+		credStore: &MockCredentialStore{},
+	}
+	_, outOfScopeErr := hOutOfScope.getAzureCompatibleOfferings(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureOfferingsBody,
+	})
+	require.Error(t, outOfScopeErr, "a scoped session must not price an out-of-scope subscription")
+	assert.ErrorIs(t, outOfScopeErr, errNotFound,
+		"must be the generic scope-check 404, not a credential-resolution error from building the client first")
+
+	assert.Equal(t, unregisteredErr.Error(), outOfScopeErr.Error(),
+		"both denials must be byte-identical so a scoped caller cannot tell registered from unregistered subscriptions")
+}
