@@ -3,7 +3,7 @@
 
 .PHONY: help deploy plan destroy profile-list profile-show clean clean-locks \
         output aws-dev aws-prod azure-dev gcp-dev quick-plan aws-dev-plan quick-deploy \
-        validate fmt state-list state-show frontend-only
+        validate fmt state-list state-show docker-skip frontend-only
 
 # Default profile settings
 PROVIDER ?= aws
@@ -26,6 +26,9 @@ help: ## Show this help message
 	@echo "Profile Management:"
 	@echo "  make profile-list        # List all available profiles"
 	@echo "  make profile-show        # Show current profile contents"
+	@echo ""
+	@echo "Docker Operations:"
+	@echo "  make docker-skip         # Deploy without building the Docker image"
 	@echo ""
 	@echo "Cleanup:"
 	@echo "  make destroy             # Destroy infrastructure (asks for confirmation)"
@@ -118,6 +121,27 @@ state-list: ## List resources in Terraform state
 
 state-show: ## Show detailed state for a resource
 	@cd terraform/environments/$(PROVIDER)/$(PROFILE) && terraform state show $(RESOURCE)
+
+# Docker operations
+#
+# Note: an earlier draft of this file also had a "docker-build" target
+# (build the image but skip the ECR push, via a "skip_docker_push" var)
+# and a "frontend-skip" target (skip frontend build, via an
+# "enable_frontend_build" var). Neither variable exists anywhere in
+# terraform/environments/*/build.tf or variables.tf any more:
+#   - the build module has no build-without-push option, so "docker-build"
+#     has no current equivalent;
+#   - frontend assets are now bundled into the Docker/app build rather than
+#     built as a separate Terraform-controlled step, and the closest
+#     surviving flag (enable_cdn) only toggles the CloudFront distribution
+#     in front of the frontend (defaulting to false already), not whether
+#     the frontend gets built - so a "frontend-skip" wrapper would be
+#     redundant with plain `make deploy`.
+# Only the "skip the whole Docker build" case still maps to a real
+# variable (enable_docker_build, replacing the old skip_docker_build).
+docker-skip: ## Deploy without building the Docker image (uses pre-built image_uri)
+	@echo "⏭️  Deploying without Docker build..."
+	@./scripts/tf-deploy.sh $(PROVIDER) $(PROFILE) apply -var="enable_docker_build=false"
 
 # Frontend operations
 frontend-only: ## Deploy frontend only
