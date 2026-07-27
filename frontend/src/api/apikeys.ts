@@ -20,7 +20,8 @@ export async function getApiKeys(): Promise<GetAPIKeysResponse> {
 /**
  * Get section-level API keys usage stats (issue #340/#344 deferred
  * sub-task). Returns the per-section summary card -- totals + top keys
- * by 24h activity. Scoped to the calling user's own keys.
+ * ranked by request_count_window, which is a FIXED/TUMBLING window count
+ * rather than a rolling 24h total. Scoped to the calling user's own keys.
  */
 export async function getApiKeysUsageStats(): Promise<APIKeysUsageStats> {
   return apiRequest<APIKeysUsageStats>('/api-keys/usage-stats');

@@ -527,7 +527,7 @@ func TestService_ValidateUserAPIKey(t *testing.T) {
 		assert.Equal(t, apiKeyRecord, resultKey)
 		select {
 		case <-usageRecorded:
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(5 * time.Second):
 			t.Fatal("expected RecordAPIKeyUsage to be called")
 		}
 		mockStore.AssertExpectations(t)

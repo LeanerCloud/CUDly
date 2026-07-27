@@ -30,8 +30,13 @@
 --                                  see exactly which period the count
 --                                  covers instead of assuming "last 24h".
 --
--- Counters default to 0 so all existing rows show "0 requests" rather
--- than "(null)" in the UI. The window-start column is nullable because
+-- Counters default to 0 because the columns are NOT NULL. That default is
+-- not the same as "this key served no traffic": a key that was already in
+-- use before this migration also reads as 0. The read path distinguishes
+-- the two by last_used_at -- a zero request_count_total on a key that has
+-- been used is reported as unknown (nil, surfacing as lifetime_partial),
+-- while a never-used row keeps its genuine 0. See effectiveLifetimeUsage
+-- in service_apikeys_api.go. The window-start column is nullable because
 -- a row with zero-ever-usage shouldn't lie about when its window began.
 
 ALTER TABLE api_keys
