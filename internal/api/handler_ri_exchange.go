@@ -546,6 +546,68 @@ func (h *Handler) requireAzureSubscriptionScope(ctx context.Context, session *Se
 	return nil
 }
 
+// requireAzureSourceOwnership refuses any source reservation that is not
+// paid for by the authorized subscription (issue #1527).
+//
+// Every other gate on these endpoints constrains the DESTINATION of an
+// exchange: requireAzureSubscriptionScope and the execute:ri-exchange
+// AccountIDs constraint both key off subscription_id, and
+// toAzureExchangeTargets forces each target's billing scope to that same
+// subscription. The sources were unconstrained. That matters because Azure
+// reservation orders are tenant-scoped, not subscription-scoped --
+// ListExchangeableReservations enumerates the whole tenant precisely
+// because "the Azure Capacity exchange API operates on reservation order
+// IDs which span subscriptions". So a caller authorized for subscription A
+// could name subscription B's reservation IDs and hand B's commitments
+// back, with the replacement purchased into A's billing scope. Azure RBAC
+// on the reservation order was the only backstop.
+//
+// The check uses each reservation's own BillingScopeID -- the subscription
+// Azure charges for it, and the scope an exchange refunds it to. That is
+// the correct discriminator even for AppliedScopeType == Shared, which
+// governs which subscriptions receive the discount rather than which one
+// paid; an AppliedScopes-based check would pass for nearly every
+// reservation and be security theatre.
+//
+// Fails closed on every uncertainty: a reservation absent from the listing,
+// or one Azure reports without a billing scope, is refused rather than
+// allowed. Denials deliberately do not distinguish "does not exist" from
+// "belongs to someone else", so this cannot be used to enumerate another
+// subscription's reservation IDs (same posture as
+// requireAzureSubscriptionScope).
+func requireAzureSourceOwnership(owned []azurecompute.ExchangeableReservation, sources []AzureExchangeSourceBody, subscriptionID string) error {
+	scope := azureBillingScopeID(subscriptionID)
+	byID := make(map[string]string, len(owned))
+	for _, r := range owned {
+		byID[strings.ToLower(r.ReservationID)] = r.BillingScopeID
+	}
+	for i, s := range sources {
+		billingScope, found := byID[strings.ToLower(s.ReservationID)]
+		if !found || billingScope == "" || !strings.EqualFold(billingScope, scope) {
+			return NewClientError(403, fmt.Sprintf(
+				"sources[%d].reservation_id is not a reservation billed to subscription %q; an exchange may only hand back reservations that subscription paid for",
+				i, subscriptionID))
+		}
+	}
+	return nil
+}
+
+// checkAzureSourceOwnership fetches the caller's visible reservations and
+// applies requireAzureSourceOwnership. Split from the pure check so the
+// authorization rule itself is testable without a client, and so both the
+// pricing and execute endpoints share one code path.
+func checkAzureSourceOwnership(ctx context.Context, client azureExchangeClient, sources []AzureExchangeSourceBody, subscriptionID string) error {
+	owned, err := client.ListExchangeableReservations(ctx)
+	if err != nil {
+		// Fail closed: without the listing we cannot establish ownership,
+		// and permitting the exchange would restore the very gap this
+		// check exists to close.
+		logging.Errorf("azure exchange source ownership lookup failed: %v", err)
+		return NewClientError(502, "could not verify which subscription owns the requested reservations; refusing to proceed")
+	}
+	return requireAzureSourceOwnership(owned, sources, subscriptionID)
+}
+
 // getAzureCompatibleOfferings prices a proposed Azure RI exchange and
 // returns the compatible offerings Azure is willing to accept plus the cost
 // preview, without committing anything. Requires "view:purchases" permission
@@ -576,6 +638,10 @@ func (h *Handler) getAzureCompatibleOfferings(ctx context.Context, req *events.L
 	}
 	if client == nil {
 		return nil, NewClientError(404, fmt.Sprintf("no Azure account registered for subscription %q", body.SubscriptionID))
+	}
+
+	if ownErr := checkAzureSourceOwnership(ctx, client, body.Sources, body.SubscriptionID); ownErr != nil {
+		return nil, ownErr
 	}
 
 	targets, err := toAzureExchangeTargets(body.Targets, body.SubscriptionID)
@@ -763,30 +829,49 @@ func checkAzureExchangeMoneyGuardrails(preview *azurecompute.ExchangePreview, ma
 // the server always re-quotes immediately before committing.
 //
 // POST /api/ri-exchange/azure-instances/exchange.
+// parseAzureExecuteRequest decodes and validates an execute request body and
+// parses its spend cap into an exact rational.
+//
+// Extracted from executeAzureExchange purely to keep that function within
+// the project's gocyclo limit once the issue #1527 source-ownership gate was
+// added; it makes no decisions of its own beyond returning the same errors
+// inline code did.
+func parseAzureExecuteRequest(rawBody string) (AzureExecuteExchangeRequestBody, *big.Rat, error) {
+	var body AzureExecuteExchangeRequestBody
+	if err := json.Unmarshal([]byte(rawBody), &body); err != nil {
+		return body, nil, NewClientError(400, "invalid request body")
+	}
+	if err := validateAzureExecuteBody(body); err != nil {
+		return body, nil, err
+	}
+	maxRat, err := exchange.ParseDecimalRat(body.MaxPaymentDue)
+	if err != nil {
+		return body, nil, NewClientError(400, fmt.Sprintf("invalid max_payment_due: %v", err))
+	}
+	return body, maxRat, nil
+}
+
 func (h *Handler) executeAzureExchange(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	session, err := h.requirePermission(ctx, req, "execute", "ri-exchange")
 	if err != nil {
 		return nil, err
 	}
 
-	var body AzureExecuteExchangeRequestBody
-	err = json.Unmarshal([]byte(req.Body), &body)
-	if err != nil {
-		return nil, NewClientError(400, "invalid request body")
-	}
-	err = validateAzureExecuteBody(body)
+	body, maxRat, err := parseAzureExecuteRequest(req.Body)
 	if err != nil {
 		return nil, err
-	}
-
-	maxRat, err := exchange.ParseDecimalRat(body.MaxPaymentDue)
-	if err != nil {
-		return nil, NewClientError(400, fmt.Sprintf("invalid max_payment_due: %v", err))
 	}
 
 	client, err := h.authorizeAzureExchangeExecution(ctx, session, body, maxRat)
 	if err != nil {
 		return nil, err
+	}
+
+	// Ownership of the SOURCES is checked here, alongside the destination
+	// gates in authorizeAzureExchangeExecution, and before any pricing or
+	// commit call (issue #1527).
+	if ownErr := checkAzureSourceOwnership(ctx, client, body.Sources, body.SubscriptionID); ownErr != nil {
+		return nil, ownErr
 	}
 
 	targets, err := toAzureExchangeTargets(body.Targets, body.SubscriptionID)

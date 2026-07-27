@@ -48,6 +48,21 @@ func (m *mockAzureExchangeOpsClient) ExecuteExchange(ctx context.Context, sessio
 	return result, args.Error(1)
 }
 
+// ownsAzureSource stubs the tenant-wide reservation listing that the issue
+// #1527 ownership gate consults, reporting "res-1" (the source every valid
+// request body below names) as billed to subscription "sub-1".
+//
+// Registered on tests whose subject lies downstream of the gate, so they
+// reach the behavior they actually assert. Maybe() because tests that are
+// refused earlier -- by validation, allowed_accounts scope, or the
+// permission constraints -- never get this far, and must not be required
+// to. Tests whose subject IS the gate register their own listing instead.
+func ownsAzureSource(m *mockAzureExchangeOpsClient) {
+	m.On("ListExchangeableReservations", mock.Anything).Return([]azurecompute.ExchangeableReservation{
+		{ReservationID: "res-1", BillingScopeID: "/subscriptions/sub-1", Quantity: 1},
+	}, nil).Maybe()
+}
+
 // allowAnyAccountScope stubs the allowed_accounts lookup as unrestricted
 // (the "*" / Administrators-group shape), so tests whose subject is
 // something other than requireAzureSubscriptionScope reach the behavior
@@ -298,6 +313,7 @@ func TestGetAzureCompatibleOfferings_AzureClientFault(t *testing.T) {
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
 	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).
 		Return(nil, nil, &azcore.ResponseError{StatusCode: 400, ErrorCode: "ReservationNotFound"})
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })
@@ -325,6 +341,7 @@ func TestGetAzureCompatibleOfferings_TransientErrorIs500(t *testing.T) {
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
 	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).
 		Return(nil, nil, fmt.Errorf("azure: CalculateExchange: transport timeout"))
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })
@@ -359,6 +376,7 @@ func TestGetAzureCompatibleOfferings_HappyPath(t *testing.T) {
 		{SKU: "Standard_D4s_v3", Location: "eastus", Term: "P1Y", Quantity: 1, BillingCurrencyTotal: toPtr(42.5), CurrencyCode: "USD"},
 	}
 	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
 	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(preview, offerings, nil)
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })
 
@@ -413,6 +431,7 @@ func TestGetAzureCompatibleOfferings_ForeignBillingScopeRejected(t *testing.T) {
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })
 
 	h := &Handler{auth: mockAuth, azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient }}
@@ -436,6 +455,7 @@ func TestGetAzureCompatibleOfferings_ForeignBillingScopeRejected(t *testing.T) {
 func TestExecuteAzureExchange_ForeignBillingScopeRejected(t *testing.T) {
 	ctx := context.Background()
 	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })
 
 	// Deliberately not newAzureExecuteMoneyPathHandler: the rejection must
@@ -496,6 +516,7 @@ func scopedAzureStore() *MockConfigStore {
 func TestGetAzureCompatibleOfferings_OutOfScopeSubscription(t *testing.T) {
 	ctx := context.Background()
 	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })
 
 	h := &Handler{
@@ -517,6 +538,7 @@ func TestGetAzureCompatibleOfferings_OutOfScopeSubscription(t *testing.T) {
 func TestExecuteAzureExchange_OutOfScopeSubscription(t *testing.T) {
 	ctx := context.Background()
 	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })
 
 	h := &Handler{
@@ -538,6 +560,7 @@ func TestExecuteAzureExchange_OutOfScopeSubscription(t *testing.T) {
 func TestExecuteAzureExchange_InScopeSubscriptionAllowed(t *testing.T) {
 	ctx := context.Background()
 	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
 	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
 		&azurecompute.ExchangePreview{SessionID: "sess-fresh", NetPayable: toPtr(10.00), NetPayableCurrency: "USD"},
 		[]azurecompute.CompatibleOffering{}, nil,
@@ -663,6 +686,7 @@ func TestExecuteAzureExchange_ScopeCheckDenialsAreIndistinguishable(t *testing.T
 	outOfScopeAuth := scopedAzureAuth(t, "execute", "ri-exchange", []string{"acct-mine"})
 	outOfScopeStore := scopedAzureStore()
 	outOfScopeOpsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(outOfScopeOpsClient)
 	t.Cleanup(func() { outOfScopeOpsClient.AssertExpectations(t) }) // no expectations: must never be called
 	hOutOfScope := &Handler{auth: outOfScopeAuth, config: outOfScopeStore, azureExchangeFactory: func(_ string) azureExchangeClient { return outOfScopeOpsClient }}
 	_, outOfScopeErr := hOutOfScope.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
@@ -724,6 +748,7 @@ func TestExecuteAzureExchange_ConstraintExceeded(t *testing.T) {
 	}
 
 	opsClient := new(mockAzureExchangeOpsClient) // no CalculateExchange/ExecuteExchange expectations set
+	ownsAzureSource(opsClient)
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })
 
 	h := &Handler{
@@ -787,6 +812,7 @@ func TestExecuteAzureExchange_NonUSDCurrencyBlindCapRejected(t *testing.T) {
 	}
 
 	opsClient := new(mockAzureExchangeOpsClient) // no CalculateExchange/ExecuteExchange expectations set
+	ownsAzureSource(opsClient)
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })
 
 	h := &Handler{
@@ -827,6 +853,7 @@ func TestExecuteAzureExchange_USDCurrencyCapStillEnforced(t *testing.T) {
 	}
 
 	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
 	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
 		&azurecompute.ExchangePreview{SessionID: "sess-usd-ok", NetPayable: toPtr(50.00), NetPayableCurrency: "USD"},
 		[]azurecompute.CompatibleOffering{}, nil,
@@ -871,6 +898,7 @@ func TestExecuteAzureExchange_NonUSDWithoutCapStillAllowed(t *testing.T) {
 	}
 
 	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
 	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
 		&azurecompute.ExchangePreview{SessionID: "sess-kwd-ok", NetPayable: toPtr(500.00), NetPayableCurrency: "KWD"},
 		[]azurecompute.CompatibleOffering{}, nil,
@@ -1011,6 +1039,7 @@ func newAzureExecuteMoneyPathHandler(t *testing.T, opsClient azureExchangeClient
 func TestExecuteAzureExchange_CapExceeded(t *testing.T) {
 	ctx := context.Background()
 	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
 	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
 		&azurecompute.ExchangePreview{SessionID: "sess-fresh", NetPayable: toPtr(500.00), NetPayableCurrency: "USD"},
 		[]azurecompute.CompatibleOffering{}, nil,
@@ -1032,6 +1061,7 @@ func TestExecuteAzureExchange_CapExceeded(t *testing.T) {
 func TestExecuteAzureExchange_PolicyErrorsBlockExecution(t *testing.T) {
 	ctx := context.Background()
 	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
 	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
 		&azurecompute.ExchangePreview{
 			SessionID:          "sess-fresh",
@@ -1058,6 +1088,7 @@ func TestExecuteAzureExchange_PolicyErrorsBlockExecution(t *testing.T) {
 func TestExecuteAzureExchange_CurrencyMismatchBlocksExecution(t *testing.T) {
 	ctx := context.Background()
 	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
 	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
 		&azurecompute.ExchangePreview{SessionID: "sess-fresh", NetPayable: toPtr(10.00), NetPayableCurrency: "EUR"},
 		[]azurecompute.CompatibleOffering{}, nil,
@@ -1079,6 +1110,7 @@ func TestExecuteAzureExchange_CurrencyMismatchBlocksExecution(t *testing.T) {
 func TestExecuteAzureExchange_NilNetPayableRefused(t *testing.T) {
 	ctx := context.Background()
 	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
 	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
 		&azurecompute.ExchangePreview{SessionID: "sess-fresh"}, // NetPayable intentionally nil
 		[]azurecompute.CompatibleOffering{}, nil,
@@ -1106,6 +1138,7 @@ func TestExecuteAzureExchange_HappyPath(t *testing.T) {
 	const freshSessionID = "sess-server-issued-99"
 
 	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
 	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
 		&azurecompute.ExchangePreview{
 			SessionID:          freshSessionID,
@@ -1197,6 +1230,7 @@ func TestExecuteAzureExchange_ConstraintSetPinsAllDimensions(t *testing.T) {
 	}
 
 	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
 	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
 		&azurecompute.ExchangePreview{SessionID: "sess-dims", NetPayable: toPtr(10.00), NetPayableCurrency: "USD"},
 		[]azurecompute.CompatibleOffering{}, nil,
@@ -1249,6 +1283,7 @@ func TestExecuteAzureExchange_LowercaseUSDTakesUSDCapPath(t *testing.T) {
 	}
 
 	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
 	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
 		&azurecompute.ExchangePreview{SessionID: "sess-lower-usd", NetPayable: toPtr(50.00), NetPayableCurrency: "USD"},
 		[]azurecompute.CompatibleOffering{}, nil,
@@ -1294,6 +1329,7 @@ func TestExecuteAzureExchange_NonUSDDeniedOnOtherDimension(t *testing.T) {
 	}
 
 	opsClient := new(mockAzureExchangeOpsClient) // neither pricing nor execution may be reached
+	ownsAzureSource(opsClient)
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })
 
 	h := &Handler{auth: mockAuth, config: mockStore, azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient }}
@@ -1330,6 +1366,7 @@ func TestExecuteAzureExchange_RequoteFailureAbortsBeforeCommit(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			opsClient := new(mockAzureExchangeOpsClient)
+			ownsAzureSource(opsClient)
 			opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(nil, nil, tt.quoteErr)
 			t.Cleanup(func() { opsClient.AssertExpectations(t) })
 
@@ -1367,6 +1404,7 @@ func TestExecuteAzureExchange_CommitFailureClassification(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			opsClient := new(mockAzureExchangeOpsClient)
+			ownsAzureSource(opsClient)
 			opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
 				&azurecompute.ExchangePreview{SessionID: "sess-commit-fail", NetPayable: toPtr(10.00), NetPayableCurrency: "USD"},
 				[]azurecompute.CompatibleOffering{}, nil,
@@ -1490,4 +1528,213 @@ func TestGetAzureCompatibleOfferings_ScopeCheckPrecedesClientBuild(t *testing.T)
 
 	assert.Equal(t, unregisteredErr.Error(), outOfScopeErr.Error(),
 		"both denials must be byte-identical so a scoped caller cannot tell registered from unregistered subscriptions")
+}
+
+// --- issue #1527: source reservations must be owned by the authorized subscription ---
+
+// foreignSourceBody names a source reservation that exists in the tenant but
+// is billed to a DIFFERENT subscription than the authorized one. This is the
+// cross-subscription attack shape: every destination gate (allowed_accounts
+// scope, the execute:ri-exchange AccountIDs constraint, the derived target
+// billing scope) is satisfied for sub-1, and only the source belongs to
+// someone else.
+const foreignSourceBody = `{
+	"subscription_id": "sub-1",
+	"sources": [{"reservation_id": "res-belongs-to-other", "quantity": 1}],
+	"targets": [{"sku": "Standard_D4s_v3", "location": "eastus", "term": "P1Y", "quantity": 1}],
+	"max_payment_due": "100.00",
+	"currency": "USD"
+}`
+
+// tenantListingWithForeignReservation is what a tenant-wide
+// ListExchangeableReservations returns: the caller's own reservation AND
+// another subscription's, because the Azure Capacity API enumerates
+// reservation orders across the whole tenant.
+func tenantListingWithForeignReservation() []azurecompute.ExchangeableReservation {
+	return []azurecompute.ExchangeableReservation{
+		{ReservationID: "res-1", BillingScopeID: "/subscriptions/sub-1", Quantity: 1},
+		{ReservationID: "res-belongs-to-other", BillingScopeID: "/subscriptions/other-sub", Quantity: 1},
+	}
+}
+
+// TestExecuteAzureExchange_ForeignSourceReservationRefused is the issue #1527
+// regression test: it reproduces the real cross-subscription scenario end to
+// end through the handler.
+//
+// Pre-fix, sources were validated only for a non-empty reservation_id and
+// quantity >= 1, so this request reached CalculateExchange and then
+// ExecuteExchange, handing back another subscription's commitment and buying
+// the replacement into the caller's own billing scope. Azure RBAC on the
+// reservation order was the only thing standing in the way.
+//
+// No CalculateExchange or ExecuteExchange expectation is registered, so
+// testify fails this test the instant a regression lets execution past the
+// gate -- the money path must not be reached at all.
+func TestExecuteAzureExchange_ForeignSourceReservationRefused(t *testing.T) {
+	ctx := context.Background()
+	opsClient := new(mockAzureExchangeOpsClient)
+	opsClient.On("ListExchangeableReservations", mock.Anything).Return(tenantListingWithForeignReservation(), nil)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := newAzureExecuteMoneyPathHandler(t, opsClient)
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    foreignSourceBody,
+	})
+	require.Error(t, err, "a source billed to another subscription must never be exchanged")
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, err.Error(), "sources[0].reservation_id")
+	opsClient.AssertNotCalled(t, "CalculateExchange", mock.Anything, mock.Anything, mock.Anything)
+	opsClient.AssertNotCalled(t, "ExecuteExchange", mock.Anything, mock.Anything)
+}
+
+// TestGetAzureCompatibleOfferings_ForeignSourceReservationRefused is the
+// read-side half: pricing another subscription's reservation leaks its
+// commitment value, so the same gate applies to the quote endpoint.
+func TestGetAzureCompatibleOfferings_ForeignSourceReservationRefused(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "view", "purchases").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	opsClient := new(mockAzureExchangeOpsClient)
+	opsClient.On("ListExchangeableReservations", mock.Anything).Return(tenantListingWithForeignReservation(), nil)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := &Handler{auth: mockAuth, azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient }}
+	_, err := h.getAzureCompatibleOfferings(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    foreignSourceBody,
+	})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	opsClient.AssertNotCalled(t, "CalculateExchange", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestExecuteAzureExchange_SourceOwnershipLookupFailureRefuses pins the
+// fail-closed posture on the lookup itself: if the listing call fails we
+// cannot establish ownership, and permitting the exchange would restore the
+// exact gap the gate exists to close. 502 rather than 500 because the
+// upstream dependency, not this service, is what failed.
+func TestExecuteAzureExchange_SourceOwnershipLookupFailureRefuses(t *testing.T) {
+	ctx := context.Background()
+	opsClient := new(mockAzureExchangeOpsClient)
+	opsClient.On("ListExchangeableReservations", mock.Anything).
+		Return(nil, fmt.Errorf("azure: list reservations: transport timeout"))
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := newAzureExecuteMoneyPathHandler(t, opsClient)
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody,
+	})
+	require.Error(t, err, "unverifiable ownership must refuse, never fall through to permitting")
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 502, ce.code)
+	opsClient.AssertNotCalled(t, "CalculateExchange", mock.Anything, mock.Anything, mock.Anything)
+	opsClient.AssertNotCalled(t, "ExecuteExchange", mock.Anything, mock.Anything)
+}
+
+// TestRequireAzureSourceOwnership covers the authorization rule directly,
+// including the fail-closed branches that are awkward to drive through the
+// whole handler.
+func TestRequireAzureSourceOwnership(t *testing.T) {
+	mine := azurecompute.ExchangeableReservation{ReservationID: "res-1", BillingScopeID: "/subscriptions/sub-1"}
+	theirs := azurecompute.ExchangeableReservation{ReservationID: "res-2", BillingScopeID: "/subscriptions/sub-2"}
+	ownerless := azurecompute.ExchangeableReservation{ReservationID: "res-3", BillingScopeID: ""}
+
+	tests := []struct {
+		name    string
+		owned   []azurecompute.ExchangeableReservation
+		sources []AzureExchangeSourceBody
+		wantErr bool
+		reason  string
+	}{
+		{
+			name:    "own reservation is allowed",
+			owned:   []azurecompute.ExchangeableReservation{mine, theirs},
+			sources: []AzureExchangeSourceBody{{ReservationID: "res-1", Quantity: 1}},
+		},
+		{
+			name:    "ARM id and scope casing must not matter",
+			owned:   []azurecompute.ExchangeableReservation{{ReservationID: "RES-1", BillingScopeID: "/SUBSCRIPTIONS/SUB-1"}},
+			sources: []AzureExchangeSourceBody{{ReservationID: "res-1", Quantity: 1}},
+			reason:  "ARM returns resource ids in mixed casing; a case-sensitive compare would refuse legitimate requests",
+		},
+		{
+			name:    "another subscription's reservation is refused",
+			owned:   []azurecompute.ExchangeableReservation{mine, theirs},
+			sources: []AzureExchangeSourceBody{{ReservationID: "res-2", Quantity: 1}},
+			wantErr: true,
+		},
+		{
+			name:    "reservation absent from the tenant listing is refused",
+			owned:   []azurecompute.ExchangeableReservation{mine},
+			sources: []AzureExchangeSourceBody{{ReservationID: "res-does-not-exist", Quantity: 1}},
+			wantErr: true,
+			reason:  "fail closed: an id we cannot resolve has unknown ownership",
+		},
+		{
+			name:    "reservation with no reported billing scope is refused",
+			owned:   []azurecompute.ExchangeableReservation{ownerless},
+			sources: []AzureExchangeSourceBody{{ReservationID: "res-3", Quantity: 1}},
+			wantErr: true,
+			reason:  "fail closed: absent scope means ownership unknown, not unrestricted",
+		},
+		{
+			name:    "one foreign source among several taints the whole request",
+			owned:   []azurecompute.ExchangeableReservation{mine, theirs},
+			sources: []AzureExchangeSourceBody{{ReservationID: "res-1", Quantity: 1}, {ReservationID: "res-2", Quantity: 1}},
+			wantErr: true,
+			reason:  "an exchange is all-or-nothing; a single unauthorized source must sink it",
+		},
+		{
+			name:    "empty listing refuses everything",
+			owned:   nil,
+			sources: []AzureExchangeSourceBody{{ReservationID: "res-1", Quantity: 1}},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := requireAzureSourceOwnership(tt.owned, tt.sources, "sub-1")
+			if !tt.wantErr {
+				require.NoError(t, err, tt.reason)
+				return
+			}
+			require.Error(t, err, tt.reason)
+			ce, ok := IsClientError(err)
+			require.True(t, ok)
+			assert.Equal(t, 403, ce.code)
+		})
+	}
+}
+
+// TestRequireAzureSourceOwnership_DenialsAreIndistinguishable pins the
+// anti-enumeration property: refusing a reservation that belongs to another
+// subscription must be byte-identical to refusing one that does not exist.
+// Otherwise the gate itself becomes an oracle for probing which reservation
+// ids are real elsewhere in the tenant -- the same failure this PR already
+// guards against for subscription ids.
+func TestRequireAzureSourceOwnership_DenialsAreIndistinguishable(t *testing.T) {
+	owned := []azurecompute.ExchangeableReservation{
+		{ReservationID: "res-2", BillingScopeID: "/subscriptions/sub-2"},
+	}
+	foreign := requireAzureSourceOwnership(owned, []AzureExchangeSourceBody{{ReservationID: "res-2", Quantity: 1}}, "sub-1")
+	missing := requireAzureSourceOwnership(owned, []AzureExchangeSourceBody{{ReservationID: "res-nope", Quantity: 1}}, "sub-1")
+
+	require.Error(t, foreign)
+	require.Error(t, missing)
+	assert.Equal(t, foreign.Error(), missing.Error(),
+		"a caller must not be able to tell an existing foreign reservation from a nonexistent one")
+	assert.NotContains(t, foreign.Error(), "sub-2",
+		"the owning subscription must never be echoed back")
 }

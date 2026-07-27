@@ -264,3 +264,36 @@ func TestListExchangeableReservations_PagerError(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "azure api error")
 }
+
+// TestListExchangeableReservations_BillingScopeIDExtracted pins the issue
+// #1527 ownership signal.
+//
+// The API layer refuses to exchange a source reservation whose
+// BillingScopeID does not match the authorized subscription. If this field
+// were silently dropped here, every reservation would arrive with an empty
+// scope, the gate would refuse everything, and the natural "fix" would be to
+// relax the gate -- reopening the cross-subscription hole. Absent must stay
+// empty rather than be coerced, so the gate can tell "Azure did not report
+// an owner" from any real scope.
+func TestListExchangeableReservations_BillingScopeIDExtracted(t *testing.T) {
+	t.Parallel()
+	withScope := makeReservation(vmID1, "Standard_D2s_v3", 2, provStateSuc(), resTypeVM(), ifOn())
+	withScope.Properties.BillingScopeID = to.Ptr("/subscriptions/sub-owner")
+
+	withoutScope := makeReservation(vmID2, "Standard_F4s_v2", 1, provStateSuc(), resTypeVM(), ifOn())
+	withoutScope.Properties.BillingScopeID = nil
+
+	c := newClient()
+	c.SetExchangeablePager(&staticExchangeablePager{
+		pages: []*armreservations.ListResult{
+			{Value: []*armreservations.ReservationResponse{withScope, withoutScope}},
+		},
+	})
+
+	result, err := c.ListExchangeableReservations(context.Background())
+	require.NoError(t, err)
+	require.Len(t, result, 2)
+	assert.Equal(t, "/subscriptions/sub-owner", result[0].BillingScopeID)
+	assert.Empty(t, result[1].BillingScopeID,
+		"an unreported billing scope must stay empty so callers can fail closed on unknown ownership")
+}
