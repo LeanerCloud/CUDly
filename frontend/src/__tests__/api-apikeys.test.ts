@@ -61,10 +61,10 @@ describe('API Keys API Module', () => {
     test('fetches section-level usage summary', async () => {
       const mockResponse = {
         total_active: 2,
-        total_requests_24h: 42,
+        total_requests_window: 42,
         total_requests_lifetime: 1234,
         top_keys: [
-          { id: 'key-1', name: 'Busy', key_prefix: 'abc12345', request_count_24h: 30 },
+          { id: 'key-1', name: 'Busy', key_prefix: 'abc12345', request_count_window: 30 },
         ],
       };
 

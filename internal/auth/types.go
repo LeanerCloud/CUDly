@@ -78,12 +78,18 @@ type UserAPIKey struct {
 	KeyHash     string       `json:"-" dynamodbav:"KeyHash"`
 	Permissions []Permission `json:"permissions,omitempty" dynamodbav:"Permissions"`
 	IsActive    bool         `json:"is_active" dynamodbav:"IsActive"`
-	// Usage counters (issue #340/#344 deferred sub-task -- migration 000094).
-	// Both default to 0 for legacy rows. RequestCount24h is reset by the
-	// store's RecordAPIKeyUsage path once its window-start is older than
-	// 24h, so it really is a "last 24h" number, not "last calendar day".
-	RequestCountTotal int64 `json:"request_count_total" dynamodbav:"RequestCountTotal"`
-	RequestCount24h   int64 `json:"request_count_24h" dynamodbav:"RequestCount24h"`
+	// Usage counters (issue #340/#344 deferred sub-task -- migration 000093).
+	// Both default to 0 for legacy rows. RequestCountWindow is a
+	// FIXED/TUMBLING window count, not a true trailing-24h rolling count:
+	// the store's RecordAPIKeyUsage path resets it (and RequestCountWindowStart)
+	// to a fresh window once the existing window is older than 24h, so a
+	// request made just before that reset is dropped from the count as soon
+	// as the next request starts a new window. RequestCountWindowStart is
+	// exposed so API consumers can see exactly which period the count
+	// covers instead of assuming "last 24h".
+	RequestCountTotal       int64      `json:"request_count_total" dynamodbav:"RequestCountTotal"`
+	RequestCountWindow      int64      `json:"request_count_window" dynamodbav:"RequestCountWindow"`
+	RequestCountWindowStart *time.Time `json:"request_count_window_start,omitempty" dynamodbav:"RequestCountWindowStart,omitempty"`
 }
 
 // AuthContext represents the complete authorization context for a user

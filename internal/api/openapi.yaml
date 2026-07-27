@@ -2284,13 +2284,25 @@ components:
           type: integer
           format: int64
           description: Lifetime request count since the key was created.
-        request_count_24h:
+        request_count_window:
           type: integer
           format: int64
           description: |
-            Rolling 24h request count. Resets when the previous window
-            crosses 24h since its first request -- the value is "requests
-            in the last 24h", not "requests today".
+            Request count since request_count_window_start. This is a
+            FIXED/TUMBLING window, not a true trailing-24h rolling count:
+            once the window is older than 24h, the next request resets
+            both this count (to 1) and request_count_window_start (to
+            now), discarding whatever count the previous window had even
+            if some of those requests happened within the preceding 24h.
+            Use request_count_window_start to see exactly which period
+            this count covers.
+        request_count_window_start:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            Timestamp the current request_count_window began at. Null
+            when the key has never recorded a request.
 
     APIKeysUsageStats:
       type: object
@@ -2298,10 +2310,13 @@ components:
         total_active:
           type: integer
           description: Number of currently-active API keys for the caller.
-        total_requests_24h:
+        total_requests_window:
           type: integer
           format: int64
-          description: Sum of request_count_24h across the caller's keys.
+          description: |
+            Sum of request_count_window across the caller's keys. Each
+            summand is a fixed-window count (see APIKeyInfo.request_count_window),
+            not a true rolling 24h total.
         total_requests_lifetime:
           type: integer
           format: int64
@@ -2309,8 +2324,9 @@ components:
         top_keys:
           type: array
           description: |
-            Top keys by 24h request count (lifetime count as tiebreaker).
-            At most 3 entries; keys with zero 24h activity are omitted.
+            Top keys by request_count_window (lifetime count as
+            tiebreaker). At most 3 entries; keys with zero window
+            activity are omitted.
           items:
             type: object
             properties:
@@ -2320,7 +2336,7 @@ components:
                 type: string
               key_prefix:
                 type: string
-              request_count_24h:
+              request_count_window:
                 type: integer
                 format: int64
 

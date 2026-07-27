@@ -578,21 +578,25 @@ export interface APIKeyInfo {
   // Usage counters (issue #340/#344 deferred sub-task).
   // Optional in the type so older mock data / cached responses without
   // the columns don't blow up the renderer -- but the backend always
-  // sends them as of migration 000094.
+  // sends them as of migration 000093. request_count_window is a
+  // FIXED/TUMBLING window count, not a true rolling 24h total --
+  // request_count_window_start says exactly which period it covers.
   request_count_total?: number;
-  request_count_24h?: number;
+  request_count_window?: number;
+  request_count_window_start?: string;
 }
 
 export interface APIKeysUsageStatsTopKey {
   id: string;
   name: string;
   key_prefix: string;
-  request_count_24h: number;
+  request_count_window: number;
 }
 
 export interface APIKeysUsageStats {
   total_active: number;
-  total_requests_24h: number;
+  // Sum of each key's fixed-window counter -- not a true rolling 24h total.
+  total_requests_window: number;
   total_requests_lifetime: number;
   top_keys: APIKeysUsageStatsTopKey[];
 }

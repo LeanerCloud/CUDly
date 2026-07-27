@@ -289,7 +289,7 @@ func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserA
 	// concurrent requests for the same key are deduplicated rather than
 	// spawning an unbounded number of goroutines (DoS amplifier on a
 	// revoked key). The store does an atomic single-row UPDATE -- see
-	// PostgresStore.RecordAPIKeyUsage for the rolling-24h-window logic.
+	// PostgresStore.RecordAPIKeyUsage for the fixed-window-reset logic.
 	keyID := key.ID
 	go func() {
 		if _, sfErr, _ := s.lastUsedSFG.Do(keyID, func() (any, error) {
@@ -319,9 +319,10 @@ func (s *Service) UpdateLastUsed(ctx context.Context, keyID string) error {
 	return s.store.UpdateAPIKeyLastUsed(ctx, keyID)
 }
 
-// RecordUsage updates last_used_at and increments both the lifetime and
-// rolling-24h request counters for the key. See
-// PostgresStore.RecordAPIKeyUsage for the atomic SQL.
+// RecordUsage updates last_used_at and increments both the lifetime counter
+// and the fixed-window request counter for the key. See
+// PostgresStore.RecordAPIKeyUsage for the atomic SQL and the window's
+// tumbling-reset semantics.
 func (s *Service) RecordUsage(ctx context.Context, keyID string) error {
 	return s.store.RecordAPIKeyUsage(ctx, keyID)
 }

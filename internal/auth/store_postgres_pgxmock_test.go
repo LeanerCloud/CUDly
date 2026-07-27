@@ -423,7 +423,7 @@ func TestPGXMock_ListUsers_RowError(t *testing.T) {
 var apiKeyColumns = []string{
 	"id", "user_id", "name", "key_prefix", "key_hash", "permissions",
 	"is_active", "expires_at", "created_at", "last_used_at",
-	"request_count_total", "request_count_24h",
+	"request_count_total", "request_count_window", "request_count_window_start",
 }
 
 func TestPGXMock_ListAPIKeysByUser_Success(t *testing.T) {
@@ -433,17 +433,18 @@ func TestPGXMock_ListAPIKeysByUser_Success(t *testing.T) {
 	created := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 	expires := created.Add(24 * time.Hour)
 	lastUsed := created.Add(time.Hour)
+	windowStart := created.Add(30 * time.Minute)
 
 	rows := pgxmock.NewRows(apiKeyColumns).
 		AddRow(
 			"key-1", "user-1", "ci key", "cudly_ab", "hash-1",
 			[]byte(`[{"action":"view","resource":"recommendations"}]`), true, expires, created, lastUsed,
-			int64(42), int64(3),
+			int64(42), int64(3), windowStart,
 		).
 		AddRow(
 			"key-2", "user-1", "old key", "cudly_cd", "hash-2",
 			[]byte(`[]`), false, nil, created, nil,
-			int64(0), int64(0),
+			int64(0), int64(0), nil,
 		)
 
 	mock.ExpectQuery(`(?s)SELECT id, user_id, name, key_prefix, key_hash, permissions,.*FROM api_keys\s+WHERE user_id = \$1\s+ORDER BY created_at DESC`).
@@ -463,14 +464,17 @@ func TestPGXMock_ListAPIKeysByUser_Success(t *testing.T) {
 	require.NotNil(t, keys[0].LastUsedAt)
 	assert.Equal(t, lastUsed, *keys[0].LastUsedAt)
 	assert.Equal(t, int64(42), keys[0].RequestCountTotal)
-	assert.Equal(t, int64(3), keys[0].RequestCount24h)
+	assert.Equal(t, int64(3), keys[0].RequestCountWindow)
+	require.NotNil(t, keys[0].RequestCountWindowStart)
+	assert.Equal(t, windowStart, *keys[0].RequestCountWindowStart)
 
 	assert.Equal(t, "key-2", keys[1].ID)
 	assert.False(t, keys[1].IsActive)
 	assert.Nil(t, keys[1].ExpiresAt)
 	assert.Nil(t, keys[1].LastUsedAt)
 	assert.Equal(t, int64(0), keys[1].RequestCountTotal)
-	assert.Equal(t, int64(0), keys[1].RequestCount24h)
+	assert.Equal(t, int64(0), keys[1].RequestCountWindow)
+	assert.Nil(t, keys[1].RequestCountWindowStart)
 }
 
 func TestPGXMock_ListAPIKeysByUser_QueryError(t *testing.T) {

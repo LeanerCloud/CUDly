@@ -781,7 +781,7 @@ func (s *PostgresStore) GetAPIKeyByID(ctx context.Context, keyID string) (*UserA
 	query := `
 		SELECT id, user_id, name, key_prefix, key_hash, permissions,
 		       is_active, expires_at, created_at, last_used_at,
-		       request_count_total, request_count_24h
+		       request_count_total, request_count_window, request_count_window_start
 		FROM api_keys
 		WHERE id = $1
 	`
@@ -794,7 +794,7 @@ func (s *PostgresStore) GetAPIKeyByHash(ctx context.Context, keyHash string) (*U
 	query := `
 		SELECT id, user_id, name, key_prefix, key_hash, permissions,
 		       is_active, expires_at, created_at, last_used_at,
-		       request_count_total, request_count_24h
+		       request_count_total, request_count_window, request_count_window_start
 		FROM api_keys
 		WHERE key_hash = $1 AND is_active = true
 		  AND (expires_at IS NULL OR expires_at > NOW())
@@ -808,7 +808,7 @@ func (s *PostgresStore) ListAPIKeysByUser(ctx context.Context, userID string) ([
 	query := `
 		SELECT id, user_id, name, key_prefix, key_hash, permissions,
 		       is_active, expires_at, created_at, last_used_at,
-		       request_count_total, request_count_24h
+		       request_count_total, request_count_window, request_count_window_start
 		FROM api_keys
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -876,7 +876,7 @@ func (s *PostgresStore) UpdateAPIKey(ctx context.Context, key *UserAPIKey) error
 // UpdateAPIKeyLastUsed atomically updates the last_used_at timestamp for an
 // API key. Retained for backwards compatibility with callers that only need
 // the timestamp update -- production code routes through RecordAPIKeyUsage,
-// which additionally maintains the usage counters from migration 000094.
+// which additionally maintains the usage counters from migration 000093.
 func (s *PostgresStore) UpdateAPIKeyLastUsed(ctx context.Context, keyID string) error {
 	query := `UPDATE api_keys SET last_used_at = NOW() WHERE id = $1`
 	result, err := s.db.Exec(ctx, query, keyID)
@@ -890,13 +890,23 @@ func (s *PostgresStore) UpdateAPIKeyLastUsed(ctx context.Context, keyID string) 
 }
 
 // RecordAPIKeyUsage atomically updates last_used_at, increments
-// request_count_total, and increments-or-resets request_count_24h based on
-// whether the rolling 24h window is still current.
+// request_count_total, and increments-or-resets request_count_window based
+// on whether the current window is still within 24h of its start.
 //
-// The single UPDATE does the window decision inline:
+// request_count_window is a FIXED/TUMBLING window counter, not a true
+// trailing-24h rolling count: the single UPDATE does the window decision
+// inline --
 //   - if window_start IS NULL OR (NOW() - window_start) >= 24h, start a
-//     fresh window (window_start = NOW(), count = 1).
+//     fresh window (window_start = NOW(), count = 1) -- this DISCARDS
+//     whatever count the previous window had, even if some of those
+//     requests happened within the preceding 24h of NOW().
 //   - otherwise increment the existing count.
+//
+// A request made moments before a window resets is therefore dropped from
+// the count as soon as the next request starts a new window; an idle key's
+// stale count also lingers unchanged until its next request. Callers that
+// need the actual period covered should read request_count_window_start
+// rather than assuming "requests in the last 24h".
 //
 // Doing it in one statement keeps the update atomic per row, so two
 // concurrent calls can't both see "stale window" and reset to 1 in
@@ -906,17 +916,17 @@ func (s *PostgresStore) RecordAPIKeyUsage(ctx context.Context, keyID string) err
 		UPDATE api_keys
 		SET last_used_at = NOW(),
 		    request_count_total = request_count_total + 1,
-		    request_count_24h = CASE
-		        WHEN request_count_24h_window_start IS NULL
-		             OR NOW() - request_count_24h_window_start >= INTERVAL '24 hours'
+		    request_count_window = CASE
+		        WHEN request_count_window_start IS NULL
+		             OR NOW() - request_count_window_start >= INTERVAL '24 hours'
 		        THEN 1
-		        ELSE request_count_24h + 1
+		        ELSE request_count_window + 1
 		    END,
-		    request_count_24h_window_start = CASE
-		        WHEN request_count_24h_window_start IS NULL
-		             OR NOW() - request_count_24h_window_start >= INTERVAL '24 hours'
+		    request_count_window_start = CASE
+		        WHEN request_count_window_start IS NULL
+		             OR NOW() - request_count_window_start >= INTERVAL '24 hours'
 		        THEN NOW()
-		        ELSE request_count_24h_window_start
+		        ELSE request_count_window_start
 		    END
 		WHERE id = $1
 	`
@@ -1071,7 +1081,7 @@ func (s *PostgresStore) scanGroup(scanner Scanner) (*Group, error) {
 func (s *PostgresStore) scanAPIKey(scanner Scanner) (*UserAPIKey, error) {
 	var key UserAPIKey
 	var permissionsJSON []byte
-	var expiresAt, lastUsedAt sql.NullTime
+	var expiresAt, lastUsedAt, windowStart sql.NullTime
 
 	err := scanner.Scan(
 		&key.ID,
@@ -1085,7 +1095,8 @@ func (s *PostgresStore) scanAPIKey(scanner Scanner) (*UserAPIKey, error) {
 		&key.CreatedAt,
 		&lastUsedAt,
 		&key.RequestCountTotal,
-		&key.RequestCount24h,
+		&key.RequestCountWindow,
+		&windowStart,
 	)
 
 	if err != nil {
@@ -1108,6 +1119,9 @@ func (s *PostgresStore) scanAPIKey(scanner Scanner) (*UserAPIKey, error) {
 	}
 	if lastUsedAt.Valid {
 		key.LastUsedAt = &lastUsedAt.Time
+	}
+	if windowStart.Valid {
+		key.RequestCountWindowStart = &windowStart.Time
 	}
 
 	return &key, nil

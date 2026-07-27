@@ -66,7 +66,7 @@ describe('API Keys Module', () => {
     // only set up `getApiKeys`. Individual tests can override.
     (api.getApiKeysUsageStats as jest.Mock).mockResolvedValue({
       total_active: 0,
-      total_requests_24h: 0,
+      total_requests_window: 0,
       total_requests_lifetime: 0,
       top_keys: [],
     });
@@ -1019,11 +1019,11 @@ describe('API Keys Module', () => {
       (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: [] });
       (api.getApiKeysUsageStats as jest.Mock).mockResolvedValue({
         total_active: 2,
-        total_requests_24h: 42,
+        total_requests_window: 42,
         total_requests_lifetime: 1234,
         top_keys: [
-          { id: 'key-1', name: 'Busy', key_prefix: 'aaaa1111', request_count_24h: 30 },
-          { id: 'key-2', name: 'Medium', key_prefix: 'bbbb2222', request_count_24h: 12 },
+          { id: 'key-1', name: 'Busy', key_prefix: 'aaaa1111', request_count_window: 30 },
+          { id: 'key-2', name: 'Medium', key_prefix: 'bbbb2222', request_count_window: 12 },
         ],
       });
 
@@ -1034,22 +1034,22 @@ describe('API Keys Module', () => {
       const summary = document.getElementById('apikeys-usage-summary');
       expect(summary?.textContent).toContain('Active keys');
       expect(summary?.textContent).toContain('2');
-      expect(summary?.textContent).toContain('Requests (24h)');
+      expect(summary?.textContent).toContain('Requests (window)');
       expect(summary?.textContent).toContain('42');
       expect(summary?.textContent).toContain('Requests (lifetime)');
       // formatCount abbreviates large numbers in the summary tiles to
       // fit the tile width — table cells keep the exact integer.
       expect(summary?.textContent).toContain('1.2k');
-      expect(summary?.textContent).toContain('Most active (24h)');
+      expect(summary?.textContent).toContain('Most active (window)');
       expect(summary?.textContent).toContain('Busy');
       expect(summary?.textContent).toContain('aaaa1111');
     });
 
-    test('omits top-list when no key has 24h activity', async () => {
+    test('omits top-list when no key has window activity', async () => {
       (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: [] });
       (api.getApiKeysUsageStats as jest.Mock).mockResolvedValue({
         total_active: 1,
-        total_requests_24h: 0,
+        total_requests_window: 0,
         total_requests_lifetime: 7,
         top_keys: [],
       });
@@ -1058,7 +1058,7 @@ describe('API Keys Module', () => {
       await new Promise((r) => setTimeout(r, 0));
 
       const summary = document.getElementById('apikeys-usage-summary');
-      expect(summary?.textContent).not.toContain('Most active (24h)');
+      expect(summary?.textContent).not.toContain('Most active (window)');
     });
 
     test('shows inline error when stats endpoint fails, table still renders', async () => {
@@ -1079,7 +1079,7 @@ describe('API Keys Module', () => {
       expect(list?.innerHTML).toContain('abc12345');
     });
 
-    test('renders Requests (24h) and Requests (total) columns per row', async () => {
+    test('renders Requests (window) and Requests (total) columns per row', async () => {
       (api.getApiKeys as jest.Mock).mockResolvedValue({
         api_keys: [
           {
@@ -1088,7 +1088,7 @@ describe('API Keys Module', () => {
             key_prefix: 'abc12345',
             is_active: true,
             created_at: '2024-01-15T10:00:00Z',
-            request_count_24h: 12,
+            request_count_window: 12,
             request_count_total: 1234,
           },
         ],
@@ -1097,7 +1097,7 @@ describe('API Keys Module', () => {
       await loadApiKeys();
 
       const container = document.getElementById('apikeys-list');
-      expect(container?.innerHTML).toContain('Requests (24h)');
+      expect(container?.innerHTML).toContain('Requests (window)');
       expect(container?.innerHTML).toContain('Requests (total)');
       // Counts render with thousands separator for readability.
       expect(container?.innerHTML).toContain('1,234');
@@ -1125,7 +1125,7 @@ describe('API Keys Module', () => {
       (api.getApiKeys as jest.Mock).mockRejectedValue(new Error('list boom'));
       (api.getApiKeysUsageStats as jest.Mock).mockResolvedValue({
         total_active: 0,
-        total_requests_24h: 0,
+        total_requests_window: 0,
         total_requests_lifetime: 0,
         top_keys: [],
       });

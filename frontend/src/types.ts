@@ -410,9 +410,12 @@ export interface APIKeyInfo {
   // Usage counters (issue #340/#344 deferred sub-task). Optional so
   // older mock data / cached responses without the columns don't blow
   // up the renderer -- the backend always sends them as of migration
-  // 000094.
+  // 000093. request_count_window is a FIXED/TUMBLING window count, not
+  // a true rolling 24h total -- request_count_window_start says exactly
+  // which period it covers.
   request_count_total?: number;
-  request_count_24h?: number;
+  request_count_window?: number;
+  request_count_window_start?: string;
 }
 
 export interface CreateAPIKeyResponse {

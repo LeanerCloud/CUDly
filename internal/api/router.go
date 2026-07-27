@@ -739,9 +739,9 @@ func (r *Router) listAPIKeysHandler(ctx context.Context, req *events.LambdaFunct
 	return r.h.listAPIKeys(ctx, req)
 }
 
-func (r *Router) listAPIKeysUsageStatsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.listAPIKeysUsageStats(ctx, req)
-}
+// listAPIKeysUsageStatsHandler lives in handler_apikeys_usage.go alongside
+// its handler so the usage-stats feature stays in its own bounded-context
+// file instead of growing this already-oversized router further.
 
 func (r *Router) createAPIKeyHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.createAPIKey(ctx, req)

@@ -50,9 +50,10 @@ type StoreInterface interface {
 	UpdateAPIKey(ctx context.Context, key *UserAPIKey) error
 	UpdateAPIKeyLastUsed(ctx context.Context, keyID string) error
 	// RecordAPIKeyUsage atomically updates last_used_at and increments
-	// request_count_total + request_count_24h. The 24h counter resets
-	// (along with its window-start) when the existing window is older
-	// than 24h. See migration 000094 for the column shape.
+	// request_count_total + request_count_window. request_count_window is a
+	// fixed/tumbling window count (not a true trailing-24h rolling count):
+	// it resets (along with request_count_window_start) when the existing
+	// window is older than 24h. See migration 000093 for the column shape.
 	RecordAPIKeyUsage(ctx context.Context, keyID string) error
 	DeleteAPIKey(ctx context.Context, keyID string) error
 

@@ -468,11 +468,11 @@ func TestService_ValidateUserAPIKeyAPI(t *testing.T) {
 }
 
 func TestSortAPIKeysByActivity(t *testing.T) {
-	t.Run("sorts by 24h count descending", func(t *testing.T) {
+	t.Run("sorts by window count descending", func(t *testing.T) {
 		keys := []*UserAPIKey{
-			{ID: "low", RequestCount24h: 1, RequestCountTotal: 100},
-			{ID: "high", RequestCount24h: 10, RequestCountTotal: 5},
-			{ID: "mid", RequestCount24h: 5, RequestCountTotal: 50},
+			{ID: "low", RequestCountWindow: 1, RequestCountTotal: 100},
+			{ID: "high", RequestCountWindow: 10, RequestCountTotal: 5},
+			{ID: "mid", RequestCountWindow: 5, RequestCountTotal: 50},
 		}
 
 		sortAPIKeysByActivity(keys)
@@ -485,8 +485,8 @@ func TestSortAPIKeysByActivity(t *testing.T) {
 
 	t.Run("uses lifetime total as tiebreaker", func(t *testing.T) {
 		keys := []*UserAPIKey{
-			{ID: "idle-high-lifetime", RequestCount24h: 3, RequestCountTotal: 900},
-			{ID: "active-low-lifetime", RequestCount24h: 3, RequestCountTotal: 10},
+			{ID: "idle-high-lifetime", RequestCountWindow: 3, RequestCountTotal: 900},
+			{ID: "active-low-lifetime", RequestCountWindow: 3, RequestCountTotal: 10},
 		}
 
 		sortAPIKeysByActivity(keys)
@@ -500,17 +500,17 @@ func TestSortAPIKeysByActivity(t *testing.T) {
 func TestService_GetAPIKeysUsageStatsAPI(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("aggregates totals and returns top-3 by 24h activity", func(t *testing.T) {
+	t.Run("aggregates totals and returns top-3 by window activity", func(t *testing.T) {
 		mockStore := new(MockStore)
 		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		service := &Service{store: mockStore}
 
 		user := &User{ID: "user-123", Email: "test@example.com", Active: true}
 		keys := []*UserAPIKey{
-			{ID: "key-1", Name: "Busy", KeyPrefix: "aaaa1111", IsActive: true, RequestCount24h: 30, RequestCountTotal: 300},
-			{ID: "key-2", Name: "Medium", KeyPrefix: "bbbb2222", IsActive: true, RequestCount24h: 12, RequestCountTotal: 120},
-			{ID: "key-3", Name: "Quiet", KeyPrefix: "cccc3333", IsActive: false, RequestCount24h: 3, RequestCountTotal: 60},
-			{ID: "key-4", Name: "Idle", KeyPrefix: "dddd4444", IsActive: true, RequestCount24h: 0, RequestCountTotal: 5},
+			{ID: "key-1", Name: "Busy", KeyPrefix: "aaaa1111", IsActive: true, RequestCountWindow: 30, RequestCountTotal: 300},
+			{ID: "key-2", Name: "Medium", KeyPrefix: "bbbb2222", IsActive: true, RequestCountWindow: 12, RequestCountTotal: 120},
+			{ID: "key-3", Name: "Quiet", KeyPrefix: "cccc3333", IsActive: false, RequestCountWindow: 3, RequestCountTotal: 60},
+			{ID: "key-4", Name: "Idle", KeyPrefix: "dddd4444", IsActive: true, RequestCountWindow: 0, RequestCountTotal: 5},
 		}
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
 		mockStore.On("ListAPIKeysByUser", ctx, "user-123").Return(keys, nil)
@@ -521,27 +521,27 @@ func TestService_GetAPIKeysUsageStatsAPI(t *testing.T) {
 		resp, ok := result.(*APIKeysUsageStatsResponse)
 		require.True(t, ok)
 		assert.Equal(t, 3, resp.TotalActive) // key-3 is inactive
-		assert.Equal(t, int64(45), resp.TotalRequests24h)
+		assert.Equal(t, int64(45), resp.TotalRequestsWindow)
 		assert.Equal(t, int64(485), resp.TotalRequestsLifetime)
 		require.Len(t, resp.TopKeys, 3)
 		assert.Equal(t, "key-1", resp.TopKeys[0].ID)
 		assert.Equal(t, "key-2", resp.TopKeys[1].ID)
 		assert.Equal(t, "key-3", resp.TopKeys[2].ID)
-		// key-4 has zero 24h activity and must be omitted, even though the
+		// key-4 has zero window activity and must be omitted, even though the
 		// top-N slice has room for a 4th entry.
 		for _, k := range resp.TopKeys {
 			assert.NotEqual(t, "key-4", k.ID)
 		}
 	})
 
-	t.Run("omits top list entirely when no key has 24h activity", func(t *testing.T) {
+	t.Run("omits top list entirely when no key has window activity", func(t *testing.T) {
 		mockStore := new(MockStore)
 		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		service := &Service{store: mockStore}
 
 		user := &User{ID: "user-123", Email: "test@example.com", Active: true}
 		keys := []*UserAPIKey{
-			{ID: "key-1", IsActive: true, RequestCount24h: 0, RequestCountTotal: 7},
+			{ID: "key-1", IsActive: true, RequestCountWindow: 0, RequestCountTotal: 7},
 		}
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
 		mockStore.On("ListAPIKeysByUser", ctx, "user-123").Return(keys, nil)
@@ -552,7 +552,7 @@ func TestService_GetAPIKeysUsageStatsAPI(t *testing.T) {
 		resp, ok := result.(*APIKeysUsageStatsResponse)
 		require.True(t, ok)
 		assert.Equal(t, 1, resp.TotalActive)
-		assert.Equal(t, int64(0), resp.TotalRequests24h)
+		assert.Equal(t, int64(0), resp.TotalRequestsWindow)
 		assert.Equal(t, int64(7), resp.TotalRequestsLifetime)
 		assert.Empty(t, resp.TopKeys)
 	})
@@ -572,7 +572,7 @@ func TestService_GetAPIKeysUsageStatsAPI(t *testing.T) {
 		resp, ok := result.(*APIKeysUsageStatsResponse)
 		require.True(t, ok)
 		assert.Equal(t, 0, resp.TotalActive)
-		assert.Equal(t, int64(0), resp.TotalRequests24h)
+		assert.Equal(t, int64(0), resp.TotalRequestsWindow)
 		assert.Equal(t, int64(0), resp.TotalRequestsLifetime)
 		assert.Empty(t, resp.TopKeys)
 	})
