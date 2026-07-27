@@ -469,16 +469,11 @@ func lookupPoolKey(rec common.Recommendation) string {
 
 // rdsEngineDeploymentFromRec extracts the RDS engine and deployment
 // strings from a recommendation's polymorphic Details, returning ("", "")
-// when the rec isn't an RDS rec. Handles both pointer and value forms of
-// DatabaseDetails because the live parser uses pointers and the CSV
-// loader uses values.
+// when the rec isn't an RDS rec. DatabaseDetails is always a pointer
+// (every producer constructs it that way; see
+// pkg/common/service_details_codec.go's package doc for the invariant).
 func rdsEngineDeploymentFromRec(rec common.Recommendation) (engine, deployment string) {
-	switch details := rec.Details.(type) {
-	case *common.DatabaseDetails:
-		if details != nil {
-			return details.Engine, details.AZConfig
-		}
-	case common.DatabaseDetails:
+	if details, ok := rec.Details.(*common.DatabaseDetails); ok && details != nil {
 		return details.Engine, details.AZConfig
 	}
 	return "", ""
