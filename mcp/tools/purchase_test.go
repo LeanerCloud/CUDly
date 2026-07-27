@@ -377,8 +377,8 @@ func TestIdempotencyKeyDistinguishesSavingsPlanHourlyCommitment(t *testing.T) {
 	expensiveRec, _, _, _, err := savingsPlanRecommendationFromArgs(expensiveArgs)
 	require.NoError(t, err)
 
-	cheapKey := idempotencyKeyFor(region, cheapRec, "")
-	expensiveKey := idempotencyKeyFor(region, expensiveRec, "")
+	cheapKey := idempotencyKeyFor(region, cheapRec, "", "")
+	expensiveKey := idempotencyKeyFor(region, expensiveRec, "", "")
 	assert.NotEqual(t, cheapKey, expensiveKey,
 		"a $5/hr and a $50/hr Compute Savings Plan must not derive the same idempotency key")
 }
@@ -402,8 +402,8 @@ func TestIdempotencyKeyDistinguishesEC2Platform(t *testing.T) {
 	windowsRec, windowsRegion, _, _, err := ec2RecommendationFromArgs(windowsArgs)
 	require.NoError(t, err)
 
-	linuxKey := idempotencyKeyFor(linuxRegion, linuxRec, "")
-	windowsKey := idempotencyKeyFor(windowsRegion, windowsRec, "")
+	linuxKey := idempotencyKeyFor(linuxRegion, linuxRec, "", "")
+	windowsKey := idempotencyKeyFor(windowsRegion, windowsRec, "", "")
 	assert.NotEqual(t, linuxKey, windowsKey,
 		"a Linux and a Windows EC2 RI purchase must not derive the same idempotency key")
 }
@@ -424,8 +424,8 @@ func TestIdempotencyKeySameDimensionsNoNonceAlwaysMatch(t *testing.T) {
 	rec := testRecommendation()
 	region := "us-east-1"
 
-	key1 := idempotencyKeyFor(region, rec, "")
-	key2 := idempotencyKeyFor(region, rec, "")
+	key1 := idempotencyKeyFor(region, rec, "", "")
+	key2 := idempotencyKeyFor(region, rec, "", "")
 	assert.Equal(t, key1, key2,
 		"identical dimensions with no nonce must always derive the same key, so a retry never double-buys")
 }
@@ -440,10 +440,10 @@ func TestIdempotencyKeyNonceAuthorizesDistinctRepeat(t *testing.T) {
 	rec := testRecommendation()
 	region := "us-east-1"
 
-	noNonceKey := idempotencyKeyFor(region, rec, "")
-	nonceAKey1 := idempotencyKeyFor(region, rec, "nonce-a")
-	nonceAKey2 := idempotencyKeyFor(region, rec, "nonce-a")
-	nonceBKey := idempotencyKeyFor(region, rec, "nonce-b")
+	noNonceKey := idempotencyKeyFor(region, rec, "", "")
+	nonceAKey1 := idempotencyKeyFor(region, rec, "", "nonce-a")
+	nonceAKey2 := idempotencyKeyFor(region, rec, "", "nonce-a")
+	nonceBKey := idempotencyKeyFor(region, rec, "", "nonce-b")
 
 	assert.NotEqual(t, noNonceKey, nonceAKey1,
 		"supplying a nonce must authorize a purchase distinct from the no-nonce default")
@@ -486,4 +486,92 @@ func TestExecutePurchaseNonceThreadedThroughToToken(t *testing.T) {
 
 	assert.Equal(t, fake1.lastOpts.IdempotencyToken, fake3.lastOpts.IdempotencyToken,
 		"the same nonce must derive the same idempotency token")
+}
+
+// TestIdempotencyKeyDistinguishesCredentialScope is the regression guard for
+// the cross-account false-dedupe found in review. The product dimensions
+// folded into the key describe WHAT is bought, never WHERE it lands, so two
+// identical purchases aimed at different accounts derived the SAME token.
+//
+// On Azure that silently skips a real purchase rather than merely being
+// imprecise: reservations.FindReservationOrderByIdempotencyToken lists
+// reservation orders from the TENANT-wide endpoint (ReservationOrdersListURL
+// has no subscription prefix), so buying the same VM reservation for a second
+// subscription in the same tenant matched the FIRST subscription's order by
+// token, short-circuited, and reported success without buying anything for
+// the second subscription. This test fails on the pre-fix key, which took no
+// scope argument at all.
+func TestIdempotencyKeyDistinguishesCredentialScope(t *testing.T) {
+	t.Parallel()
+	rec := testRecommendation()
+	region := "us-east-1"
+
+	subAKey := idempotencyKeyFor(region, rec, "subscription-a", "")
+	subBKey := idempotencyKeyFor(region, rec, "subscription-b", "")
+	subAKeyAgain := idempotencyKeyFor(region, rec, "subscription-a", "")
+
+	assert.NotEqual(t, subAKey, subBKey,
+		"identical purchases billed to different accounts must derive different tokens")
+	assert.Equal(t, subAKey, subAKeyAgain,
+		"a retry against the same account must still dedupe")
+}
+
+// TestExecutePurchaseCredentialScopeThreadedThroughToToken proves
+// PurchaseRequest.CredentialScope reaches the token the provider actually
+// dedupes on, not just idempotencyKeyFor in isolation.
+func TestExecutePurchaseCredentialScopeThreadedThroughToToken(t *testing.T) {
+	t.Parallel()
+	rec := testRecommendation()
+
+	purchaseInScope := func(scope string) *fakeServiceClient {
+		fake := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true}}
+		_, err := ExecutePurchase(context.Background(), PurchaseRequest{
+			Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true,
+			CredentialScope: scope,
+			ResolveClient:   func(_ context.Context) (provider.ServiceClient, error) { return fake, nil },
+		})
+		require.NoError(t, err)
+		return fake
+	}
+
+	subA := purchaseInScope("subscription-a")
+	subB := purchaseInScope("subscription-b")
+	subARetry := purchaseInScope("subscription-a")
+
+	assert.NotEqual(t, subA.lastOpts.IdempotencyToken, subB.lastOpts.IdempotencyToken,
+		"different credential scopes must derive different idempotency tokens")
+	assert.Equal(t, subA.lastOpts.IdempotencyToken, subARetry.lastOpts.IdempotencyToken,
+		"the same credential scope must derive the same idempotency token")
+}
+
+// TestCredentialScopeResolution pins CredentialScope's precedence: an
+// explicit caller-supplied override always wins, an ambient environment
+// variable is the fallback (matching what the provider factory itself
+// consults), whitespace-only input counts as absent, and "" is a legitimate
+// result rather than an error (see the CredentialScope doc comment).
+func TestCredentialScopeResolution(t *testing.T) {
+	const envVar = "CUDLY_TEST_SUBSCRIPTION_ID"
+
+	t.Run("explicit override wins over the environment", func(t *testing.T) {
+		t.Setenv(envVar, "from-env")
+		assert.Equal(t, "explicit", CredentialScope("explicit", envVar))
+	})
+
+	t.Run("falls back to the environment when no override is given", func(t *testing.T) {
+		t.Setenv(envVar, "from-env")
+		assert.Equal(t, "from-env", CredentialScope("", envVar))
+	})
+
+	t.Run("whitespace-only values count as absent", func(t *testing.T) {
+		t.Setenv(envVar, "  ")
+		assert.Empty(t, CredentialScope("   ", envVar))
+	})
+
+	t.Run("surrounding whitespace is trimmed so it cannot fork the key", func(t *testing.T) {
+		assert.Equal(t, "sub-a", CredentialScope(" sub-a "))
+	})
+
+	t.Run("empty when neither override nor environment is set", func(t *testing.T) {
+		assert.Empty(t, CredentialScope("", envVar))
+	})
 }

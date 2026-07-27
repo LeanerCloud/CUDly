@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -64,6 +65,39 @@ type PurchaseRequest struct {
 	// RIs" with the same parameters). When empty (the default), identical
 	// purchases dedupe so retries never double-buy. See idempotencyKeyFor.
 	Nonce string
+
+	// CredentialScope identifies WHERE the purchase lands: the AWS profile,
+	// Azure subscription, or GCP project the call is billed to. It is folded
+	// into the idempotency key so two purchases that are identical in every
+	// product dimension but target different accounts derive DIFFERENT
+	// tokens. Populated by each tool via CredentialScope(). See
+	// idempotencyKeyFor for why omitting it is a double-spend/skipped-spend
+	// hazard on Azure specifically.
+	CredentialScope string
+}
+
+// CredentialScope resolves the account/subscription/project identifier that
+// bounds where a purchase lands: the caller-supplied override when present,
+// otherwise the first non-empty value among the ambient environment
+// variables the matching provider factory itself consults (e.g.
+// AZURE_SUBSCRIPTION_ID, providers/azure/provider.go's
+// resolveDefaultSubscription).
+//
+// It returns "" when neither is set, which is correct rather than an error:
+// a provider that resolves its account purely from ambient credentials
+// (single visible Azure subscription, AWS STS identity, ambient GCP project)
+// is unambiguous for the life of the server process, so there is no second
+// scope for a token to collide with.
+func CredentialScope(explicit string, envVars ...string) string {
+	if s := strings.TrimSpace(explicit); s != "" {
+		return s
+	}
+	for _, env := range envVars {
+		if s := strings.TrimSpace(os.Getenv(env)); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // PurchaseResponse is the structured result returned to the MCP caller for
@@ -143,7 +177,21 @@ func nonZeroCostPtr(v float64) *float64 {
 //
 // rec.Account is deliberately excluded: no *FromArgs constructor in this
 // package populates it today, so folding it in would add an always-empty,
-// misleading key component rather than real discrimination.
+// misleading key component rather than real discrimination. scope carries
+// that information instead -- see below.
+//
+// scope (the caller's AWS profile / Azure subscription / GCP project, via
+// PurchaseRequest.CredentialScope) is folded in because the product
+// dimensions above describe WHAT is bought but not WHERE it lands. Omitting
+// it is not merely imprecise, it silently skips real purchases on Azure:
+// reservations.FindReservationOrderByIdempotencyToken lists reservation
+// orders from the TENANT-wide endpoint (no subscription prefix -- see
+// ReservationOrdersListURL), so an identical VM reservation requested for a
+// second subscription in the same tenant would match the first
+// subscription's order by token, short-circuit, and report success without
+// buying anything for the second subscription. AWS (per-account tag/
+// ClientToken lookups) and GCP (per-project commitment names) scope their
+// own dedupe, so this is defense in depth there and load-bearing on Azure.
 //
 // This function is deliberately fail-safe with respect to time: it folds in
 // no clock reading of any kind. When nonce is empty (the default), two calls
@@ -163,9 +211,9 @@ func nonZeroCostPtr(v float64) *float64 {
 // purchase becomes a distinct one (e.g. "buy 3 now" then "buy 3 more next
 // week" by passing a fresh nonce on the second call); the same nonce plus
 // the same dimensions still dedupes a nonce'd retry.
-func idempotencyKeyFor(region string, rec common.Recommendation, nonce string) string {
-	return fmt.Sprintf("mcp:%s:%s:%s:%s:%d:%s:%s:%s:%s",
-		rec.Provider, region, rec.Service, rec.ResourceType, rec.Count, rec.Term, rec.PaymentOption,
+func idempotencyKeyFor(region string, rec common.Recommendation, scope, nonce string) string {
+	return fmt.Sprintf("mcp:%s:%s:%s:%s:%s:%d:%s:%s:%s:%s",
+		rec.Provider, scope, region, rec.Service, rec.ResourceType, rec.Count, rec.Term, rec.PaymentOption,
 		detailsKeyComponent(rec.Details), nonce)
 }
 
@@ -257,7 +305,7 @@ func ExecutePurchase(ctx context.Context, req PurchaseRequest) (*PurchaseRespons
 		return nil, fmt.Errorf("resolve %s service client: %w", rec.Provider, err)
 	}
 
-	token := common.DeriveIdempotencyToken(idempotencyKeyFor(req.Region, rec, req.Nonce), 0)
+	token := common.DeriveIdempotencyToken(idempotencyKeyFor(req.Region, rec, req.CredentialScope, req.Nonce), 0)
 	opts := common.PurchaseOptions{
 		Source:           common.PurchaseSourceMCP,
 		IdempotencyToken: token,

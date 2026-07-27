@@ -99,12 +99,13 @@ func (t *awsSavingsPlansPurchaseTool) handle(ctx context.Context, _ *mcp.CallToo
 	}
 
 	resp, err := ExecutePurchase(ctx, PurchaseRequest{
-		Region:         region,
-		Recommendation: rec,
-		DryRun:         dryRun,
-		Confirm:        confirm,
-		ResolveClient:  t.resolveClient(args, region, rec.Service),
-		Nonce:          args.IdempotencyNonce,
+		Region:          region,
+		Recommendation:  rec,
+		DryRun:          dryRun,
+		Confirm:         confirm,
+		ResolveClient:   t.resolveClient(args, region, rec.Service),
+		Nonce:           args.IdempotencyNonce,
+		CredentialScope: CredentialScope(args.AWSProfile, "AWS_PROFILE"),
 	})
 	if err != nil {
 		return nil, PurchaseResponse{}, err

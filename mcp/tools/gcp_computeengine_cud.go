@@ -84,12 +84,13 @@ func (t *gcpComputeEngineCUDPurchaseTool) handle(ctx context.Context, _ *mcp.Cal
 	}
 
 	resp, err := ExecutePurchase(ctx, PurchaseRequest{
-		Region:         region,
-		Recommendation: rec,
-		DryRun:         dryRun,
-		Confirm:        confirm,
-		ResolveClient:  t.resolveClient(args, region),
-		Nonce:          args.IdempotencyNonce,
+		Region:          region,
+		Recommendation:  rec,
+		DryRun:          dryRun,
+		Confirm:         confirm,
+		ResolveClient:   t.resolveClient(args, region),
+		Nonce:           args.IdempotencyNonce,
+		CredentialScope: CredentialScope(args.GCPProjectID),
 	})
 	if err != nil {
 		return nil, PurchaseResponse{}, err

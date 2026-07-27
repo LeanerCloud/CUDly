@@ -83,12 +83,13 @@ func (t *awsElastiCacheRIPurchaseTool) handle(ctx context.Context, _ *mcp.CallTo
 	}
 
 	resp, err := ExecutePurchase(ctx, PurchaseRequest{
-		Region:         region,
-		Recommendation: rec,
-		DryRun:         dryRun,
-		Confirm:        confirm,
-		ResolveClient:  t.resolveClient(args, region),
-		Nonce:          args.IdempotencyNonce,
+		Region:          region,
+		Recommendation:  rec,
+		DryRun:          dryRun,
+		Confirm:         confirm,
+		ResolveClient:   t.resolveClient(args, region),
+		Nonce:           args.IdempotencyNonce,
+		CredentialScope: CredentialScope(args.AWSProfile, "AWS_PROFILE"),
 	})
 	if err != nil {
 		return nil, PurchaseResponse{}, err
