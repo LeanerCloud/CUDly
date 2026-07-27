@@ -40,6 +40,8 @@ export type {
   CreateAPIKeyRequest,
   CreateAPIKeyResponse,
   GetAPIKeysResponse,
+  APIKeysUsageStats,
+  APIKeysUsageStatsTopKey,
   SavingsAnalyticsResponse,
   SavingsAnalyticsSummary,
   SavingsDataPoint,
@@ -169,6 +171,7 @@ export {
 // Re-export apikeys functions
 export {
   getApiKeys,
+  getApiKeysUsageStats,
   createApiKey,
   revokeApiKey,
   deleteApiKey
