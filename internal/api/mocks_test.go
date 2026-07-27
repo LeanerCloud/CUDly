@@ -67,8 +67,8 @@ type MockScheduler struct {
 	mock.Mock
 }
 
-func (m *MockScheduler) CollectRecommendations(ctx context.Context) (*scheduler.CollectResult, error) {
-	args := m.Called(ctx)
+func (m *MockScheduler) CollectRecommendations(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
+	args := m.Called(ctx, ownerToken)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

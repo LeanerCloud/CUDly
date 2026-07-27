@@ -249,10 +249,10 @@ func (app *Application) handleLambdaSQSEvent(ctx context.Context, rawEvent json.
 
 // handleLambdaScheduledEvent processes scheduled/cron events.
 func (app *Application) handleLambdaScheduledEvent(ctx context.Context, rawEvent json.RawMessage) (any, error) {
-	taskType, err := ParseScheduledEvent(rawEvent)
+	taskType, params, err := ParseScheduledEvent(rawEvent)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse scheduled event: %w", err)
 	}
 
-	return app.HandleScheduledTask(ctx, taskType)
+	return app.HandleScheduledTask(ctx, taskType, params)
 }

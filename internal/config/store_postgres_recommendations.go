@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -427,16 +428,24 @@ func (s *PostgresStore) GetRecommendationsFreshness(ctx context.Context) (*Recom
 }
 
 // SetRecommendationsCollectionError records the most recent collection's
-// error message without touching last_collected_at. Also clears
-// last_collection_started_at so the frontend knows the collection has
-// finished (with an error). Used by the scheduler when a collect fails
+// error message without touching last_collected_at or
+// last_collection_started_at. Used by the scheduler when a collect fails
 // partially or fully so the frontend banner surfaces the issue while
 // existing cached rows stay visible.
+//
+// This method must NOT clear last_collection_started_at (issue #261): it is
+// called mid-run from persistCollection on every CollectRecommendations
+// invocation that hits a provider error, including tokenless cron/cold-start/
+// background runs. Clearing the marker here, unconditionally and with no
+// owner check, previously let a tokenless run's routine provider error wipe
+// a concurrent owner run's in-flight marker, reopening the exact race the
+// compare-and-clear guard exists to close. Only the deferred, token-guarded
+// clearCollectionStartedBestEffort (which runs on both the success and
+// failure exit paths of CollectRecommendations) may clear started_at.
 func (s *PostgresStore) SetRecommendationsCollectionError(ctx context.Context, errMsg string) error {
 	if _, err := s.db.Exec(ctx, `
 		UPDATE recommendations_state
-		   SET last_collection_error       = $1,
-		       last_collection_started_at  = NULL
+		   SET last_collection_error = $1
 		 WHERE id = 1
 	`, errMsg); err != nil {
 		return fmt.Errorf("failed to set collection error: %w", err)
@@ -448,40 +457,73 @@ func (s *PostgresStore) SetRecommendationsCollectionError(ctx context.Context, e
 // only when no in-flight collection is currently running. The WHERE clause
 // treats a started_at older than 5 minutes as stale (the scheduler Lambda
 // must have crashed) so a new collection can proceed rather than being
-// permanently blocked.
+// permanently blocked. A fresh owner token is stamped into
+// last_collection_owner_id alongside the timestamp so the caller that wins
+// the race is the only one that can later clear the marker (issue #261
+// compare-and-clear guard; see ClearCollectionStarted).
 //
-// Returns true when this caller won the race (rowsAffected == 1) and should
-// proceed with the async invoke. Returns false when another collection is
-// already in flight (rowsAffected == 0), signaling the handler to return
-// 409 Conflict.
-func (s *PostgresStore) MarkCollectionStarted(ctx context.Context) (bool, error) {
+// Returns the token and true when this caller won the race (rowsAffected ==
+// 1) and should proceed with the async invoke, threading the token through
+// so it can be passed to ClearCollectionStarted later. Returns ("", false,
+// nil) when another collection is already in flight (rowsAffected == 0),
+// signaling the handler to return 409 Conflict.
+func (s *PostgresStore) MarkCollectionStarted(ctx context.Context) (token string, ok bool, err error) {
+	token = uuid.New().String()
 	tag, err := s.db.Exec(ctx, `
 		UPDATE recommendations_state
-		   SET last_collection_started_at = NOW()
+		   SET last_collection_started_at = NOW(),
+		       last_collection_owner_id    = $1
 		 WHERE id = 1
 		   AND (
 		           last_collection_started_at IS NULL
 		        OR last_collection_started_at < NOW() - INTERVAL '5 minutes'
 		       )
-	`)
+	`, token)
 	if err != nil {
-		return false, fmt.Errorf("failed to mark collection started: %w", err)
+		return "", false, fmt.Errorf("failed to mark collection started: %w", err)
 	}
-	return tag.RowsAffected() == 1, nil
+	if tag.RowsAffected() != 1 {
+		return "", false, nil
+	}
+	return token, true, nil
 }
 
-// ClearCollectionStarted clears last_collection_started_at so the frontend
-// knows an async collection has finished. Called by the scheduler on both
-// success and failure paths. On the success path, last_collected_at and
-// last_collection_error are updated by UpsertRecommendations/ReplaceRecommendations,
-// so this method only touches started_at.
-func (s *PostgresStore) ClearCollectionStarted(ctx context.Context) error {
-	if _, err := s.db.Exec(ctx, `
+// ClearCollectionStarted clears last_collection_started_at (and the owner
+// token) so the frontend knows an async collection has finished. Called by
+// the scheduler on both success and failure paths. On the success path,
+// last_collected_at and last_collection_error are updated by
+// UpsertRecommendations/ReplaceRecommendations, so this method only touches
+// started_at and the owner column.
+//
+// The clear is scoped to rows where last_collection_owner_id still matches
+// token (issue #261): a caller whose token no longer matches (another run
+// has since started and won the race) has nothing left to clear and this is
+// a documented silent no-op, not an error. An empty token is a boundary
+// error: only a caller that actually won MarkCollectionStarted should ever
+// call Clear; callers with no marker to own (cron, cold-start) must skip
+// the call entirely rather than pass an empty token.
+func (s *PostgresStore) ClearCollectionStarted(ctx context.Context, token string) error {
+	if token == "" {
+		return fmt.Errorf("owner token must not be empty")
+	}
+	tag, err := s.db.Exec(ctx, `
 		UPDATE recommendations_state
-		   SET last_collection_started_at = NULL
+		   SET last_collection_started_at = NULL,
+		       last_collection_owner_id    = NULL
 		 WHERE id = 1
-	`); err != nil {
+		   AND last_collection_owner_id = $1
+	`, token)
+	if err != nil {
 		return fmt.Errorf("failed to clear collection started: %w", err)
+	}
+	// The no-op branch IS the safety mechanism issue #261 adds, so surface it
+	// at debug level: without this there is no signal in production
+	// distinguishing "cleared" from "declined to clear someone else's marker",
+	// and a guard that never fires looks identical to a guard that is broken.
+	// The token is deliberately not logged: it is the capability that controls
+	// the marker, and the repo forbids putting token material in logs.
+	if tag.RowsAffected() == 0 {
+		logging.Debugf("ClearCollectionStarted: no-op, caller's token no longer owns the collection marker")
 	}
 	return nil
 }

@@ -141,26 +141,35 @@ func cacheTTLFromEnv() time.Duration {
 // Persists results to the recommendations cache so read handlers can serve
 // from SQL instead of re-fetching live.
 //
-// Bookkeeping: always clears last_collection_started_at on exit (success or
-// failure) so the frontend polling loop can detect completion. The scheduler
-// is invoked either by the cron EventBridge rule or by an async self-invoke
-// from the POST /api/recommendations/refresh handler. In the async case,
-// MarkCollectionStarted has already set last_collection_started_at; the
-// cron case leaves it NULL (no async-invoke bookkeeping for cron runs, which
-// are expected and not user-triggered).
-func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult, error) {
+// Bookkeeping: clears last_collection_started_at on exit (success or
+// failure) so the frontend polling loop can detect completion, but only if
+// ownerToken is non-empty and still matches last_collection_owner_id
+// (issue #261 compare-and-clear guard). The scheduler is invoked either by
+// the cron EventBridge rule or by an async self-invoke from the POST
+// /api/recommendations/refresh handler. In the async case,
+// MarkCollectionStarted has already set last_collection_started_at and
+// returned the token that ownerToken carries here; the cron case (and
+// cold-start) call with an empty ownerToken since they never won a marker,
+// and the clear is skipped entirely rather than clearing unconditionally,
+// which previously let a cron run wipe a concurrent user-triggered run's
+// marker. This deferred clear is the ONLY place that touches started_at:
+// persistCollection's SetRecommendationsCollectionError call (below, on a
+// provider failure) intentionally leaves started_at alone, so a tokenless
+// run hitting a routine provider error cannot wipe another run's marker
+// either.
+func (s *Scheduler) CollectRecommendations(ctx context.Context, ownerToken string) (*CollectResult, error) {
 	logging.Info("Collecting recommendations from cloud providers...")
 
-	// Always clear last_collection_started_at on exit so the frontend knows
-	// the collection has finished. Use a fresh background context with a
-	// short timeout: the request ctx may already be canceled by the time
-	// the defer runs (e.g. caller deadline expired during a slow collect),
+	// Clear last_collection_started_at on exit so the frontend knows the
+	// collection has finished. Use a fresh background context with a short
+	// timeout: the request ctx may already be canceled by the time the
+	// defer runs (e.g. caller deadline expired during a slow collect),
 	// which would cause ClearCollectionStarted to fail and leave the
 	// "in flight" marker until the 5-min auto-recovery window kicks in.
 	defer func() {
 		clearCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		s.clearCollectionStartedBestEffort(clearCtx)
+		s.clearCollectionStartedBestEffort(clearCtx, ownerToken)
 	}()
 
 	// Get global config
@@ -359,8 +368,16 @@ func (s *Scheduler) collectAllProviders(ctx context.Context, globalCfg *config.G
 // scheduler's exit path. Best-effort — a failure here is logged but does not
 // prevent returning the collection result. Extracted so CollectRecommendations
 // stays under the cyclomatic-complexity gate.
-func (s *Scheduler) clearCollectionStartedBestEffort(ctx context.Context) {
-	if err := s.config.ClearCollectionStarted(ctx); err != nil {
+//
+// A caller that never won MarkCollectionStarted (cron, cold-start) passes
+// an empty ownerToken and by design owns no marker to clear; this is an
+// explicit, logged skip, not a silent fallback.
+func (s *Scheduler) clearCollectionStartedBestEffort(ctx context.Context, ownerToken string) {
+	if ownerToken == "" {
+		logging.Debugf("skipping collection-started clear: caller holds no owner token (cron/cold-start run)")
+		return
+	}
+	if err := s.config.ClearCollectionStarted(ctx, ownerToken); err != nil {
 		logging.Errorf("failed to clear collection started: %v", err)
 	}
 }
@@ -929,7 +946,7 @@ func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.Recom
 
 	if freshness.LastCollectedAt == nil {
 		logging.Info("Recommendations cache is empty; performing synchronous cold-start collect")
-		_, collectErr := s.CollectRecommendations(ctx)
+		_, collectErr := s.CollectRecommendations(ctx, "")
 		if collectErr != nil {
 			return nil, fmt.Errorf("cold-start collect failed: %w", collectErr)
 		}
@@ -1202,7 +1219,7 @@ func (s *Scheduler) maybeKickBackgroundRefresh(freshness *config.Recommendations
 				logging.Errorf("background recommendations refresh panic: %v", r)
 			}
 		}()
-		if _, err := s.CollectRecommendations(bgCtx); err != nil {
+		if _, err := s.CollectRecommendations(bgCtx, ""); err != nil {
 			// CollectRecommendations already surfaces errors via
 			// recommendations_state.last_collection_error, so just log
 			// locally here for operator visibility.

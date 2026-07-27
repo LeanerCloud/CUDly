@@ -243,8 +243,10 @@ func (app *Application) handleScheduledHTTP(w http.ResponseWriter, r *http.Reque
 	}
 	taskType := ScheduledTaskType(taskTypeStr)
 
-	// Execute scheduled task
-	result, err := app.HandleScheduledTask(ctx, taskType)
+	// Execute scheduled task. This HTTP-triggered path carries no owner
+	// token; TaskCollectRecommendations runs as if cron-triggered and skips
+	// the collection-marker clear (see ScheduledTaskParams).
+	result, err := app.HandleScheduledTask(ctx, taskType, ScheduledTaskParams{})
 	if err != nil {
 		log.Printf("Scheduled task %q error: %v", taskTypeStr, err) // #nosec G706 -- taskTypeStr printed with %q which escapes special chars; validated to contain no '/' before this point
 		http.Error(w, "Internal server error", http.StatusInternalServerError)

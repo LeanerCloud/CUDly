@@ -226,7 +226,7 @@ func TestScheduler_CollectRecommendations_NoProviders(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	result, err := scheduler.CollectRecommendations(ctx)
+	result, err := scheduler.CollectRecommendations(ctx, "")
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, result.Recommendations)
@@ -257,11 +257,75 @@ func TestScheduler_CollectRecommendations_AWSProvider(t *testing.T) {
 		providerFactory: mockFactory,
 	}
 
-	result, err := scheduler.CollectRecommendations(ctx)
+	result, err := scheduler.CollectRecommendations(ctx, "")
 	require.NoError(t, err)
 
 	// Provider returns error, so no recommendations
 	assert.Equal(t, 0, result.Recommendations)
+}
+
+// TestScheduler_CollectRecommendations_EmptyTokenSkipsClear pins issue #261:
+// a caller with no owner token (cron, cold-start) never won
+// MarkCollectionStarted and must not call ClearCollectionStarted at all,
+// rather than clearing unconditionally and risking wiping another run's
+// marker.
+func TestScheduler_CollectRecommendations_EmptyTokenSkipsClear(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	mockEmail := new(MockEmailSender)
+
+	globalCfg := &config.GlobalConfig{EnabledProviders: []string{}}
+	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
+	// The expectation is registered (as Maybe) purely so an unwanted call is
+	// RECORDED. MockConfigStore short-circuits methods with no registered
+	// expectation before reaching mock.Called, so the call never lands in
+	// m.Calls and the AssertNotCalled below would pass vacuously: deleting the
+	// empty-token guard in clearCollectionStartedBestEffort kept this test
+	// green until this line was added.
+	mockStore.On("ClearCollectionStarted", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	scheduler := &Scheduler{
+		config:       mockStore,
+		email:        mockEmail,
+		dashboardURL: "https://dashboard.example.com",
+	}
+
+	_, err := scheduler.CollectRecommendations(ctx, "")
+	require.NoError(t, err)
+
+	mockStore.AssertNotCalled(t, "ClearCollectionStarted", mock.Anything, mock.Anything)
+}
+
+// TestScheduler_CollectRecommendations_ClearsWithOwnerToken pins issue #261:
+// a caller holding an owner token (the async self-invoke path) must clear
+// with that exact token, using a background context carrying a deadline
+// (not the possibly-canceled request ctx) so the clear survives a caller
+// timeout.
+func TestScheduler_CollectRecommendations_ClearsWithOwnerToken(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	mockEmail := new(MockEmailSender)
+
+	globalCfg := &config.GlobalConfig{EnabledProviders: []string{}}
+	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
+	mockStore.On("ClearCollectionStarted",
+		mock.MatchedBy(func(clearCtx context.Context) bool {
+			_, hasDeadline := clearCtx.Deadline()
+			return hasDeadline
+		}),
+		"tok-1",
+	).Return(nil)
+
+	scheduler := &Scheduler{
+		config:       mockStore,
+		email:        mockEmail,
+		dashboardURL: "https://dashboard.example.com",
+	}
+
+	_, err := scheduler.CollectRecommendations(ctx, "tok-1")
+	require.NoError(t, err)
 }
 
 func TestScheduler_CollectRecommendations_AllProviders(t *testing.T) {
@@ -288,7 +352,7 @@ func TestScheduler_CollectRecommendations_AllProviders(t *testing.T) {
 		providerFactory: mockFactory,
 	}
 
-	result, err := scheduler.CollectRecommendations(ctx)
+	result, err := scheduler.CollectRecommendations(ctx, "")
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, result.Recommendations)
@@ -356,7 +420,7 @@ func TestScheduler_CollectRecommendations_ParallelProviders(t *testing.T) {
 			providerFactory: mockFactory,
 		}
 
-		result, err := scheduler.CollectRecommendations(ctx)
+		result, err := scheduler.CollectRecommendations(ctx, "")
 		require.NoError(t, err)
 
 		assert.Equal(t, []string{"gcp", "azure"}, result.SuccessfulProviders,
@@ -391,7 +455,7 @@ func TestScheduler_CollectRecommendations_ParallelProviders(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel() // cancel BEFORE the call
 
-		_, err := scheduler.CollectRecommendations(ctx)
+		_, err := scheduler.CollectRecommendations(ctx, "")
 		require.Error(t, err, "expected context.Canceled to propagate from CollectRecommendations")
 		assert.ErrorIs(t, err, context.Canceled,
 			"CollectRecommendations must propagate the parent ctx error after the provider fan-out's g.Wait()")
@@ -417,7 +481,7 @@ func TestScheduler_CollectRecommendations_UnknownProvider(t *testing.T) {
 		providerFactory: mockFactory,
 	}
 
-	result, err := scheduler.CollectRecommendations(ctx)
+	result, err := scheduler.CollectRecommendations(ctx, "")
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, result.Recommendations)
@@ -556,7 +620,7 @@ func TestScheduler_CollectRecommendations_WithNotification(t *testing.T) {
 		providerFactory: mockFactory,
 	}
 
-	result, err := scheduler.CollectRecommendations(ctx)
+	result, err := scheduler.CollectRecommendations(ctx, "")
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, result.Recommendations)
@@ -595,7 +659,7 @@ func TestScheduler_CollectRecommendations_ConfigError(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	result, err := scheduler.CollectRecommendations(ctx)
+	result, err := scheduler.CollectRecommendations(ctx, "")
 	assert.Error(t, err)
 	assert.Nil(t, result)
 }
@@ -1653,7 +1717,7 @@ func TestScheduler_CollectRecommendations_WithSuccessfulRecs(t *testing.T) {
 		providerFactory: mockFactory,
 	}
 
-	result, err := scheduler.CollectRecommendations(ctx)
+	result, err := scheduler.CollectRecommendations(ctx, "")
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, result.Recommendations)

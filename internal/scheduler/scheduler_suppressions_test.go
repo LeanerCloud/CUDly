@@ -31,10 +31,10 @@ func (m *mockSuppressionStore) GetRecommendationsFreshness(_ context.Context) (*
 	now := time.Now()
 	return &config.RecommendationsFreshness{LastCollectedAt: &now}, nil
 }
-func (m *mockSuppressionStore) MarkCollectionStarted(_ context.Context) (bool, error) {
-	return true, nil
+func (m *mockSuppressionStore) MarkCollectionStarted(_ context.Context) (string, bool, error) {
+	return "mock-owner-token", true, nil
 }
-func (m *mockSuppressionStore) ClearCollectionStarted(_ context.Context) error {
+func (m *mockSuppressionStore) ClearCollectionStarted(_ context.Context, _ string) error {
 	return nil
 }
 

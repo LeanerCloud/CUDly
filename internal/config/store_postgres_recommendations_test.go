@@ -12,6 +12,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/CUDly/internal/database/postgres/testhelpers"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -391,6 +392,120 @@ func TestPostgresStore_UpsertRecommendations_AmbientAndRegisteredCoexist(t *test
 	}
 	assert.True(t, ambientFound, "ambient row must remain in DB after partial registered-only collect")
 	assert.True(t, registeredFound, "registered row must be upserted")
+}
+
+// TestPostgresStore_ClearCollectionStarted_CompareAndClear pins the issue
+// #261 compare-and-clear guard at the store level: a late clear from an
+// abandoned run (run A) must not wipe the marker a later run (run B) now
+// owns. Pre-fix, ClearCollectionStarted took no token and cleared
+// unconditionally, so run A's deferred clear (arriving after run B had
+// already started) would wipe run B's in-flight marker.
+//
+// Both runs here go through MarkCollectionStarted, which only the
+// POST /api/recommendations/refresh handler calls, so run B models a second
+// user-triggered refresh taking over after run A's 5-minute window lapses.
+// The cron variant of the same race (a tokenless scheduler run clearing a
+// user run's marker) cannot be expressed at this level because cron never
+// marks; it is pinned in the scheduler by
+// TestScheduler_CollectRecommendations_EmptyTokenSkipsClear.
+func TestPostgresStore_ClearCollectionStarted_CompareAndClear(t *testing.T) {
+	ctx := context.Background()
+	container, err := testhelpers.SetupPostgresContainer(ctx, t)
+	require.NoError(t, err)
+	defer container.Cleanup(ctx)
+	pool := container.DB.Pool()
+	require.NoError(t, migrations.RunMigrations(ctx, pool, getMigrationsPath(), "", ""))
+	store := config.NewPostgresStore(container.DB)
+
+	// Run A wins the race and is stamped with a fresh owner token.
+	tokenA, okA, err := store.MarkCollectionStarted(ctx)
+	require.NoError(t, err)
+	require.True(t, okA)
+	_, uuidErr := uuid.Parse(tokenA)
+	require.NoError(t, uuidErr, "MarkCollectionStarted must return a UUID token")
+
+	// A concurrent Mark while A's marker is fresh is blocked (409 path).
+	tokenNone, okBlocked, err := store.MarkCollectionStarted(ctx)
+	require.NoError(t, err)
+	assert.False(t, okBlocked)
+	assert.Empty(t, tokenNone)
+
+	// Force run A's marker stale (simulates its Lambda crashing or running
+	// long past the 5-minute window), so the next refresh (run B) is allowed
+	// to take the marker over.
+	_, err = pool.Exec(ctx, `
+		UPDATE recommendations_state
+		   SET last_collection_started_at = NOW() - INTERVAL '6 minutes'
+		 WHERE id = 1
+	`)
+	require.NoError(t, err)
+
+	tokenB, okB, err := store.MarkCollectionStarted(ctx)
+	require.NoError(t, err)
+	require.True(t, okB)
+	require.NotEqual(t, tokenA, tokenB, "run B must win its own distinct token")
+
+	// The regression assertion: run A finally finishes (late, after its own
+	// stale window) and calls Clear with its own token. Because
+	// last_collection_owner_id now points at run B, this must be a silent
+	// no-op: run B's in-flight marker must survive.
+	require.NoError(t, store.ClearCollectionStarted(ctx, tokenA))
+	freshness, err := store.GetRecommendationsFreshness(ctx)
+	require.NoError(t, err)
+	assert.NotNil(t, freshness.LastCollectionStartedAt,
+		"run B's marker must survive run A's stale-token clear")
+
+	// Run B's own clear matches the current owner and actually clears.
+	require.NoError(t, store.ClearCollectionStarted(ctx, tokenB))
+	freshness, err = store.GetRecommendationsFreshness(ctx)
+	require.NoError(t, err)
+	assert.Nil(t, freshness.LastCollectionStartedAt)
+
+	// Empty token is a boundary error: only a caller that actually won
+	// MarkCollectionStarted should ever call Clear.
+	err = store.ClearCollectionStarted(ctx, "")
+	require.Error(t, err)
+}
+
+// TestPostgresStore_SetRecommendationsCollectionError_DoesNotClearOwnerMarker
+// pins a second issue #261 side door found in adversarial review:
+// SetRecommendationsCollectionError is called mid-run from persistCollection
+// on EVERY CollectRecommendations invocation that hits a provider error,
+// including tokenless cron/cold-start/background runs. Pre-fix, it cleared
+// last_collection_started_at unconditionally (no owner check), so a
+// tokenless run's routine provider error would wipe a concurrent owner run's
+// in-flight marker, reopening the exact race the compare-and-clear guard
+// exists to close.
+func TestPostgresStore_SetRecommendationsCollectionError_DoesNotClearOwnerMarker(t *testing.T) {
+	ctx := context.Background()
+	container, err := testhelpers.SetupPostgresContainer(ctx, t)
+	require.NoError(t, err)
+	defer container.Cleanup(ctx)
+	pool := container.DB.Pool()
+	require.NoError(t, migrations.RunMigrations(ctx, pool, getMigrationsPath(), "", ""))
+	store := config.NewPostgresStore(container.DB)
+
+	// Owner run A wins the race and is stamped with a fresh owner token.
+	tokenA, okA, err := store.MarkCollectionStarted(ctx)
+	require.NoError(t, err)
+	require.True(t, okA)
+
+	// A tokenless caller (cron/cold-start/background run hitting a routine
+	// provider error) records the error. It must NOT touch run A's marker.
+	require.NoError(t, store.SetRecommendationsCollectionError(ctx, "aws: transient throttling"))
+
+	freshness, err := store.GetRecommendationsFreshness(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, freshness.LastCollectionError)
+	assert.Equal(t, "aws: transient throttling", *freshness.LastCollectionError)
+	assert.NotNil(t, freshness.LastCollectionStartedAt,
+		"run A's marker must survive a tokenless SetRecommendationsCollectionError call")
+
+	// Run A's own token-guarded clear still works afterward.
+	require.NoError(t, store.ClearCollectionStarted(ctx, tokenA))
+	freshness, err = store.GetRecommendationsFreshness(ctx)
+	require.NoError(t, err)
+	assert.Nil(t, freshness.LastCollectionStartedAt)
 }
 
 func float64Ptr(f float64) *float64 { return &f }

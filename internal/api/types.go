@@ -142,7 +142,7 @@ type PurchaseManagerInterface interface {
 
 // SchedulerInterface defines scheduler methods used by handler.
 type SchedulerInterface interface {
-	CollectRecommendations(ctx context.Context) (*scheduler.CollectResult, error)
+	CollectRecommendations(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error)
 	ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
 	// GetRecommendationByID fetches a single rec by its application-level id,
 	// bypassing account-override filtering so deep-linked URLs to override-

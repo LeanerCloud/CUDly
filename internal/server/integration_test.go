@@ -83,7 +83,7 @@ func TestScheduledTaskIntegration(t *testing.T) {
 
 	// Create application with mock dependencies
 	mockScheduler := &testutil.MockScheduler{
-		CollectRecommendationsFunc: func(ctx context.Context) (*scheduler.CollectResult, error) {
+		CollectRecommendationsFunc: func(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
 			// Simulate actual work
 			time.Sleep(100 * time.Millisecond)
 			return &scheduler.CollectResult{}, nil
@@ -95,7 +95,7 @@ func TestScheduledTaskIntegration(t *testing.T) {
 	}
 
 	// Test collect_recommendations task
-	result, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations)
+	result, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations, ScheduledTaskParams{})
 	testutil.AssertNoError(t, err)
 	testutil.AssertTrue(t, result != nil, "Result should not be nil")
 

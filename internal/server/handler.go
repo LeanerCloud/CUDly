@@ -3,13 +3,21 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"log"
+	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/purchase"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
+	"github.com/google/uuid"
 )
+
+// skippedCollectionMarkerClearTimeout bounds the detached best-effort clear
+// issued when a marker-owning collect run is skipped by the advisory lock.
+// Matches the scheduler's deferred clear budget.
+const skippedCollectionMarkerClearTimeout = 5 * time.Second
 
 // TaskLocker abstracts advisory lock operations for scheduled task concurrency control.
 type TaskLocker interface {
@@ -81,7 +89,7 @@ var scheduledEventActions = map[string]ScheduledTaskType{
 
 // HandleScheduledTask processes a scheduled task by type.
 // It acquires a PostgreSQL advisory lock to prevent concurrent execution of the same task.
-func (app *Application) HandleScheduledTask(ctx context.Context, taskType ScheduledTaskType) (any, error) {
+func (app *Application) HandleScheduledTask(ctx context.Context, taskType ScheduledTaskType, params ScheduledTaskParams) (any, error) {
 	log.Printf("Handling scheduled task: %q", taskType) // #nosec G706 -- taskType is looked up from a known-value map; %q quotes the value to prevent CR/LF log injection
 
 	if err := app.ensureDB(ctx); err != nil {
@@ -97,37 +105,104 @@ func (app *Application) HandleScheduledTask(ctx context.Context, taskType Schedu
 		}
 		if !acquired {
 			log.Printf("Task %q already running (advisory lock held), skipping", taskType) // #nosec G706 -- taskType is looked up from a known-value map; %q quotes the value to prevent CR/LF log injection
+			app.releaseSkippedCollectionMarker(taskType, params.OwnerToken)
 			return map[string]string{"status": "skipped", "reason": "already_running"}, nil
 		}
 		defer locker.ReleaseAdvisoryLock(ctx, lockID)
 	}
 
-	return app.dispatchTask(ctx, taskType)
+	return app.dispatchTask(ctx, taskType, params)
+}
+
+// releaseSkippedCollectionMarker releases this run's OWN collection in-flight
+// marker when a TaskCollectRecommendations invocation that holds an owner
+// token is skipped by the advisory lock, and therefore never reaches
+// CollectRecommendations, whose deferred token-scoped clear would normally
+// release it.
+//
+// Without this the abandoned run's marker sits stranded until the 5-minute
+// auto-recovery window in MarkCollectionStarted expires, and every refresh
+// the user attempts during that window is rejected with 409 "collection
+// already in progress" while no collection backed by that marker is running.
+// Before the issue #261 compare-and-clear guard, the overlapping run holding
+// the lock happened to cover this case with its unconditional clear; scoping
+// the clear to its owner correctly stopped that cross-run wipe, so the
+// abandoning run now has to release its own marker explicitly.
+//
+// Only the lock-skip path releases. A lock-check error returns an error, which
+// lets the Lambda async-invoke retry the same event (same owner token) and
+// still run the collect, so the marker must survive that path.
+//
+// Known residual gap: the token identifies the MARKER, not the invocation, so
+// this cannot distinguish "the lock is held by a tokenless cron run" (release
+// is required, or the marker strands for the full 5-minute window) from "the
+// lock is held by a concurrent duplicate delivery of my own event" (release is
+// premature, since that sibling carries the same token and is still
+// collecting). Lambda's async invocation is at-least-once, so the second case
+// is reachable, and there it clears the marker mid-run: the frontend banner
+// drops early and a refresh issued during the remainder wins a fresh marker
+// only to be lock-skipped and released again, returning 202 without collecting.
+// It is bounded and self-healing (the next refresh after the run completes
+// behaves normally) and touches no purchase or money path. Releasing is still
+// strictly better than not releasing, because the cron-overlap case is routine
+// while duplicate delivery is rare. Closing it properly needs an
+// invocation-scoped identity distinct from the marker token (e.g. the lock
+// winner re-stamping last_collection_owner_id with a fresh token), which is a
+// design change deliberately left out of this PR.
+//
+// Scoped by ownerToken, so this can only ever release the marker this run
+// owns, never a concurrent run's. Callers that never won MarkCollectionStarted
+// (EventBridge cron, the /api/scheduled/ HTTP path, the --task CLI) carry no
+// token, own no marker, and are skipped. Best effort: a failure only defers
+// cleanup to the 5-minute window, so it is logged rather than failing the
+// task. Uses a detached short-deadline context for the same reason the
+// scheduler's deferred clear does: ctx may already be near its deadline by
+// the time cleanup runs.
+func (app *Application) releaseSkippedCollectionMarker(taskType ScheduledTaskType, ownerToken string) {
+	if taskType != TaskCollectRecommendations || ownerToken == "" {
+		return
+	}
+	if app.Config == nil {
+		log.Println("Cannot release collection marker for skipped run: no config store configured")
+		return
+	}
+	clearCtx, cancel := context.WithTimeout(context.Background(), skippedCollectionMarkerClearTimeout)
+	defer cancel()
+	if err := app.Config.ClearCollectionStarted(clearCtx, ownerToken); err != nil {
+		log.Printf("Failed to release collection marker for skipped run: %v", err)
+	}
 }
 
 // dispatchTask routes a scheduled task to its handler.
-func (app *Application) dispatchTask(ctx context.Context, taskType ScheduledTaskType) (any, error) {
+func (app *Application) dispatchTask(ctx context.Context, taskType ScheduledTaskType, params ScheduledTaskParams) (any, error) {
 	// Map-based dispatch (rather than a switch) keeps this function under the
 	// cyclomatic-complexity limit as the task roster grows. Each handler adapts
-	// its concrete return type to (any, error) at the call site.
-	handlers := map[ScheduledTaskType]func(context.Context) (any, error){
-		TaskCollectRecommendations:    func(c context.Context) (any, error) { return app.handleCollectRecommendations(c) },
-		TaskProcessScheduledPurchases: func(c context.Context) (any, error) { return app.handleProcessScheduledPurchases(c) },
-		TaskSendNotifications:         func(c context.Context) (any, error) { return app.handleSendNotifications(c) },
-		TaskCleanupExpiredRecords:     func(c context.Context) (any, error) { return app.handleCleanupExpiredRecords(c) },
-		TaskRefreshAnalytics:          func(c context.Context) (any, error) { return app.handleRefreshAnalytics(c) },
-		TaskCollectAnalytics:          func(c context.Context) (any, error) { return app.handleCollectAnalytics(c) },
-		TaskRIExchangeReshape:         func(c context.Context) (any, error) { return app.handleRIExchangeReshape(c) },
-		TaskReapStuckPurchases:        func(c context.Context) (any, error) { return app.handleReapStuckPurchases(c) },
-		TaskFireScheduledPurchases:    func(c context.Context) (any, error) { return app.handleFireScheduledPurchases(c) },
-		TaskFinalizeRevocations:       func(c context.Context) (any, error) { return app.handleFinalizeRevocations(c) },
-		TaskLadderRun:                 func(c context.Context) (any, error) { return app.handleLadderRun(c) },
+	// its concrete return type to (any, error) at the call site. Only
+	// TaskCollectRecommendations reads params; every other closure ignores it.
+	handlers := map[ScheduledTaskType]func(context.Context, ScheduledTaskParams) (any, error){
+		TaskCollectRecommendations: func(c context.Context, p ScheduledTaskParams) (any, error) {
+			return app.handleCollectRecommendations(c, p.OwnerToken)
+		},
+		TaskProcessScheduledPurchases: func(c context.Context, _ ScheduledTaskParams) (any, error) {
+			return app.handleProcessScheduledPurchases(c)
+		},
+		TaskSendNotifications:     func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleSendNotifications(c) },
+		TaskCleanupExpiredRecords: func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleCleanupExpiredRecords(c) },
+		TaskRefreshAnalytics:      func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleRefreshAnalytics(c) },
+		TaskCollectAnalytics:      func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleCollectAnalytics(c) },
+		TaskRIExchangeReshape:     func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleRIExchangeReshape(c) },
+		TaskReapStuckPurchases:    func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleReapStuckPurchases(c) },
+		TaskFireScheduledPurchases: func(c context.Context, _ ScheduledTaskParams) (any, error) {
+			return app.handleFireScheduledPurchases(c)
+		},
+		TaskFinalizeRevocations: func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleFinalizeRevocations(c) },
+		TaskLadderRun:           func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleLadderRun(c) },
 	}
 	handler, ok := handlers[taskType]
 	if !ok {
 		return nil, fmt.Errorf("unknown scheduled task type: %s", taskType)
 	}
-	return handler(ctx)
+	return handler(ctx, params)
 }
 
 // taskLocker returns the configured TaskLocker, falling back to DB if set.
@@ -149,9 +224,11 @@ func taskLockID(taskType ScheduledTaskType) int64 {
 }
 
 // handleCollectRecommendations collects cost optimization recommendations.
-func (app *Application) handleCollectRecommendations(ctx context.Context) (*scheduler.CollectResult, error) {
+// ownerToken threads through to CollectRecommendations's compare-and-clear
+// guard (issue #261); it is empty for cron-triggered runs.
+func (app *Application) handleCollectRecommendations(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
 	log.Println("Collecting recommendations...")
-	result, err := app.Scheduler.CollectRecommendations(ctx)
+	result, err := app.Scheduler.CollectRecommendations(ctx, ownerToken)
 	if err != nil {
 		log.Printf("Failed to collect recommendations: %v", err)
 		return nil, err
@@ -333,18 +410,56 @@ type ScheduledEvent struct {
 	DetailType string          `json:"detail-type"`
 	Action     string          `json:"action"`
 	Detail     json.RawMessage `json:"detail"`
+	// OwnerToken carries the collection-marker owner token (issue #261
+	// compare-and-clear guard) for TaskCollectRecommendations events fired
+	// by the async self-invoke in handler_recommendations_refresh.go.
+	// EventBridge cron deliveries and the --task CLI never set this field,
+	// so it decodes to "" and the scheduler treats the run as owning no
+	// marker (see ScheduledTaskParams / clearCollectionStartedBestEffort).
+	OwnerToken string `json:"owner_token"`
 }
 
-// ParseScheduledEvent parses a scheduled event and returns the task type.
-func ParseScheduledEvent(rawEvent json.RawMessage) (ScheduledTaskType, error) {
+// ScheduledTaskParams carries per-task-type data extracted from a
+// ScheduledEvent. Only TaskCollectRecommendations currently reads a field
+// (OwnerToken); other task types receive a zero-value struct.
+type ScheduledTaskParams struct {
+	OwnerToken string
+}
+
+// ParseScheduledEvent parses a scheduled event and returns the task type
+// plus any per-task parameters.
+func ParseScheduledEvent(rawEvent json.RawMessage) (ScheduledTaskType, ScheduledTaskParams, error) {
 	var event ScheduledEvent
 	if err := json.Unmarshal(rawEvent, &event); err != nil {
-		return "", fmt.Errorf("failed to parse scheduled event: %w", err)
+		return "", ScheduledTaskParams{}, fmt.Errorf("failed to parse scheduled event: %w", err)
+	}
+
+	// Validate the owner token at the boundary rather than letting a malformed
+	// value reach the UUID-typed persistence layer. Empty is legitimate and
+	// expected (EventBridge cron, the /api/scheduled/ HTTP path, the --task
+	// CLI): those callers never won MarkCollectionStarted and own no marker.
+	// A non-empty value, though, can only have come from asyncInvokeSelf,
+	// which always sends a uuid.New(), so anything else means the payload is
+	// corrupt. Failing loud here is deliberate: a token that cannot match any
+	// owner would leave the marker it belongs to stranded for the full
+	// 5-minute recovery window anyway, so a buried error log on the eventual
+	// clear is strictly worse than refusing the malformed event outright.
+	//
+	// uuid.Parse's error is deliberately NOT wrapped: for a 45-character input
+	// it formats as "invalid urn prefix: %q" over the value's first nine bytes
+	// (google/uuid uuid.go), so propagating it would echo part of the rejected
+	// token into the error and from there into logs. The shape of the failure
+	// carries no diagnostic value the fixed message below does not already
+	// give, so the value is dropped rather than masked.
+	if event.OwnerToken != "" {
+		if _, err := uuid.Parse(event.OwnerToken); err != nil {
+			return "", ScheduledTaskParams{}, errors.New("invalid owner_token in scheduled event: not a UUID")
+		}
 	}
 
 	// Map action to task type
 	if taskType, ok := scheduledEventActions[event.Action]; ok {
-		return taskType, nil
+		return taskType, ScheduledTaskParams{OwnerToken: event.OwnerToken}, nil
 	}
-	return "", fmt.Errorf("unknown scheduled task action: %q", event.Action)
+	return "", ScheduledTaskParams{}, fmt.Errorf("unknown scheduled task action: %q", event.Action)
 }

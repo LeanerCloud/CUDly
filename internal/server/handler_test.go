@@ -3,12 +3,15 @@ package server
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/internal/mocks"
 	"github.com/LeanerCloud/CUDly/internal/purchase"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/LeanerCloud/CUDly/internal/testutil"
+	"github.com/stretchr/testify/mock"
 )
 
 // mockTaskLocker implements TaskLocker for testing.
@@ -39,7 +42,7 @@ func TestHandleScheduledTask(t *testing.T) {
 			name:     "collect_recommendations success",
 			taskType: TaskCollectRecommendations,
 			setupMocks: func(s *testutil.MockScheduler, p *testutil.MockPurchaseManager) {
-				s.CollectRecommendationsFunc = func(ctx context.Context) (*scheduler.CollectResult, error) {
+				s.CollectRecommendationsFunc = func(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
 					return &scheduler.CollectResult{}, nil
 				}
 			},
@@ -49,7 +52,7 @@ func TestHandleScheduledTask(t *testing.T) {
 			name:     "collect_recommendations failure",
 			taskType: TaskCollectRecommendations,
 			setupMocks: func(s *testutil.MockScheduler, p *testutil.MockPurchaseManager) {
-				s.CollectRecommendationsFunc = func(ctx context.Context) (*scheduler.CollectResult, error) {
+				s.CollectRecommendationsFunc = func(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
 					return nil, errors.New("collection failed")
 				}
 			},
@@ -181,7 +184,7 @@ func TestHandleScheduledTask(t *testing.T) {
 				Purchase:  mockPurchase,
 			}
 
-			_, err := app.HandleScheduledTask(ctx, tt.taskType)
+			_, err := app.HandleScheduledTask(ctx, tt.taskType, ScheduledTaskParams{})
 
 			if tt.expectError {
 				testutil.AssertError(t, err)
@@ -230,7 +233,7 @@ func TestHandleScheduledTaskSkipsWhenDBNil(t *testing.T) {
 	ctx := testutil.TestContext(t)
 
 	mockScheduler := &testutil.MockScheduler{}
-	mockScheduler.CollectRecommendationsFunc = func(ctx context.Context) (*scheduler.CollectResult, error) {
+	mockScheduler.CollectRecommendationsFunc = func(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
 		return &scheduler.CollectResult{Recommendations: 5}, nil
 	}
 
@@ -240,7 +243,7 @@ func TestHandleScheduledTaskSkipsWhenDBNil(t *testing.T) {
 		DB:        nil, // No DB — lock path skipped
 	}
 
-	result, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations)
+	result, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations, ScheduledTaskParams{})
 	testutil.AssertNoError(t, err)
 	if result == nil {
 		t.Fatal("expected non-nil result")
@@ -258,7 +261,7 @@ func TestHandleScheduledTaskAdvisoryLock(t *testing.T) {
 			TaskLocker: locker,
 		}
 
-		_, err := app.HandleScheduledTask(ctx, TaskCleanupExpiredRecords)
+		_, err := app.HandleScheduledTask(ctx, TaskCleanupExpiredRecords, ScheduledTaskParams{})
 		testutil.AssertNoError(t, err)
 		testutil.AssertEqual(t, 1, locker.lockCalls)
 		testutil.AssertEqual(t, 1, locker.unlockCalls)
@@ -274,7 +277,7 @@ func TestHandleScheduledTaskAdvisoryLock(t *testing.T) {
 			TaskLocker: locker,
 		}
 
-		result, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations)
+		result, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations, ScheduledTaskParams{})
 		testutil.AssertNoError(t, err)
 		testutil.AssertEqual(t, 1, locker.lockCalls)
 		testutil.AssertEqual(t, 0, locker.unlockCalls)
@@ -297,9 +300,110 @@ func TestHandleScheduledTaskAdvisoryLock(t *testing.T) {
 			TaskLocker: locker,
 		}
 
-		_, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations)
+		_, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations, ScheduledTaskParams{})
 		testutil.AssertError(t, err)
 		testutil.AssertContains(t, err.Error(), "failed to check task lock")
+	})
+}
+
+// TestHandleScheduledTaskReleasesMarkerWhenSkipped pins the abandoned-marker
+// leak in the issue #261 compare-and-clear guard: a collect run that WON
+// MarkCollectionStarted (so it owns the in-flight marker) but is then skipped
+// by the advisory lock never reaches CollectRecommendations, so the deferred
+// token-scoped clear never fires. Before this release the marker sat stranded
+// for the full 5-minute auto-recovery window, rejecting every refresh the user
+// attempted with 409 while nothing backed by that marker was running.
+func TestHandleScheduledTaskReleasesMarkerWhenSkipped(t *testing.T) {
+	t.Run("owner token released when the run is skipped", func(t *testing.T) {
+		ctx := testutil.TestContext(t)
+		store := new(mocks.MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
+		store.On("ClearCollectionStarted", mock.Anything, "tok-owner").Return(nil)
+
+		app := &Application{
+			Config:     store,
+			Scheduler:  &testutil.MockScheduler{},
+			Purchase:   &testutil.MockPurchaseManager{},
+			TaskLocker: &mockTaskLocker{acquired: false},
+		}
+
+		result, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations,
+			ScheduledTaskParams{OwnerToken: "tok-owner"})
+		testutil.AssertNoError(t, err)
+
+		m, ok := result.(map[string]string)
+		if !ok {
+			t.Fatalf("expected map[string]string, got %T", result)
+		}
+		testutil.AssertEqual(t, "skipped", m["status"])
+		store.AssertCalled(t, "ClearCollectionStarted", mock.Anything, "tok-owner")
+	})
+
+	// A tokenless run (EventBridge cron, the /api/scheduled/ HTTP path, the
+	// --task CLI) owns no marker, so a skip must not clear anything: that
+	// would be exactly the cross-run wipe issue #261 closes. The expectation
+	// is registered (as Maybe) so an unwanted call is still recorded rather
+	// than falling through the mock's no-expectation default and letting
+	// AssertNotCalled pass vacuously.
+	t.Run("tokenless skipped run clears nothing", func(t *testing.T) {
+		ctx := testutil.TestContext(t)
+		store := new(mocks.MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
+		store.On("ClearCollectionStarted", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+		app := &Application{
+			Config:     store,
+			Scheduler:  &testutil.MockScheduler{},
+			Purchase:   &testutil.MockPurchaseManager{},
+			TaskLocker: &mockTaskLocker{acquired: false},
+		}
+
+		_, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations, ScheduledTaskParams{})
+		testutil.AssertNoError(t, err)
+		store.AssertNotCalled(t, "ClearCollectionStarted", mock.Anything, mock.Anything)
+	})
+
+	// A lock-check error is returned to the caller, so the Lambda async invoke
+	// retries the same event with the same owner token and the collect can
+	// still run. Releasing the marker there would strand the retry.
+	t.Run("lock error keeps the marker for the retry", func(t *testing.T) {
+		ctx := testutil.TestContext(t)
+		store := new(mocks.MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
+		store.On("ClearCollectionStarted", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+		app := &Application{
+			Config:     store,
+			Scheduler:  &testutil.MockScheduler{},
+			Purchase:   &testutil.MockPurchaseManager{},
+			TaskLocker: &mockTaskLocker{err: errors.New("db connection lost")},
+		}
+
+		_, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations,
+			ScheduledTaskParams{OwnerToken: "tok-owner"})
+		testutil.AssertError(t, err)
+		store.AssertNotCalled(t, "ClearCollectionStarted", mock.Anything, mock.Anything)
+	})
+
+	// Only collect_recommendations carries an owner token. A stray token on
+	// another task type must never reach the collection marker.
+	t.Run("other task types never touch the marker", func(t *testing.T) {
+		ctx := testutil.TestContext(t)
+		store := new(mocks.MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
+		store.On("ClearCollectionStarted", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+		app := &Application{
+			Config:     store,
+			Scheduler:  &testutil.MockScheduler{},
+			Purchase:   &testutil.MockPurchaseManager{},
+			TaskLocker: &mockTaskLocker{acquired: false},
+		}
+
+		_, err := app.HandleScheduledTask(ctx, TaskCleanupExpiredRecords,
+			ScheduledTaskParams{OwnerToken: "tok-owner"})
+		testutil.AssertNoError(t, err)
+		store.AssertNotCalled(t, "ClearCollectionStarted", mock.Anything, mock.Anything)
 	})
 }
 
@@ -354,16 +458,68 @@ func TestHandleSQSMessage(t *testing.T) {
 	}
 }
 
+// TestParseScheduledEvent_MalformedTokenNotEchoedInError pins that the
+// rejection error for a malformed owner_token never carries any of the
+// rejected value. The 45-character input below is the one shape where
+// uuid.Parse formats its error as "invalid urn prefix: %q" over the value's
+// first nine bytes (google/uuid uuid.go), so wrapping that error with %w
+// would echo "OWNERTOK-" into the error string and from there into the
+// Lambda logs. Asserting on a shorter malformed token would pass with the
+// bug present, because uuid.Parse reports those as a bare length/format
+// error that happens to contain nothing sensitive.
+func TestParseScheduledEvent_MalformedTokenNotEchoedInError(t *testing.T) {
+	// 45 characters, so uuid.Parse takes its urn-prefix branch.
+	const leakyToken = "OWNERTOK-6b1f2c34-5d6e-4a7b-8c9d-0e1f2a3b4c5d"
+	testutil.AssertEqual(t, 45, len(leakyToken))
+
+	_, _, err := ParseScheduledEvent([]byte(
+		`{"source": "aws.events", "action": "collect_recommendations", "owner_token": "` + leakyToken + `"}`))
+
+	testutil.AssertError(t, err)
+	if strings.Contains(err.Error(), leakyToken[:9]) {
+		t.Fatalf("rejection error must not echo the token value, got: %s", err.Error())
+	}
+}
+
 func TestParseScheduledEvent(t *testing.T) {
 	tests := []struct {
-		name         string
-		rawEvent     string
-		expectedTask ScheduledTaskType
-		expectError  bool
+		name          string
+		rawEvent      string
+		expectedTask  ScheduledTaskType
+		expectedToken string
+		expectError   bool
 	}{
 		{
 			name:         "collect_recommendations event",
 			rawEvent:     `{"action": "collect_recommendations"}`,
+			expectedTask: TaskCollectRecommendations,
+		},
+		{
+			// Async self-invoke payload carries the owner token so the
+			// scheduler can scope ClearCollectionStarted to this run
+			// (issue #261 compare-and-clear guard).
+			name:          "collect_recommendations event with owner_token",
+			rawEvent:      `{"source": "aws.events", "action": "collect_recommendations", "owner_token": "` + testOwnerToken + `"}`,
+			expectedTask:  TaskCollectRecommendations,
+			expectedToken: testOwnerToken,
+		},
+		{
+			// A non-empty owner_token is validated at the boundary: the only
+			// legitimate producer is asyncInvokeSelf, which always sends a
+			// uuid.New(), so a non-UUID value means a corrupt payload. It
+			// could never match a marker owner, and letting it through would
+			// strand that marker for the full 5-minute recovery window with
+			// only a buried error log to show for it.
+			name:        "collect_recommendations event with malformed owner_token",
+			rawEvent:    `{"source": "aws.events", "action": "collect_recommendations", "owner_token": "tok-1"}`,
+			expectError: true,
+		},
+		{
+			// An absent owner_token stays legitimate: cron, the
+			// /api/scheduled/ HTTP path and the --task CLI never win
+			// MarkCollectionStarted and own no marker to clear.
+			name:         "collect_recommendations event with empty owner_token",
+			rawEvent:     `{"source": "aws.events", "action": "collect_recommendations", "owner_token": ""}`,
 			expectedTask: TaskCollectRecommendations,
 		},
 		{
@@ -420,12 +576,13 @@ func TestParseScheduledEvent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			taskType, err := ParseScheduledEvent([]byte(tt.rawEvent))
+			taskType, params, err := ParseScheduledEvent([]byte(tt.rawEvent))
 			if tt.expectError {
 				testutil.AssertError(t, err)
 			} else {
 				testutil.AssertNoError(t, err)
 				testutil.AssertEqual(t, tt.expectedTask, taskType)
+				testutil.AssertEqual(t, tt.expectedToken, params.OwnerToken)
 			}
 		})
 	}
