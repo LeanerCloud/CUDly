@@ -15,6 +15,16 @@ resource "aws_kms_key" "signing" {
   tags = merge(var.tags, {
     Name = "${var.stack_name}-oidc-signing"
   })
+
+  # Any change that forces a new CMK (e.g. the RSA_2048 -> ECC_NIST_P256
+  # migration in #1480) must create the replacement key and cut the alias
+  # over to it BEFORE scheduling the old key for deletion. Without this,
+  # Terraform's default destroy-before-create would schedule the live OIDC
+  # signing key for deletion (immediately unusable for kms:Sign) before the
+  # new key exists, briefly breaking client-assertion JWT minting.
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_kms_alias" "signing" {
