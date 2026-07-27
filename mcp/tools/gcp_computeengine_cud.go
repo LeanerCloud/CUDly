@@ -147,7 +147,7 @@ func gcpComputeEngineRecommendationFromArgs(args gcpComputeEngineCUDPurchaseArgs
 		// offering-details switch falls through to `default: upfrontCost =
 		// totalCost`, reporting the whole commitment as an upfront charge
 		// for an empty payment option. gcpPaymentOption is the single value
-		// config.ValidPaymentOptionsByProvider["gcp"] recognises.
+		// config.ValidPaymentOptionsByProvider["gcp"] recognizes.
 		PaymentOption: gcpPaymentOption,
 		Details: common.ComputeDetails{
 			InstanceType: machineType,
