@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -101,7 +100,7 @@ func getAllAWSRegionsWithClient(ctx context.Context, ec2Client EC2ClientInterfac
 // discoverRegionsForService discovers regions that have recommendations for a specific service.
 func discoverRegionsForService(ctx context.Context, client provider.RecommendationsClient, service common.ServiceType) ([]string, error) {
 	recs, err := client.GetRecommendationsForService(ctx, service)
-	if partial := asPartialSubscriptionFailure(err); partial != nil {
+	if partial := azureprovider.AsPartialSubscriptionFailure(err); partial != nil {
 		// Region discovery is best-effort: the subscriptions that answered
 		// still tell us where to look. Report the gap rather than dropping
 		// the discovered regions or failing outright.
@@ -447,7 +446,7 @@ func fetchRecommendationsForRegion(
 	}
 
 	recs, err := recClient.GetRecommendations(ctx, &params)
-	if partial := asPartialSubscriptionFailure(err); partial != nil {
+	if partial := azureprovider.AsPartialSubscriptionFailure(err); partial != nil {
 		// Keep the subscriptions that did answer, but say plainly that the
 		// sweep was incomplete: without this the operator would read a short
 		// list as "little to buy here" rather than "some subscriptions were
@@ -465,18 +464,6 @@ func fetchRecommendationsForRegion(
 	}
 
 	return recs
-}
-
-// asPartialSubscriptionFailure reports whether err is the Azure fan-out's
-// partial-failure signal, which is returned ALONGSIDE the recommendations
-// that were collected successfully. Returns nil when err is any other error
-// (or nil), so callers keep their normal fail-loud handling for real errors.
-func asPartialSubscriptionFailure(err error) *azureprovider.PartialSubscriptionFailureError {
-	var partial *azureprovider.PartialSubscriptionFailureError
-	if errors.As(err, &partial) {
-		return partial
-	}
-	return nil
 }
 
 // populateRecommendationAccountNames populates account names from account IDs.

@@ -4,6 +4,7 @@ package azure
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -76,13 +77,10 @@ type PartialSubscriptionFailureError struct {
 }
 
 func (e *PartialSubscriptionFailureError) Error() string {
-	ids := make([]string, 0, len(e.Failed))
-	for _, f := range e.Failed {
-		ids = append(ids, f.SubscriptionID)
-	}
 	return fmt.Sprintf(
 		"azure recommendations incomplete: %d of %d subscriptions succeeded; %d failed (%s): %v",
-		e.Succeeded, e.Attempted, len(e.Failed), strings.Join(ids, ", "), e.Failed[0].Err)
+		e.Succeeded, e.Attempted, len(e.Failed),
+		strings.Join(e.FailedSubscriptionIDs(), ", "), e.Failed[0].Err)
 }
 
 // Unwrap exposes the per-subscription causes so errors.Is/errors.As can match
@@ -93,6 +91,34 @@ func (e *PartialSubscriptionFailureError) Unwrap() []error {
 		errs = append(errs, f.Err)
 	}
 	return errs
+}
+
+// FailedSubscriptionIDs lists the subscriptions that could not be queried, for
+// log lines and operator-facing messages.
+func (e *PartialSubscriptionFailureError) FailedSubscriptionIDs() []string {
+	ids := make([]string, 0, len(e.Failed))
+	for _, f := range e.Failed {
+		ids = append(ids, f.SubscriptionID)
+	}
+	return ids
+}
+
+// AsPartialSubscriptionFailure reports whether err is (or wraps) the org-wide
+// fan-out's partial-failure signal, returning it when so and nil otherwise.
+//
+// Provided so callers do not each hand-roll the errors.As dance, and -- more
+// importantly -- so the "a partial sweep must not be treated as a total
+// failure" rule is expressed the same way everywhere. A caller that skips this
+// check and falls into a plain `if err != nil` discards the recommendations
+// that WERE collected, turning one flaky subscription into a total collection
+// outage, which is worse than the silent under-collection this error exists to
+// prevent.
+func AsPartialSubscriptionFailure(err error) *PartialSubscriptionFailureError {
+	var partial *PartialSubscriptionFailureError
+	if errors.As(err, &partial) {
+		return partial
+	}
+	return nil
 }
 
 // MultiSubscriptionRecommendationsClient fans recommendation collection out
