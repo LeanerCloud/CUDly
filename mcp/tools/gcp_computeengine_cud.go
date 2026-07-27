@@ -190,7 +190,7 @@ func gcpComputeEngineRecommendationFromArgs(args gcpComputeEngineCUDPurchaseArgs
 // client against a raw, un-trimmed value.
 func (t *gcpComputeEngineCUDPurchaseTool) resolveClient(args gcpComputeEngineCUDPurchaseArgs, region string) ResolveClientFunc {
 	return func(ctx context.Context) (provider.ServiceClient, error) {
-		cfg := &provider.ProviderConfig{Name: string(common.ProviderGCP), GCPProjectID: args.GCPProjectID, Region: region}
+		cfg := &provider.ProviderConfig{Name: string(common.ProviderGCP), GCPProjectID: CredentialScope(args.GCPProjectID), Region: region}
 		prov, err := t.createProvider(string(common.ProviderGCP), cfg)
 		if err != nil {
 			return nil, err

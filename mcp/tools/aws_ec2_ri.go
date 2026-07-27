@@ -200,7 +200,7 @@ func ec2RecommendationFromArgs(args ec2RIPurchaseArgs) (rec common.Recommendatio
 // resolves the provider/service client against a raw, un-trimmed value.
 func (t *awsEC2RIPurchaseTool) resolveClient(args ec2RIPurchaseArgs, region string) ResolveClientFunc {
 	return func(ctx context.Context) (provider.ServiceClient, error) {
-		cfg := &provider.ProviderConfig{Name: string(common.ProviderAWS), AWSProfile: args.AWSProfile, Region: region}
+		cfg := &provider.ProviderConfig{Name: string(common.ProviderAWS), AWSProfile: CredentialScope(args.AWSProfile), Region: region}
 		prov, err := t.createProvider(string(common.ProviderAWS), cfg)
 		if err != nil {
 			return nil, err

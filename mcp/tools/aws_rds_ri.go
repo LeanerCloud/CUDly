@@ -159,7 +159,7 @@ func rdsRecommendationFromArgs(args rdsRIPurchaseArgs) (rec common.Recommendatio
 // raw, un-trimmed value.
 func (t *awsRDSRIPurchaseTool) resolveClient(args rdsRIPurchaseArgs, region string) ResolveClientFunc {
 	return func(ctx context.Context) (provider.ServiceClient, error) {
-		cfg := &provider.ProviderConfig{Name: string(common.ProviderAWS), AWSProfile: args.AWSProfile, Region: region}
+		cfg := &provider.ProviderConfig{Name: string(common.ProviderAWS), AWSProfile: CredentialScope(args.AWSProfile), Region: region}
 		prov, err := t.createProvider(string(common.ProviderAWS), cfg)
 		if err != nil {
 			return nil, err

@@ -176,9 +176,20 @@ func savingsPlanRecommendationFromArgs(args savingsPlansPurchaseArgs) (rec commo
 	trimmedRegion := strings.TrimSpace(args.Region)
 	trimmedInstanceFamily := strings.TrimSpace(args.InstanceFamily)
 
-	region = trimmedRegion
-	if region == "" {
-		region = savingsPlansAccountLevelRegion
+	// Account-level plan types (Compute/SageMaker/Database) ignore region
+	// entirely, so pin the canonical one rather than honoring whatever the
+	// caller passed. region flows into rec.Region and from there into
+	// idempotencyKeyFor (mcp/tools/purchase.go), so letting an IGNORED input
+	// through would fork purchase identity: buying a $10/hr Compute SP once
+	// without region and then re-issuing the identical call with
+	// region="eu-west-1" (a self-correction, or a retry that fills the field
+	// in) derives two different tokens, Savings Plans' ClientToken dedupe
+	// misses, and a second plan is bought. Only EC2Instance plans are
+	// genuinely region-scoped, and validateSavingsPlanArgs already requires a
+	// non-blank region for those.
+	region = savingsPlansAccountLevelRegion
+	if spType == SPTypeEC2Instance {
+		region = trimmedRegion
 	}
 
 	// Resolve the precise per-plan-type ServiceType (e.g.
@@ -298,7 +309,7 @@ func validateDatabaseSPConstraints(spType SPType, term TermYears, paymentOption 
 
 func (t *awsSavingsPlansPurchaseTool) resolveClient(args savingsPlansPurchaseArgs, region string, service common.ServiceType) ResolveClientFunc {
 	return func(ctx context.Context) (provider.ServiceClient, error) {
-		cfg := &provider.ProviderConfig{Name: string(common.ProviderAWS), AWSProfile: args.AWSProfile, Region: region}
+		cfg := &provider.ProviderConfig{Name: string(common.ProviderAWS), AWSProfile: CredentialScope(args.AWSProfile), Region: region}
 		prov, err := t.createProvider(string(common.ProviderAWS), cfg)
 		if err != nil {
 			return nil, err

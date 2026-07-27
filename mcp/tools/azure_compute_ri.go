@@ -180,7 +180,7 @@ func azureComputeRecommendationFromArgs(args azureComputeRIPurchaseArgs) (rec co
 // client against a raw, un-trimmed value.
 func (t *azureComputeRIPurchaseTool) resolveClient(args azureComputeRIPurchaseArgs, region string) ResolveClientFunc {
 	return func(ctx context.Context) (provider.ServiceClient, error) {
-		cfg := &provider.ProviderConfig{Name: string(common.ProviderAzure), AzureSubscriptionID: args.AzureSubscriptionID, Region: region}
+		cfg := &provider.ProviderConfig{Name: string(common.ProviderAzure), AzureSubscriptionID: CredentialScope(args.AzureSubscriptionID), Region: region}
 		prov, err := t.createProvider(string(common.ProviderAzure), cfg)
 		if err != nil {
 			return nil, err
