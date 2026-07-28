@@ -34,10 +34,21 @@ Parameters:
       Expected audience (aud) in the incoming OIDC token.
       Azure: api://<client_id>  or  <client_id>
       GCP:   https://iam.googleapis.com/projects/<project_number>/locations/global/workloadIdentityPools/<pool_id>/providers/<provider_id>
-      Leave empty to skip audience matching, or supply a non-whitespace string.
+      Leaving this empty does NOT skip audience matching. Both the trust
+      policy condition and the OIDC provider ClientIdList fall back to the
+      literal string sts.amazonaws.com, so only tokens carrying exactly that
+      audience are accepted.
     Default: ""
-    AllowedPattern: "^$|^\\S$|^\\S.*\\S$"
-    ConstraintDescription: "OIDCAudience must be either empty or a non-whitespace string (no leading/trailing whitespace)."
+    AllowedPattern: "^$|^[^\\s*$]$|^[^\\s*$][^*$]*[^\\s*$]$"
+    ConstraintDescription: >
+      OIDCAudience must be empty, or a non-whitespace string with no
+      leading/trailing whitespace and containing no '$' or '*'.
+      '$' is rejected because the trust policy is an IAM policy document and
+      IAM expands ${...} policy variables inside Condition values: an audience
+      of ${accounts.google.com:aud} would expand to the presented token's own
+      aud claim and therefore match every token.
+      '*' is rejected because StringEquals compares it literally rather than
+      as a wildcard, silently producing a role nobody can assume.
 
   OIDCThumbprint:
     Type: String
@@ -58,16 +69,26 @@ Parameters:
       so any tenant of that issuer could assume this role and place
       irreversible multi-year commitment purchases in this account.
       Azure AD managed identity: the object ID of the managed identity.
-      GCP service account: the service account unique ID, or the form
-      system:serviceaccount:<project>:<sa-email>.
+      GCP service account: the service account's 21-digit numeric unique ID.
+      That is the sub claim accounts.google.com actually issues; it is not the
+      service account email. The system:serviceaccount:<namespace>:<name> form
+      is the Kubernetes subject format and belongs to a cluster OIDC issuer,
+      not to accounts.google.com.
       Mirrors the required oidc_subject_claim variable in the Terraform module.
     MinLength: 1
-    AllowedPattern: "^[^\\s*]$|^[^\\s*][^*]*[^\\s*]$"
+    AllowedPattern: "^[^\\s*$]$|^[^\\s*$][^*$]*[^\\s*$]$"
     ConstraintDescription: >
       OIDCSubjectClaim is required and must be a non-empty string with no
-      leading/trailing whitespace and no '*'. The trust policy matches the
-      subject with StringEquals, so a '*' is compared literally rather than
-      as a wildcard and would silently produce a role nobody can assume.
+      leading/trailing whitespace and containing no '$' or '*'.
+      '$' is rejected because the trust policy below is an IAM policy document
+      (Version 2012-10-17) and IAM expands ${...} policy variables inside
+      Condition values. A subject of ${accounts.google.com:sub} would expand
+      to the presented token's own sub claim, making the condition a tautology
+      that matches EVERY identity the issuer can mint. That is exactly the
+      hole this parameter exists to close, so it is rejected at submission
+      time rather than deployed.
+      '*' is rejected because StringEquals compares it literally rather than
+      as a wildcard, silently producing a role nobody can assume.
 
   RoleName:
     Type: String

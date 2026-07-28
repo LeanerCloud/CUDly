@@ -4,22 +4,41 @@
 
 ## CRITICAL: federation bundle generator never emits `OIDCSubjectClaim`
 
-**File**: `internal/api/handler_federation.go` (`buildCFParamsJSON`), `internal/iacfiles/templates/aws-wif-cf-params.json.tmpl`, `internal/iacfiles/templates/aws-wif-cli.sh.tmpl`
+**File**:
+
+- `internal/api/handler_federation.go` (`buildCFParamsJSON`, and the
+  `format=cli` bundle selector at `:401`/`:415`)
+- `internal/iacfiles/templates/aws-wif-cf-params.json.tmpl`
+- `internal/iacfiles/templates/aws-wif-cli.sh.tmpl:17` (documents
+  `OIDC_SUBJECT_CLAIM` as Optional) and `:57-70` (else branch builds the role
+  with only the `:aud` condition and no `:sub`)
+- `internal/iacfiles/templates/aws-cfn-deploy.sh.tmpl:34-38`, the
+  `--parameter-overrides` list in the script that deploys the CloudFormation
+  bundle; it does not pass `OIDCSubjectClaim`
+- `internal/iacfiles/templates/aws-wif.tfvars.tmpl:14-15`, which emits
+  `# oidc_subject_claim = ""` labelled Optional, contradicting the REQUIRED
+  `oidc_subject_claim` variable in `terraform/variables.tf:28-42`
+
 **Description**: The customer-facing onboarding bundle writes CloudFormation
 parameter overrides for `OIDCIssuerURL`, `OIDCIssuerHost`, `OIDCAudience` and
 `RoleName`, but never `OIDCSubjectClaim`. `aws-wif-cli.sh.tmpl` has the same
 shape: it documents `OIDC_SUBJECT_CLAIM` as "Optional" and builds a trust
 policy with no `:sub` condition when the variable is unset. Both paths
 therefore produce the unrestricted trust policy that issue #1543 removed from
-the template itself.
+the template itself. The tfvars template repeats the claim that the subject is
+optional, and the deploy script never forwards the parameter.
 **Impact**: Now that `OIDCSubjectClaim` is a required template parameter, the
 generated CloudFormation bundle fails at change-set creation with
 `Parameters: [OIDCSubjectClaim] must have values` — fail-closed, but the
-onboarding flow is broken until the generator is taught to emit the subject.
-The `aws-wif-cli.sh.tmpl` path does not go through CloudFormation and still
-creates a subject-less role.
-**Status:** ⚠️ Still valid — tracked as a follow-up to #1543, and not fixed in
-that PR because `internal/` was owned by concurrent in-flight branches.
+onboarding flow is broken until the generator and `aws-cfn-deploy.sh.tmpl` are
+taught to emit the subject. The `aws-wif-cli.sh.tmpl` path does not go through
+CloudFormation at all: `format=cli` is a first-class user-selectable download,
+so a customer choosing the CLI bundle still gets exactly the subject-less
+role #1543 describes. The tfvars path is fail-closed (Terraform's variable
+validation rejects the omission) but misleads the operator first.
+**Status:** ⚠️ Still valid — tracked as a follow-up to #1543 in #1640, and not
+fixed in that PR because `internal/` was owned by concurrent in-flight
+branches.
 
 ## ~~CRITICAL: CloudFormation `:sub` restriction is optional and defaults to trusting every issuer identity~~ — RESOLVED
 
@@ -41,8 +60,20 @@ purchases are irreversible multi-year spend.
 **Resolved by:** #1543 — removes the `HasSubject` condition and the
 subject-less trust statement, and makes `OIDCSubjectClaim` a required
 parameter (no `Default`, `MinLength: 1`, `AllowedPattern` rejecting
-whitespace-only and `*` values), mirroring the Terraform module's
+whitespace-only values and any `*` or `$`), mirroring the Terraform module's
 `oidc_subject_claim` validation.
+
+`$` is rejected because `AssumeRolePolicyDocument` is an IAM policy document
+and IAM expands `${...}` policy variables inside `Condition` values. A subject
+of `${accounts.google.com:sub}` (a documented web-identity policy variable for
+the `accounts.google.com` issuer this template targets) expands to the
+presented token's own `sub` claim, making the condition a tautology that
+matches every identity the issuer can mint. An operator could reach that value
+by copy-pasting a placeholder or by running a templating layer that failed to
+interpolate, reconstructing the #1543 hole through the guard added to close
+it. The same guard is applied to `OIDCAudience` and to the Terraform
+`oidc_subject_claim` / `oidc_audience` variables, since audience is the only
+other control on this trust policy.
 
 ## ~~CRITICAL: Terraform trust policy silently drops `:aud` condition when `oidc_subject_claim` is set~~ — RESOLVED
 
@@ -135,7 +166,7 @@ whitespace-only and `*` values), mirroring the Terraform module's
 **Description**: A whitespace-only audience value previously created a trust policy that no token matches.
 **Status:** ✔️ Resolved
 
-**Resolved by:** Added `AllowedPattern: "^$|^\\S$|^\\S.*\\S$"` and `ConstraintDescription` to the `OIDCAudience` parameter. Empty strings remain allowed (HasAudience stays false); whitespace-only and leading/trailing-whitespace values are now rejected at change-set creation time.
+**Resolved by:** Added `AllowedPattern` and `ConstraintDescription` to the `OIDCAudience` parameter. Empty strings remain allowed (HasAudience stays false); whitespace-only and leading/trailing-whitespace values are now rejected at change-set creation time. #1543 tightened the pattern to `^$|^[^\\s*$]$|^[^\\s*$][^*$]*[^\\s*$]$`, additionally rejecting `*` and `$` for the IAM policy-variable-expansion reason described in the #1543 entry above.
 
 ### Original implementation plan
 
