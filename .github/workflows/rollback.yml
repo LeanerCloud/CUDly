@@ -11,8 +11,16 @@
 
 name: Rollback Deployment
 
+# Least privilege by default: only the jobs that actually authenticate to a
+# cloud provider get `id-token: write`, and every one of those jobs is bound to
+# a deployment environment, so no OIDC token can be minted by a job outside the
+# environment's protection rules.
+#
+# The binding is necessary but not sufficient: GitHub auto-creates a referenced
+# environment on first use with NO protection rules. The `<cloud>-<env>-rollback`
+# environments must therefore be configured with required reviewers in repo
+# settings for the approval gate to actually stop anything.
 permissions:
-  id-token: write
   contents: read
 
 on:
@@ -46,8 +54,9 @@ jobs:
     name: Validate Rollback
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
     outputs:
-      is_valid: ${{ steps.check.outputs.is_valid }}
       image_uri: ${{ steps.check.outputs.image_uri }}
 
     steps:
@@ -59,148 +68,116 @@ jobs:
       - name: Validate inputs
         id: check
         env:
+          CLOUD: ${{ inputs.cloud }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
           ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+          GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          ARTIFACT_REGISTRY_REPO: ${{ vars.ARTIFACT_REGISTRY_REPO || 'cudly' }}
+          ACR_NAME: ${{ vars.ACR_NAME || 'cudlyacr' }}
         run: |
-          IS_VALID=true
-          IMAGE_URI=""
+          set -euo pipefail
 
-          # Validate image tag format
-          if [[ ! "${{ inputs.image_tag }}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-            echo "❌ Invalid image tag format"
-            IS_VALID=false
+          # `env:` entries whose expression renders empty are exported empty,
+          # but normalise anyway so `set -u` can never abort a rollback on an
+          # unset optional repository variable.
+          ECR_REPOSITORY="${ECR_REPOSITORY:-}"
+          AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID:-}"
+          GCP_PROJECT_ID="${GCP_PROJECT_ID:-}"
+
+          # The tag is embedded in image URIs that later steps hand to the cloud
+          # CLIs, so reject anything outside the registry-safe character set here
+          # rather than downstream. Constraining the tag also keeps the operator-
+          # supplied half of the $GITHUB_OUTPUT write below free of newlines; the
+          # rest of the URI comes from admin-controlled repository variables.
+          if [[ ! "$IMAGE_TAG" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+            echo "::error::Invalid image tag format: only [a-zA-Z0-9._-] are allowed"
+            exit 1
           fi
 
           # Construct image URI based on cloud provider
-          case "${{ inputs.cloud }}" in
+          case "$CLOUD" in
             aws-lambda|aws-fargate)
               if [ -z "$ECR_REPOSITORY" ]; then
-                echo "❌ ECR_REPOSITORY repository variable is not set; refusing to guess the repo name"
-                IS_VALID=false
-              else
-                IMAGE_URI="${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION || 'us-east-1' }}.amazonaws.com/${ECR_REPOSITORY}:${{ inputs.image_tag }}"
+                echo "::error::ECR_REPOSITORY repository variable is not set; refusing to guess the repo name"
+                exit 1
               fi
+              if [ -z "$AWS_ACCOUNT_ID" ]; then
+                echo "::error::AWS_ACCOUNT_ID repository variable is not set; refusing to guess the registry"
+                exit 1
+              fi
+              IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}"
               ;;
             gcp)
-              IMAGE_URI="${{ vars.GCP_REGION || 'us-central1' }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ vars.ARTIFACT_REGISTRY_REPO || 'cudly' }}/cudly:${{ inputs.image_tag }}"
+              if [ -z "$GCP_PROJECT_ID" ]; then
+                echo "::error::GCP_PROJECT_ID secret is not set; refusing to guess the project"
+                exit 1
+              fi
+              IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/cudly:${IMAGE_TAG}"
               ;;
             azure)
-              IMAGE_URI="${{ vars.ACR_NAME || 'cudlyacr' }}.azurecr.io/cudly:${{ inputs.image_tag }}"
+              IMAGE_URI="${ACR_NAME}.azurecr.io/cudly:${IMAGE_TAG}"
               ;;
             *)
-              echo "❌ Unknown cloud provider"
-              IS_VALID=false
+              echo "::error::Unknown cloud provider: $CLOUD"
+              exit 1
               ;;
           esac
 
-          echo "is_valid=$IS_VALID" >> $GITHUB_OUTPUT
-          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+          echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
 
       - name: Display rollback plan
+        env:
+          CLOUD: ${{ inputs.cloud }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          IMAGE_URI: ${{ steps.check.outputs.image_uri }}
+          REASON: ${{ inputs.reason }}
         run: |
-          echo "## Rollback Plan" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Cloud:** ${{ inputs.cloud }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Image Tag:** ${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Image URI:** ${{ steps.check.outputs.image_uri }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          set -euo pipefail
+          # The step summary renders as markdown, so fold the free-text reason
+          # onto one line: a dispatcher could otherwise embed newlines and forge
+          # headings or a fake result line in the rendered summary.
+          REASON="${REASON:-}"
+          REASON="${REASON//$'\n'/ }"
+          REASON="${REASON//$'\r'/ }"
+          {
+            echo "## Rollback Plan"
+            echo ""
+            echo "**Cloud:** $CLOUD"
+            echo "**Environment:** $ENVIRONMENT"
+            echo "**Image Tag:** $IMAGE_TAG"
+            echo "**Image URI:** $IMAGE_URI"
+            echo ""
 
-          if [ -n "${{ inputs.reason }}" ]; then
-            echo "**Reason:** ${{ inputs.reason }}" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-          fi
+            if [ -n "$REASON" ]; then
+              echo "**Reason:** $REASON"
+              echo ""
+            fi
 
-          if [[ "${{ inputs.environment }}" == "prod" ]]; then
-            echo "⚠️ **WARNING:** Rolling back PRODUCTION environment!" >> $GITHUB_STEP_SUMMARY
-          fi
+            if [ "$ENVIRONMENT" = "prod" ]; then
+              echo "⚠️ **WARNING:** Rolling back PRODUCTION environment!"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
-  # Verify image exists
-  verify-image:
-    name: Verify Image Exists
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    needs: validate
-    if: needs.validate.outputs.is_valid == 'true'
-
-    steps:
-      - name: Configure credentials (AWS)
-        if: startsWith(inputs.cloud, 'aws')
-        uses: aws-actions/configure-aws-credentials@d979d5b3a71173a29b74b5b88418bfda9437d885 # v6.1.1
-        with:
-          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-
-      - name: Verify AWS image
-        if: startsWith(inputs.cloud, 'aws')
-        run: |
-          IMAGE_TAG="${{ inputs.image_tag }}"
-          REPO="${{ vars.ECR_REPOSITORY }}"
-
-          if [ -z "$REPO" ]; then
-            echo "❌ ECR_REPOSITORY repository variable is not set"
-            exit 1
-          fi
-
-          echo "Checking if image exists: $REPO:$IMAGE_TAG"
-
-          if aws ecr describe-images \
-              --repository-name $REPO \
-              --image-ids imageTag=$IMAGE_TAG \
-              --region ${{ vars.AWS_REGION || 'us-east-1' }} > /dev/null 2>&1; then
-            echo "✅ Image exists in ECR"
-          else
-            echo "❌ Image not found in ECR"
-            exit 1
-          fi
-
-      - name: Configure credentials (GCP)
-        if: inputs.cloud == 'gcp'
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
-
-      - name: Verify GCP image
-        if: inputs.cloud == 'gcp'
-        run: |
-          gcloud artifacts docker images describe \
-            "${{ needs.validate.outputs.image_uri }}" \
-            && echo "✅ Image exists in Artifact Registry" \
-            || (echo "❌ Image not found in Artifact Registry" && exit 1)
-
-      - name: Configure credentials (Azure)
-        if: inputs.cloud == 'azure'
-        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Verify Azure image
-        if: inputs.cloud == 'azure'
-        run: |
-          IMAGE_TAG="${{ inputs.image_tag }}"
-          ACR_NAME="${{ vars.ACR_NAME || 'cudlyacr' }}"
-
-          echo "Checking if image exists: $ACR_NAME/cudly:$IMAGE_TAG"
-
-          if az acr repository show-tags \
-              --name $ACR_NAME \
-              --repository cudly \
-              --output tsv | grep -q "^$IMAGE_TAG$"; then
-            echo "✅ Image exists in ACR"
-          else
-            echo "❌ Image not found in ACR"
-            exit 1
-          fi
+  # NOTE: image existence is verified inside each rollback job rather than in a
+  # standalone job. A separate verify job would have to assume the same
+  # cloud deploy role, and it could not be covered by the rollback
+  # environment's reviewer gate without prompting the operator for a second
+  # approval on every rollback.
 
   # Rollback AWS Lambda
   rollback-aws-lambda:
     name: Rollback AWS Lambda
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [validate, verify-image]
+    needs: validate
     if: inputs.cloud == 'aws-lambda'
+    permissions:
+      id-token: write
+      contents: read
     environment:
       name: aws-lambda-${{ inputs.environment }}-rollback
 
@@ -216,6 +193,31 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
+      - name: Verify image exists
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${ECR_REPOSITORY:-}" ]; then
+            echo "::error::ECR_REPOSITORY repository variable is not set"
+            exit 1
+          fi
+
+          echo "Checking if image exists: $ECR_REPOSITORY:$IMAGE_TAG"
+
+          if aws ecr describe-images \
+              --repository-name "$ECR_REPOSITORY" \
+              --image-ids "imageTag=$IMAGE_TAG" \
+              --region "$AWS_REGION" > /dev/null 2>&1; then
+            echo "✅ Image exists in ECR"
+          else
+            echo "::error::Image not found in ECR"
+            exit 1
+          fi
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
@@ -226,21 +228,26 @@ jobs:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
           TF_BACKEND: ${{ secrets.TF_BACKEND_AWS }}
           ENVIRONMENT: ${{ inputs.environment }}
+          IMAGE_URI: ${{ needs.validate.outputs.image_uri }}
         run: |
+          set -euo pipefail
           printf '%s\nkey = "github-%s/terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/aws
           terraform init -backend-config=/tmp/backend.tfbackend
 
           terraform apply -auto-approve \
-            -var-file="github-${{ inputs.environment }}.tfvars" \
-            -var="image_uri=${{ needs.validate.outputs.image_uri }}" \
+            -var-file="github-${ENVIRONMENT}.tfvars" \
+            -var="image_uri=${IMAGE_URI}" \
             -var="compute_platform=lambda"
 
       - name: Verify rollback
         run: |
+          set -euo pipefail
           sleep 30  # Wait for Lambda to update
           cd terraform/environments/aws
-          FUNCTION_URL=$(terraform output -raw lambda_function_url 2>/dev/null)
+          # Not silenced: if the output is missing, the real terraform error is
+          # what tells the operator why the rollback cannot be verified.
+          FUNCTION_URL=$(terraform output -raw lambda_function_url)
 
           if curl -f -s "$FUNCTION_URL/health" > /dev/null; then
             echo "✅ Rollback successful - health check passed"
@@ -254,8 +261,11 @@ jobs:
     name: Rollback AWS Fargate
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [validate, verify-image]
+    needs: validate
     if: inputs.cloud == 'aws-fargate'
+    permissions:
+      id-token: write
+      contents: read
     environment:
       name: aws-fargate-${{ inputs.environment }}-rollback
 
@@ -271,6 +281,31 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
+      - name: Verify image exists
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${ECR_REPOSITORY:-}" ]; then
+            echo "::error::ECR_REPOSITORY repository variable is not set"
+            exit 1
+          fi
+
+          echo "Checking if image exists: $ECR_REPOSITORY:$IMAGE_TAG"
+
+          if aws ecr describe-images \
+              --repository-name "$ECR_REPOSITORY" \
+              --image-ids "imageTag=$IMAGE_TAG" \
+              --region "$AWS_REGION" > /dev/null 2>&1; then
+            echo "✅ Image exists in ECR"
+          else
+            echo "::error::Image not found in ECR"
+            exit 1
+          fi
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
@@ -281,14 +316,16 @@ jobs:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
           TF_BACKEND: ${{ secrets.TF_BACKEND_AWS }}
           ENVIRONMENT: ${{ inputs.environment }}
+          IMAGE_URI: ${{ needs.validate.outputs.image_uri }}
         run: |
+          set -euo pipefail
           printf '%s\nkey = "github-%s/terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/aws
           terraform init -backend-config=/tmp/backend.tfbackend
 
           terraform apply -auto-approve \
-            -var-file="github-${{ inputs.environment }}.tfvars" \
-            -var="image_uri=${{ needs.validate.outputs.image_uri }}" \
+            -var-file="github-${ENVIRONMENT}.tfvars" \
+            -var="image_uri=${IMAGE_URI}" \
             -var="compute_platform=fargate"
 
   # Rollback GCP
@@ -296,8 +333,11 @@ jobs:
     name: Rollback GCP Cloud Run
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [validate, verify-image]
+    needs: validate
     if: inputs.cloud == 'gcp'
+    permissions:
+      id-token: write
+      contents: read
     environment:
       name: gcp-${{ inputs.environment }}-rollback
 
@@ -313,6 +353,21 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
+      - name: Verify image exists
+        env:
+          IMAGE_URI: ${{ needs.validate.outputs.image_uri }}
+        run: |
+          set -euo pipefail
+
+          echo "Checking if image exists: $IMAGE_URI"
+
+          if gcloud artifacts docker images describe "$IMAGE_URI" > /dev/null 2>&1; then
+            echo "✅ Image exists in Artifact Registry"
+          else
+            echo "::error::Image not found in Artifact Registry"
+            exit 1
+          fi
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
@@ -323,23 +378,29 @@ jobs:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
           TF_BACKEND: ${{ secrets.TF_BACKEND_GCP }}
           ENVIRONMENT: ${{ inputs.environment }}
+          IMAGE_URI: ${{ needs.validate.outputs.image_uri }}
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
         run: |
+          set -euo pipefail
           printf '%s\nprefix = "github-%s"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/gcp
           terraform init -backend-config=/tmp/backend.tfbackend
 
           terraform apply -auto-approve \
-            -var-file="github-${{ inputs.environment }}.tfvars" \
-            -var="image_uri=${{ needs.validate.outputs.image_uri }}" \
-            -var="project_id=${{ secrets.GCP_PROJECT_ID }}"
+            -var-file="github-${ENVIRONMENT}.tfvars" \
+            -var="image_uri=${IMAGE_URI}" \
+            -var="project_id=${GCP_PROJECT_ID}"
 
   # Rollback Azure
   rollback-azure:
     name: Rollback Azure Container Apps
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [validate, verify-image]
+    needs: validate
     if: inputs.cloud == 'azure'
+    permissions:
+      id-token: write
+      contents: read
     environment:
       name: azure-${{ inputs.environment }}-rollback
 
@@ -356,6 +417,29 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Verify image exists
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          ACR_NAME: ${{ vars.ACR_NAME || 'cudlyacr' }}
+        run: |
+          set -euo pipefail
+
+          echo "Checking if image exists: $ACR_NAME/cudly:$IMAGE_TAG"
+
+          # Look the tag up directly instead of listing tags and grepping.
+          # `show-tags` is paginated, so a valid but older tag can fall off the
+          # first page and be reported missing; and under `set -o pipefail` the
+          # early exit of `grep -q` can SIGPIPE the `az` process, failing the
+          # pipeline even on a match.
+          if az acr repository show \
+              --name "$ACR_NAME" \
+              --image "cudly:$IMAGE_TAG" > /dev/null 2>&1; then
+            echo "✅ Image exists in ACR"
+          else
+            echo "::error::Image not found in ACR"
+            exit 1
+          fi
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
@@ -368,23 +452,26 @@ jobs:
           TF_VAR_key_vault_name: ${{ vars.KEY_VAULT_NAME }}
           TF_BACKEND: ${{ secrets.TF_BACKEND_AZURE }}
           ENVIRONMENT: ${{ inputs.environment }}
+          IMAGE_URI: ${{ needs.validate.outputs.image_uri }}
         run: |
+          set -euo pipefail
           printf '%s\nkey = "github-%s.terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/azure
           terraform init -backend-config=/tmp/backend.tfbackend
 
           terraform apply -auto-approve \
-            -var-file="github-${{ inputs.environment }}.tfvars" \
-            -var="image_uri=${{ needs.validate.outputs.image_uri }}"
+            -var-file="github-${ENVIRONMENT}.tfvars" \
+            -var="image_uri=${IMAGE_URI}"
 
   # Summary
   summary:
     name: Rollback Summary
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     needs:
       - validate
-      - verify-image
       - rollback-aws-lambda
       - rollback-aws-fargate
       - rollback-gcp
@@ -392,61 +479,55 @@ jobs:
     if: always()
 
     steps:
-      - name: Post summary
+      - name: Determine rollback result
+        id: result
+        env:
+          CLOUD: ${{ inputs.cloud }}
+          RESULT_AWS_LAMBDA: ${{ needs.rollback-aws-lambda.result }}
+          RESULT_AWS_FARGATE: ${{ needs.rollback-aws-fargate.result }}
+          RESULT_GCP: ${{ needs.rollback-gcp.result }}
+          RESULT_AZURE: ${{ needs.rollback-azure.result }}
         run: |
-          echo "## Rollback Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Cloud:** ${{ inputs.cloud }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Image Tag:** ${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Timestamp:** $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          set -euo pipefail
 
-          if [ -n "${{ inputs.reason }}" ]; then
-            echo "**Reason:** ${{ inputs.reason }}" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          # Determine which job ran
-          RESULT=""
-          case "${{ inputs.cloud }}" in
-            aws-lambda)
-              RESULT="${{ needs.rollback-aws-lambda.result }}"
-              ;;
-            aws-fargate)
-              RESULT="${{ needs.rollback-aws-fargate.result }}"
-              ;;
-            gcp)
-              RESULT="${{ needs.rollback-gcp.result }}"
-              ;;
-            azure)
-              RESULT="${{ needs.rollback-azure.result }}"
-              ;;
+          case "$CLOUD" in
+            aws-lambda)  RESULT="$RESULT_AWS_LAMBDA" ;;
+            aws-fargate) RESULT="$RESULT_AWS_FARGATE" ;;
+            gcp)         RESULT="$RESULT_GCP" ;;
+            azure)       RESULT="$RESULT_AZURE" ;;
+            *)           RESULT="unknown" ;;
           esac
 
-          if [ "$RESULT" == "success" ]; then
-            echo "✅ **Rollback completed successfully!**" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ **Rollback failed. Status: $RESULT**" >> $GITHUB_STEP_SUMMARY
-            echo "Check the job logs for details." >> $GITHUB_STEP_SUMMARY
-            exit 1
-          fi
+          echo "result=$RESULT" >> "$GITHUB_OUTPUT"
 
       - name: Record rollback
+        env:
+          CLOUD: ${{ inputs.cloud }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          IMAGE_URI: ${{ needs.validate.outputs.image_uri }}
+          REASON: ${{ inputs.reason }}
+          RESULT: ${{ steps.result.outputs.result }}
+          PERFORMED_BY: ${{ github.actor }}
+          WORKFLOW_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          # Create rollback record for audit trail
-          cat <<EOF > rollback-record.json
-          {
-            "cloud": "${{ inputs.cloud }}",
-            "environment": "${{ inputs.environment }}",
-            "image_tag": "${{ inputs.image_tag }}",
-            "image_uri": "${{ needs.validate.outputs.image_uri }}",
-            "reason": "${{ inputs.reason }}",
-            "performed_by": "${{ github.actor }}",
-            "performed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "workflow_run": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          }
-          EOF
+          set -euo pipefail
+          REASON="${REASON:-}"
+
+          # Build the audit record with jq so every value is JSON-escaped by the
+          # tool. Interpolating them into a here-document would both break the
+          # JSON on a quote and let $(...) in an input execute as shell.
+          jq -n \
+            --arg cloud "$CLOUD" \
+            --arg environment "$ENVIRONMENT" \
+            --arg image_tag "$IMAGE_TAG" \
+            --arg image_uri "$IMAGE_URI" \
+            --arg reason "$REASON" \
+            --arg result "$RESULT" \
+            --arg performed_by "$PERFORMED_BY" \
+            --arg performed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg workflow_run "$WORKFLOW_RUN" \
+            '$ARGS.named' > rollback-record.json
 
           echo "Rollback record:"
           cat rollback-record.json
@@ -457,3 +538,46 @@ jobs:
           name: rollback-record-${{ github.run_id }}
           path: rollback-record.json
           retention-days: 365  # Keep rollback records for 1 year
+
+      # Runs last so that a failed rollback still leaves the audit record above
+      # uploaded before this step fails the job.
+      - name: Post summary
+        env:
+          CLOUD: ${{ inputs.cloud }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          REASON: ${{ inputs.reason }}
+          RESULT: ${{ steps.result.outputs.result }}
+        run: |
+          set -euo pipefail
+          # Folded onto one line for the same reason as in the rollback plan:
+          # the summary is markdown and must not be forgeable from an input.
+          REASON="${REASON:-}"
+          REASON="${REASON//$'\n'/ }"
+          REASON="${REASON//$'\r'/ }"
+
+          {
+            echo "## Rollback Results"
+            echo ""
+            echo "**Cloud:** $CLOUD"
+            echo "**Environment:** $ENVIRONMENT"
+            echo "**Image Tag:** $IMAGE_TAG"
+            echo "**Timestamp:** $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo ""
+
+            if [ -n "$REASON" ]; then
+              echo "**Reason:** $REASON"
+              echo ""
+            fi
+
+            if [ "$RESULT" = "success" ]; then
+              echo "✅ **Rollback completed successfully!**"
+            else
+              echo "❌ **Rollback failed. Status: $RESULT**"
+              echo "Check the job logs for details."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$RESULT" != "success" ]; then
+            exit 1
+          fi
