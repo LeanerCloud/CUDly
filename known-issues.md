@@ -5,6 +5,96 @@ action. Resolved items are moved to the Resolved section at the bottom.
 
 ## Outstanding
 
+### Existing Azure deployments carry a tenant-wide reservation grant (issue #1545)
+
+Until issue #1545 was fixed, `arm/CUDly-CrossSubscription/template.json`
+declared two things that reached past the subscription being onboarded:
+
+1. A **second** role assignment carrying `"scope": "/providers/Microsoft.Capacity"`,
+   in addition to the intended subscription-scope assignment. Written as an
+   absolute path, that scope denotes tenant-wide reservation orders: an
+   assignment there covers every reservation order in the Azure AD tenant,
+   including subscriptions the customer never onboarded.
+2. `/providers/Microsoft.Capacity` in the custom role definition's
+   `assignableScopes`, which declares the role *eligible* to be assigned at
+   tenant scope by anyone who can create role assignments there.
+
+What (1) actually produced is worth recording, because it is not what the
+template appears to say. Running `az deployment sub validate` against the
+pre-fix template resolves that assignment to
+
+```text
+/subscriptions/<subId>/providers/providers/Microsoft.Capacity/providers/Microsoft.Authorization/roleAssignments/<guid>
+```
+
+Note the doubled `providers/providers`. In a subscription-scoped deployment
+ARM appends the `scope` value beneath the subscription rather than treating it
+as an absolute tenant path, so the most likely apply-time outcome is a
+malformed target that fails or lands somewhere meaningless, not a clean
+tenant-wide grant. Whether it ever resolved to a real tenant-scope assignment
+(for example when deployed by a principal holding tenant-root authority) has
+not been established, and cannot be without applying the template to a live
+tenant.
+
+Treat it as possibly live rather than assuming either way: **verify, then
+revoke if present.** (2) is a real widening regardless of how (1) resolved.
+
+The template no longer creates that assignment, and `/providers/Microsoft.Capacity`
+has been dropped from the role definition's `assignableScopes`. This matches
+`terraform/modules/iam/azure/cudly-reservation-role`, whose
+`include_capacity_provider_scope` flag has always defaulted to `false`, and
+`iac/federation/azure-target/terraform`, which has only ever assigned at
+subscription scope.
+
+**ARM deployments are incremental: removing the resource from the template does
+not revoke anything it previously created.** Anyone who deployed the template
+before this fix keeps whatever it granted until they delete it by hand.
+Redeploying alone is not sufficient.
+
+Remediation, in this order:
+
+```bash
+# 1. Check what the pre-fix template actually left behind, tenant-wide.
+#    Any row scoped at or under /providers/Microsoft.Capacity is over-broad.
+az role assignment list \
+  --assignee <SP-object-id> \
+  --all \
+  --query "[?contains(scope, 'Microsoft.Capacity')].{scope:scope, role:roleDefinitionName}" \
+  -o table
+
+# 2. Revoke anything step 1 listed, FIRST, before redeploying.
+az role assignment delete \
+  --assignee <SP-object-id> \
+  --role "CUDly Reservation Purchaser (custom)" \
+  --scope /providers/Microsoft.Capacity
+
+# 3. Then redeploy the corrected template to narrow assignableScopes.
+az deployment sub create \
+  --location eastus \
+  --template-file arm/CUDly-CrossSubscription/template.json \
+  --parameters servicePrincipalObjectId=<SP-object-id> \
+  --name CUDly-CrossSubscription \
+  --no-prompt
+```
+
+Step 1 returning nothing is a good outcome, and the expected one if the
+malformed target described above simply failed to apply. Step 3 is still
+required either way: it is what removes the tenant entry from
+`assignableScopes`.
+
+The order matters: Azure refuses to remove an assignable scope from a role
+definition while assignments still exist at that scope, so redeploying before
+step 1 can fail on the role-definition update.
+
+Purchases are unaffected by the narrower grant. Azure authorises a reservation
+purchase against the subscription named in the request body's `billingScopeId`,
+not against the tenant-level `Microsoft.Capacity` provider path, which is why
+the Terraform onboarding path has always worked with subscription scope alone.
+If a deployment ever does need a tenant-wide grant, it must be applied manually
+as an explicitly consented step (the `az role assignment create` mirror of
+step 1) and must not be reintroduced into the template.
+`scripts/check-azure-role-parity.sh` fails CI if it is.
+
 ### Azure ARM template re-deployment required for purchase support (issue #731)
 
 The built-in "Reservation Purchaser" role (f7b75c60-3036-4b75-91c3-6b41c27c1689)
@@ -44,6 +134,13 @@ will continue to return 403.
   applied the buggy template may need to clean up the orphaned
   subscription-scoped `Reservation Reader` assignment manually with
   `az role assignment delete --assignee <sp-object-id> --role "Reservation Reader" --scope /subscriptions/<subId>`.
+  **Superseded by issue #1545**: the `/providers/Microsoft.Capacity`
+  assignment described here was a workaround for `Reservation Reader` not
+  existing in every tenant. The custom role introduced by issue #731 removed
+  that need, but the tenant-wide assignment was left behind and silently
+  granted access across the whole tenant. It has since been removed; do not
+  reintroduce it. See the #1545 entry under Outstanding for the revocation
+  steps existing deployments still need.
 
 - **Azure ACS SMTP credential generation requires manual portal step**:
   Microsoft's API gap remains (no REST endpoint generates ACS SMTP

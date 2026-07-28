@@ -40,6 +40,23 @@ run_case "drifted ARM exits 1" 1 \
   --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
   --arm-file "${FIXTURES}/drifted-arm.json"
 
+# Case 3 (issue #1545): actions match, but the role is assignable at (and
+# assigned at) the tenant-wide /providers/Microsoft.Capacity scope. This is
+# the exact shape that shipped in arm/CUDly-CrossSubscription/template.json:
+# the actions check passes, so only the scope check can catch it.
+run_case "tenant-scope ARM exits 1" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/tenant-scope-arm.json"
+
+# Case 4 (issue #1545): the same tenant-wide escape, but written as an ARM
+# expression that also mentions /subscriptions/. A check that merely required
+# the scope to look subscription-anchored would admit this while rejecting the
+# blunt literal in case 3, accepting the fail-OPEN form and blocking only the
+# cosmetically-bad one. The token denylist is what must reject it.
+run_case "obfuscated tenant-scope ARM exits 1" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/obfuscated-tenant-scope-arm.json"
+
 echo ""
 echo "Results: ${pass} passed, ${fail} failed."
 [[ "$fail" -eq 0 ]]
