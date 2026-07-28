@@ -56,17 +56,19 @@ Remediation, in this order:
 ```bash
 # 1. Check what the pre-fix template actually left behind, tenant-wide.
 #    Any row scoped at or under /providers/Microsoft.Capacity is over-broad.
+#    Project the assignment id: it is what step 2 deletes by.
 az role assignment list \
   --assignee <SP-object-id> \
   --all \
-  --query "[?contains(scope, 'Microsoft.Capacity')].{scope:scope, role:roleDefinitionName}" \
+  --query "[?contains(scope, 'Microsoft.Capacity')].{id:id, scope:scope, role:roleDefinitionName}" \
   -o table
 
 # 2. Revoke anything step 1 listed, FIRST, before redeploying.
-az role assignment delete \
-  --assignee <SP-object-id> \
-  --role "CUDly Reservation Purchaser (custom)" \
-  --scope /providers/Microsoft.Capacity
+#    Delete by --ids, not by --scope: the pre-fix template could produce the
+#    malformed doubled-providers scope shown above, and `az role assignment
+#    delete --scope /providers/Microsoft.Capacity` rejects that as an invalid
+#    scope, leaving the row listed but undeletable. The id always works.
+az role assignment delete --ids <id-from-step-1> [<id> ...]
 
 # 3. Then redeploy the corrected template to narrow assignableScopes.
 az deployment sub create \
