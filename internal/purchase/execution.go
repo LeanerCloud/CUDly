@@ -61,6 +61,20 @@ func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExec
 				return fmt.Errorf("failed to load plan accounts for plan %s: %w", exec.PlanID, err)
 			}
 			if len(accounts) > 0 {
+				if scoped := accountScopedLineageKeyOwner(exec, accounts); scoped != nil {
+					// Second gate for issue #1537. cloud_account_id is the
+					// primary one, but a row can reach here scopeless with a
+					// key that is already per-account: rows minted by the
+					// pre-#1537 retry handler and still pending/approved at
+					// deploy time. Fanning those out re-suffixes the key and
+					// re-buys every account that already committed, so fail
+					// loud instead — the operator re-drives the correct
+					// per-account row rather than the plan paying twice.
+					return fmt.Errorf("refusing to fan out execution %s across %d plan accounts: "+
+						"its idempotency lineage is already scoped to account %s (%s) but the row carries no cloud_account_id; "+
+						"re-deriving the key would double-purchase every account that already committed (issue #1537)",
+						exec.ExecutionID, len(accounts), scoped.ID, scoped.Name)
+				}
 				return m.executeMultiAccount(ctx, exec, plan, accounts)
 			}
 		}
@@ -714,6 +728,31 @@ func idempotencyLineageKey(exec *config.PurchaseExecution) string {
 		return exec.IdempotencyKey
 	}
 	return exec.ExecutionID
+}
+
+// accountScopedLineageKeyOwner returns the plan account whose ID terminates
+// exec's idempotency lineage key, or nil when the key is a root key.
+//
+// executeForAccount keys every fan-out row "<root-key>:<accountID>", so a
+// terminal ":<accountID>" match against the plan's OWN account set identifies a
+// row that is already scoped to one account regardless of what cloud_account_id
+// says. Matching against the plan's accounts (rather than parsing the string
+// for a UUID-shaped tail) is what makes this precise: a root key is a UUID or a
+// legacy execution ID and cannot end in ":" plus one of this plan's account
+// IDs, so there are no false positives to trade off against.
+func accountScopedLineageKeyOwner(exec *config.PurchaseExecution, accounts []config.CloudAccount) *config.CloudAccount {
+	key := idempotencyLineageKey(exec)
+	for i := range accounts {
+		// An empty ID would reduce the test to HasSuffix(key, ":") and could
+		// veto a legitimate fan-out, so require a real account ID to match on.
+		if accounts[i].ID == "" {
+			continue
+		}
+		if strings.HasSuffix(key, ":"+accounts[i].ID) {
+			return &accounts[i]
+		}
+	}
+	return nil
 }
 
 // appendErrNote joins note onto an existing error string with "; ",

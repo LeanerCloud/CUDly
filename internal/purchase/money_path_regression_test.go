@@ -357,3 +357,167 @@ func TestMultiAccountPartialSuccessIsAcked(t *testing.T) {
 	assert.Equal(t, "partially_completed", savedRoot.Status,
 		"root must reflect partial success, never 'failed' (double-spend mislabel #642/#1014)")
 }
+
+// TestScopelessPerAccountKeyRefusesToFanOut is the issue #1537 defense-in-depth
+// guard at the purchase layer.
+//
+// The primary fix keeps cloud_account_id on a per-account row's retry successor
+// (api.persistRetryExecution). This is the second gate, for a row that reaches
+// the executor scopeless while its idempotency lineage is already per-account —
+// concretely, a successor minted by the pre-#1537 retry handler that is still
+// pending/approved when the fix deploys. Fanning such a row out would re-suffix
+// its key ("root:acct-A" -> "root:acct-A:acct-B"), derive tokens matching
+// nothing the first attempt used, and re-buy every account that already
+// committed. It must fail loud with ZERO purchases instead.
+func TestScopelessPerAccountKeyRefusesToFanOut(t *testing.T) {
+	ctx := context.Background()
+	accounts := []config.CloudAccount{
+		{ID: "acct-A", Name: "A", Provider: "aws", ExternalID: "111111111111", AWSAuthMode: "access_keys"},
+		{ID: "acct-B", Name: "B", Provider: "aws", ExternalID: "222222222222", AWSAuthMode: "access_keys"},
+	}
+
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+	mockFactory := new(MockProviderFactory)
+	mockProviderInst := new(MockProvider)
+	mockServiceClient := new(MockServiceClient)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	t.Cleanup(func() { mockEmail.AssertExpectations(t) })
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
+	t.Cleanup(func() { mockProviderInst.AssertExpectations(t) })
+	t.Cleanup(func() { mockServiceClient.AssertExpectations(t) })
+
+	mockStore.GetPurchasePlanFn = func(_ context.Context, id string) (*config.PurchasePlan, error) {
+		return &config.PurchasePlan{ID: id, Name: "Plan X"}, nil
+	}
+	mockStore.GetPlanAccountsFn = func(_ context.Context, _ string) ([]config.CloudAccount, error) {
+		return accounts, nil
+	}
+	mockStore.SavePurchaseExecutionFn = func(_ context.Context, _ *config.PurchaseExecution) error { return nil }
+
+	// The whole provider chain is wired and WOULD happily sell: without the
+	// guard this run completes and buys for both accounts. Counting the
+	// purchases (rather than leaving the chain unwired and reading an
+	// unexpected-mock-call panic as "refused") is what makes this test fail on
+	// pre-guard code instead of passing for the wrong reason.
+	var purchases int
+	var mu sync.Mutex
+	mockStore.On("SavePurchaseHistory", mock.Anything, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil).Maybe()
+	mockEmail.On("SendPurchaseConfirmation", mock.Anything, mock.AnythingOfType("email.NotificationData")).Return(nil).Maybe()
+	mockStore.On("IncrementPlanCurrentStep", mock.Anything, "plan-x").Return(nil).Maybe()
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil).Maybe()
+	mockProviderInst.On("GetServiceClient", mock.Anything, common.ServiceEC2, mock.Anything).Return(mockServiceClient, nil).Maybe()
+	mockServiceClient.On("PurchaseCommitment", mock.Anything, mock.Anything, mock.Anything).
+		Run(func(mock.Arguments) { mu.Lock(); purchases++; mu.Unlock() }).
+		Return(common.PurchaseResult{Success: true, CommitmentID: "ri-ok"}, nil).Maybe()
+
+	manager := &Manager{
+		config:          mockStore,
+		email:           mockEmail,
+		providerFactory: mockFactory,
+		credStore:       awsAccessKeyCredStore(),
+		dashboardURL:    "https://dashboard.example.com",
+	}
+
+	orphan := &config.PurchaseExecution{
+		ExecutionID: "successor-of-acct-A-row",
+		// Scope lost in transit; the lineage key still says "account A".
+		CloudAccountID: nil,
+		IdempotencyKey: "root-lineage:acct-A",
+		PlanID:         "plan-x",
+		Source:         common.PurchaseSourceWeb,
+		Recommendations: []config.RecommendationRecord{
+			{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, UpfrontCost: 300, Selected: true},
+		},
+	}
+
+	err := manager.executePurchase(ctx, orphan)
+
+	mu.Lock()
+	got := purchases
+	mu.Unlock()
+	assert.Zero(t, got,
+		"a scopeless row whose lineage key is already per-account must buy NOTHING; each purchase here is an account that already committed being bought again (issue #1537)")
+
+	require.Error(t, err,
+		"the refusal must surface as an error, not a silent skip, so the row lands 'failed' and an operator sees it")
+	assert.Contains(t, err.Error(), "refusing to fan out",
+		"the error must be the #1537 refusal itself, not an incidental downstream failure")
+	assert.Contains(t, err.Error(), "acct-A",
+		"the error must name the account the lineage key is scoped to so an operator can re-drive the right row")
+}
+
+// TestRootKeyStillFansOutThroughExecutePurchase is the counterpart to the guard
+// above: the refusal must be narrow. A genuine root row (root lineage key, no
+// account scope) must still fan out across every plan account, each under its
+// own per-account key — a legitimate multi-account purchase silently not
+// happening is the same defect with the opposite sign.
+func TestRootKeyStillFansOutThroughExecutePurchase(t *testing.T) {
+	ctx := context.Background()
+	accounts := []config.CloudAccount{
+		{ID: "acct-A", Name: "A", Provider: "aws", ExternalID: "111111111111", AWSAuthMode: "access_keys"},
+		{ID: "acct-B", Name: "B", Provider: "aws", ExternalID: "222222222222", AWSAuthMode: "access_keys"},
+	}
+
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+	mockFactory := new(MockProviderFactory)
+	mockProviderInst := new(MockProvider)
+	mockServiceClient := new(MockServiceClient)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	t.Cleanup(func() { mockEmail.AssertExpectations(t) })
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
+	t.Cleanup(func() { mockProviderInst.AssertExpectations(t) })
+	t.Cleanup(func() { mockServiceClient.AssertExpectations(t) })
+
+	mockStore.GetPurchasePlanFn = func(_ context.Context, id string) (*config.PurchasePlan, error) {
+		return &config.PurchasePlan{ID: id, Name: "Plan X"}, nil
+	}
+	mockStore.GetPlanAccountsFn = func(_ context.Context, _ string) ([]config.CloudAccount, error) {
+		return accounts, nil
+	}
+
+	var mu sync.Mutex
+	perAccountKey := map[string]string{}
+	mockStore.SavePurchaseExecutionFn = func(_ context.Context, e *config.PurchaseExecution) error {
+		mu.Lock()
+		if e.CloudAccountID != nil {
+			perAccountKey[*e.CloudAccountID] = e.IdempotencyKey
+		}
+		mu.Unlock()
+		return nil
+	}
+	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)
+	mockProviderInst.On("GetServiceClient", mock.Anything, common.ServiceEC2, mock.Anything).Return(mockServiceClient, nil)
+	mockServiceClient.On("PurchaseCommitment", mock.Anything, mock.Anything, mock.Anything).
+		Return(common.PurchaseResult{Success: true, CommitmentID: "ri-ok"}, nil)
+
+	manager := &Manager{
+		config:          mockStore,
+		email:           mockEmail,
+		providerFactory: mockFactory,
+		credStore:       awsAccessKeyCredStore(),
+		dashboardURL:    "https://dashboard.example.com",
+	}
+
+	root := &config.PurchaseExecution{
+		ExecutionID:    "root-exec",
+		IdempotencyKey: "root-lineage",
+		PlanID:         "plan-x",
+		Source:         common.PurchaseSourceWeb,
+		Recommendations: []config.RecommendationRecord{
+			{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, UpfrontCost: 300, Selected: true},
+		},
+	}
+	require.NoError(t, manager.executePurchase(ctx, root),
+		"a genuine root row must still fan out; the #1537 refusal must not catch it")
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, map[string]string{
+		"acct-A": "root-lineage:acct-A",
+		"acct-B": "root-lineage:acct-B",
+	}, perAccountKey, "every plan account must still be purchased under its own per-account lineage key")
+}
