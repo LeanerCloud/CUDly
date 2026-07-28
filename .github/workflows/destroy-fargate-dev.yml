@@ -12,8 +12,23 @@ on:
         description: 'Type "destroy" to confirm'
         required: true
 
+# Least privilege: `id-token: write` is granted per job, only to the job that
+# assumes the AWS deploy role, and that job is bound to the `dev` deployment
+# environment. `guard` authenticates to nothing and must not hold it.
+#
+# IMPORTANT — what the `environment:` binding does and does not buy. It scopes
+# secrets/vars and sets the OIDC subject to `repo:<org/repo>:environment:dev`,
+# which the AWS trust policy's sub allowlist accepts (role.tf:30).
+#
+# It is NOT a reviewer gate. GitHub only blocks a job once required-reviewer
+# protection rules are configured on the environment in repo settings, and as of
+# this change NO environment in this repo has any — `dev` exists but carries
+# `protection_rules: []` and no branch policy. Until that is configured
+# out-of-band this destroy job still runs unapproved. See #1660.
+#
+# Because the environment subject is ref-agnostic, the `guard` job below
+# separately enforces that this workflow may only be dispatched from `main`.
 permissions:
-  id-token: write
   contents: read
 
 env:
@@ -25,7 +40,24 @@ jobs:
   guard:
     name: Confirm Destruction
     runs-on: ubuntu-latest
+    permissions: {}
     steps:
+      # See the note in cleanup-staging.yml: an environment binding replaces the
+      # ref-scoped OIDC subject with a ref-agnostic one, and `dev` carries no
+      # deployment_branch_policy, so without this check the binding would widen
+      # the destroy path from main-only to any-branch. Enforced in code because
+      # `main` is unprotected, so a protected-branches policy would match
+      # nothing. Keep until `main` is protected and `dev` has a branch policy
+      # (#1660).
+      - name: Restrict to main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::Refusing to destroy from '$REF'; this workflow may only be dispatched from refs/heads/main"
+            exit 1
+          fi
+
       - name: Check confirmation
         env:
           CONFIRM: ${{ inputs.confirm }}
@@ -39,6 +71,13 @@ jobs:
     name: Terraform Destroy (Fargate dev)
     runs-on: ubuntu-24.04-arm
     needs: guard
+    permissions:
+      id-token: write
+      contents: read
+    # Binds the OIDC subject to repo:<org/repo>:environment:dev, which the AWS
+    # trust policy matches on. Not a reviewer gate until protection rules exist
+    # on this environment -- see the note at the top of this file.
+    environment: dev
 
     steps:
       - name: Checkout code
