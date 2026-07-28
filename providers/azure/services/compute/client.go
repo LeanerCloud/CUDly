@@ -110,6 +110,14 @@ type ComputeClient struct {
 	// armreservations.ReservationClient. Tests inject a stub to run
 	// hermetically without Azure credentials.
 	exchangeablePager ExchangeableReservationPager
+
+	// Optional injected LRO callers for CalculateExchange and
+	// ExecuteExchange. When nil (the production default) the methods
+	// construct real armreservations SDK clients. Tests inject stubs via
+	// SetCalculateExchangeCaller and SetDoExchangeCaller to run
+	// hermetically and make the LRO synchronous.
+	calculateExchangeCaller CalculateExchangeCallerFunc
+	doExchangeCaller        DoExchangeCallerFunc
 }
 
 // NewClient creates a new Azure Compute client

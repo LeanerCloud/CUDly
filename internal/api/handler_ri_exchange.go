@@ -10,8 +10,10 @@ import (
 	"math/big"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -163,12 +165,21 @@ func (h *Handler) listTargetOfferings(ctx context.Context, req *events.LambdaFun
 	return &TargetOfferingsResponse{Offerings: offerings}, nil
 }
 
-// azureExchangeClient is the narrow interface that listExchangeableAzureRIs
-// needs from the Azure compute client. Satisfied by
-// *azurecompute.ComputeClient; a stub can be injected via
-// Handler.azureExchangeFactory for tests.
+// azureExchangeClient is the narrow interface that listExchangeableAzureRIs,
+// getAzureCompatibleOfferings, and executeAzureExchange need from the Azure
+// compute client. Satisfied by *azurecompute.ComputeClient; a stub can be
+// injected via Handler.azureExchangeFactory for tests.
 type azureExchangeClient interface {
 	ListExchangeableReservations(ctx context.Context) ([]azurecompute.ExchangeableReservation, error)
+
+	// CalculateExchange prices a proposed exchange without committing it.
+	// Both getAzureCompatibleOfferings (read-only quote) and
+	// executeAzureExchange (server-side re-quote before commit) call this;
+	// only executeAzureExchange ever calls ExecuteExchange, and only with
+	// the SessionID this same call just returned -- see executeAzureExchange's
+	// doc comment for why a client-supplied session is never trusted.
+	CalculateExchange(ctx context.Context, sources []azurecompute.ExchangeableReservation, targets []azurecompute.ExchangeTarget) (*azurecompute.ExchangePreview, []azurecompute.CompatibleOffering, error)
+	ExecuteExchange(ctx context.Context, sessionID string) (*azurecompute.ExchangeResult, error)
 }
 
 // buildAzureExchangeClient returns the injected factory result when one has
@@ -253,6 +264,805 @@ func (h *Handler) listExchangeableAzureRIs(ctx context.Context, req *events.Lamb
 	}
 
 	return &ExchangeableAzureRIsResponse{Reservations: reservations}, nil
+}
+
+// maxAzureExchangeItems caps the number of sources/targets accepted per
+// Azure exchange request, guarding against an oversized request fanning out
+// into an enormous CalculateExchange payload.
+const maxAzureExchangeItems = 50
+
+// AzureExchangeSourceBody is one source reservation entry in an Azure
+// compatible-offerings or execute request body.
+type AzureExchangeSourceBody struct {
+	ReservationID string `json:"reservation_id"`
+	Quantity      int32  `json:"quantity"`
+}
+
+// AzureExchangeTargetBody is one target entry. Term is the ISO 8601
+// reservation term string ("P1Y", "P3Y", ...); azureReservationTermFromString
+// validates it against the SDK's typed enum rather than accepting anything
+// the caller sends.
+type AzureExchangeTargetBody struct {
+	SKU      string `json:"sku"`
+	Location string `json:"location"`
+	Term     string `json:"term"`
+	Quantity int32  `json:"quantity"`
+
+	// BillingScopeID is optional and is NOT the scope that gets charged:
+	// the handler always derives that from the request's authorized
+	// subscription_id (azureBillingScopeID), matching every other Azure
+	// reservation purchase path in this repo. When supplied it must match
+	// the derived scope, so a caller cannot direct the charge at a
+	// different subscription than the one their permission constraints
+	// were evaluated against.
+	BillingScopeID string `json:"billing_scope_id,omitempty"`
+}
+
+// AzureCompatibleOfferingsRequestBody is the request body for the
+// compatible-offerings endpoint.
+type AzureCompatibleOfferingsRequestBody struct {
+	SubscriptionID string                    `json:"subscription_id"`
+	Sources        []AzureExchangeSourceBody `json:"sources"`
+	Targets        []AzureExchangeTargetBody `json:"targets"`
+}
+
+// AzureCompatibleOfferingsResponse is the response for the
+// compatible-offerings endpoint: the priced candidate offerings plus the
+// preview (including the SessionID a subsequent execute call would need,
+// though execute never trusts a client-supplied session -- see
+// executeAzureExchange).
+type AzureCompatibleOfferingsResponse struct {
+	Offerings []azurecompute.CompatibleOffering `json:"offerings"`
+	Preview   *azurecompute.ExchangePreview     `json:"preview"`
+}
+
+// AzureExecuteExchangeRequestBody is the request body for the execute
+// endpoint. MaxPaymentDue + Currency are mandatory safety guardrails: the
+// handler refuses to execute an exchange whose fresh quote exceeds the cap
+// or is denominated in a different currency.
+type AzureExecuteExchangeRequestBody struct {
+	SubscriptionID string                    `json:"subscription_id"`
+	Sources        []AzureExchangeSourceBody `json:"sources"`
+	Targets        []AzureExchangeTargetBody `json:"targets"`
+	MaxPaymentDue  string                    `json:"max_payment_due"`
+	Currency       string                    `json:"currency"`
+}
+
+// AzureExecuteExchangeResponse is the response from a successfully executed
+// Azure exchange.
+type AzureExecuteExchangeResponse struct {
+	SessionID          string   `json:"session_id"`
+	Status             string   `json:"status"`
+	NetPayable         *float64 `json:"net_payable"`
+	NetPayableCurrency string   `json:"net_payable_currency,omitempty"`
+	RefundsTotal       *float64 `json:"refunds_total"`
+	PurchasesTotal     *float64 `json:"purchases_total"`
+}
+
+// azureReservationTermFromString converts the HTTP-layer term string to the
+// typed SDK enum, rejecting anything outside armreservations'
+// PossibleReservationTermValues(). No fallback: an unrecognized term is a
+// 400, never silently coerced to a default term (feedback_sdk_enum_string_literals).
+func azureReservationTermFromString(s string) (armreservations.ReservationTerm, error) {
+	term := armreservations.ReservationTerm(s)
+	for _, t := range armreservations.PossibleReservationTermValues() {
+		if t == term {
+			return term, nil
+		}
+	}
+	return "", fmt.Errorf("unsupported term %q", s)
+}
+
+// validateAzureExchangeSources checks the shared sources[] shape for both
+// the offerings and execute request bodies.
+func validateAzureExchangeSources(sources []AzureExchangeSourceBody) error {
+	if len(sources) == 0 {
+		return NewClientError(400, "sources is required")
+	}
+	if len(sources) > maxAzureExchangeItems {
+		return NewClientError(400, fmt.Sprintf("sources exceeds the maximum of %d items", maxAzureExchangeItems))
+	}
+	for i, s := range sources {
+		if s.ReservationID == "" {
+			return NewClientError(400, fmt.Sprintf("sources[%d].reservation_id is required", i))
+		}
+		if s.Quantity < 1 {
+			return NewClientError(400, fmt.Sprintf("sources[%d].quantity must be >= 1", i))
+		}
+	}
+	return nil
+}
+
+// azureBillingScopeID returns the ARM billing scope that a purchase against
+// subscriptionID is charged to.
+//
+// The billing scope is always derived from the request's subscription_id,
+// never accepted from the caller. Every other Azure reservation purchase
+// path in this repo does the same (ComputeClient.buildReservationBody and
+// the database / cache / search / cosmosdb / synapse / managedredis
+// clients all build "/subscriptions/{their own subscriptionID}"). It also
+// keeps the charge inside the scope authorization actually checked: the
+// execute:ri-exchange AccountIDs constraint is evaluated against the
+// CloudAccount registered for subscription_id, so letting a caller name a
+// different billing scope would move the money outside the account whose
+// constraints were verified.
+func azureBillingScopeID(subscriptionID string) string {
+	return "/subscriptions/" + subscriptionID
+}
+
+// validateAzureExchangeTargets checks the shared targets[] shape for both
+// the offerings and execute request bodies. subscriptionID is the already-
+// validated request subscription; a target may omit billing_scope_id
+// entirely, but may not name a scope other than that subscription's.
+func validateAzureExchangeTargets(targets []AzureExchangeTargetBody, subscriptionID string) error {
+	if len(targets) == 0 {
+		return NewClientError(400, "targets is required")
+	}
+	if len(targets) > maxAzureExchangeItems {
+		return NewClientError(400, fmt.Sprintf("targets exceeds the maximum of %d items", maxAzureExchangeItems))
+	}
+	scope := azureBillingScopeID(subscriptionID)
+	for i, t := range targets {
+		if t.SKU == "" {
+			return NewClientError(400, fmt.Sprintf("targets[%d].sku is required", i))
+		}
+		// Blank-but-not-empty is rejected too: targetLocations trims before
+		// it builds the Regions constraint, so a whitespace-only location
+		// would otherwise reach the permission check as "" -- a region no
+		// permission can name.
+		if strings.TrimSpace(t.Location) == "" {
+			return NewClientError(400, fmt.Sprintf("targets[%d].location is required", i))
+		}
+		if t.BillingScopeID != "" && !strings.EqualFold(t.BillingScopeID, scope) {
+			return NewClientError(400, fmt.Sprintf(
+				"targets[%d].billing_scope_id %q is not the billing scope of subscription %q; omit it to charge the subscription's own scope",
+				i, t.BillingScopeID, subscriptionID))
+		}
+		if t.Quantity < 1 {
+			return NewClientError(400, fmt.Sprintf("targets[%d].quantity must be >= 1", i))
+		}
+		if _, err := azureReservationTermFromString(t.Term); err != nil {
+			return NewClientError(400, fmt.Sprintf("targets[%d].term: %v", i, err))
+		}
+	}
+	return nil
+}
+
+// validateAzureOfferingsBody validates the compatible-offerings request
+// body. Extracted so getAzureCompatibleOfferings and
+// validateAzureExecuteBody share the same check without exceeding the
+// gocyclo threshold (mirrors validateExecuteExchangeBody's precedent for
+// the AWS execute handler).
+func validateAzureOfferingsBody(body AzureCompatibleOfferingsRequestBody) error {
+	if body.SubscriptionID == "" {
+		return NewClientError(400, "subscription_id is required")
+	}
+	if err := validateAzureExchangeSources(body.Sources); err != nil {
+		return err
+	}
+	return validateAzureExchangeTargets(body.Targets, body.SubscriptionID)
+}
+
+// validateAzureExecuteBody validates the execute request body: the shared
+// offerings validation plus the mandatory spend-cap and currency guardrails.
+func validateAzureExecuteBody(body AzureExecuteExchangeRequestBody) error {
+	if err := validateAzureOfferingsBody(AzureCompatibleOfferingsRequestBody{
+		SubscriptionID: body.SubscriptionID,
+		Sources:        body.Sources,
+		Targets:        body.Targets,
+	}); err != nil {
+		return err
+	}
+	if body.MaxPaymentDue == "" {
+		return NewClientError(400, "max_payment_due is required as a safety guardrail")
+	}
+	if body.Currency == "" {
+		return NewClientError(400, "currency is required")
+	}
+	return nil
+}
+
+// toAzureExchangeSources converts the HTTP-shaped sources into the
+// provider-layer shape. Pure field mapping; validateAzureExchangeSources
+// must be called first.
+func toAzureExchangeSources(sources []AzureExchangeSourceBody) []azurecompute.ExchangeableReservation {
+	out := make([]azurecompute.ExchangeableReservation, len(sources))
+	for i, s := range sources {
+		out[i] = azurecompute.ExchangeableReservation{ReservationID: s.ReservationID, Quantity: s.Quantity}
+	}
+	return out
+}
+
+// toAzureExchangeTargets converts the HTTP-shaped targets into the
+// provider-layer shape, re-parsing the term string and deriving each
+// target's billing scope from subscriptionID rather than from the request
+// body (see azureBillingScopeID). validateAzureExchangeTargets must be
+// called first; a term error here indicates an internal invariant break
+// rather than a fresh client mistake.
+func toAzureExchangeTargets(targets []AzureExchangeTargetBody, subscriptionID string) ([]azurecompute.ExchangeTarget, error) {
+	out := make([]azurecompute.ExchangeTarget, len(targets))
+	scope := azureBillingScopeID(subscriptionID)
+	for i, t := range targets {
+		term, err := azureReservationTermFromString(t.Term)
+		if err != nil {
+			return nil, fmt.Errorf("targets[%d]: %w", i, err)
+		}
+		out[i] = azurecompute.ExchangeTarget{
+			SKU:            t.SKU,
+			Location:       t.Location,
+			Term:           term,
+			Quantity:       t.Quantity,
+			BillingScopeID: scope,
+		}
+	}
+	return out, nil
+}
+
+// targetLocations returns the de-duplicated, canonically lower-cased set of
+// target locations, used to populate the Regions dimension of the
+// execute:ri-exchange constraint check. Callers must have already validated
+// that every target has a non-blank Location.
+//
+// Azure treats location names case-insensitively and its own APIs return the
+// lower-case form, so lower case is the canonical spelling. Normalizing
+// before the dedup collapses "EastUS" -- the casing the Azure portal
+// displays -- and "eastus" into the single region they actually are, so the
+// constraint set names each target region exactly once rather than demanding
+// a permission for two spellings of one place.
+//
+// auth.matchAllRegionsConstraint compares case-insensitively as well, so a
+// permission stored in either casing matches either way. Normalizing here
+// keeps the two layers agreeing on what a region is instead of leaving the
+// constraint set's accuracy resting on the matcher's leniency.
+//
+// toAzureExchangeTargets sends Azure the raw, un-normalized Location. That
+// is not a gap: Azure resolves either casing to the same region, so the
+// region authorized here is the region the exchange lands in.
+func targetLocations(targets []AzureExchangeTargetBody) []string {
+	locations := make([]string, len(targets))
+	for i, t := range targets {
+		locations[i] = t.Location
+	}
+	return normalizeRegions(locations)
+}
+
+// normalizeRegions canonically lower-cases and trims region names and
+// de-duplicates them, preserving first-seen order. Shared by targetLocations
+// and exchangeRegions so both sides of an exchange are spelled the same way
+// before they reach auth.matchAllRegionsConstraint.
+func normalizeRegions(regions []string) []string {
+	seen := make(map[string]bool, len(regions))
+	out := make([]string, 0, len(regions))
+	for _, r := range regions {
+		region := strings.ToLower(strings.TrimSpace(r))
+		if !seen[region] {
+			seen[region] = true
+			out = append(out, region)
+		}
+	}
+	return out
+}
+
+// unknownRegionConstraint is the Regions entry substituted for a source
+// reservation whose region Azure did not report (ExchangeableReservation.Region
+// "may be empty for reservations with AppliedScopeType == Shared"), or that is
+// absent from the tenant listing altogether.
+//
+// It is deliberately not a region name: no Azure location is spelled this way,
+// so a permission carrying ANY Regions constraint cannot name it and the
+// exchange is denied. A permission with NO Regions constraint is unaffected
+// (auth.matchAllRegionsConstraint treats an empty permission list as "no
+// restriction"), so callers who were never region-scoped are not penalized for
+// a reservation Azure described incompletely.
+//
+// The alternative -- dropping an unreported region from the set -- would make
+// "Azure did not tell us where this is" mean "unconstrained", which is exactly
+// the fail-open shape of the empty-region defect fixed in PR #1495. Same
+// posture as unattributedAccountConstraint on the AccountIDs dimension.
+const unknownRegionConstraint = "unknown-region"
+
+// exchangeRegions returns every region an Azure exchange touches: each
+// target's location AND each source reservation's own region, normalized and
+// de-duplicated into one set.
+//
+// Both halves belong in the Regions dimension because an exchange mutates
+// both. The sources are handed back to Azure and their commitment value is
+// consumed; the targets are acquired. Constraining only the targets (the
+// pre-fix behavior) let a caller permitted solely in eastus name a
+// westeurope reservation as the source of an eastus-targeted exchange: the
+// Regions dimension saw only "eastus", requireAzureSourceOwnership keys on the
+// reservation's BillingScopeID rather than its region, and no other gate
+// consults a source's region at all. The westeurope commitment -- which the
+// caller was never authorized to touch -- was consumed and relocated,
+// irreversibly.
+//
+// Source regions come from the tenant listing (owned) rather than the request
+// body, because the request names only reservation IDs; Azure is the authority
+// on where a reservation lives. A source missing from the listing, or one
+// whose Region Azure left empty, contributes unknownRegionConstraint rather
+// than nothing -- see that constant for why.
+//
+// On the execute path requireAzureSourceOwnership has already refused any
+// source absent from the listing by the time this runs, so the sentinel there
+// means specifically "owned, but Azure reported no region". The missing-source
+// branch is kept as a fail-closed default for any future caller that reaches
+// this function without that guarantee.
+func exchangeRegions(targets []AzureExchangeTargetBody, sources []AzureExchangeSourceBody, owned []azurecompute.ExchangeableReservation) []string {
+	regionByID := make(map[string]string, len(owned))
+	for i := range owned {
+		regionByID[strings.ToLower(owned[i].ReservationID)] = owned[i].Region
+	}
+
+	regions := targetLocations(targets)
+	for _, s := range sources {
+		region := strings.ToLower(strings.TrimSpace(regionByID[strings.ToLower(s.ReservationID)]))
+		if region == "" {
+			region = unknownRegionConstraint
+		}
+		regions = append(regions, region)
+	}
+	return normalizeRegions(regions)
+}
+
+// requireAzureSubscriptionScope enforces the session's allowed_accounts
+// scope (issue #1030) against the CloudAccount registered for
+// subscriptionID, the same per-account gate the sibling /ri-exchange
+// endpoints apply. Without it, subscription_id is a caller-controlled
+// pointer at any subscription in the tenant: a user scoped to one account
+// could price, and with an otherwise-unconstrained execute:ri-exchange
+// permission execute, an exchange against another account's subscription.
+// The per-permission Constraints check does not cover this -- it only
+// consults the permission's own AccountIDs, never the user's
+// allowed_accounts.
+//
+// Returns errNotFound (404, not 403) when a scoped session names a
+// subscription outside its scope, including one with no registered account
+// at all, matching requireAccountAccess: a user must not be able to probe
+// which subscriptions exist outside their scope.
+//
+// Unrestricted / admin sessions short-circuit before the account fetch,
+// mirroring requireExecutionAccess.
+func (h *Handler) requireAzureSubscriptionScope(ctx context.Context, session *Session, subscriptionID string) error {
+	allowed, err := h.getAllowedAccounts(ctx, session)
+	if err != nil {
+		return fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	if auth.IsUnrestrictedAccess(allowed) {
+		return nil
+	}
+	account, err := h.config.GetCloudAccountByExternalID(ctx, "azure", subscriptionID)
+	if err != nil {
+		return fmt.Errorf("failed to resolve cloud account scope: %w", err)
+	}
+	if account == nil || !auth.MatchesAccount(allowed, account.ID, account.Name) {
+		return errNotFound
+	}
+	return nil
+}
+
+// requireAzureSourceOwnership refuses any source reservation that is not
+// paid for by the authorized subscription (issue #1527).
+//
+// Every other gate on these endpoints constrains the DESTINATION of an
+// exchange: requireAzureSubscriptionScope and the execute:ri-exchange
+// AccountIDs constraint both key off subscription_id, and
+// toAzureExchangeTargets forces each target's billing scope to that same
+// subscription. The sources were unconstrained. That matters because Azure
+// reservation orders are tenant-scoped, not subscription-scoped --
+// ListExchangeableReservations enumerates the whole tenant precisely
+// because "the Azure Capacity exchange API operates on reservation order
+// IDs which span subscriptions". So a caller authorized for subscription A
+// could name subscription B's reservation IDs and hand B's commitments
+// back, with the replacement purchased into A's billing scope. Azure RBAC
+// on the reservation order was the only backstop.
+//
+// The check uses each reservation's own BillingScopeID -- the subscription
+// Azure charges for it, and the scope an exchange refunds it to. That is
+// the correct discriminator even for AppliedScopeType == Shared, which
+// governs which subscriptions receive the discount rather than which one
+// paid; an AppliedScopes-based check would pass for nearly every
+// reservation and be security theater.
+//
+// Fails closed on every uncertainty: a reservation absent from the listing,
+// or one Azure reports without a billing scope, is refused rather than
+// allowed. Denials deliberately do not distinguish "does not exist" from
+// "belongs to someone else", so this cannot be used to enumerate another
+// subscription's reservation IDs (same posture as
+// requireAzureSubscriptionScope).
+func requireAzureSourceOwnership(owned []azurecompute.ExchangeableReservation, sources []AzureExchangeSourceBody, subscriptionID string) error {
+	scope := azureBillingScopeID(subscriptionID)
+	byID := make(map[string]string, len(owned))
+	for i := range owned {
+		byID[strings.ToLower(owned[i].ReservationID)] = owned[i].BillingScopeID
+	}
+	for i, s := range sources {
+		billingScope, found := byID[strings.ToLower(s.ReservationID)]
+		if !found || billingScope == "" || !strings.EqualFold(billingScope, scope) {
+			return NewClientError(403, fmt.Sprintf(
+				"sources[%d].reservation_id is not a reservation billed to subscription %q; an exchange may only hand back reservations that subscription paid for",
+				i, subscriptionID))
+		}
+	}
+	return nil
+}
+
+// checkAzureSourceOwnership fetches the caller's visible reservations and
+// applies requireAzureSourceOwnership. Split from the pure check so the
+// authorization rule itself is testable without a client, and so both the
+// pricing and execute endpoints share one code path.
+func checkAzureSourceOwnership(ctx context.Context, client azureExchangeClient, sources []AzureExchangeSourceBody, subscriptionID string) error {
+	owned, err := listOwnedAzureReservations(ctx, client)
+	if err != nil {
+		return err
+	}
+	return requireAzureSourceOwnership(owned, sources, subscriptionID)
+}
+
+// listOwnedAzureReservations fetches the tenant-wide reservation listing that
+// both source-side gates consult: requireAzureSourceOwnership (which
+// subscription paid for each source) and exchangeRegions (where each source
+// lives). Extracted so the execute path can fetch it once and feed both,
+// rather than listing twice and risking the two gates disagreeing.
+//
+// Fails closed: without the listing we can establish neither ownership nor
+// region, and permitting the exchange would restore the very gaps those
+// checks exist to close. 502 rather than 500 because the upstream dependency,
+// not this service, is what failed.
+func listOwnedAzureReservations(ctx context.Context, client azureExchangeClient) ([]azurecompute.ExchangeableReservation, error) {
+	owned, err := client.ListExchangeableReservations(ctx)
+	if err != nil {
+		logging.Errorf("azure exchange source ownership lookup failed: %v", err)
+		return nil, NewClientError(502, "could not verify which subscription owns the requested reservations; refusing to proceed")
+	}
+	return owned, nil
+}
+
+// getAzureCompatibleOfferings prices a proposed Azure RI exchange and
+// returns the compatible offerings Azure is willing to accept plus the cost
+// preview, without committing anything. Requires "view:purchases" permission
+// plus allowed_accounts scope over the requested subscription, mirroring the
+// AWS quote endpoint.
+//
+// POST /api/ri-exchange/azure-instances/compatible-offerings.
+func (h *Handler) getAzureCompatibleOfferings(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
+	session, err := h.requirePermission(ctx, req, "view", "purchases")
+	if err != nil {
+		return nil, err
+	}
+
+	var body AzureCompatibleOfferingsRequestBody
+	if err = json.Unmarshal([]byte(req.Body), &body); err != nil {
+		return nil, NewClientError(400, "invalid request body")
+	}
+	if validateErr := validateAzureOfferingsBody(body); validateErr != nil {
+		return nil, validateErr
+	}
+	if scopeErr := h.requireAzureSubscriptionScope(ctx, session, body.SubscriptionID); scopeErr != nil {
+		return nil, scopeErr
+	}
+
+	client, err := h.buildAzureExchangeClient(ctx, body.SubscriptionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build Azure exchange client: %w", err)
+	}
+	if client == nil {
+		return nil, NewClientError(404, fmt.Sprintf("no Azure account registered for subscription %q", body.SubscriptionID))
+	}
+
+	if ownErr := checkAzureSourceOwnership(ctx, client, body.Sources, body.SubscriptionID); ownErr != nil {
+		return nil, ownErr
+	}
+
+	targets, err := toAzureExchangeTargets(body.Targets, body.SubscriptionID)
+	if err != nil {
+		return nil, err
+	}
+
+	preview, offerings, err := client.CalculateExchange(ctx, toAzureExchangeSources(body.Sources), targets)
+	if err != nil {
+		logging.Errorf("azure compatible offerings failed: %v", err)
+		return nil, mapAzureExchangeError("failed to find compatible offerings", err)
+	}
+
+	return &AzureCompatibleOfferingsResponse{Offerings: offerings, Preview: preview}, nil
+}
+
+// azureMaxPurchaseAmountCurrency is the currency the execute:ri-exchange
+// permission's MaxPurchaseAmount constraint is denominated in, matching the
+// AWS execute:ri-exchange precedent (which takes max_payment_due_usd). There
+// is no FX conversion available here, so a non-USD exchange's raw amount can
+// never be safely compared against a USD-denominated cap -- see
+// checkAzureExecuteConstraints.
+const azureMaxPurchaseAmountCurrency = "USD"
+
+// authorizeAzureExchangeExecution builds the Azure exchange client for the
+// request's subscription, refuses sources the subscription does not own
+// (issue #1527), and enforces the per-permission Constraints configured on
+// execute:ri-exchange (SEC-01, issue #1141). Extracted from
+// executeAzureExchange to keep that function under the gocyclo limit.
+//
+// Order matters, and all three gates run before any pricing or commit call:
+//
+//   - The tenant listing is fetched before the constraint check because the
+//     Regions dimension cannot be assembled without knowing where the sources
+//     live (exchangeRegions). An unavailable listing therefore refuses with
+//     502 ahead of any constraint denial. The caller has already cleared
+//     requirePermission("execute", "ri-exchange") and the allowed_accounts
+//     scope for this subscription by then, so the read-only listing call is
+//     within what they are authorized to trigger.
+//
+//   - Ownership is checked before the constraint check so the two cannot form
+//     an enumeration oracle. If the constraint check ran first, a caller
+//     scoped to subscription A and permitted only in eastus would get
+//     distinguishable answers for a reservation id they do not own: an id
+//     that exists in eastus (owned by subscription B) would clear the Regions
+//     dimension and be refused by the ownership gate, while an id that does
+//     not exist -- or lives in an unpermitted region -- would be refused by
+//     the constraint check with a different message. That difference confirms
+//     "this reservation id exists, in one of my permitted regions, in a
+//     subscription I am not scoped to". requireAzureSourceOwnership
+//     deliberately makes its own denials indistinguishable; running it first
+//     keeps the whole path that way.
+//
+//     It also sharpens exchangeRegions: every source reaching it is
+//     known-owned, so unknownRegionConstraint means only "owned, but Azure
+//     reported no region" rather than doubling as "not yours" or "not real".
+func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *Session, body AzureExecuteExchangeRequestBody, maxRat *big.Rat) (azureExchangeClient, error) {
+	// Scope check MUST precede building the client (mirrors
+	// getAzureCompatibleOfferings): otherwise an unregistered subscription
+	// (distinguishable 404: "no Azure account registered...") and a
+	// registered-but-out-of-scope one (generic errNotFound) would leak an
+	// enumeration signal to a scoped caller about which subscriptions exist,
+	// and credentials for an out-of-scope account could be resolved before
+	// the denial.
+	if scopeErr := h.requireAzureSubscriptionScope(ctx, session, body.SubscriptionID); scopeErr != nil {
+		return nil, scopeErr
+	}
+
+	client, err := h.buildAzureExchangeClient(ctx, body.SubscriptionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build Azure exchange client: %w", err)
+	}
+	if client == nil {
+		return nil, NewClientError(404, fmt.Sprintf("no Azure account registered for subscription %q", body.SubscriptionID))
+	}
+
+	owned, err := listOwnedAzureReservations(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+
+	if ownErr := requireAzureSourceOwnership(owned, body.Sources, body.SubscriptionID); ownErr != nil {
+		return nil, ownErr
+	}
+
+	accountID, err := h.resolveAzureExchangeAccountID(ctx, body.SubscriptionID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := h.checkAzureExecuteConstraints(ctx, session, body, accountID, maxRat, exchangeRegions(body.Targets, body.Sources, owned)); err != nil {
+		return nil, err
+	}
+	return client, nil
+}
+
+// resolveAzureExchangeAccountID looks up the CloudAccount registered for
+// subscriptionID and returns its ID, or unattributedAccountConstraint when
+// no account is registered (so an AccountIDs-constrained permission still
+// fails closed against an unattributed request). Extracted from
+// authorizeAzureExchangeExecution to keep that function under the gocyclo
+// limit.
+func (h *Handler) resolveAzureExchangeAccountID(ctx context.Context, subscriptionID string) (string, error) {
+	account, err := h.config.GetCloudAccountByExternalID(ctx, "azure", subscriptionID)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve cloud account scope: %w", err)
+	}
+	if account != nil {
+		return account.ID, nil
+	}
+	return unattributedAccountConstraint, nil
+}
+
+// checkAzureExecuteConstraints enforces the execute:ri-exchange permission
+// Constraints (SEC-01, issue #1141): AccountIDs from the resolved
+// CloudAccount, Providers/Services fixed to azure/compute, Regions covering
+// every region the exchange touches (see exchangeRegions -- both the target
+// locations and the source reservations' own regions), and MaxPurchaseAmount
+// from the caller's cap.
+//
+// MaxPurchaseAmount is USD-denominated (azureMaxPurchaseAmountCurrency) with
+// no FX conversion available. A non-USD request's raw amount is therefore
+// never compared directly against the cap -- doing so would let a large
+// non-USD amount (e.g. 1000 KWD, worth far more than 1000 USD) clear a cap
+// meant to bound USD spend. Instead, a non-USD request is checked with an
+// unmatchable sentinel amount (math.MaxFloat64): this denies the request if
+// the granting permission carries ANY MaxPurchaseAmount constraint (fail
+// closed on a cap this code cannot safely evaluate) while still allowing it
+// through when the permission has no amount constraint at all -- callers
+// without a spend cap are not penalized for using a non-USD subscription.
+//
+// When the sentinel check fails, a second call with the amount dimension
+// neutralized (MaxPurchaseAmount: 0, which matchPurchaseAmountConstraint
+// always treats as satisfied) disambiguates the cause: if that second call
+// still fails, some other dimension (account/provider/service/region) is
+// the real reason and its error is returned unchanged; otherwise the amount
+// constraint was specifically the blocker and a currency-specific 403 is
+// returned instead of the generic constraint-denied message.
+func (h *Handler) checkAzureExecuteConstraints(ctx context.Context, session *Session, body AzureExecuteExchangeRequestBody, accountID string, maxRat *big.Rat, regions []string) error {
+	base := auth.PermissionConstraints{
+		AccountIDs: []string{accountID},
+		Providers:  []string{string(common.ProviderAzure)},
+		Services:   []string{string(common.ServiceCompute)},
+		Regions:    regions,
+	}
+
+	isUSD := strings.EqualFold(body.Currency, azureMaxPurchaseAmountCurrency)
+	attempt := base
+	if isUSD {
+		maxPayment, _ := maxRat.Float64()
+		attempt.MaxPurchaseAmount = maxPayment
+	} else {
+		attempt.MaxPurchaseAmount = math.MaxFloat64
+	}
+
+	err := h.requirePermissionConstraints(ctx, session, "ri-exchange", []auth.PermissionConstraints{attempt})
+	if err == nil || isUSD {
+		return err
+	}
+
+	// Non-USD and denied: isolate whether the amount dimension was
+	// specifically the cause.
+	withoutAmount := base
+	withoutAmount.MaxPurchaseAmount = 0
+	if otherErr := h.requirePermissionConstraints(ctx, session, "ri-exchange", []auth.PermissionConstraints{withoutAmount}); otherErr != nil {
+		return otherErr
+	}
+	return NewClientError(403, fmt.Sprintf(
+		"your execute:ri-exchange permission has a spend-cap (MaxPurchaseAmount) constraint, which is USD-denominated and cannot be safely enforced against a %s exchange; use a USD-denominated request or ask an administrator to remove the constraint",
+		body.Currency))
+}
+
+// checkAzureExchangeMoneyGuardrails enforces the money-path guardrails
+// against a freshly-obtained CalculateExchange preview, before its
+// SessionID is allowed to reach ExecuteExchange: non-empty policy errors
+// block execution, a nil NetPayable is refused rather than treated as free,
+// a currency mismatch blocks execution, and NetPayable exceeding the cap
+// blocks execution. Extracted from executeAzureExchange to keep that
+// function under the gocyclo limit.
+//
+// A nil preview is itself refused rather than dereferenced: the current
+// azureExchangeClient.CalculateExchange contract never returns (nil, nil,
+// nil), but a future implementation of the interface making that mistake
+// must not panic this handler.
+func checkAzureExchangeMoneyGuardrails(preview *azurecompute.ExchangePreview, maxRat *big.Rat, currency string) error {
+	if preview == nil {
+		return fmt.Errorf("internal error: CalculateExchange returned a nil preview")
+	}
+	if len(preview.PolicyErrors) > 0 {
+		return NewClientError(422, fmt.Sprintf("Azure rejected this exchange: %s", strings.Join(preview.PolicyErrors, "; ")))
+	}
+	if preview.NetPayable == nil {
+		return NewClientError(422, "Azure did not return a net payable amount; refusing to execute")
+	}
+	// Case-insensitive to match the isUSD test in checkAzureExecuteConstraints:
+	// a request of "usd" must not clear the USD-denominated cap check there
+	// and then be rejected here as a mismatch against Azure's "USD".
+	if !strings.EqualFold(preview.NetPayableCurrency, currency) {
+		return NewClientError(422, fmt.Sprintf("quoted currency %q does not match requested currency %q", preview.NetPayableCurrency, currency))
+	}
+	netPayableRat := new(big.Rat).SetFloat64(*preview.NetPayable)
+	if netPayableRat == nil {
+		return fmt.Errorf("internal error: quoted net payable %v is not a finite number", *preview.NetPayable)
+	}
+	if netPayableRat.Cmp(maxRat) > 0 {
+		return NewClientError(422, fmt.Sprintf("quoted net payable %s %s exceeds max_payment_due %s %s",
+			netPayableRat.FloatString(2), currency, maxRat.FloatString(2), currency))
+	}
+	return nil
+}
+
+// parseAzureExecuteRequest decodes and validates an execute request body and
+// parses its spend cap into an exact rational.
+//
+// Extracted from executeAzureExchange purely to keep that function within
+// the project's gocyclo limit once the issue #1527 source-ownership gate was
+// added; it makes no decisions of its own beyond returning the same errors
+// inline code did.
+func parseAzureExecuteRequest(rawBody string) (AzureExecuteExchangeRequestBody, *big.Rat, error) {
+	var body AzureExecuteExchangeRequestBody
+	if err := json.Unmarshal([]byte(rawBody), &body); err != nil {
+		return body, nil, NewClientError(400, "invalid request body")
+	}
+	if err := validateAzureExecuteBody(body); err != nil {
+		return body, nil, err
+	}
+	maxRat, err := exchange.ParseDecimalRat(body.MaxPaymentDue)
+	if err != nil {
+		return body, nil, NewClientError(400, fmt.Sprintf("invalid max_payment_due: %v", err))
+	}
+	return body, maxRat, nil
+}
+
+// executeAzureExchange executes an Azure RI exchange with mandatory
+// spend-cap and currency guardrails. Requires "execute:ri-exchange"
+// (deliberately separate from execute:purchases), mirroring the AWS
+// executeExchange handler: RI exchanges are financially irreversible once
+// submitted.
+//
+// Unlike a design that executes a client-supplied session_id, this handler
+// never trusts the caller's own pricing: it re-runs CalculateExchange itself
+// against the caller's sources/targets, validates the FRESH quote against
+// every guardrail in checkAzureExchangeMoneyGuardrails, and only then calls
+// ExecuteExchange with the SessionID *that fresh call returned*. A
+// client-supplied or stale session would bypass every guardrail below, so
+// the server always re-quotes immediately before committing.
+//
+// POST /api/ri-exchange/azure-instances/exchange.
+func (h *Handler) executeAzureExchange(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
+	session, err := h.requirePermission(ctx, req, "execute", "ri-exchange")
+	if err != nil {
+		return nil, err
+	}
+
+	body, maxRat, err := parseAzureExecuteRequest(req.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	// authorizeAzureExchangeExecution applies every gate: allowed_accounts
+	// scope, source ownership (issue #1527) and the execute:ri-exchange
+	// Constraints, all before the pricing call below.
+	client, err := h.authorizeAzureExchangeExecution(ctx, session, body, maxRat)
+	if err != nil {
+		return nil, err
+	}
+
+	targets, err := toAzureExchangeTargets(body.Targets, body.SubscriptionID)
+	if err != nil {
+		return nil, err
+	}
+
+	preview, _, err := client.CalculateExchange(ctx, toAzureExchangeSources(body.Sources), targets)
+	if err != nil {
+		logging.Errorf("azure exchange re-quote failed: %v", err)
+		return nil, mapAzureExchangeError("failed to price the exchange before execution", err)
+	}
+
+	err = checkAzureExchangeMoneyGuardrails(preview, maxRat, body.Currency)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := client.ExecuteExchange(ctx, preview.SessionID)
+	if err != nil {
+		logging.Errorf("azure exchange execution failed: %v", err)
+		return nil, mapAzureExchangeError("exchange execution failed", err)
+	}
+
+	logging.Infof("azure ri-exchange executed: subscription=%s session=%s status=%s", body.SubscriptionID, result.SessionID, result.Status)
+
+	return &AzureExecuteExchangeResponse{
+		SessionID:          result.SessionID,
+		Status:             result.Status,
+		NetPayable:         result.NetPayable,
+		NetPayableCurrency: result.NetPayableCurrency,
+		RefundsTotal:       preview.RefundsTotal,
+		PurchasesTotal:     preview.PurchasesTotal,
+	}, nil
+}
+
+// mapAzureExchangeError converts an error from an Azure RI exchange
+// client-layer call to a ClientError with the appropriate HTTP status.
+// Azure 4xx client faults (via isAzureClientError) produce a 400 with the
+// Azure error message preserved; any other error produces a 500 using the
+// opMsg fallback -- the same contract mapAWSExchangeError applies to the
+// AWS exchange endpoints.
+func mapAzureExchangeError(opMsg string, err error) error {
+	if isAzureClientError(err) {
+		return NewClientError(400, err.Error())
+	}
+	return NewClientError(500, opMsg)
 }
 
 // getBaseAWSConfig returns the cached base AWS config, loading it once via sync.Once.
@@ -771,7 +1581,7 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 	if cloudAccountID == "" {
 		cloudAccountID = unattributedAccountConstraint
 	}
-	err = h.requirePermissionConstraints(ctx, session, "execute", "ri-exchange", []auth.PermissionConstraints{{
+	err = h.requirePermissionConstraints(ctx, session, "ri-exchange", []auth.PermissionConstraints{{
 		AccountIDs:        []string{cloudAccountID},
 		Providers:         []string{string(common.ProviderAWS)},
 		Services:          []string{string(common.ServiceEC2)},

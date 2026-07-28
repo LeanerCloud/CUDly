@@ -35,6 +35,23 @@ type ExchangeableReservation struct {
 	// Used as the source identifier in CalculateExchange.ReservationsToExchange.
 	ReservationID string `json:"reservation_id"`
 
+	// BillingScopeID is the ARM scope that paid for this reservation, e.g.
+	// "/subscriptions/{subscriptionID}". Azure documents the underlying
+	// field as "Subscription that will be charged for purchasing
+	// Reservation", so it identifies the owning subscription even for a
+	// reservation whose AppliedScopeType is Shared (Shared controls which
+	// subscriptions receive the DISCOUNT; exactly one scope is CHARGED).
+	//
+	// This is the only ownership signal available on a tenant-wide listing,
+	// and an exchange refunds each source reservation to its own billing
+	// scope. Callers authorizing an exchange MUST require this to match the
+	// subscription they authorized, or a caller scoped to one subscription
+	// can hand back another's commitments (issue #1527).
+	//
+	// Empty when Azure did not report one. Callers must treat that as
+	// "ownership unknown" and refuse, never as "no restriction".
+	BillingScopeID string `json:"billing_scope_id,omitempty"`
+
 	// SKU is the VM size (e.g. "Standard_D2s_v3").
 	SKU string `json:"sku"`
 
@@ -45,7 +62,10 @@ type ExchangeableReservation struct {
 	// reservations with AppliedScopeType == Shared.
 	Region string `json:"region,omitempty"`
 
-	// Term is the reservation term in ISO 8601 duration format ("P1Y" or "P3Y").
+	// Term is the reservation term in ISO 8601 duration format, stringified
+	// from armreservations.PossibleReservationTermValues() ("P1Y", "P3Y" or
+	// "P5Y"). Consumers must not treat a term outside the one/three-year
+	// pair as unsupported.
 	Term string `json:"term,omitempty"`
 
 	// ExpiryDate is when the reservation expires. Zero if not set by Azure.
@@ -195,9 +215,18 @@ func convertToExchangeableReservation(item *armreservations.ReservationResponse)
 	// in the inventory view, but callers MUST filter out empty-order-ID entries
 	// before initiating an exchange operation -- the Azure exchange API requires a
 	// non-empty reservationOrderId.
+	// Read directly rather than through extractReservationFields, which
+	// already returns the maximum number of positional results that stays
+	// readable. Absent stays "" so callers can distinguish "Azure did not
+	// report an owner" from any real scope.
+	var billingScopeID string
+	if item.Properties.BillingScopeID != nil {
+		billingScopeID = *item.Properties.BillingScopeID
+	}
 	return &ExchangeableReservation{
 		ReservationOrderID:  orderID,
 		ReservationID:       id,
+		BillingScopeID:      billingScopeID,
 		SKU:                 sku,
 		Quantity:            quantity,
 		Region:              region,
