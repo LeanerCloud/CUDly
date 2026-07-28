@@ -22,7 +22,12 @@ func (c *Client) parseRecommendations(ctx context.Context, awsRecs []types.Reser
 		for i, details := range awsRec.RecommendationDetails {
 			rec, err := c.parseRecommendationDetail(ctx, &details, params)
 			if err != nil {
-				fmt.Printf("Warning: Failed to parse recommendation detail %d: %v\n", i, err)
+				// log (stderr), never fmt.Print (stdout): this package is
+				// linked into cmd/cudly-mcp, whose stdio transport owns
+				// stdout for JSON-RPC framing. A warning printed here during
+				// a cudly_search_recommendations call would be interleaved
+				// into the protocol stream and corrupt the session.
+				log.Printf("Warning: Failed to parse recommendation detail %d: %v", i, err)
 				continue
 			}
 

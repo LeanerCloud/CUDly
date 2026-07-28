@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -709,4 +710,103 @@ func TestParseTermYears(t *testing.T) {
 			assert.Equal(t, tc.want, got, "term=%q", tc.term)
 		}
 	}
+}
+
+// TestBillingPlanForPaymentOption pins the two-billing-plan Azure contract:
+// Upfront and Monthly are the only members of armreservations.
+// ReservationBillingPlan (constants.go), and Monthly costs the same total
+// as Upfront (no partial-upfront exists). Both the converter's
+// "upfront"/"monthly" vocabulary and the CLI/MCP's "all-upfront"/
+// "no-upfront" vocabulary must map onto the same two SDK enum values; every
+// other input (including "partial-upfront", empty, and unrecognized
+// strings) must be a hard error, never a silent default
+// (feedback_no_silent_fallbacks).
+func TestBillingPlanForPaymentOption(t *testing.T) {
+	tests := []struct {
+		paymentOption string
+		want          armreservations.ReservationBillingPlan
+		wantErr       bool
+	}{
+		{"all-upfront", armreservations.ReservationBillingPlanUpfront, false},
+		{"upfront", armreservations.ReservationBillingPlanUpfront, false},
+		{"ALL-UPFRONT", armreservations.ReservationBillingPlanUpfront, false}, // case-insensitive
+		{" upfront ", armreservations.ReservationBillingPlanUpfront, false},   // whitespace-tolerant
+		{"no-upfront", armreservations.ReservationBillingPlanMonthly, false},
+		{"monthly", armreservations.ReservationBillingPlanMonthly, false},
+		{"partial-upfront", "", true}, // Azure has no partial-upfront equivalent
+		{"", "", true},                // empty must error, never silently default to Upfront
+		{"bogus", "", true},
+	}
+	for _, tc := range tests {
+		got, err := BillingPlanForPaymentOption(tc.paymentOption)
+		if tc.wantErr {
+			assert.Error(t, err, "payment_option=%q should be an error", tc.paymentOption)
+			assert.Empty(t, got, "payment_option=%q error return should be empty", tc.paymentOption)
+		} else {
+			require.NoError(t, err, "payment_option=%q should not error", tc.paymentOption)
+			assert.Equal(t, tc.want, got, "payment_option=%q", tc.paymentOption)
+		}
+	}
+}
+
+// TestBillingPlanForPaymentOption_EmptyHasItsOwnMessage pins that a missing
+// payment option is diagnosed as missing, not as an unsupported
+// partial-upfront. Empty is a reachable state with a different remedy: the
+// recommendations table has carried `payment_option TEXT NOT NULL DEFAULT
+// ”` since migration 000032, so a row predating that migration reaches
+// internal/purchase/execution.go with rec.Payment == "" and lands here.
+// Before this split, the operator reading that failure was told
+// partial-upfront had no Azure equivalent, which is true but has nothing to
+// do with why their purchase failed.
+func TestBillingPlanForPaymentOption_EmptyHasItsOwnMessage(t *testing.T) {
+	t.Parallel()
+
+	_, emptyErr := BillingPlanForPaymentOption("")
+	require.Error(t, emptyErr)
+	assert.Contains(t, emptyErr.Error(), "no payment option was supplied")
+	assert.NotContains(t, emptyErr.Error(), "partial-upfront",
+		"a missing value must not be blamed on partial-upfront")
+
+	_, partialErr := BillingPlanForPaymentOption("partial-upfront")
+	require.Error(t, partialErr)
+	assert.Contains(t, partialErr.Error(), "partial-upfront has no azure equivalent")
+
+	// Whitespace-only is the same failure as empty, since the switch trims.
+	_, blankErr := BillingPlanForPaymentOption("   ")
+	require.Error(t, blankErr)
+	assert.Contains(t, blankErr.Error(), "no payment option was supplied")
+}
+
+// TestBillingPlanForPaymentOption_UnrecognizedIsNotBlamedOnPartialUpfront
+// extends the same split one step further: before this, EVERY unrecognized
+// value was reported as "partial-upfront has no azure equivalent", so a typo
+// ("montly") or a value from another provider's vocabulary ("prepaid") was
+// diagnosed as a partial-upfront problem the caller never had. Only an
+// actual partial-upfront should mention partial-upfront; anything else is
+// simply not a recognized option.
+func TestBillingPlanForPaymentOption_UnrecognizedIsNotBlamedOnPartialUpfront(t *testing.T) {
+	t.Parallel()
+
+	for _, unrecognized := range []string{"bogus", "prepaid", "montly", "PARTIAL"} {
+		_, err := BillingPlanForPaymentOption(unrecognized)
+		require.Errorf(t, err, "payment_option=%q must error", unrecognized)
+		assert.Containsf(t, err.Error(), "is not a recognized payment option",
+			"payment_option=%q should be diagnosed as unrecognized", unrecognized)
+		assert.NotContainsf(t, err.Error(), "partial-upfront has no azure equivalent",
+			"payment_option=%q is not partial-upfront, so the error must not blame it", unrecognized)
+		assert.Containsf(t, err.Error(), unrecognized,
+			"the error must quote the value actually supplied")
+	}
+
+	// partial-upfront itself keeps its specific message: it is a real payment
+	// option on other providers, so the caller needs to know Azure has no
+	// equivalent rather than that they typo'd.
+	_, partialErr := BillingPlanForPaymentOption("partial-upfront")
+	require.Error(t, partialErr)
+	assert.Contains(t, partialErr.Error(), "partial-upfront has no azure equivalent")
+	// Case and whitespace are normalized by the switch, so these reach the
+	// same case rather than falling through to the unrecognized branch.
+	_, paddedErr := BillingPlanForPaymentOption("  Partial-Upfront  ")
+	require.Error(t, paddedErr)
+	assert.Contains(t, paddedErr.Error(), "partial-upfront has no azure equivalent")
 }

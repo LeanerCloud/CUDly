@@ -312,6 +312,7 @@ type PurchaseResult struct {
 const (
 	PurchaseSourceCLI = "cudly-cli"
 	PurchaseSourceWeb = "cudly-web"
+	PurchaseSourceMCP = "cudly-mcp"
 )
 
 // PurchaseTagKey is the tag/label key every CUDly-purchased commitment carries
@@ -368,12 +369,12 @@ type PurchaseOptions struct {
 func NormalizeSource(s string) (string, error) {
 	lower := strings.ToLower(strings.TrimSpace(s))
 	switch lower {
-	case PurchaseSourceCLI, PurchaseSourceWeb:
+	case PurchaseSourceCLI, PurchaseSourceWeb, PurchaseSourceMCP:
 		return lower, nil
 	case "":
 		return "", fmt.Errorf("purchase source is required")
 	default:
-		return "", fmt.Errorf("invalid purchase source %q (allowed: %s, %s)", s, PurchaseSourceCLI, PurchaseSourceWeb)
+		return "", fmt.Errorf("invalid purchase source %q (allowed: %s, %s, %s)", s, PurchaseSourceCLI, PurchaseSourceWeb, PurchaseSourceMCP)
 	}
 }
 

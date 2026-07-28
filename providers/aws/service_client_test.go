@@ -290,3 +290,294 @@ func TestRecommendationsClientAdapter_GetAllRecommendations(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
+
+// TestApplyRecommendationFilters_Region is the regression guard for issue
+// #1506's Change 3: GetReservationPurchaseRecommendation and
+// GetSavingsPlansPurchaseRecommendation are account-level Cost Explorer
+// calls with no region parameter, so AWS returns recommendations from every
+// region the account has usage in regardless of params.Region. Before the
+// fix, only params.IncludeRegions/ExcludeRegions were honored here, so a
+// caller passing region alone (as cudly_search_recommendations documents)
+// got no region filtering at all -- an eu-west-1 recommendation could
+// surface from a us-east-1 search.
+func TestApplyRecommendationFilters_Region(t *testing.T) {
+	recs := []common.Recommendation{
+		{Account: "111", Region: "us-east-1"},
+		{Account: "222", Region: "eu-west-1"},
+	}
+
+	t.Run("region alone filters out other regions", func(t *testing.T) {
+		got := applyRecommendationFilters(recs, common.RecommendationParams{Region: "us-east-1"})
+		require.Len(t, got, 1)
+		assert.Equal(t, "us-east-1", got[0].Region)
+	})
+
+	t.Run("no region constraint returns everything", func(t *testing.T) {
+		got := applyRecommendationFilters(recs, common.RecommendationParams{})
+		assert.Len(t, got, 2)
+	})
+
+	t.Run("region and include_regions are additive", func(t *testing.T) {
+		threeRegionRecs := append(append([]common.Recommendation{}, recs...), common.Recommendation{Account: "333", Region: "ap-southeast-1"})
+		got := applyRecommendationFilters(threeRegionRecs, common.RecommendationParams{
+			Region:         "us-east-1",
+			IncludeRegions: []string{"eu-west-1"},
+		})
+		gotRegions := make([]string, len(got))
+		for i, r := range got {
+			gotRegions[i] = r.Region
+		}
+		assert.ElementsMatch(t, []string{"us-east-1", "eu-west-1"}, gotRegions)
+	})
+
+	t.Run("exclude_regions still applies on top of region", func(t *testing.T) {
+		got := applyRecommendationFilters(recs, common.RecommendationParams{
+			Region:         "us-east-1",
+			ExcludeRegions: []string{"us-east-1"},
+		})
+		assert.Empty(t, got)
+	})
+}
+
+// TestApplyRecommendationFilters_SavingsPlanRegion is the regression guard
+// for the read-path bug where a region filter silently dropped ALL Savings
+// Plans recommendations. Unlike RI/reservation recs, SP recs never populate
+// the top-level rec.Region: account-level plans (Compute/SageMaker/Database)
+// carry no region at all, and EC2Instance plans carry their region in
+// Details.Region (common.SavingsPlanDetails) instead, per parser_sp.go's
+// extractEC2SPFields. Before the fix, filterByIncludedRegions/
+// filterByExcludedRegions matched only rec.Region, so every SP rec --
+// region-agnostic or not -- was silently dropped by any region constraint.
+func TestApplyRecommendationFilters_SavingsPlanRegion(t *testing.T) {
+	accountLevelSP := common.Recommendation{
+		Account:        "111",
+		Region:         "",
+		CommitmentType: common.CommitmentSavingsPlan,
+		Details:        &common.SavingsPlanDetails{PlanType: "Compute"},
+	}
+	ec2InstanceSP := common.Recommendation{
+		Account:        "222",
+		Region:         "",
+		CommitmentType: common.CommitmentSavingsPlan,
+		Details:        &common.SavingsPlanDetails{PlanType: "EC2Instance", Region: "us-east-1"},
+	}
+
+	t.Run("account-level SP rec is kept under a region filter", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{accountLevelSP}, common.RecommendationParams{Region: "us-east-1"})
+		require.Len(t, got, 1)
+	})
+
+	t.Run("EC2Instance SP rec matching Details.Region is kept", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{ec2InstanceSP}, common.RecommendationParams{Region: "us-east-1"})
+		require.Len(t, got, 1)
+	})
+
+	t.Run("EC2Instance SP rec not matching Details.Region is dropped", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{ec2InstanceSP}, common.RecommendationParams{Region: "eu-west-1"})
+		assert.Empty(t, got)
+	})
+
+	t.Run("account-level SP rec is never excluded by exclude_regions", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{accountLevelSP}, common.RecommendationParams{ExcludeRegions: []string{"us-east-1"}})
+		require.Len(t, got, 1)
+	})
+
+	t.Run("EC2Instance SP rec matching exclude_regions is dropped", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{ec2InstanceSP}, common.RecommendationParams{ExcludeRegions: []string{"us-east-1"}})
+		assert.Empty(t, got)
+	})
+
+	t.Run("mixed recs: region filter keeps account-level and matching region, drops non-matching", func(t *testing.T) {
+		regionScoped := common.Recommendation{Account: "333", Region: "eu-west-1"}
+		got := applyRecommendationFilters(
+			[]common.Recommendation{accountLevelSP, ec2InstanceSP, regionScoped},
+			common.RecommendationParams{Region: "us-east-1"},
+		)
+		require.Len(t, got, 2)
+	})
+}
+
+// TestApplyRecommendationFilters_RegionlessReservationNotExempt is the
+// regression guard for the over-broad exemption found reviewing #1495. The
+// Savings Plans fix above needs region-agnostic recs to survive a region
+// filter, but keying that exemption on "effective region is empty" alone
+// swept in reservation recs too: every parser in parser_services.go writes
+// rec.Region only under `if <svc>Details.Region != nil`, so an EC2/RDS/etc
+// rec whose Cost Explorer payload omitted the region field carries Region ==
+// "" while still being a single-region purchase.
+//
+// Exempting those let a recommendation of unknown region survive an explicit
+// "us-east-1 only" filter and reach the purchase path, to be bought in
+// whatever region the service client resolved. This test fails on the
+// empty-region-means-agnostic version and passes with the
+// CommitmentSavingsPlan-gated isRegionAgnostic.
+func TestApplyRecommendationFilters_RegionlessReservationNotExempt(t *testing.T) {
+	regionlessRI := common.Recommendation{
+		Account:        "111",
+		Region:         "",
+		CommitmentType: common.CommitmentReservedInstance,
+		ResourceType:   "m5.large",
+		Details:        &common.ComputeDetails{InstanceType: "m5.large"},
+	}
+
+	t.Run("region-less reservation rec is dropped by an include filter", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{regionlessRI}, common.RecommendationParams{Region: "us-east-1"})
+		assert.Empty(t, got, "a reservation rec of unknown region must not survive an explicit region filter")
+	})
+
+	t.Run("region-less reservation rec is dropped by include_regions too", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{regionlessRI},
+			common.RecommendationParams{IncludeRegions: []string{"us-east-1", "eu-west-1"}})
+		assert.Empty(t, got)
+	})
+
+	t.Run("region-less reservation rec survives when no region constraint is set", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{regionlessRI}, common.RecommendationParams{})
+		require.Len(t, got, 1, "with no region filter, nothing is dropped")
+	})
+
+	t.Run("region-less reservation rec is not excluded by exclude_regions", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{regionlessRI},
+			common.RecommendationParams{ExcludeRegions: []string{"us-east-1"}})
+		require.Len(t, got, 1, "a rec of unknown region cannot be shown to be in an excluded region")
+	})
+}
+
+// TestApplyRecommendationFilters_BlankRegionEntryIsNotAMatcher pins that a
+// blank entry in a region filter list is never treated as a matching region
+// code. Without regionSet's skip, a blank in ExcludeRegions puts "" in the
+// lookup set, and any rec whose effective region is also "" then matches that
+// key and is wrongly excluded.
+//
+// The subject must be a rec that is NOT region-agnostic but still has an
+// empty effective region, i.e. a region-less reservation (see
+// TestApplyRecommendationFilters_RegionlessReservationNotExempt for why those
+// exist). An account-level Savings Plan would NOT pin this: it
+// short-circuits on isRegionAgnostic before the map is ever consulted, so
+// that subtest would pass with or without the blank skip and prove nothing.
+func TestApplyRecommendationFilters_BlankRegionEntryIsNotAMatcher(t *testing.T) {
+	// Not region-agnostic (a reservation), but carries no region because
+	// Cost Explorer omitted the field. effectiveRegion is "" and
+	// isRegionAgnostic is false, so this rec reaches the map lookup.
+	regionlessRI := common.Recommendation{
+		Account:        "111",
+		CommitmentType: common.CommitmentReservedInstance,
+		ResourceType:   "m5.large",
+		Details:        &common.ComputeDetails{InstanceType: "m5.large"},
+	}
+	usEast := common.Recommendation{Account: "222", Region: "us-east-1"}
+
+	t.Run("blank exclude entry does not drop a rec with no region", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{regionlessRI},
+			common.RecommendationParams{ExcludeRegions: []string{""}})
+		require.Len(t, got, 1,
+			`a blank exclude entry must not become a lookup key that matches an empty effective region`)
+	})
+
+	t.Run("blank exclude entry alongside a real one still excludes the real one", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{regionlessRI, usEast},
+			common.RecommendationParams{ExcludeRegions: []string{"", "us-east-1"}})
+		require.Len(t, got, 1, "us-east-1 is excluded; the region-less rec is not")
+		assert.Empty(t, got[0].Region)
+	})
+
+	t.Run("blank include entry does not match anything", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{usEast},
+			common.RecommendationParams{IncludeRegions: []string{"", "us-east-1"}})
+		require.Len(t, got, 1)
+		assert.Equal(t, "us-east-1", got[0].Region)
+	})
+}
+
+// TestApplyRecommendationFilters_RegionlessEC2InstanceSPNotExempt is the
+// regression guard for the residual half of the over-broad region exemption.
+//
+// TestApplyRecommendationFilters_RegionlessReservationNotExempt above closed
+// the hole for reservations by requiring CommitmentSavingsPlan. That is still
+// not enough: only the ACCOUNT-LEVEL Savings Plans (Compute, SageMaker,
+// Database) belong to no region. An EC2Instance Savings Plan is region-scoped,
+// and extractEC2SPFields (recommendations/parser_sp.go) yields Region == ""
+// whenever Cost Explorer omitted SavingsPlansDetails or its Region field,
+// because aws.ToString maps a nil pointer to "". Keying the exemption on
+// CommitmentSavingsPlan alone therefore let a region-scoped EC2Instance SP of
+// unknown region survive an explicit "us-east-1 only" filter and be purchased
+// in whatever region the service client resolved -- the same defect, one plan
+// type over.
+//
+// This test fails on the CommitmentSavingsPlan-only isRegionAgnostic and
+// passes once the exemption also requires isAccountLevelSPPlanType.
+func TestApplyRecommendationFilters_RegionlessEC2InstanceSPNotExempt(t *testing.T) {
+	// An EC2Instance SP whose CE payload carried no region: region-scoped,
+	// but with nothing to match a region filter against.
+	regionlessEC2SP := common.Recommendation{
+		Account:        "111",
+		CommitmentType: common.CommitmentSavingsPlan,
+		Details:        &common.SavingsPlanDetails{PlanType: "EC2Instance"},
+	}
+
+	t.Run("region-less EC2Instance SP is dropped by an include filter", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{regionlessEC2SP},
+			common.RecommendationParams{Region: "us-east-1"})
+		assert.Empty(t, got,
+			"an EC2Instance Savings Plan is region-scoped: with an unknown region it must not survive an explicit region filter")
+	})
+
+	t.Run("region-less EC2Instance SP is dropped by include_regions too", func(t *testing.T) {
+		got := applyRecommendationFilters([]common.Recommendation{regionlessEC2SP},
+			common.RecommendationParams{IncludeRegions: []string{"us-east-1", "eu-west-1"}})
+		assert.Empty(t, got)
+	})
+
+	t.Run("account-level SPs stay exempt", func(t *testing.T) {
+		for _, planType := range []string{"Compute", "SageMaker", "Database"} {
+			accountLevelSP := common.Recommendation{
+				Account:        "111",
+				CommitmentType: common.CommitmentSavingsPlan,
+				Details:        &common.SavingsPlanDetails{PlanType: planType},
+			}
+			got := applyRecommendationFilters([]common.Recommendation{accountLevelSP},
+				common.RecommendationParams{Region: "us-east-1"})
+			require.Lenf(t, got, 1,
+				"%s Savings Plans apply account-wide and must survive a region filter", planType)
+		}
+	})
+
+	t.Run("an unrecognised plan type is treated as region-scoped, not exempt", func(t *testing.T) {
+		// spPlanTypeDisplayString passes unknown SDK plan types through
+		// verbatim, so this is reachable on a future AWS product. The
+		// conservative direction is to filter it, not to exempt it.
+		unknownSP := common.Recommendation{
+			Account:        "111",
+			CommitmentType: common.CommitmentSavingsPlan,
+			Details:        &common.SavingsPlanDetails{PlanType: "SomeFutureSP"},
+		}
+		got := applyRecommendationFilters([]common.Recommendation{unknownSP},
+			common.RecommendationParams{Region: "us-east-1"})
+		assert.Empty(t, got, "a plan type this build does not recognise must not be granted the exemption")
+	})
+
+	t.Run("an SP carrying no Details at all is not exempt", func(t *testing.T) {
+		noDetailsSP := common.Recommendation{
+			Account:        "111",
+			CommitmentType: common.CommitmentSavingsPlan,
+		}
+		got := applyRecommendationFilters([]common.Recommendation{noDetailsSP},
+			common.RecommendationParams{Region: "us-east-1"})
+		assert.Empty(t, got, "with no Details there is no positive evidence the plan is account-level")
+	})
+
+	t.Run("an EC2Instance SP that DOES carry its region is filtered on that region", func(t *testing.T) {
+		ec2SPInUsEast := common.Recommendation{
+			Account:        "111",
+			CommitmentType: common.CommitmentSavingsPlan,
+			Details:        &common.SavingsPlanDetails{PlanType: "EC2Instance", Region: "us-east-1"},
+		}
+		kept := applyRecommendationFilters([]common.Recommendation{ec2SPInUsEast},
+			common.RecommendationParams{Region: "us-east-1"})
+		require.Len(t, kept, 1, "a matching region must still be kept")
+
+		dropped := applyRecommendationFilters([]common.Recommendation{ec2SPInUsEast},
+			common.RecommendationParams{Region: "eu-west-1"})
+		assert.Empty(t, dropped, "a non-matching region must still be dropped")
+	})
+}

@@ -1007,6 +1007,7 @@ func TestCacheClient_PurchaseCommitment_Success(t *testing.T) {
 		Term:           "1yr",
 		Count:          1,
 		CommitmentCost: 1000.0,
+		PaymentOption:  "no-upfront",
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -1035,6 +1036,7 @@ func TestCacheClient_PurchaseCommitment_3YearTerm(t *testing.T) {
 		Term:           "3yr",
 		Count:          1,
 		CommitmentCost: 2500.0,
+		PaymentOption:  "no-upfront",
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -1062,6 +1064,7 @@ func TestCacheClient_PurchaseCommitment_Accepted(t *testing.T) {
 		Term:           "1yr",
 		Count:          1,
 		CommitmentCost: 1000.0,
+		PaymentOption:  "no-upfront",
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -1077,9 +1080,10 @@ func TestCacheClient_PurchaseCommitment_TokenError(t *testing.T) {
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
 	rec := common.Recommendation{
-		ResourceType: "Premium_P1",
-		Term:         "1yr",
-		Count:        1,
+		ResourceType:  "Premium_P1",
+		Term:          "1yr",
+		Count:         1,
+		PaymentOption: "no-upfront",
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -1099,9 +1103,10 @@ func TestCacheClient_PurchaseCommitment_HTTPError(t *testing.T) {
 	})).Return(nil, errors.New("network error")).Once()
 
 	rec := common.Recommendation{
-		ResourceType: "Premium_P1",
-		Term:         "1yr",
-		Count:        1,
+		ResourceType:  "Premium_P1",
+		Term:          "1yr",
+		Count:         1,
+		PaymentOption: "no-upfront",
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -1124,9 +1129,10 @@ func TestCacheClient_PurchaseCommitment_BadStatus(t *testing.T) {
 	})).Return(createMockHTTPResponse(http.StatusBadRequest, `{"error": "invalid request"}`), nil).Once()
 
 	rec := common.Recommendation{
-		ResourceType: "Premium_P1",
-		Term:         "1yr",
-		Count:        1,
+		ResourceType:  "Premium_P1",
+		Term:          "1yr",
+		Count:         1,
+		PaymentOption: "no-upfront",
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -1164,7 +1170,7 @@ func TestCacheClient_PurchaseCommitment_TagInjection(t *testing.T) {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase"
 	})).Return(createMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
 
-	rec := common.Recommendation{ResourceType: "Premium_P1", Term: "1yr", Count: 1, CommitmentCost: 1000.0}
+	rec := common.Recommendation{ResourceType: "Premium_P1", Term: "1yr", Count: 1, CommitmentCost: 1000.0, PaymentOption: "no-upfront"}
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: source})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
@@ -1175,6 +1181,71 @@ func TestCacheClient_PurchaseCommitment_TagInjection(t *testing.T) {
 	require.True(t, hasTags, "tags field must be present in calculatePrice body when Source is set")
 	assert.Equal(t, source, tags[common.PurchaseTagKey], "tag value must match opts.Source")
 	mockHTTP.AssertExpectations(t)
+}
+
+// TestCacheClient_PurchaseCommitment_BillingPlan pins the billingPlan wiring
+// (issue #1502, mirroring PR #1495's fix for compute): Azure Cache for Redis
+// reserved capacity supports both Upfront and Monthly billing
+// (learn.microsoft.com/azure/azure-cache-for-redis/cache-reserved-pricing),
+// so rec.PaymentOption must map onto the correct armreservations
+// ReservationBillingPlan value in the purchase body rather than silently
+// defaulting to Azure's Upfront behavior for a no-upfront/monthly rec.
+func TestCacheClient_PurchaseCommitment_BillingPlan(t *testing.T) {
+	cases := []struct {
+		name          string
+		paymentOption string
+		wantPlan      string
+		wantErrSub    string
+	}{
+		{name: "all-upfront maps to Upfront", paymentOption: "all-upfront", wantPlan: "Upfront"},
+		{name: "no-upfront maps to Monthly", paymentOption: "no-upfront", wantPlan: "Monthly"},
+		{name: "partial-upfront is rejected", paymentOption: "partial-upfront", wantErrSub: "partial-upfront has no azure equivalent"},
+		{name: "empty payment option is rejected", paymentOption: "", wantErrSub: "azure reservations support only upfront or monthly billing"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			mockHTTP := &MockHTTPClient{}
+			mockCred := &MockTokenCredential{token: "test-token"}
+			client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
+
+			rec := common.Recommendation{ResourceType: "Premium_P1", Term: "1yr", Count: 1, PaymentOption: tc.paymentOption}
+
+			if tc.wantErrSub != "" {
+				result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+				require.Error(t, err)
+				assert.False(t, result.Success)
+				assert.Contains(t, err.Error(), tc.wantErrSub)
+				mockHTTP.AssertNotCalled(t, "Do", mock.Anything)
+				return
+			}
+
+			const orderID = "cache-billingplan-test"
+			var capturedBody []byte
+			mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+				if r.URL.Path != "/providers/Microsoft.Capacity/calculatePrice" {
+					return false
+				}
+				capturedBody, _ = io.ReadAll(r.Body)
+				r.Body = io.NopCloser(bytes.NewReader(capturedBody))
+				return true
+			})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once()
+			mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+				return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase"
+			})).Return(createMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+
+			result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+			require.NoError(t, err)
+			assert.True(t, result.Success)
+
+			var body map[string]interface{}
+			require.NoError(t, json.Unmarshal(capturedBody, &body))
+			props, ok := body["properties"].(map[string]interface{})
+			require.True(t, ok, "properties map missing from reservation body")
+			assert.Equal(t, tc.wantPlan, props["billingPlan"])
+			mockHTTP.AssertExpectations(t)
+		})
+	}
 }
 
 // TestCacheClient_PurchaseCommitment_RequiresSource pins the dedupe guard:
@@ -1238,6 +1309,7 @@ func TestCacheClient_PurchaseCommitment_DisplayNameConformsToAzureAllowlist(t *t
 		Term:           "1yr",
 		Count:          1,
 		CommitmentCost: 1000.0,
+		PaymentOption:  "no-upfront",
 	}
 	_, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)

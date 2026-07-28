@@ -70,7 +70,12 @@ func (c *Client) getSavingsPlansRecommendations(ctx context.Context, params *com
 			if len(planTypes) == 1 {
 				return nil, fmt.Errorf("failed to get %s recommendations: %w", planType, err)
 			}
-			fmt.Printf("Warning: Failed to get %s recommendations: %v\n", planType, err)
+			// log (stderr), never fmt.Print (stdout): see the identical note
+			// in parser_ri.go's parseRecommendations. cmd/cudly-mcp frames
+			// JSON-RPC on stdout, and this branch fires whenever ONE plan
+			// type fails while others succeed (e.g. Database SP unavailable
+			// in an account) -- a routine condition, not a rare one.
+			log.Printf("Warning: Failed to get %s recommendations: %v", planType, err)
 			continue
 		}
 
@@ -249,13 +254,17 @@ type ec2SPFields struct {
 // CE SavingsPlansDetails nested struct for EC2Instance plan recommendations.
 // Returns a zero-value struct (all empty strings) for non-EC2Instance plan
 // types and when SavingsPlansDetails is nil, so callers do not need a nil guard.
+// Region is normalized (see normalizeRegionName) to match the reservation
+// parsers in parser_services.go, so downstream region filtering (see
+// service_client.go's filterByIncludedRegions) compares against the same
+// canonical region codes rather than occasionally raw CE display names.
 func extractEC2SPFields(planType types.SupportedSavingsPlansType, detail *types.SavingsPlansPurchaseRecommendationDetail) ec2SPFields {
 	if planType != types.SupportedSavingsPlansTypeEc2InstanceSp || detail.SavingsPlansDetails == nil {
 		return ec2SPFields{}
 	}
 	return ec2SPFields{
 		instanceFamily: aws.ToString(detail.SavingsPlansDetails.InstanceFamily),
-		region:         aws.ToString(detail.SavingsPlansDetails.Region),
+		region:         normalizeRegionName(aws.ToString(detail.SavingsPlansDetails.Region)),
 		offeringID:     aws.ToString(detail.SavingsPlansDetails.OfferingId),
 	}
 }

@@ -1,7 +1,11 @@
 package recommendations
 
 import (
+	"bytes"
 	"context"
+	"io"
+	"log"
+	"os"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -595,4 +599,108 @@ func TestParseRIUtilizationSignals(t *testing.T) {
 			assert.Equal(t, tt.wantUtilization, rec.RecommendedUtilization)
 		})
 	}
+}
+
+// TestParseRecommendations_WarningsNeverGoToStdout is the regression guard for
+// the MCP stdio-protocol corruption found in review of #1495.
+//
+// This package is linked into cmd/cudly-mcp (via providers/aws), and the MCP
+// stdio transport owns STDOUT for JSON-RPC framing. parseRecommendations logs
+// a warning for every recommendation detail it cannot parse; while that
+// warning used fmt.Printf it went to stdout, so a single unparseable detail
+// during a cudly_search_recommendations call injected a bare line of prose
+// into the middle of the JSON-RPC stream and broke the client session.
+//
+// TestParseRecommendations_SkipsInvalidDetails above already drives this exact
+// code path, but it only asserts the returned recommendation count -- it stayed
+// green the entire time the bug was live. This test asserts the property that
+// actually matters: nothing reaches stdout, whatever is logged.
+func TestParseRecommendations_WarningsNeverGoToStdout(t *testing.T) {
+	// Not parallel: swaps the process-wide os.Stdout and the shared logger.
+	client := &Client{}
+
+	awsRecs := []types.ReservationPurchaseRecommendation{
+		{
+			RecommendationDetails: []types.ReservationPurchaseRecommendationDetail{
+				{
+					// Invalid: missing quantity, so parseRecommendationDetail
+					// fails and parseRecommendations logs its warning.
+					RecommendedNumberOfInstancesToPurchase: nil,
+					EstimatedMonthlySavingsAmount:          aws.String("50.00"),
+					InstanceDetails: &types.InstanceDetails{
+						EC2InstanceDetails: &types.EC2InstanceDetails{
+							InstanceType: aws.String("m5.large"),
+						},
+					},
+				},
+			},
+		},
+	}
+	params := common.RecommendationParams{
+		Service:        common.ServiceEC2,
+		PaymentOption:  "partial-upfront",
+		Term:           "1yr",
+		LookbackPeriod: "7d",
+	}
+
+	stdout, logged := captureStdoutAndLog(t, func() {
+		recs, err := client.parseRecommendations(context.Background(), awsRecs, params)
+		require.NoError(t, err)
+		assert.Empty(t, recs, "the single invalid detail must be skipped")
+	})
+
+	assert.Empty(t, stdout,
+		"nothing may be written to stdout: cmd/cudly-mcp frames JSON-RPC there and any stray byte corrupts the protocol")
+	assert.Contains(t, logged, "Failed to parse recommendation detail",
+		"the warning must still be emitted, just on stderr via log rather than stdout")
+}
+
+// captureStdoutAndLog runs fn with os.Stdout redirected to a pipe and the
+// standard logger redirected to a buffer, returning whatever fn wrote to each.
+// Both are restored before it returns.
+//
+// os.Stdout is swapped (rather than only the logger) because the bug under
+// test wrote via fmt.Printf, which resolves os.Stdout at call time and so is
+// invisible to any logger-only capture.
+func captureStdoutAndLog(t *testing.T, fn func()) (stdout, logged string) {
+	t.Helper()
+
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+
+	prevStdout := os.Stdout
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	var logBuf bytes.Buffer
+	os.Stdout = w
+	log.SetOutput(&logBuf)
+	log.SetFlags(0)
+
+	// Drain the pipe concurrently so a write larger than the pipe buffer
+	// cannot deadlock fn.
+	drained := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, copyErr := io.Copy(&buf, r)
+		if copyErr != nil {
+			// Surfaced via the returned string rather than require.* --
+			// this runs on a non-test goroutine, where require.* is unsafe
+			// (feedback_require_in_goroutines).
+			buf.WriteString("<copy error: " + copyErr.Error() + ">")
+		}
+		drained <- buf.String()
+	}()
+
+	func() {
+		defer func() {
+			os.Stdout = prevStdout
+			log.SetOutput(prevOut)
+			log.SetFlags(prevFlags)
+			require.NoError(t, w.Close())
+		}()
+		fn()
+	}()
+
+	stdout = <-drained
+	require.NoError(t, r.Close())
+	return stdout, logBuf.String()
 }

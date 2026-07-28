@@ -455,3 +455,51 @@ func TestRICostParsers_RejectNonFiniteAndNegative(t *testing.T) {
 		})
 	}
 }
+
+// TestExtractEC2SPFieldsNormalizesRegion pins that an EC2Instance Savings
+// Plans recommendation's region is canonicalized on the way out of the
+// parser.
+//
+// Cost Explorer sometimes returns a human display name ("US East (N.
+// Virginia)") rather than a region code. Downstream, service_client.go's
+// region filters compare the value against caller-supplied region codes like
+// "us-east-1", so an un-normalized display name matches nothing: an
+// EC2Instance SP recommendation would be silently dropped from a search that
+// explicitly asked for its region, or wrongly survive an exclude of it.
+// The reservation parsers in parser_services.go already normalize; this
+// keeps the Savings Plans path consistent with them.
+func TestExtractEC2SPFieldsNormalizesRegion(t *testing.T) {
+	t.Parallel()
+
+	newDetail := func(region string) *types.SavingsPlansPurchaseRecommendationDetail {
+		return &types.SavingsPlansPurchaseRecommendationDetail{
+			SavingsPlansDetails: &types.SavingsPlansDetails{
+				InstanceFamily: aws.String("m5"),
+				Region:         aws.String(region),
+				OfferingId:     aws.String("offering-123"),
+			},
+		}
+	}
+
+	t.Run("display name is canonicalized to a region code", func(t *testing.T) {
+		t.Parallel()
+		got := extractEC2SPFields(types.SupportedSavingsPlansTypeEc2InstanceSp, newDetail("US East (N. Virginia)"))
+		assert.Equal(t, "us-east-1", got.region,
+			"a Cost Explorer display name must be canonicalized before it reaches region filtering")
+		assert.Equal(t, "m5", got.instanceFamily)
+		assert.Equal(t, "offering-123", got.offeringID)
+	})
+
+	t.Run("an already-canonical region code passes through unchanged", func(t *testing.T) {
+		t.Parallel()
+		got := extractEC2SPFields(types.SupportedSavingsPlansTypeEc2InstanceSp, newDetail("eu-west-1"))
+		assert.Equal(t, "eu-west-1", got.region)
+	})
+
+	t.Run("non-EC2Instance plan types carry no region", func(t *testing.T) {
+		t.Parallel()
+		got := extractEC2SPFields(types.SupportedSavingsPlansTypeComputeSp, newDetail("US East (N. Virginia)"))
+		assert.Empty(t, got.region, "account-level plans are region-agnostic")
+		assert.Empty(t, got.instanceFamily)
+	})
+}

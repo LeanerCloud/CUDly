@@ -49,6 +49,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations"
+
 	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
@@ -67,6 +69,67 @@ func ParseTermYears(term string) (int, error) {
 		return 3, nil
 	default:
 		return 0, fmt.Errorf("unsupported reservation term: %s", term)
+	}
+}
+
+// BillingPlanForPaymentOption maps a recommendation's payment-option string
+// to the armreservations.ReservationBillingPlan Azure's purchase API expects
+// in properties.billingPlan (confirmed against
+// armreservations.PurchaseRequestProperties.BillingPlan and the two-member
+// enum in constants.go: ReservationBillingPlanUpfront = "Upfront",
+// ReservationBillingPlanMonthly = "Monthly"). Azure reservations support
+// exactly those two billing plans -- there is no partial-upfront -- and
+// Monthly costs the same total as Upfront (no premium for spreading
+// payments), so "no-upfront"/"monthly" is a safe, cost-neutral default at
+// the caller layer.
+//
+// CUDly's own recommendation converter (providers/azure/internal/
+// recommendations/converter.go) emits PaymentOption "upfront"/"monthly";
+// the MCP tool boundary and the CLI --payment flag use "all-upfront"/
+// "no-upfront"/"partial-upfront". Both vocabularies are accepted here so
+// this function is the single mapping point regardless of which caller
+// populated rec.PaymentOption.
+//
+// An empty or unrecognized value (including "partial-upfront", which Azure
+// cannot express at all) is a hard error rather than a silent default: the
+// default belongs at the caller (CLI/MCP) layer, never silently applied on
+// this money-affecting path (feedback_no_silent_fallbacks).
+//
+// Empty gets its own message rather than sharing the unrecognized-value one.
+// It is a reachable state with a different remedy: migration 000032 added
+// recommendations.payment_option as TEXT NOT NULL defaulting to the empty
+// string, so a row predating that migration reaches
+// internal/purchase/execution.go with rec.Payment == "" and lands here.
+// Blaming partial-upfront for a value that is simply missing sends whoever
+// reads that error looking in the wrong place.
+func BillingPlanForPaymentOption(paymentOption string) (armreservations.ReservationBillingPlan, error) {
+	switch strings.ToLower(strings.TrimSpace(paymentOption)) {
+	case "all-upfront", "upfront":
+		return armreservations.ReservationBillingPlanUpfront, nil
+	case "no-upfront", "monthly":
+		return armreservations.ReservationBillingPlanMonthly, nil
+	case "":
+		return "", fmt.Errorf(
+			"azure reservations support only upfront or monthly billing, and no payment option was supplied; " +
+				"set it explicitly (upfront or monthly) rather than relying on a default, because Azure's own " +
+				"default is upfront and would charge the whole commitment immediately")
+	case "partial-upfront":
+		// Named explicitly rather than folded into default: partial-upfront is
+		// a real payment option elsewhere in CUDly (AWS offers it), so the
+		// caller needs to know Azure specifically has no equivalent. Handled
+		// as its own case so the switch's already-normalized value decides it,
+		// rather than re-lowercasing inside default.
+		return "", fmt.Errorf(
+			"azure reservations support only upfront or monthly billing; %q is not available (partial-upfront has no azure equivalent)",
+			paymentOption)
+	default:
+		// Anything else is a typo or an unknown value. Blaming partial-upfront
+		// here would misdirect debugging: %q is not partial-upfront, so saying
+		// "partial-upfront has no azure equivalent" describes a value the
+		// caller never supplied.
+		return "", fmt.Errorf(
+			"azure reservations support only upfront or monthly billing; %q is not a recognized payment option",
+			paymentOption)
 	}
 }
 
@@ -91,9 +154,19 @@ func PurchaseURL(reservationOrderID string) string {
 
 // ReservationOrdersListURL returns the list-reservation-orders endpoint URL.
 // The endpoint is tenant-wide (no subscription prefix): the caller's bearer
-// token determines visibility, and the idempotency-token tag is globally
-// unique per (execution, rec), so a tenant-wide search returns the correct
+// token determines visibility, so a tenant-wide search returns the correct
 // order regardless of which subscription executed the purchase.
+//
+// That correctness rests entirely on the idempotency token being unique per
+// (target subscription, request), and it is the CALLER's job to make it so.
+// The CLI/web paths satisfy this by deriving the token from a UUID execution
+// ID (common.DeriveIdempotencyToken), which is unique by construction. A
+// caller that instead derives a token from the request's own parameters must
+// fold the target subscription into it, or two subscriptions in the same
+// tenant ordering the same SKU will collide here: the second purchase would
+// match the first subscription's order, short-circuit, and report success
+// without buying anything. See mcp/tools/purchase.go's idempotencyKeyFor,
+// which folds in PurchaseRequest.CredentialScope for exactly this reason.
 func ReservationOrdersListURL() string {
 	return BaseURL + "/providers/Microsoft.Capacity/reservationOrders?api-version=" + apiVersion
 }
