@@ -52,9 +52,22 @@ Parameters:
   OIDCSubjectClaim:
     Type: String
     Description: >
-      Optional subject (sub) claim to restrict which identity can assume the role.
-      Leave empty to allow any authenticated subject from this issuer.
-    Default: ""
+      REQUIRED. Subject (sub) claim identifying the single workload allowed to
+      assume this role. There is deliberately no default: without a :sub
+      condition the trust policy accepts EVERY identity the issuer can mint,
+      so any tenant of that issuer could assume this role and place
+      irreversible multi-year commitment purchases in this account.
+      Azure AD managed identity: the object ID of the managed identity.
+      GCP service account: the service account unique ID, or the form
+      system:serviceaccount:<project>:<sa-email>.
+      Mirrors the required oidc_subject_claim variable in the Terraform module.
+    MinLength: 1
+    AllowedPattern: "^[^\\s*]$|^[^\\s*][^*]*[^\\s*]$"
+    ConstraintDescription: >
+      OIDCSubjectClaim is required and must be a non-empty string with no
+      leading/trailing whitespace and no '*'. The trust policy matches the
+      subject with StringEquals, so a '*' is compared literally rather than
+      as a wildcard and would silently produce a role nobody can assume.
 
   RoleName:
     Type: String
@@ -63,7 +76,6 @@ Parameters:
 
 Conditions:
   HasAudience: !Not [!Equals [!Ref OIDCAudience, ""]]
-  HasSubject: !Not [!Equals [!Ref OIDCSubjectClaim, ""]]
 
 Resources:
   OIDCProvider:
@@ -156,26 +168,19 @@ Resources:
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
-          # Use Fn::If to conditionally include :sub restriction alongside :aud
-          - !If
-            - HasSubject
-            - Effect: Allow
-              Principal:
-                Federated: !GetAtt OIDCProvider.Arn
-              Action: sts:AssumeRoleWithWebIdentity
-              Condition:
-                StringEquals:
-                  !Sub "${OIDCIssuerHost}:aud":
-                    !If [HasAudience, !Ref OIDCAudience, sts.amazonaws.com]
-                  !Sub "${OIDCIssuerHost}:sub": !Ref OIDCSubjectClaim
-            - Effect: Allow
-              Principal:
-                Federated: !GetAtt OIDCProvider.Arn
-              Action: sts:AssumeRoleWithWebIdentity
-              Condition:
-                StringEquals:
-                  !Sub "${OIDCIssuerHost}:aud":
-                    !If [HasAudience, !Ref OIDCAudience, sts.amazonaws.com]
+          # Both :aud and :sub are always enforced. There is intentionally no
+          # subject-less variant of this statement: omitting :sub would trust
+          # every identity the issuer can mint. OIDCSubjectClaim is a required
+          # parameter, so this condition can never collapse to an empty match.
+          - Effect: Allow
+            Principal:
+              Federated: !GetAtt OIDCProvider.Arn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                !Sub "${OIDCIssuerHost}:aud":
+                  !If [HasAudience, !Ref OIDCAudience, sts.amazonaws.com]
+                !Sub "${OIDCIssuerHost}:sub": !Ref OIDCSubjectClaim
       ManagedPolicyArns:
         - !Ref CUDlyPolicy
 

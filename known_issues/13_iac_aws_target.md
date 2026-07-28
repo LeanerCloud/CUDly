@@ -1,6 +1,48 @@
 # Known Issues: IaC AWS Target Federation
 
-> **Audit status (2026-04-20):** `0 still valid · 7 resolved · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-07-28):** `1 still valid · 8 resolved · 0 partially fixed · 0 moved · 0 needs triage`
+
+## CRITICAL: federation bundle generator never emits `OIDCSubjectClaim`
+
+**File**: `internal/api/handler_federation.go` (`buildCFParamsJSON`), `internal/iacfiles/templates/aws-wif-cf-params.json.tmpl`, `internal/iacfiles/templates/aws-wif-cli.sh.tmpl`
+**Description**: The customer-facing onboarding bundle writes CloudFormation
+parameter overrides for `OIDCIssuerURL`, `OIDCIssuerHost`, `OIDCAudience` and
+`RoleName`, but never `OIDCSubjectClaim`. `aws-wif-cli.sh.tmpl` has the same
+shape: it documents `OIDC_SUBJECT_CLAIM` as "Optional" and builds a trust
+policy with no `:sub` condition when the variable is unset. Both paths
+therefore produce the unrestricted trust policy that issue #1543 removed from
+the template itself.
+**Impact**: Now that `OIDCSubjectClaim` is a required template parameter, the
+generated CloudFormation bundle fails at change-set creation with
+`Parameters: [OIDCSubjectClaim] must have values` — fail-closed, but the
+onboarding flow is broken until the generator is taught to emit the subject.
+The `aws-wif-cli.sh.tmpl` path does not go through CloudFormation and still
+creates a subject-less role.
+**Status:** ⚠️ Still valid — tracked as a follow-up to #1543, and not fixed in
+that PR because `internal/` was owned by concurrent in-flight branches.
+
+## ~~CRITICAL: CloudFormation `:sub` restriction is optional and defaults to trusting every issuer identity~~ — RESOLVED
+
+**File**: `iac/federation/aws-target/cloudformation/template.yaml:52-57`, `:64-66`, `:171-178`
+**Description**: `OIDCSubjectClaim` defaulted to `""` and a `HasSubject`
+condition selected a trust statement that omitted the `:sub` condition
+entirely, gating only on `<issuer>:aud`. With `OIDCAudience` also left at its
+default the audience collapsed to the literal `sts.amazonaws.com`, so any
+identity the issuer could mint — for the documented `accounts.google.com`
+issuer, any Google service account anywhere — could call
+`sts:AssumeRoleWithWebIdentity` and obtain `ec2:PurchaseReservedInstancesOffering`,
+`savingsplans:CreateSavingsPlan` and `rds:PurchaseReservedDBInstancesOffering`
+in the customer's account.
+**Impact**: Unauthenticated-in-practice takeover of the commitment-purchasing
+role in every customer account deployed with the default parameters. The
+purchases are irreversible multi-year spend.
+**Status:** ✔️ Resolved
+
+**Resolved by:** #1543 — removes the `HasSubject` condition and the
+subject-less trust statement, and makes `OIDCSubjectClaim` a required
+parameter (no `Default`, `MinLength: 1`, `AllowedPattern` rejecting
+whitespace-only and `*` values), mirroring the Terraform module's
+`oidc_subject_claim` validation.
 
 ## ~~CRITICAL: Terraform trust policy silently drops `:aud` condition when `oidc_subject_claim` is set~~ — RESOLVED
 
@@ -19,6 +61,11 @@
 **Status:** ✔️ Resolved
 
 **Resolved by:** `a96fc719f` — adds an `OIDCSubjectClaim` parameter and conditional `:sub` `StringEquals` alongside the existing `:aud` check.
+
+> **Follow-up:** the *conditional* form this entry describes was itself the
+> CRITICAL hole filed as #1543 — the parameter defaulted to `""` and the
+> condition then selected a subject-less trust statement. The `:sub` check is
+> now unconditional; see the #1543 entry above.
 
 ## ~~HIGH: `OIDCThumbprint` parameter has no format validation in CloudFormation~~ — RESOLVED
 
