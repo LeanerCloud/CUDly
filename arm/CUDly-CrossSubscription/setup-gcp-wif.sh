@@ -117,11 +117,23 @@ if [[ "$PROVIDER_TYPE" == "aws" ]]; then
   # every IAM principal in the AWS account can federate as the service account.
   [[ -n "$AWS_ROLE_NAME" ]] || die "--aws-role-name is required for --provider-type aws. Without it the provider has no attribute condition and any IAM role in account ${AWS_ACCOUNT_ID} can federate as ${SA_EMAIL}."
   validate_principal_value "--aws-account-id" "$AWS_ACCOUNT_ID" '^[0-9]{12}$'
-  validate_principal_value "--aws-role-name"  "$AWS_ROLE_NAME"  '^[A-Za-z0-9_+=.@-]{1,64}$'
+  # Matches AWS's own role-name charset [\w+=,.@-]{1,64}. The comma is safe here:
+  # the role name reaches --attribute-condition (a plain string flag), never the
+  # comma-delimited --attribute-mapping dict.
+  validate_principal_value "--aws-role-name"  "$AWS_ROLE_NAME"  '^[A-Za-z0-9_+=,.@-]{1,64}$'
   # Standard AWS partition. A GovCloud or China-partition caller presents a
   # different ARN prefix, so the condition below simply would not match: the
   # token exchange is refused rather than admitted on a partition mismatch.
   AWS_ROLE_ARN="arn:aws:sts::${AWS_ACCOUNT_ID}:assumed-role/${AWS_ROLE_NAME}"
+  EXPECTED_CONDITION="attribute.aws_role == '${AWS_ROLE_ARN}'"
+  # google.subject is the full session ARN here and GCP caps it at 127 chars.
+  # "arn:aws:sts::<12 digits>:assumed-role/<role>/<session>" leaves
+  # 127 - 38 - len(role) - 1 for the session name, which AWS allows up to 64.
+  if [[ $((127 - 38 - ${#AWS_ROLE_NAME} - 1)) -lt 64 ]]; then
+    echo "Note: role name '${AWS_ROLE_NAME}' leaves only $((127 - 38 - ${#AWS_ROLE_NAME} - 1)) characters" >&2
+    echo "      for the session name before google.subject exceeds GCP's 127-character" >&2
+    echo "      limit. Longer session names will be rejected at token-exchange time." >&2
+  fi
 else
   [[ -n "$ISSUER_URI" ]] || die "--issuer-uri is required for --provider-type oidc"
   # Mandatory: public issuers such as token.actions.githubusercontent.com will
@@ -129,10 +141,14 @@ else
   # any repository in the world can federate as the service account.
   [[ -n "$OIDC_SUBJECT" ]] || die "--oidc-subject is required for --provider-type oidc. Without it the provider has no attribute condition and any subject issued by ${ISSUER_URI} can federate as ${SA_EMAIL}."
   validate_principal_value "--issuer-uri"   "$ISSUER_URI"   '^https://[a-zA-Z0-9.-]+(:[0-9]+)?(/[-a-zA-Z0-9._~/]*)?$'
-  validate_principal_value "--oidc-subject" "$OIDC_SUBJECT" '^[A-Za-z0-9][-A-Za-z0-9._:/@=+~]*$'
+  # '|' is permitted because Auth0/Okta-style subjects use it (google-oauth2|123).
+  # It is inert in both destinations: quotes are rejected above, so it cannot
+  # escape the CEL string literal, and it carries no meaning in a principal path.
+  validate_principal_value "--oidc-subject" "$OIDC_SUBJECT" '^[A-Za-z0-9][-A-Za-z0-9._:/@=+~|]*$'
   # google.subject is capped at 127 characters by GCP; a longer value would be
   # rejected at token-exchange time, long after this script reported success.
   [[ ${#OIDC_SUBJECT} -le 127 ]] || die "--oidc-subject must be at most 127 characters (google.subject limit); got ${#OIDC_SUBJECT}"
+  EXPECTED_CONDITION="google.subject == '${OIDC_SUBJECT}'"
 fi
 
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
@@ -183,7 +199,7 @@ if ! gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
       --workload-identity-pool="$POOL_ID" \
       --account-id="$AWS_ACCOUNT_ID" \
       --attribute-mapping="google.subject=assertion.arn,attribute.aws_role=assertion.arn.contains('assumed-role') ? assertion.arn.extract('{account_arn}assumed-role/') + 'assumed-role/' + assertion.arn.extract('assumed-role/{role_name}/') : assertion.arn" \
-      --attribute-condition="attribute.aws_role == '${AWS_ROLE_ARN}'" \
+      --attribute-condition="$EXPECTED_CONDITION" \
       --quiet
   else
     # --attribute-mapping is required; without it no subject claims are mapped and
@@ -195,22 +211,44 @@ if ! gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
       --workload-identity-pool="$POOL_ID" \
       --issuer-uri="$ISSUER_URI" \
       --attribute-mapping="google.subject=assertion.sub" \
-      --attribute-condition="google.subject == '${OIDC_SUBJECT}'" \
+      --attribute-condition="$EXPECTED_CONDITION" \
       --quiet
   fi
 else
-  # An existing provider keeps whatever attribute condition it was created with,
-  # including none at all. Do not report success over a provider this script
-  # cannot vouch for.
+  # An existing provider keeps whatever attribute condition it was created with.
+  # Checking only that the condition is non-empty would grandfather exactly the
+  # values --subject-condition was removed to prevent: "true", or
+  # "assertion.sub != ''", both non-empty and both admitting every identity. The
+  # condition is therefore compared to the one this script would have written.
+  DELETE_HINT="  gcloud iam workload-identity-pools providers delete ${PROVIDER_ID} --project=${PROJECT} --location=global --workload-identity-pool=${POOL_ID}"
   EXISTING_CONDITION=$(gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
     --project="$PROJECT" --location=global \
     --workload-identity-pool="$POOL_ID" \
     --format='value(attributeCondition)')
-  if [[ -z "$EXISTING_CONDITION" ]]; then
-    die "provider '${PROVIDER_ID}' already exists with no attribute condition, so every identity it accepts can enter pool '${POOL_ID}'. Delete it and re-run:
-  gcloud iam workload-identity-pools providers delete ${PROVIDER_ID} --project=${PROJECT} --location=global --workload-identity-pool=${POOL_ID}"
+  # A provider of the other type would emit a credential config that does not
+  # match it and mint an attribute the grant below never names.
+  EXISTING_TYPE=$(gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
+    --project="$PROJECT" --location=global \
+    --workload-identity-pool="$POOL_ID" \
+    --format='value(aws.accountId,oidc.issuerUri)')
+  if [[ "$PROVIDER_TYPE" == "aws" && "$EXISTING_TYPE" != "${AWS_ACCOUNT_ID}"* ]]; then
+    die "provider '${PROVIDER_ID}' already exists but is not an AWS provider for account ${AWS_ACCOUNT_ID} (describe reports: ${EXISTING_TYPE}). Delete it and re-run:
+${DELETE_HINT}"
   fi
-  echo "Reusing existing provider '${PROVIDER_ID}' (attribute condition: ${EXISTING_CONDITION})"
+  if [[ "$PROVIDER_TYPE" == "oidc" && "$EXISTING_TYPE" != *"${ISSUER_URI}" ]]; then
+    die "provider '${PROVIDER_ID}' already exists but is not an OIDC provider for issuer ${ISSUER_URI} (describe reports: ${EXISTING_TYPE}). Delete it and re-run:
+${DELETE_HINT}"
+  fi
+  if [[ "$EXISTING_CONDITION" != "$EXPECTED_CONDITION" ]]; then
+    die "provider '${PROVIDER_ID}' already exists with a different attribute condition, so this script cannot vouch for which identities enter pool '${POOL_ID}'.
+  found   : ${EXISTING_CONDITION:-(none)}
+  expected: ${EXPECTED_CONDITION}
+A condition that is merely non-empty is not a restriction: 'true' and
+\"assertion.sub != ''\" both admit every identity the issuer will vouch for.
+Delete the provider and re-run:
+${DELETE_HINT}"
+  fi
+  echo "Reusing existing provider '${PROVIDER_ID}' (attribute condition matches: ${EXISTING_CONDITION})"
 fi
 
 # ── Grant service account impersonation to one principal ──────────────────────
@@ -230,32 +268,72 @@ gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
   --project="$PROJECT" \
   --quiet
 
-# ── Retire the pool-wide grant left by earlier versions of this script ────────
-LEGACY_MEMBER="principalSet://iam.googleapis.com/${POOL_RESOURCE}/*"
-# Fetched into a variable first: a pipeline straight into grep would let a failed
-# get-iam-policy read as "no legacy binding found" and report success over one.
-SA_POLICY=$(gcloud iam service-accounts get-iam-policy "$SA_EMAIL" \
-  --project="$PROJECT" --format=json)
-if grep -qF -- "$LEGACY_MEMBER" <<<"$SA_POLICY"; then
+# ── Retire pool-wide grants left by earlier versions of this script ───────────
+# Scanned across every pool and every role, not just this run's --pool-id and
+# roles/iam.workloadIdentityUser. Scoping the scan to the current pool would let
+# a customer hide the original grant simply by re-running with a different
+# --pool-id (which the pool-reuse note above actively recommends), and scoping it
+# to one role would miss the same wildcard under roles/iam.serviceAccountTokenCreator,
+# which confers the same impersonation power via generateAccessToken.
+#
+# Emitted one "role<TAB>member" line per member so the role owning each wildcard
+# is known; a bare policy grep cannot tell which role to remove it from.
+#
+# The fetch is deliberately kept out of the grep pipeline. Piping gcloud straight
+# into `grep ... || true` would let a failed get-iam-policy produce empty output
+# and read as "no wildcard grants found", reporting success over the very grant
+# this check exists to catch. As a plain assignment it aborts under `set -e`.
+sa_bindings() {
+  gcloud iam service-accounts get-iam-policy "$SA_EMAIL" \
+    --project="$PROJECT" --flatten="bindings[].members" \
+    --format="value(bindings.role,bindings.members)"
+}
+pool_wide_grants() {
+  grep -E $'\t''principalSet://iam\.googleapis\.com/projects/[0-9]+/locations/[^/]+/workloadIdentityPools/[^/]+/\*$' <<<"$1" || true
+}
+
+SA_BINDINGS=$(sa_bindings)
+LEGACY_GRANTS=$(pool_wide_grants "$SA_BINDINGS")
+if [[ -n "$LEGACY_GRANTS" ]]; then
   if [[ "$REMOVE_LEGACY_POOL_BINDING" == "true" ]]; then
-    echo "Removing legacy pool-wide impersonation grant..."
-    gcloud iam service-accounts remove-iam-policy-binding "$SA_EMAIL" \
-      --role=roles/iam.workloadIdentityUser \
-      --member="$LEGACY_MEMBER" \
-      --project="$PROJECT" \
-      --quiet
+    while IFS=$'\t' read -r legacy_role legacy_member; do
+      [[ -n "$legacy_member" ]] || continue
+      echo "Removing pool-wide grant: ${legacy_role} -> ${legacy_member}"
+      gcloud iam service-accounts remove-iam-policy-binding "$SA_EMAIL" \
+        --role="$legacy_role" \
+        --member="$legacy_member" \
+        --project="$PROJECT" \
+        --quiet
+    done <<<"$LEGACY_GRANTS"
+    # Re-read the policy: removing one role's wildcard says nothing about the
+    # others, and reporting success here is the whole point of the check.
+    SA_BINDINGS=$(sa_bindings)
+    REMAINING=$(pool_wide_grants "$SA_BINDINGS")
+    [[ -z "$REMAINING" ]] || die "pool-wide grants survived removal on ${SA_EMAIL}:
+${REMAINING}"
   else
-    die "${SA_EMAIL} still grants roles/iam.workloadIdentityUser to every identity in pool '${POOL_ID}':
-  ${LEGACY_MEMBER}
-That grant was created by an earlier version of this script and makes the narrow
-grant added above irrelevant: anything admitted to the pool can still impersonate
-the service account. Re-run this command with --remove-legacy-pool-binding, or
-remove it yourself with:
+    die "${SA_EMAIL} still grants impersonation to every identity in a workload identity pool:
+${LEGACY_GRANTS}
+Grants of this shape were created by earlier versions of this script and make the
+narrow grant added above irrelevant: anything admitted to that pool can still
+impersonate the service account. Re-run with --remove-legacy-pool-binding, or
+remove each one yourself with:
   gcloud iam service-accounts remove-iam-policy-binding ${SA_EMAIL} \\
-    --role=roles/iam.workloadIdentityUser \\
-    --member='${LEGACY_MEMBER}' \\
-    --project=${PROJECT}"
+    --role='<role>' --member='<member>' --project=${PROJECT}"
   fi
+fi
+
+# Narrow grants for identities other than this run's are not removed (they may
+# belong to a second legitimate CUDly account), but they are surfaced: a re-run
+# with a corrected role or subject otherwise leaves the previous one impersonating.
+OTHER_GRANTS=$(grep -F "iam.googleapis.com/${POOL_RESOURCE}/" <<<"$SA_BINDINGS" \
+  | grep -vF -- "$MEMBER" || true)
+if [[ -n "$OTHER_GRANTS" ]]; then
+  echo "Note: ${SA_EMAIL} is also impersonable by other identities in pool '${POOL_ID}':" >&2
+  while IFS= read -r grant_line; do
+    echo "      ${grant_line}" >&2
+  done <<<"$OTHER_GRANTS"
+  echo "      Remove any that are no longer expected." >&2
 fi
 
 # ── Generate external account credential config (no secrets) ──────────────────
