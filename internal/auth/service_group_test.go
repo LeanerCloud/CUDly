@@ -1429,3 +1429,142 @@ func TestMatchConstraints(t *testing.T) {
 		assert.False(t, service.matchConstraints(permConstraints, reqConstraints))
 	})
 }
+
+// TestMatchConstraints_RegionsRequireEveryRequestedRegion pins the Regions
+// dimension's ALL-match rule.
+//
+// Regions is the only dimension a single request legitimately spans several
+// values on: an Azure RI exchange submits every target location at once
+// (api.targetLocations). Under the generic containsAny rule the other
+// dimensions use, a caller permitted only in eastus could attach a westus
+// target -- containsAny finds eastus in the permitted set, returns true, and
+// the irreversible exchange executes in BOTH regions. Every case below is
+// asserted through matchConstraints, not matchAllRegionsConstraint directly,
+// so re-wiring the Regions dimension back to matchStringListConstraints
+// fails these tests rather than leaving them vacuously green.
+func TestMatchConstraints_RegionsRequireEveryRequestedRegion(t *testing.T) {
+	service := &Service{}
+
+	tests := []struct {
+		name        string
+		permRegions []string
+		reqRegions  []string
+		want        bool
+	}{
+		{
+			name:        "partially permitted multi-region request is denied",
+			permRegions: []string{"eastus"},
+			reqRegions:  []string{"eastus", "westus"},
+			want:        false,
+		},
+		{
+			name:        "every requested region permitted",
+			permRegions: []string{"eastus", "westus", "westeurope"},
+			reqRegions:  []string{"eastus", "westus"},
+			want:        true,
+		},
+		{
+			name:        "single permitted region",
+			permRegions: []string{"eastus", "westus"},
+			reqRegions:  []string{"westus"},
+			want:        true,
+		},
+		{
+			name:        "single unpermitted region is denied",
+			permRegions: []string{"eastus"},
+			reqRegions:  []string{"westus"},
+			want:        false,
+		},
+		{
+			name:        "permission casing does not matter",
+			permRegions: []string{"EastUS"},
+			reqRegions:  []string{"eastus"},
+			want:        true,
+		},
+		{
+			name:        "request casing does not matter",
+			permRegions: []string{"eastus"},
+			reqRegions:  []string{"EastUS"},
+			want:        true,
+		},
+		{
+			name:        "surrounding whitespace does not matter",
+			permRegions: []string{"  eastus  "},
+			reqRegions:  []string{"eastus"},
+			want:        true,
+		},
+		{
+			name:        "casing does not smuggle in an unpermitted region",
+			permRegions: []string{"EastUS"},
+			reqRegions:  []string{"eastus", "WestUS"},
+			want:        false,
+		},
+		{
+			name:        "unconstrained permission matches any request",
+			permRegions: nil,
+			reqRegions:  []string{"eastus", "westus"},
+			want:        true,
+		},
+		{
+			name:        "request naming no region matches a constrained permission",
+			permRegions: []string{"eastus"},
+			reqRegions:  nil,
+			want:        true,
+		},
+		{
+			name:        "AWS-style region names behave identically",
+			permRegions: []string{"us-east-1"},
+			reqRegions:  []string{"us-east-1", "eu-west-1"},
+			want:        false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := service.matchConstraints(
+				&PermissionConstraints{Regions: tt.permRegions},
+				&PermissionConstraints{Regions: tt.reqRegions},
+			)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestHasPermission_RegionConstraintDeniesUnpermittedTargetRegion drives the
+// same ALL-match rule through the real HasPermission entry point the API
+// handlers call, so the fix is proven end to end and not just at the matcher.
+//
+// The scenario is the Azure RI exchange bypass: a group permitted to execute
+// ri-exchange only in eastus, and a request whose target list spans eastus
+// and westus.
+func TestHasPermission_RegionConstraintDeniesUnpermittedTargetRegion(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockStore)
+	mockEmail := new(MockEmailSender)
+	svc := createTestService(mockStore, mockEmail)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	user := &User{ID: "user-eastus", GroupIDs: []string{"group-eastus"}, Active: true}
+	group := &Group{
+		ID:   "group-eastus",
+		Name: "EastUS Exchangers",
+		Permissions: []Permission{{
+			Action:      ActionExecute,
+			Resource:    ResourceRIExchange,
+			Constraints: &PermissionConstraints{Regions: []string{"eastus"}},
+		}},
+	}
+	mockStore.On("GetUserByID", ctx, "user-eastus").Return(user, nil)
+	mockStore.On("GetGroup", ctx, "group-eastus").Return(group, nil)
+
+	has, err := svc.HasPermission(ctx, "user-eastus", ActionExecute, ResourceRIExchange,
+		&PermissionConstraints{Regions: []string{"eastus", "westus"}})
+	require.NoError(t, err)
+	assert.False(t, has,
+		"a caller permitted only in eastus must not execute an exchange that also targets westus")
+
+	has, err = svc.HasPermission(ctx, "user-eastus", ActionExecute, ResourceRIExchange,
+		&PermissionConstraints{Regions: []string{"eastus"}})
+	require.NoError(t, err)
+	assert.True(t, has, "the permitted region alone must still be allowed")
+}

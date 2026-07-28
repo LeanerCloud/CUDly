@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -241,7 +242,7 @@ func (s *Service) matchConstraints(permConstraints, reqConstraints *PermissionCo
 	return s.matchStringListConstraints(permConstraints.AccountIDs, reqConstraints.AccountIDs) &&
 		s.matchStringListConstraints(permConstraints.Providers, reqConstraints.Providers) &&
 		s.matchStringListConstraints(permConstraints.Services, reqConstraints.Services) &&
-		s.matchStringListConstraints(permConstraints.Regions, reqConstraints.Regions) &&
+		s.matchAllRegionsConstraint(permConstraints.Regions, reqConstraints.Regions) &&
 		s.matchPurchaseAmountConstraint(permConstraints.MaxPurchaseAmount, reqConstraints.MaxPurchaseAmount)
 }
 
@@ -261,6 +262,43 @@ func (s *Service) matchConstraints(permConstraints, reqConstraints *PermissionCo
 func (s *Service) matchStringListConstraints(permList, reqList []string) bool {
 	if len(permList) > 0 && len(reqList) > 0 {
 		return containsAny(permList, reqList)
+	}
+	return true
+}
+
+// matchAllRegionsConstraint is the Regions dimension's matcher: EVERY
+// requested region must be permitted, not merely one of them.
+//
+// Regions is the one dimension where a single request legitimately spans
+// several values: an Azure RI exchange takes a list of targets, and
+// handler_ri_exchange.go's targetLocations feeds all of their locations in
+// at once. Under the generic containsAny rule that made the region
+// constraint bypassable -- a caller permitted only in eastus could attach a
+// westus target, containsAny would find eastus in the permitted set, return
+// true, and the exchange would execute for BOTH regions. "Regions limits to
+// specific regions" (types.go) cannot mean "limits to requests that mention
+// at least one permitted region".
+//
+// Every other dimension keeps containsAny: a request names one provider,
+// one service, one account, so for them any-match and all-match coincide.
+//
+// Comparison is case-insensitive so a permission stored as "EastUS" still
+// matches the canonical lower-case form callers are normalized to; the
+// empty-list semantics are unchanged from matchStringListConstraints (an
+// unconstrained permission, or a request that does not name a region, still
+// matches).
+func (s *Service) matchAllRegionsConstraint(permRegions, reqRegions []string) bool {
+	if len(permRegions) == 0 || len(reqRegions) == 0 {
+		return true
+	}
+	permitted := make(map[string]bool, len(permRegions))
+	for _, r := range permRegions {
+		permitted[strings.ToLower(strings.TrimSpace(r))] = true
+	}
+	for _, r := range reqRegions {
+		if !permitted[strings.ToLower(strings.TrimSpace(r))] {
+			return false
+		}
 	}
 	return true
 }

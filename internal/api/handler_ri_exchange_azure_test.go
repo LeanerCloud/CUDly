@@ -120,6 +120,8 @@ func TestValidateAzureOfferingsBody(t *testing.T) {
 	missingSKU.SKU = ""
 	missingLocation := azureOfferingsTarget()
 	missingLocation.Location = ""
+	blankLocation := azureOfferingsTarget()
+	blankLocation.Location = "   "
 	foreignBillingScope := azureOfferingsTarget()
 	foreignBillingScope.BillingScopeID = "/subscriptions/someone-elses-sub"
 	zeroTargetQty := azureOfferingsTarget()
@@ -175,6 +177,14 @@ func TestValidateAzureOfferingsBody(t *testing.T) {
 		{
 			"target missing location",
 			AzureCompatibleOfferingsRequestBody{SubscriptionID: "sub-1", Sources: []AzureExchangeSourceBody{azureOfferingsSource()}, Targets: []AzureExchangeTargetBody{missingLocation}},
+			"targets[0].location is required",
+		},
+		{
+			// Whitespace-only survives the empty check but trims to "" in
+			// targetLocations, i.e. a Regions constraint entry no permission
+			// can name. Reject it at the boundary instead.
+			"target location is whitespace only",
+			AzureCompatibleOfferingsRequestBody{SubscriptionID: "sub-1", Sources: []AzureExchangeSourceBody{azureOfferingsSource()}, Targets: []AzureExchangeTargetBody{blankLocation}},
 			"targets[0].location is required",
 		},
 		{
@@ -1254,6 +1264,124 @@ func TestExecuteAzureExchange_ConstraintSetPinsAllDimensions(t *testing.T) {
 	assert.Equal(t, []string{"compute"}, c.Services)
 	assert.Equal(t, []string{"eastus", "westeurope"}, c.Regions, "Regions must cover every target location, de-duplicated in first-seen order")
 	assert.InDelta(t, 100.00, c.MaxPurchaseAmount, 0.0001)
+}
+
+// TestTargetLocations_CanonicalizesCase pins the normalization targetLocations
+// applies before its output becomes the Regions dimension of the
+// execute:ri-exchange constraint check.
+//
+// The permission side compares region names literally, so an un-normalized
+// "EastUS" -- the spelling the Azure portal shows -- would not match a
+// permission stored as "eastus", and the caller would be 403'd out of a
+// region they legitimately hold. Normalizing before the dedup additionally
+// collapses "EastUS" and "eastus" into the single region they actually are,
+// instead of submitting two entries that must both be permitted.
+func TestTargetLocations_CanonicalizesCase(t *testing.T) {
+	tests := []struct {
+		name    string
+		targets []AzureExchangeTargetBody
+		want    []string
+	}{
+		{
+			name:    "no targets yields an empty set",
+			targets: nil,
+			want:    []string{},
+		},
+		{
+			name:    "already-canonical locations pass through in first-seen order",
+			targets: []AzureExchangeTargetBody{{Location: "westeurope"}, {Location: "eastus"}},
+			want:    []string{"westeurope", "eastus"},
+		},
+		{
+			name:    "mixed-case location is lower-cased",
+			targets: []AzureExchangeTargetBody{{Location: "EastUS"}},
+			want:    []string{"eastus"},
+		},
+		{
+			name:    "case variants of one region collapse into a single entry",
+			targets: []AzureExchangeTargetBody{{Location: "EastUS"}, {Location: "eastus"}, {Location: "EASTUS"}},
+			want:    []string{"eastus"},
+		},
+		{
+			name:    "surrounding whitespace is trimmed before dedup",
+			targets: []AzureExchangeTargetBody{{Location: "  EastUS "}, {Location: "eastus"}},
+			want:    []string{"eastus"},
+		},
+		{
+			name: "distinct regions survive while their case variants collapse",
+			targets: []AzureExchangeTargetBody{
+				{Location: "EastUS"},
+				{Location: "WestEurope"},
+				{Location: "eastus"},
+			},
+			want: []string{"eastus", "westeurope"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, targetLocations(tt.targets))
+		})
+	}
+}
+
+// TestExecuteAzureExchange_ConstraintRegionsAreLowerCased drives the same
+// normalization through the handler, so the constraint set actually submitted
+// for a portal-cased request is pinned and not merely the helper's return
+// value. Without it, a body naming "EastUS" and "eastus" would submit two
+// Regions entries in the portal's casing and the permission check would
+// compare them literally against the lower-case names permissions store.
+func TestExecuteAzureExchange_ConstraintRegionsAreLowerCased(t *testing.T) {
+	ctx := context.Background()
+	var captured []auth.PermissionConstraints
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
+	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange",
+		mock.MatchedBy(func(sets []auth.PermissionConstraints) bool {
+			captured = sets
+			return true
+		})).Return(true, nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	mockStore := &MockConfigStore{}
+	mockStore.GetCloudAccountByExternalIDFn = func(_ context.Context, _, _ string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: "acct-sub-1"}, nil
+	}
+
+	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
+	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
+		&azurecompute.ExchangePreview{SessionID: "sess-case", NetPayable: toPtr(10.00), NetPayableCurrency: "USD"},
+		[]azurecompute.CompatibleOffering{}, nil,
+	)
+	opsClient.On("ExecuteExchange", ctx, "sess-case").Return(
+		&azurecompute.ExchangeResult{SessionID: "sess-case", Status: "Succeeded"}, nil,
+	)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := &Handler{auth: mockAuth, config: mockStore, azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient }}
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body: `{
+			"subscription_id": "sub-1",
+			"sources": [{"reservation_id": "res-1", "quantity": 1}],
+			"targets": [
+				{"sku": "Standard_D4s_v3", "location": "EastUS", "term": "P1Y", "quantity": 1},
+				{"sku": "Standard_D8s_v3", "location": "WestEurope", "term": "P3Y", "quantity": 2},
+				{"sku": "Standard_D2s_v3", "location": "eastus", "term": "P1Y", "quantity": 1}
+			],
+			"max_payment_due": "100.00",
+			"currency": "USD"
+		}`,
+	})
+	require.NoError(t, err)
+
+	require.Len(t, captured, 1)
+	assert.Equal(t, []string{"eastus", "westeurope"}, captured[0].Regions,
+		"portal-cased target locations must reach the permission check lower-cased and de-duplicated")
 }
 
 // TestExecuteAzureExchange_LowercaseUSDTakesUSDCapPath closes the other half

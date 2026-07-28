@@ -406,7 +406,11 @@ func validateAzureExchangeTargets(targets []AzureExchangeTargetBody, subscriptio
 		if t.SKU == "" {
 			return NewClientError(400, fmt.Sprintf("targets[%d].sku is required", i))
 		}
-		if t.Location == "" {
+		// Blank-but-not-empty is rejected too: targetLocations trims before
+		// it builds the Regions constraint, so a whitespace-only location
+		// would otherwise reach the permission check as "" -- a region no
+		// permission can name.
+		if strings.TrimSpace(t.Location) == "" {
 			return NewClientError(400, fmt.Sprintf("targets[%d].location is required", i))
 		}
 		if t.BillingScopeID != "" && !strings.EqualFold(t.BillingScopeID, scope) {
@@ -494,17 +498,34 @@ func toAzureExchangeTargets(targets []AzureExchangeTargetBody, subscriptionID st
 	return out, nil
 }
 
-// targetLocations returns the de-duplicated set of target locations, used to
-// populate the Regions dimension of the execute:ri-exchange constraint
-// check. Callers must have already validated that every target has a
-// non-empty Location.
+// targetLocations returns the de-duplicated, canonically lower-cased set of
+// target locations, used to populate the Regions dimension of the
+// execute:ri-exchange constraint check. Callers must have already validated
+// that every target has a non-blank Location.
+//
+// Azure treats location names case-insensitively and its own APIs return the
+// lower-case form, so lower case is the canonical spelling. Normalizing
+// before the dedup collapses "EastUS" -- the casing the Azure portal
+// displays -- and "eastus" into the single region they actually are, so the
+// constraint set names each target region exactly once rather than demanding
+// a permission for two spellings of one place.
+//
+// auth.matchAllRegionsConstraint compares case-insensitively as well, so a
+// permission stored in either casing matches either way. Normalizing here
+// keeps the two layers agreeing on what a region is instead of leaving the
+// constraint set's accuracy resting on the matcher's leniency.
+//
+// toAzureExchangeTargets sends Azure the raw, un-normalized Location. That
+// is not a gap: Azure resolves either casing to the same region, so the
+// region authorized here is the region the exchange lands in.
 func targetLocations(targets []AzureExchangeTargetBody) []string {
 	seen := make(map[string]bool, len(targets))
 	out := make([]string, 0, len(targets))
 	for _, t := range targets {
-		if !seen[t.Location] {
-			seen[t.Location] = true
-			out = append(out, t.Location)
+		location := strings.ToLower(strings.TrimSpace(t.Location))
+		if !seen[location] {
+			seen[location] = true
+			out = append(out, location)
 		}
 	}
 	return out
@@ -814,21 +835,6 @@ func checkAzureExchangeMoneyGuardrails(preview *azurecompute.ExchangePreview, ma
 	return nil
 }
 
-// executeAzureExchange executes an Azure RI exchange with mandatory
-// spend-cap and currency guardrails. Requires "execute:ri-exchange"
-// (deliberately separate from execute:purchases), mirroring the AWS
-// executeExchange handler: RI exchanges are financially irreversible once
-// submitted.
-//
-// Unlike a design that executes a client-supplied session_id, this handler
-// never trusts the caller's own pricing: it re-runs CalculateExchange itself
-// against the caller's sources/targets, validates the FRESH quote against
-// every guardrail in checkAzureExchangeMoneyGuardrails, and only then calls
-// ExecuteExchange with the SessionID *that fresh call returned*. A
-// client-supplied or stale session would bypass every guardrail below, so
-// the server always re-quotes immediately before committing.
-//
-// POST /api/ri-exchange/azure-instances/exchange.
 // parseAzureExecuteRequest decodes and validates an execute request body and
 // parses its spend cap into an exact rational.
 //
@@ -851,6 +857,21 @@ func parseAzureExecuteRequest(rawBody string) (AzureExecuteExchangeRequestBody, 
 	return body, maxRat, nil
 }
 
+// executeAzureExchange executes an Azure RI exchange with mandatory
+// spend-cap and currency guardrails. Requires "execute:ri-exchange"
+// (deliberately separate from execute:purchases), mirroring the AWS
+// executeExchange handler: RI exchanges are financially irreversible once
+// submitted.
+//
+// Unlike a design that executes a client-supplied session_id, this handler
+// never trusts the caller's own pricing: it re-runs CalculateExchange itself
+// against the caller's sources/targets, validates the FRESH quote against
+// every guardrail in checkAzureExchangeMoneyGuardrails, and only then calls
+// ExecuteExchange with the SessionID *that fresh call returned*. A
+// client-supplied or stale session would bypass every guardrail below, so
+// the server always re-quotes immediately before committing.
+//
+// POST /api/ri-exchange/azure-instances/exchange.
 func (h *Handler) executeAzureExchange(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	session, err := h.requirePermission(ctx, req, "execute", "ri-exchange")
 	if err != nil {
