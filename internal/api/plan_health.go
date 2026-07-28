@@ -72,23 +72,18 @@ const (
 	// Agreeing on the length is necessary but not sufficient: the sweep has
 	// to measure it from the same column. CountExecutionsByPlanAndStatus
 	// windows on updated_at, so CleanupOldExecutions retains canceled rows
-	// on updated_at too (its branch 2, and the canceled exclusion on its
-	// expires_at branch). If either side is moved back onto scheduled_date,
-	// the sweep starts deleting rows this score is still counting and a
-	// plan's score jumps by up to 20 points overnight with nothing having
-	// changed about the plan.
+	// on updated_at too (its branch 2), and excludes every status counted
+	// here from its expires_at branch. If either side is moved back onto a
+	// different clock, the sweep starts deleting rows this score is still
+	// counting and a plan's score jumps overnight -- by up to 20 points for
+	// canceled, up to 40 for failed -- with nothing having changed about
+	// the plan. config.HealthScoredExecutionStatuses is the shared list
+	// that keeps the two sides from drifting.
 	//
 	// Every factor note names the window, so the number on screen is never
 	// ambiguous about what it covers.
 	planHealthLookbackDays = config.DefaultExecutionTTLDays
 )
-
-// planHealthStatusFailed mirrors the "failed" execution-status literal used
-// throughout internal/api (e.g. handler_purchases.go finalizePurchaseStatus).
-// No config.Status* constant exists for it today -- only StatusCanceled and
-// LegacyStatusCanceled do -- so this local constant is the typed handle for
-// this file.
-const planHealthStatusFailed = "failed"
 
 // planHealthExecutionStatuses selects the execution statuses
 // computePlanHealth needs (failed + both spellings of canceled). Passed to
@@ -97,11 +92,14 @@ const planHealthStatusFailed = "failed"
 // config.DefaultListLimit across ALL plans, so counting rows out of it
 // would silently understate any plan whose executions fall outside the
 // newest page and render an unhealthy plan as healthy.
-var planHealthExecutionStatuses = []string{
-	planHealthStatusFailed,
-	config.StatusCanceled,
-	config.LegacyStatusCanceled,
-}
+//
+// Deliberately an alias for config.HealthScoredExecutionStatuses rather than
+// a second literal list: CleanupOldExecutions must exclude exactly these
+// statuses from its expires_at reaping, so a status added to the score here
+// has to extend that exclusion in the same edit. Sharing the slice makes
+// that structural instead of a convention someone has to remember. See the
+// doc on config.HealthScoredExecutionStatuses for the failure it prevents.
+var planHealthExecutionStatuses = config.HealthScoredExecutionStatuses
 
 // computePlanHealth derives a 0-100 health score for a single purchase plan
 // from its ramp-schedule attributes and its own execution counts (the caller
@@ -174,7 +172,7 @@ func overdueFactor(plan config.PurchasePlan, now time.Time) (PlanHealthFactor, b
 // (uncapped) count and the window it covers, so an operator can see the full
 // extent even when the penalty itself is capped.
 func failedExecutionsFactor(counts config.ExecutionStatusCounts) (PlanHealthFactor, bool) {
-	count := counts[planHealthStatusFailed]
+	count := counts[config.StatusFailed]
 	if count == 0 {
 		return PlanHealthFactor{}, false
 	}
@@ -252,10 +250,13 @@ func scheduleFactor(plan config.PurchasePlan, now time.Time) (PlanHealthFactor, 
 	// past TotalSteps: a 4-step weekly ramp started 90 days ago yields 12.
 	// Reporting "expected step 12 by now" for a 4-step plan quotes a step
 	// the plan does not have, and an operator checking the plan against it
-	// finds nothing to reconcile. The comparison and the note are clamped
-	// together on purpose -- clamping only the note would let the factor
-	// fire on a step number it never displays, and clamping only the
-	// comparison would leave the fabricated number on screen.
+	// finds nothing to reconcile. The note is what the clamp is for; the
+	// comparison below is clamped by the same variable only so the two can
+	// never disagree. It cannot change the outcome today, because
+	// CurrentStep >= TotalSteps is exactly IsComplete() and computePlanHealth
+	// already short-circuits those plans to a perfect score before reaching
+	// here -- keeping them consistent is cheap insurance against that
+	// short-circuit being relaxed later.
 	expectedStep := daysSinceStart / ramp.StepIntervalDays
 	if ramp.TotalSteps > 0 && expectedStep > ramp.TotalSteps {
 		expectedStep = ramp.TotalSteps

@@ -2181,7 +2181,9 @@ func TestPGXMock_CleanupOldExecutions_Success(t *testing.T) {
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg()).
+	// Two args: retentionDays, then the health-scored status list branch 3
+	// excludes (see CleanupOldExecutions).
+	mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 5))
 
 	n, err := store.CleanupOldExecutions(ctx, 90)
@@ -2773,7 +2775,7 @@ func TestPGXMock_CleanupOldExecutions_IncludesCanonicalStatus(t *testing.T) {
 	// appearing together in the SQL. If either is missing the mock won't
 	// match, causing an "unexpected query" error from ExpectationsWereMet.
 	mock.ExpectExec(`'cancelled'.*'canceled'`).
-		WithArgs(pgxmock.AnyArg()).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 4))
 
 	n, err := store.CleanupOldExecutions(ctx, 90)
@@ -2796,7 +2798,7 @@ func TestPGXMock_CleanupOldExecutions_RetainsCanceledOnUpdatedAt(t *testing.T) {
 	anchors := map[string]string{
 		"canceled branch retains on updated_at":      `(?s)status IN \('cancelled', 'canceled'\)\s+AND updated_at`,
 		"completed branch retains on scheduled_date": `(?s)status = 'completed'\s+AND scheduled_date`,
-		"expires_at branch skips canceled rows":      `(?s)status NOT IN \('cancelled', 'canceled'\)\s+AND expires_at IS NOT NULL`,
+		"expires_at branch skips scored statuses":    `(?s)status <> ALL\(\$2\)\s+AND expires_at IS NOT NULL`,
 	}
 
 	for name, pattern := range anchors {
@@ -2806,7 +2808,7 @@ func TestPGXMock_CleanupOldExecutions_RetainsCanceledOnUpdatedAt(t *testing.T) {
 			ctx := context.Background()
 
 			mock.ExpectExec(pattern).
-				WithArgs(pgxmock.AnyArg()).
+				WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
 				WillReturnResult(pgxmock.NewResult("DELETE", 1))
 
 			n, err := store.CleanupOldExecutions(ctx, 30)
@@ -2815,6 +2817,33 @@ func TestPGXMock_CleanupOldExecutions_RetainsCanceledOnUpdatedAt(t *testing.T) {
 			assert.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
+}
+
+// TestPGXMock_CleanupOldExecutions_ExcludesEveryHealthScoredStatus pins the
+// $2 argument itself, not just the `<> ALL($2)` spelling. The anchors above
+// would still match if someone passed a narrower list (say, the canceled
+// spellings only), which is exactly the drift the shared slice exists to
+// prevent: `failed` is scored at up to -40, so dropping it from the
+// exclusion silently reintroduces the larger of the two overnight score
+// jumps. Asserting on config.HealthScoredExecutionStatuses rather than a
+// literal means adding a scored status extends this guard automatically.
+func TestPGXMock_CleanupOldExecutions_ExcludesEveryHealthScoredStatus(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectExec("DELETE").
+		WithArgs(30, HealthScoredExecutionStatuses).
+		WillReturnResult(pgxmock.NewResult("DELETE", 2))
+
+	n, err := store.CleanupOldExecutions(ctx, 30)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), n)
+	assert.NoError(t, mock.ExpectationsWereMet())
+	// Guards the slice's contents independently of how the query uses it.
+	assert.ElementsMatch(t,
+		[]string{StatusFailed, StatusCanceled, LegacyStatusCanceled},
+		HealthScoredExecutionStatuses)
 }
 
 // ─── CountExecutionsByPlanAndStatus ──────────────────────────────────────────

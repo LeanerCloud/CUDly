@@ -1327,6 +1327,29 @@ func TestPostgresStoreDB_CleanupOldExecutions_RetainsCanceledInsideHealthWindow(
 			why:           "the legacy spelling is retained on updated_at too",
 		},
 		{
+			// The `failed` counterpart of the canceled case above, and the
+			// reason branch 3's exclusion is sourced from
+			// HealthScoredExecutionStatuses rather than a canceled-only
+			// literal. The score counts failed at -10 each up to -40,
+			// twice canceled's worst case, so purging one inside the
+			// window is the larger of the two overnight jumps.
+			name:          "failed-today-with-lapsed-expires-at",
+			status:        StatusFailed,
+			scheduledDays: -40,
+			updatedDays:   0,
+			expiresDays:   intPtr(-40),
+			shouldSurvive: true,
+			why:           "failed inside the health window; the score still counts it at up to -40",
+		},
+		{
+			name:          "failed-long-ago-no-expiry",
+			status:        StatusFailed,
+			scheduledDays: -40,
+			updatedDays:   -40,
+			shouldSurvive: true,
+			why:           "the sweep never deletes failed rows; plan_health.go's lookback depends on it",
+		},
+		{
 			name:          "canceled-long-ago",
 			status:        StatusCanceled,
 			scheduledDays: -40,
