@@ -1030,12 +1030,30 @@ func TestExecuteAzureExchange_InvalidMaxPaymentDue(t *testing.T) {
 // the CalculateExchange response under test.
 func newAzureExecuteMoneyPathHandler(t *testing.T, opsClient azureExchangeClient) *Handler {
 	t.Helper()
+	return newAzureExecuteHandler(t, opsClient, true)
+}
+
+// newAzureExecuteSourceGateHandler is the same handler with the constraint
+// check marked optional, for tests whose subject is a gate that legitimately
+// runs BEFORE it: source ownership, and the tenant listing that feeds both it
+// and the Regions dimension. Those tests must not require a call the handler
+// correctly never makes.
+func newAzureExecuteSourceGateHandler(t *testing.T, opsClient azureExchangeClient) *Handler {
+	t.Helper()
+	return newAzureExecuteHandler(t, opsClient, false)
+}
+
+func newAzureExecuteHandler(t *testing.T, opsClient azureExchangeClient, requireConstraintCheck bool) *Handler {
+	t.Helper()
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
 	allowAnyAccountScope(mockAuth)
-	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange", mock.Anything).Return(true, nil)
+	constraints := mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange", mock.Anything).Return(true, nil)
+	if !requireConstraintCheck {
+		constraints.Maybe()
+	}
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockStore := &MockConfigStore{}
@@ -1709,7 +1727,7 @@ func TestExecuteAzureExchange_ForeignSourceReservationRefused(t *testing.T) {
 	opsClient.On("ListExchangeableReservations", mock.Anything).Return(tenantListingWithForeignReservation(), nil)
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })
 
-	h := newAzureExecuteMoneyPathHandler(t, opsClient)
+	h := newAzureExecuteSourceGateHandler(t, opsClient)
 	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer tok"},
 		Body:    foreignSourceBody,
@@ -1756,11 +1774,10 @@ func TestGetAzureCompatibleOfferings_ForeignSourceReservationRefused(t *testing.
 // exact gap the gate exists to close. 502 rather than 500 because the
 // upstream dependency, not this service, is what failed.
 //
-// The handler is built inline rather than via newAzureExecuteMoneyPathHandler
-// because the listing now precedes the constraint check -- the Regions
-// dimension cannot be assembled without knowing where the sources live -- so
-// a listing failure legitimately returns before HasPermissionForConstraintsAPI
-// is ever called, and that expectation must be optional here.
+// It uses newAzureExecuteSourceGateHandler because the listing precedes the
+// constraint check -- the Regions dimension cannot be assembled without
+// knowing where the sources live -- so a listing failure legitimately returns
+// before HasPermissionForConstraintsAPI is ever called.
 func TestExecuteAzureExchange_SourceOwnershipLookupFailureRefuses(t *testing.T) {
 	ctx := context.Background()
 	opsClient := new(mockAzureExchangeOpsClient)
@@ -1768,24 +1785,7 @@ func TestExecuteAzureExchange_SourceOwnershipLookupFailureRefuses(t *testing.T) 
 		Return(nil, fmt.Errorf("azure: list reservations: transport timeout"))
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })
 
-	mockAuth := new(MockAuthService)
-	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
-	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
-	allowAnyAccountScope(mockAuth)
-	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange", mock.Anything).
-		Return(true, nil).Maybe()
-	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
-
-	mockStore := &MockConfigStore{}
-	mockStore.GetCloudAccountByExternalIDFn = func(_ context.Context, _, _ string) (*config.CloudAccount, error) {
-		return &config.CloudAccount{ID: "acct-1"}, nil
-	}
-
-	h := &Handler{
-		auth:                 mockAuth,
-		config:               mockStore,
-		azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient },
-	}
+	h := newAzureExecuteSourceGateHandler(t, opsClient)
 	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer tok"},
 		Body:    validAzureExecuteBody,
@@ -2067,6 +2067,82 @@ func TestExecuteAzureExchange_UnreportedSourceRegionAllowedWithoutRegionScope(t 
 	})
 	require.NoError(t, err, "a caller with no Regions constraint must not be blocked by the unknown-region sentinel")
 	require.NotNil(t, resp)
+}
+
+// TestExecuteAzureExchange_UnownedSourceDenialsAreIndistinguishable pins the
+// anti-enumeration property at the HANDLER level, across the ownership gate
+// and the constraint check together.
+//
+// TestRequireAzureSourceOwnership_DenialsAreIndistinguishable calls the gate
+// directly, so it stays green even when the surrounding path leaks: it proves
+// the gate's two denials match, not that a caller receives the same answer.
+// The pipeline was the leak. With the constraint check running first, a caller
+// scoped to sub-1 and permitted only in eastus got two different 403s for a
+// reservation they do not own:
+//
+//   - an id that exists in eastus but is billed to sub-2 -- exchangeRegions
+//     yields ["eastus"], the constraint check passes, and the ownership gate
+//     refuses with "sources[0].reservation_id is not a reservation billed
+//     to...";
+//   - an id that does not exist (or lives in westeurope) -- the sentinel or
+//     the foreign region joins the set and the constraint check refuses first,
+//     with its own message.
+//
+// The difference confirms "this reservation id exists, in one of my permitted
+// regions, in a subscription I am not scoped to" -- exactly the oracle the
+// ownership gate's identical denials were written to deny. Checking ownership
+// before the constraints closes it.
+func TestExecuteAzureExchange_UnownedSourceDenialsAreIndistinguishable(t *testing.T) {
+	ctx := context.Background()
+
+	// One tenant listing for both probes: a reservation that exists, sits in
+	// the caller's permitted region, and belongs to someone else.
+	tenantListing := []azurecompute.ExchangeableReservation{
+		{ReservationID: "res-eastus-other", BillingScopeID: "/subscriptions/sub-2", Region: "eastus", Quantity: 1},
+	}
+	bodyFor := func(reservationID string) string {
+		return fmt.Sprintf(`{
+			"subscription_id": "sub-1",
+			"sources": [{"reservation_id": %q, "quantity": 1}],
+			"targets": [{"sku": "Standard_D4s_v3", "location": "eastus", "term": "P1Y", "quantity": 1}],
+			"max_payment_due": "100.00",
+			"currency": "USD"
+		}`, reservationID)
+	}
+
+	probe := func(reservationID string) error {
+		var captured []auth.PermissionConstraints
+		opsClient := new(mockAzureExchangeOpsClient)
+		opsClient.On("ListExchangeableReservations", mock.Anything).Return(tenantListing, nil)
+		t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+		h := newAzureRegionScopedHandler(t, ctx, opsClient, "eastus", &captured)
+		_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"authorization": "Bearer tok"},
+			Body:    bodyFor(reservationID),
+		})
+		opsClient.AssertNotCalled(t, "CalculateExchange", mock.Anything, mock.Anything, mock.Anything)
+		opsClient.AssertNotCalled(t, "ExecuteExchange", mock.Anything, mock.Anything)
+		return err
+	}
+
+	// Exists, in a permitted region, owned by another subscription.
+	existsElsewhere := probe("res-eastus-other")
+	// Does not exist anywhere in the tenant listing.
+	doesNotExist := probe("res-nowhere")
+
+	require.Error(t, existsElsewhere)
+	require.Error(t, doesNotExist)
+
+	existsCE, ok := IsClientError(existsElsewhere)
+	require.True(t, ok)
+	missingCE, ok := IsClientError(doesNotExist)
+	require.True(t, ok)
+
+	assert.Equal(t, existsCE.code, missingCE.code,
+		"a caller must not be able to tell a real foreign reservation from a nonexistent one by status code")
+	assert.Equal(t, existsElsewhere.Error(), doesNotExist.Error(),
+		"...nor by message: differing denials confirm the id exists in a subscription the caller is not scoped to")
 }
 
 // TestExchangeRegions covers the fold itself, including the branches that are

@@ -581,6 +581,12 @@ const unknownRegionConstraint = "unknown-region"
 // on where a reservation lives. A source missing from the listing, or one
 // whose Region Azure left empty, contributes unknownRegionConstraint rather
 // than nothing -- see that constant for why.
+//
+// On the execute path requireAzureSourceOwnership has already refused any
+// source absent from the listing by the time this runs, so the sentinel there
+// means specifically "owned, but Azure reported no region". The missing-source
+// branch is kept as a fail-closed default for any future caller that reaches
+// this function without that guarantee.
 func exchangeRegions(targets []AzureExchangeTargetBody, sources []AzureExchangeSourceBody, owned []azurecompute.ExchangeableReservation) []string {
 	regionByID := make(map[string]string, len(owned))
 	for i := range owned {
@@ -770,23 +776,38 @@ func (h *Handler) getAzureCompatibleOfferings(ctx context.Context, req *events.L
 const azureMaxPurchaseAmountCurrency = "USD"
 
 // authorizeAzureExchangeExecution builds the Azure exchange client for the
-// request's subscription and enforces the per-permission Constraints
-// configured on execute:ri-exchange (SEC-01, issue #1141). Extracted from
+// request's subscription, refuses sources the subscription does not own
+// (issue #1527), and enforces the per-permission Constraints configured on
+// execute:ri-exchange (SEC-01, issue #1141). Extracted from
 // executeAzureExchange to keep that function under the gocyclo limit.
 //
-// It also returns the tenant-wide reservation listing it had to fetch to
-// resolve the source regions, so executeAzureExchange can apply
-// requireAzureSourceOwnership to the exact same listing this constraint check
-// was derived from, without a second round trip.
+// Order matters, and all three gates run before any pricing or commit call:
 //
-// That listing is deliberately fetched BEFORE the constraint check: the
-// Regions dimension cannot be assembled without knowing where the sources
-// live (exchangeRegions), so an unavailable listing now refuses with 502
-// ahead of any constraint denial. The caller has already cleared
-// requirePermission("execute", "ri-exchange") and the allowed_accounts scope
-// for this subscription by then, so the read-only listing call is within what
-// they are authorized to trigger.
-func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *Session, body AzureExecuteExchangeRequestBody, maxRat *big.Rat) (azureExchangeClient, []azurecompute.ExchangeableReservation, error) {
+//   - The tenant listing is fetched before the constraint check because the
+//     Regions dimension cannot be assembled without knowing where the sources
+//     live (exchangeRegions). An unavailable listing therefore refuses with
+//     502 ahead of any constraint denial. The caller has already cleared
+//     requirePermission("execute", "ri-exchange") and the allowed_accounts
+//     scope for this subscription by then, so the read-only listing call is
+//     within what they are authorized to trigger.
+//
+//   - Ownership is checked before the constraint check so the two cannot form
+//     an enumeration oracle. If the constraint check ran first, a caller
+//     scoped to subscription A and permitted only in eastus would get
+//     distinguishable answers for a reservation id they do not own: an id
+//     that exists in eastus (owned by subscription B) would clear the Regions
+//     dimension and be refused by the ownership gate, while an id that does
+//     not exist -- or lives in an unpermitted region -- would be refused by
+//     the constraint check with a different message. That difference confirms
+//     "this reservation id exists, in one of my permitted regions, in a
+//     subscription I am not scoped to". requireAzureSourceOwnership
+//     deliberately makes its own denials indistinguishable; running it first
+//     keeps the whole path that way.
+//
+//     It also sharpens exchangeRegions: every source reaching it is
+//     known-owned, so unknownRegionConstraint means only "owned, but Azure
+//     reported no region" rather than doubling as "not yours" or "not real".
+func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *Session, body AzureExecuteExchangeRequestBody, maxRat *big.Rat) (azureExchangeClient, error) {
 	// Scope check MUST precede building the client (mirrors
 	// getAzureCompatibleOfferings): otherwise an unregistered subscription
 	// (distinguishable 404: "no Azure account registered...") and a
@@ -795,31 +816,35 @@ func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *
 	// and credentials for an out-of-scope account could be resolved before
 	// the denial.
 	if scopeErr := h.requireAzureSubscriptionScope(ctx, session, body.SubscriptionID); scopeErr != nil {
-		return nil, nil, scopeErr
+		return nil, scopeErr
 	}
 
 	client, err := h.buildAzureExchangeClient(ctx, body.SubscriptionID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to build Azure exchange client: %w", err)
+		return nil, fmt.Errorf("failed to build Azure exchange client: %w", err)
 	}
 	if client == nil {
-		return nil, nil, NewClientError(404, fmt.Sprintf("no Azure account registered for subscription %q", body.SubscriptionID))
+		return nil, NewClientError(404, fmt.Sprintf("no Azure account registered for subscription %q", body.SubscriptionID))
 	}
 
 	owned, err := listOwnedAzureReservations(ctx, client)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
+	}
+
+	if ownErr := requireAzureSourceOwnership(owned, body.Sources, body.SubscriptionID); ownErr != nil {
+		return nil, ownErr
 	}
 
 	accountID, err := h.resolveAzureExchangeAccountID(ctx, body.SubscriptionID)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	if err := h.checkAzureExecuteConstraints(ctx, session, body, accountID, maxRat, exchangeRegions(body.Targets, body.Sources, owned)); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return client, owned, nil
+	return client, nil
 }
 
 // resolveAzureExchangeAccountID looks up the CloudAccount registered for
@@ -985,18 +1010,12 @@ func (h *Handler) executeAzureExchange(ctx context.Context, req *events.LambdaFu
 		return nil, err
 	}
 
-	client, owned, err := h.authorizeAzureExchangeExecution(ctx, session, body, maxRat)
+	// authorizeAzureExchangeExecution applies every gate: allowed_accounts
+	// scope, source ownership (issue #1527) and the execute:ri-exchange
+	// Constraints, all before the pricing call below.
+	client, err := h.authorizeAzureExchangeExecution(ctx, session, body, maxRat)
 	if err != nil {
 		return nil, err
-	}
-
-	// Ownership of the SOURCES is checked here, alongside the destination
-	// gates in authorizeAzureExchangeExecution, and before any pricing or
-	// commit call (issue #1527). It reuses the listing that call already
-	// fetched, so the subscription this gate accepts and the regions the
-	// constraint check authorized describe the same reservations.
-	if ownErr := requireAzureSourceOwnership(owned, body.Sources, body.SubscriptionID); ownErr != nil {
-		return nil, ownErr
 	}
 
 	targets, err := toAzureExchangeTargets(body.Targets, body.SubscriptionID)
