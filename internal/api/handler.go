@@ -649,6 +649,18 @@ func (h *Handler) validateSecurityContext(ctx context.Context, req *events.Lambd
 	}
 	ctx = contextWithPrincipal(ctx, principal)
 
+	// Book the API key's usage here and nowhere else. This is the one code
+	// path that runs exactly once per inbound request, so it is the only
+	// place where a per-request counter can be incremented correctly. The
+	// credential itself is validated several times per request (here, then
+	// again by every permission check, and once per verb on the multi-verb
+	// gates), so booking inside auth.Service.ValidateUserAPIKey would count
+	// validations and inflate every reported number by a factor that varies
+	// per endpoint.
+	if principal.Kind == PrincipalUserAPIKey {
+		h.auth.RecordAPIKeyUsageAsync(principal.APIKeyID)
+	}
+
 	if h.requiresCSRFValidation(method, path, req) {
 		if err := h.validateCSRF(ctx, req); err != nil {
 			logging.Warnf("CSRF validation failed: %v", err)

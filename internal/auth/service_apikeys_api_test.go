@@ -495,14 +495,16 @@ func TestService_ValidateUserAPIKeyAPI(t *testing.T) {
 
 		mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(apiKeyRecord, nil)
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
-		mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1", mock.Anything).Return(nil).Maybe()
+		// No RecordAPIKeyUsage expectation: validation books no usage, so
+		// there is no background goroutine to wait for either. Usage is
+		// booked once per request by the API layer -- see
+		// Handler.validateSecurityContext.
 
 		resultKey, resultUser, err := service.ValidateUserAPIKeyAPI(ctx, apiKey)
 
 		require.NoError(t, err)
 		assert.Equal(t, apiKeyRecord, resultKey)
 		assert.Equal(t, user, resultUser)
-		time.Sleep(10 * time.Millisecond) // Allow goroutine to complete
 		mockStore.AssertExpectations(t)
 	})
 

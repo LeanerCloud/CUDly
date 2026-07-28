@@ -77,6 +77,12 @@ type Principal struct {
 	Session *Session // non-nil when a valid bearer session was presented
 	UserID  string   // empty for PrincipalAdminAPIKey
 	Email   string   // empty for PrincipalAdminAPIKey; populated for session/user-api-key
+	// APIKeyID is the database ID of the user API key the request
+	// authenticated with. Non-empty exactly when Kind is
+	// PrincipalUserAPIKey; empty for every other kind. It lets
+	// validateSecurityContext book the key's usage once per request without
+	// re-validating the credential.
+	APIKeyID string
 }
 
 type principalContextKey struct{}
@@ -136,13 +142,13 @@ func (h *Handler) authenticatePrincipal(ctx context.Context, req *events.LambdaF
 }
 
 // principalFromUserAPIKey resolves a Principal from a user API key.
-// Returns nil when the key is empty, validation fails, or the user record
-// cannot be retrieved.
+// Returns nil when the key is empty, validation fails, or the key/user
+// records cannot be retrieved.
 func (h *Handler) principalFromUserAPIKey(ctx context.Context, apiKey string) *Principal {
 	if apiKey == "" {
 		return nil
 	}
-	_, userRaw, err := h.auth.ValidateUserAPIKeyAPI(ctx, apiKey)
+	keyRaw, userRaw, err := h.auth.ValidateUserAPIKeyAPI(ctx, apiKey)
 	if err != nil {
 		logging.Debugf("User API key validation failed: %v", err)
 		return nil
@@ -158,10 +164,21 @@ func (h *Handler) principalFromUserAPIKey(ctx context.Context, apiKey string) *P
 		logging.Debugf("User API key: userRaw has unexpected type (%T); denying", userRaw)
 		return nil
 	}
+	// The key ID is required, not optional: it is what validateSecurityContext
+	// books usage against, so accepting a principal without one would silently
+	// stop counting that key's requests. A successful validation always yields
+	// the key row, so a missing or mistyped one is a broken invariant -- deny
+	// rather than authenticate a key we cannot attribute.
+	key, ok := keyRaw.(*auth.UserAPIKey)
+	if !ok || key == nil || key.ID == "" {
+		logging.Debugf("User API key: validation returned no usable key record (%T); denying", keyRaw)
+		return nil
+	}
 	return &Principal{
-		Kind:   PrincipalUserAPIKey,
-		UserID: user.ID,
-		Email:  user.Email,
+		Kind:     PrincipalUserAPIKey,
+		UserID:   user.ID,
+		Email:    user.Email,
+		APIKeyID: key.ID,
 	}
 }
 

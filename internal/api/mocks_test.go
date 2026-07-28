@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"sync"
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
@@ -99,6 +100,32 @@ func (m *MockScheduler) GetRecommendationByID(ctx context.Context, id string) (*
 // MockAuthService is a mock implementation of the auth service.
 type MockAuthService struct {
 	mock.Mock
+	// usageBookingsMu guards usageBookings.
+	usageBookingsMu sync.Mutex
+	// usageBookings records every key ID passed to RecordAPIKeyUsageAsync,
+	// in call order. See that method for why it does not use mock.Mock.
+	usageBookings []string
+}
+
+// RecordAPIKeyUsageAsync records the booking instead of routing through
+// mock.Called. The handler books usage on every API-key-authenticated
+// request, so going through mock.Called would panic in each of the dozens of
+// existing tests that drive such a request without registering an
+// expectation. Recording into a slice keeps the calls observable --
+// UsageBookings() is what the exactly-once tests assert on -- without that
+// churn, and without the .Maybe() registration that would make the
+// assertions vacuous.
+func (m *MockAuthService) RecordAPIKeyUsageAsync(keyID string) {
+	m.usageBookingsMu.Lock()
+	defer m.usageBookingsMu.Unlock()
+	m.usageBookings = append(m.usageBookings, keyID)
+}
+
+// UsageBookings returns the key IDs booked so far, in call order.
+func (m *MockAuthService) UsageBookings() []string {
+	m.usageBookingsMu.Lock()
+	defer m.usageBookingsMu.Unlock()
+	return append([]string(nil), m.usageBookings...)
 }
 
 func (m *MockAuthService) Login(ctx context.Context, req LoginRequest) (*LoginResponse, error) {

@@ -449,8 +449,9 @@ function showError(message: string): void {
  * the tile width.
  *
  * `null` means the backend does not know the count (a key already in use
- * before migration 000094 added the counters) and renders as an em dash
- * rather than "0", which would state a request volume nobody measured.
+ * before migration 000094 added the counters) and renders as NO_COUNT_DATA
+ * ("n/a") rather than "0", which would state a request volume nobody
+ * measured.
  * `undefined` (an older cached response with no counter fields at all) is
  * treated the same way, as is any non-finite or negative value.
  */

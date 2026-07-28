@@ -51,7 +51,7 @@ type Service struct {
 	// pendingUsage accumulates per-API-key request counts that have not yet
 	// been flushed to the store, keyed by API key ID. pendingUsageMu guards
 	// the map itself; the counters are incremented and drained atomically
-	// without it. See Service.recordUsageAsync for why the count is buffered
+	// without it. See Service.RecordUsageAsync for why the count is buffered
 	// instead of incremented once per flush.
 	pendingUsage       map[string]*atomic.Int64
 	pendingUsageMu     sync.Mutex

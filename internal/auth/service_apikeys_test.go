@@ -512,23 +512,35 @@ func TestService_ValidateUserAPIKey(t *testing.T) {
 
 		mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(apiKeyRecord, nil)
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
-		// Use a signaling channel + .Once() so the test fails (rather than
-		// silently passes) if ValidateUserAPIKey ever stops recording usage,
-		// and so we don't have to busy-sleep waiting for the async goroutine.
+		// Validation must book NO usage: one HTTP request validates the same
+		// credential several times, so counting here would multiply every
+		// reported figure. The API layer books once per request instead --
+		// see Handler.validateSecurityContext and the exactly-once tests in
+		// internal/server/apikey_usage_booking_test.go.
+		//
+		// Registered with .Maybe() rather than left unregistered because an
+		// unexpected call would panic inside the flush goroutine, where
+		// RecordUsageAsync's recover() would swallow it and the test would
+		// pass regardless.
 		usageRecorded := make(chan struct{}, 1)
 		mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1", mock.Anything).
 			Run(func(mock.Arguments) { usageRecorded <- struct{}{} }).
-			Return(nil).Once()
+			Return(nil).Maybe()
 
 		resultKey, resultUser, err := service.ValidateUserAPIKey(ctx, apiKey)
 
 		require.NoError(t, err)
 		assert.Equal(t, user, resultUser)
 		assert.Equal(t, apiKeyRecord, resultKey)
+		// A booking would be flushed by a goroutine started before
+		// ValidateUserAPIKey returned, so a bounded quiet window is the only
+		// way to establish its absence. Unlike the positive waits elsewhere
+		// in this suite (where too short a deadline flakes), too short a
+		// window here can only miss a regression, never fail spuriously.
 		select {
 		case <-usageRecorded:
-		case <-time.After(5 * time.Second):
-			t.Fatal("expected RecordAPIKeyUsage to be called")
+			t.Fatal("ValidateUserAPIKey must not record usage: booking on the validation path counts validations, not requests")
+		case <-time.After(2 * time.Second):
 		}
 		mockStore.AssertExpectations(t)
 	})
@@ -781,7 +793,7 @@ func TestService_FlushPendingUsage(t *testing.T) {
 		service := &Service{store: mockStore}
 
 		// A request that lands while the write is in flight must still be
-		// pending afterwards -- recordUsageAsync's loop picks it up.
+		// pending afterwards -- RecordUsageAsync's loop picks it up.
 		mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1", int64(2)).
 			Run(func(mock.Arguments) { service.addPendingUsage("key-1") }).
 			Return(nil).Once()
@@ -832,7 +844,7 @@ func TestService_RecordUsageAsync_CountsConcurrentRequests(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			service.recordUsageAsync("key-1")
+			service.RecordUsageAsync("key-1")
 		}()
 	}
 	wg.Wait()
@@ -1122,37 +1134,20 @@ func TestService_HasAPIKeyPermissionForConstraintsAPI_OwnerCapEnforced(t *testin
 	})
 }
 
-// TestValidateUserAPIKey_UpdateLastUsedPanicIsRecovered proves that a panic
-// inside the fire-and-forget RecordUsage goroutine is caught by the
-// recover() added in issue #672. Without the recover(), the panic would crash
-// the entire test binary (an unrecovered goroutine panic terminates the
-// process). The test uses a channel -- closed by the mock Run callback just
-// before panicking -- to wait for goroutine execution without time.Sleep.
-func TestValidateUserAPIKey_UpdateLastUsedPanicIsRecovered(t *testing.T) {
-	ctx := context.Background()
-
-	apiKey := "test-api-key-panic-123"
-	hash := sha256.Sum256([]byte(apiKey))
-	keyHash := base64.RawURLEncoding.EncodeToString(hash[:])
-
-	user := &User{
-		ID:     "user-panic",
-		Email:  "panic@example.com",
-		Active: true,
-	}
-	apiKeyRecord := &UserAPIKey{
-		ID:       "key-panic",
-		UserID:   "user-panic",
-		KeyHash:  keyHash,
-		IsActive: true,
-	}
-
+// TestRecordUsageAsync_PanicIsRecovered proves that a panic inside the
+// fire-and-forget RecordUsage goroutine is caught by the recover() added in
+// issue #672. Without the recover(), the panic would crash the entire test
+// binary (an unrecovered goroutine panic terminates the process). The test
+// uses a channel -- closed by the mock Run callback just before panicking --
+// to wait for goroutine execution without time.Sleep.
+//
+// Driven through RecordUsageAsync directly rather than through
+// ValidateUserAPIKey, which no longer books usage (booking moved to the API
+// layer so it happens once per request rather than once per validation).
+func TestRecordUsageAsync_PanicIsRecovered(t *testing.T) {
 	mockStore := new(MockStore)
 	service := &Service{store: mockStore}
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
-
-	mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(apiKeyRecord, nil)
-	mockStore.On("GetUserByID", mock.Anything, "user-panic").Return(user, nil)
 
 	// done is closed by the Run callback immediately before panicking so the
 	// test can wait for goroutine execution without time.Sleep.
@@ -1164,10 +1159,7 @@ func TestValidateUserAPIKey_UpdateLastUsedPanicIsRecovered(t *testing.T) {
 		}).
 		Return(nil)
 
-	resultKey, resultUser, err := service.ValidateUserAPIKey(ctx, apiKey)
-	require.NoError(t, err)
-	require.Equal(t, apiKeyRecord, resultKey)
-	require.Equal(t, user, resultUser)
+	service.RecordUsageAsync("key-panic")
 
 	// Block until the goroutine has executed (and panicked + recovered).
 	// Reaching this line means the process survived -- recover() caught the panic.

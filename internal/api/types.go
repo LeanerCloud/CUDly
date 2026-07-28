@@ -215,6 +215,17 @@ type AuthServiceInterface interface {
 	DeleteAPIKeyAPI(ctx context.Context, userID, keyID string) error
 	RevokeAPIKeyAPI(ctx context.Context, userID, keyID string) error
 	ValidateUserAPIKeyAPI(ctx context.Context, apiKey string) (any, any, error)
+	// RecordAPIKeyUsageAsync books exactly one request against the given
+	// API key ID (the last_used_at timestamp plus the lifetime and
+	// fixed-window request counters). Fire-and-forget: the store write
+	// happens off the request path, so it returns nothing and never delays
+	// or fails the caller's request.
+	//
+	// Must be called once per inbound request and only from
+	// Handler.validateSecurityContext. Calling it from a credential
+	// validation path instead would count validations, which a single
+	// request performs several times over.
+	RecordAPIKeyUsageAsync(keyID string)
 	// HasAPIKeyPermissionAPI validates a user API key and checks the
 	// requested action/resource against the key's effective permissions
 	// (the intersection of the key's scoped permissions with the owning

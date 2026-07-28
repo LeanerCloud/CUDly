@@ -191,7 +191,14 @@ func (s *Service) CreateAPIKeyAPI(ctx context.Context, userID string, req any) (
 		return nil, err
 	}
 
-	// Convert to API response
+	// Convert to API response. keyInfo is the struct CreateAPIKey just built
+	// in memory, so its counters are necessarily zero and the window start
+	// nil -- exactly what effectiveWindowUsage returns for them. It still
+	// goes through the helper so every window-counter exposure site shares
+	// one implementation: the day CreateAPIKey re-reads the inserted row, a
+	// raw field read here would silently start reporting a stale window
+	// while the list and stats endpoints report it correctly.
+	windowCount, windowStart := effectiveWindowUsage(keyInfo, time.Now())
 	return &APICreateAPIKeyResponse{
 		APIKey: apiKey,
 		KeyID:  keyInfo.ID,
@@ -205,8 +212,8 @@ func (s *Service) CreateAPIKeyAPI(ctx context.Context, userID string, req any) (
 			LastUsedAt:              keyInfo.LastUsedAt,
 			IsActive:                keyInfo.IsActive,
 			RequestCountTotal:       effectiveLifetimeUsage(keyInfo),
-			RequestCountWindow:      keyInfo.RequestCountWindow,
-			RequestCountWindowStart: keyInfo.RequestCountWindowStart,
+			RequestCountWindow:      windowCount,
+			RequestCountWindowStart: windowStart,
 		},
 	}, nil
 }

@@ -182,7 +182,7 @@ func (s *PostgresStore) UpdateAPIKeyLastUsed(ctx context.Context, keyID string) 
 //
 // delta is the number of requests being recorded in this flush. The auth hot
 // path coalesces concurrent requests for the same key into a single write
-// (see Service.recordUsageAsync), so delta is frequently greater than 1 and
+// (see Service.RecordUsageAsync), so delta is frequently greater than 1 and
 // must be added rather than treated as a single increment.
 //
 // request_count_window is a FIXED/TUMBLING window counter, not a true

@@ -1052,6 +1052,7 @@ func (m *mockAuthForExchange) RevokeAPIKeyAPI(_ context.Context, _, _ string) er
 func (m *mockAuthForExchange) ValidateUserAPIKeyAPI(_ context.Context, _ string) (any, any, error) {
 	return nil, nil, nil
 }
+func (m *mockAuthForExchange) RecordAPIKeyUsageAsync(_ string) {}
 func (m *mockAuthForExchange) HasAPIKeyPermissionAPI(_ context.Context, _, _, _ string) (string, string, bool, error) {
 	return "admin", "", true, nil
 }

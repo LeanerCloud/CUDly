@@ -15,7 +15,8 @@
 --                                  just before the window resets is
 --                                  discarded from the count as soon as the
 --                                  next request starts a new window. See
---                                  store_postgres.go RecordAPIKeyUsage.
+--                                  store_postgres_apikeys.go
+--                                  RecordAPIKeyUsage.
 --                                  NOTE the restart only happens on the
 --                                  key's NEXT request, so an idle key keeps
 --                                  its closed window's count in this column

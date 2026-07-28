@@ -1194,6 +1194,10 @@ func (a *authServiceAdapter) ValidateUserAPIKeyAPI(ctx context.Context, apiKey s
 	return a.service.ValidateUserAPIKeyAPI(ctx, apiKey)
 }
 
+func (a *authServiceAdapter) RecordAPIKeyUsageAsync(keyID string) {
+	a.service.RecordUsageAsync(keyID)
+}
+
 func (a *authServiceAdapter) HasAPIKeyPermissionAPI(ctx context.Context, apiKey, action, resource string) (userID, keyID string, allowed bool, err error) {
 	userID, keyID, allowed, err = a.service.HasAPIKeyPermissionAPI(ctx, apiKey, action, resource)
 	return

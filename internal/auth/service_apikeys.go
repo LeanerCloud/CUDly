@@ -276,6 +276,15 @@ func (s *Service) lookupAPIKeyUser(ctx context.Context, userID string) (*User, e
 }
 
 // ValidateUserAPIKey validates an API key and returns the key info and associated user.
+//
+// Validation is deliberately side-effect free: it books no usage. A single
+// HTTP request validates the same credential several times (authentication
+// resolves the principal, then every permission check re-validates, and the
+// multi-verb gates re-validate once per verb), so booking here would count
+// validations rather than requests and inflate every usage number by a
+// per-endpoint factor. Usage is booked exactly once per request by the API
+// layer -- see Handler.validateSecurityContext, which calls RecordUsageAsync
+// on the one code path guaranteed to run once per request.
 func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserAPIKey, *User, error) {
 	hash := sha256.Sum256([]byte(apiKey))
 	keyHash := base64.RawURLEncoding.EncodeToString(hash[:])
@@ -305,13 +314,16 @@ func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserA
 		return nil, nil, err
 	}
 
-	s.recordUsageAsync(key.ID)
-
 	return key, user, nil
 }
 
-// recordUsageAsync books one request against keyID and flushes the pending
+// RecordUsageAsync books one request against keyID and flushes the pending
 // count to the store off the authentication hot path.
+//
+// Callers must invoke this exactly once per inbound request, not once per
+// credential validation -- a single request validates the same key several
+// times over. The API layer owns that guarantee (see
+// Handler.validateSecurityContext).
 //
 // The count is accumulated in memory first and the flush writes the whole
 // accumulated delta, because singleflight.Group collapses concurrent flushes
@@ -323,7 +335,7 @@ func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserA
 // singleflight is still what bounds the write rate: at most one in-flight DB
 // write per keyID at any moment, so a flood of requests on one key cannot
 // amplify into a flood of database writes.
-func (s *Service) recordUsageAsync(keyID string) {
+func (s *Service) RecordUsageAsync(keyID string) {
 	// Book the request BEFORE starting the flush goroutine, so it can never
 	// be missed by a flush that is already draining the counter.
 	s.addPendingUsage(keyID)
