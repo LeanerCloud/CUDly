@@ -22,8 +22,12 @@
 
 name: Deploy to AWS Lambda
 
+# Least privilege by default: `id-token: write` is granted per job, only to the
+# jobs that actually assume the AWS deploy role, and both of those are bound to
+# a deployment environment. Declaring it here would hand it to `prepare` and
+# `summary` too, neither of which authenticates and neither of which is bound
+# to an environment.
 permissions:
-  id-token: write
   contents: read
 
 concurrency:
@@ -82,38 +86,96 @@ jobs:
   prepare:
     name: Prepare Deployment
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # NOTE: `target_environment` below is an OUTPUT, not an `environment:`
+    # binding — this job is deliberately ungated and therefore must never hold
+    # `id-token: write`. It was previously named `environment`, which made the
+    # `outputs:` block read like a gate at a glance while gating nothing. Do not
+    # rename it back.
     outputs:
-      environment: ${{ steps.set-env.outputs.environment }}
+      target_environment: ${{ steps.set-env.outputs.target_environment }}
       image_tag: ${{ steps.set-tag.outputs.tag }}
 
     steps:
       - name: Determine environment
         id: set-env
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_ENVIRONMENT: ${{ inputs.environment }}
         run: |
-          if [[ "${{ github.event_name }}" == "release" ]]; then
-            echo "environment=prod" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.event_name }}" == "workflow_call" ]]; then
-            echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
-          else
-            echo "environment=dev" >> $GITHUB_OUTPUT
-          fi
+          set -euo pipefail
+          INPUT_ENVIRONMENT="${INPUT_ENVIRONMENT:-}"
+
+          # Inside a reusable workflow `github.event_name` is the CALLER's
+          # event, so it is never "workflow_call" — a caller's free-form
+          # `inputs.environment` arrives through the workflow_dispatch arm.
+          # Caveat: the `*` arm forces dev, so a push-triggered caller would
+          # have its requested environment silently ignored. deploy-all.yml
+          # triggers only on workflow_dispatch and release today.
+          case "$EVENT_NAME" in
+            release)           TARGET_ENVIRONMENT=prod ;;
+            workflow_dispatch) TARGET_ENVIRONMENT="$INPUT_ENVIRONMENT" ;;
+            *)                 TARGET_ENVIRONMENT=dev ;;
+          esac
+
+          # workflow_dispatch constrains this to the declared `choice` options,
+          # but the workflow_call input is typed as a free-form string, so the
+          # allowlist is enforced here rather than assumed.
+          case "$TARGET_ENVIRONMENT" in
+            dev|staging|prod) ;;
+            *)
+              echo "::error::Refusing unknown environment: $TARGET_ENVIRONMENT"
+              exit 1
+              ;;
+          esac
+
+          echo "target_environment=$TARGET_ENVIRONMENT" >> "$GITHUB_OUTPUT"
 
       - name: Set image tag
         id: set-tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          COMMIT_SHA: ${{ github.sha }}
         run: |
-          if [[ "${{ github.event_name }}" == "release" ]]; then
-            echo "tag=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "release" ]; then
+            TAG="${RELEASE_TAG:-}"
           else
-            echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+            TAG="$COMMIT_SHA"
           fi
+
+          # A git ref name may contain ';', '$', '`', '(', ')' and '|', so a
+          # release tag is attacker-settable shell metacharacter soup. Constrain
+          # it to the OCI tag grammar so it cannot poison the $GITHUB_OUTPUT
+          # write below with a newline or a heredoc delimiter, and stays valid
+          # if it is ever wired to Terraform's custom_image_tag (it is not
+          # today; the image tag is derived inside the build module). The check
+          # runs against a shell variable rather than an already-expanded
+          # expression, so unlike the original it actually validates something.
+          if [[ ! "$TAG" =~ ^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$ ]]; then
+            echo "::error::Refusing unsafe image tag: must match ^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$"
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
   # Deploy infrastructure with Terraform (includes Docker build via build module)
   build-and-deploy:
     name: Build & Deploy
     runs-on: ubuntu-24.04-arm  # ARM runner: Docker build targets linux/arm64 (Lambda/Fargate Graviton2)
     needs: prepare
+    permissions:
+      # Assumes the AWS deploy role. The `environment:` binding below is what
+      # scopes this job's OIDC `sub` to `repo:<org/repo>:environment:<name>`,
+      # which is the subject the trust policy matches. NOTE it is not by itself
+      # a reviewer gate: an Environment only blocks a job once required-reviewer
+      # protection rules are configured on it in repo settings, and as of this
+      # change none of this repo's Environments have any. See #1648.
+      id-token: write
+      contents: read
     # Bind to the named GitHub Environment matching the target so
     # secrets.* resolve to environment-scoped values when defined,
     # falling back to repo-scoped secrets otherwise. Without this,
@@ -121,7 +183,7 @@ jobs:
     # ADMIN_EMAIL) would be repo-wide and dev/staging/prod would
     # all share one value — producing wrong email links in customer
     # mailboxes. Per CR review on PR #368.
-    environment: ${{ needs.prepare.outputs.environment }}
+    environment: ${{ needs.prepare.outputs.target_environment }}
     outputs:
       function_url: ${{ steps.outputs.outputs.function_url }}
       function_name: ${{ steps.outputs.outputs.function_name }}
@@ -145,7 +207,7 @@ jobs:
       - name: Terraform Init
         env:
           TF_BACKEND: ${{ secrets.TF_BACKEND_AWS }}
-          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
+          ENVIRONMENT: ${{ needs.prepare.outputs.target_environment }}
         run: |
           printf '%s\nkey = "github-%s/terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/aws
@@ -164,10 +226,11 @@ jobs:
           # accepted by the var (the Terraform local then falls back to
           # frontend_domain_names[0]).
           TF_VAR_dashboard_url: ${{ secrets.DASHBOARD_URL }}
+          ENVIRONMENT: ${{ needs.prepare.outputs.target_environment }}
         run: |
           cd terraform/environments/aws
           terraform plan \
-            -var-file="github-${{ needs.prepare.outputs.environment }}.tfvars" \
+            -var-file="github-${ENVIRONMENT}.tfvars" \
             -var="compute_platform=lambda" \
             -out=tfplan
 
@@ -191,7 +254,7 @@ jobs:
         if: failure() || cancelled()
         env:
           TF_BACKEND: ${{ secrets.TF_BACKEND_AWS }}
-          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
+          ENVIRONMENT: ${{ needs.prepare.outputs.target_environment }}
         run: |
           BUCKET=$(grep -E '^\s*bucket\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
           if [ -n "$BUCKET" ]; then
@@ -209,24 +272,38 @@ jobs:
           echo "log_group=$(terraform output -raw lambda_log_group_name 2>/dev/null | grep -v '::' || echo "")" >> $GITHUB_OUTPUT
 
       - name: Save deployment info
+        env:
+          ENVIRONMENT: ${{ needs.prepare.outputs.target_environment }}
+          IMAGE_TAG: ${{ needs.prepare.outputs.image_tag }}
+          FUNCTION_URL: ${{ steps.outputs.outputs.function_url }}
+          FUNCTION_NAME: ${{ steps.outputs.outputs.function_name }}
+          DEPLOYED_BY: ${{ github.actor }}
+          COMMIT: ${{ github.sha }}
         run: |
-          cat <<EOF > deployment-info.json
-          {
-            "environment": "${{ needs.prepare.outputs.environment }}",
-            "image_tag": "${{ needs.prepare.outputs.image_tag }}",
-            "function_url": "${{ steps.outputs.outputs.function_url }}",
-            "function_name": "${{ steps.outputs.outputs.function_name }}",
-            "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "deployed_by": "${{ github.actor }}",
-            "commit": "${{ github.sha }}"
-          }
-          EOF
+          set -euo pipefail
+
+          # Built with jq rather than an unquoted `cat <<EOF`, which would both
+          # break the JSON on a quote and evaluate $(...) in any interpolated
+          # value as shell. `image_tag` is charset-validated upstream in
+          # `prepare`, so this is defence in depth rather than the only guard —
+          # but this job holds `id-token: write`, so the shape is not one to
+          # leave lying around.
+          jq -n \
+            --arg environment "$ENVIRONMENT" \
+            --arg image_tag "$IMAGE_TAG" \
+            --arg function_url "$FUNCTION_URL" \
+            --arg function_name "$FUNCTION_NAME" \
+            --arg deployed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg deployed_by "$DEPLOYED_BY" \
+            --arg commit "$COMMIT" \
+            '$ARGS.named' > deployment-info.json
+
           cat deployment-info.json
 
       - name: Upload deployment info
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: deployment-info-lambda-${{ needs.prepare.outputs.environment }}
+          name: deployment-info-lambda-${{ needs.prepare.outputs.target_environment }}
           path: deployment-info.json
           retention-days: 90
 
@@ -236,9 +313,18 @@ jobs:
     runs-on: ubuntu-latest
     needs: [prepare, build-and-deploy]
     if: always() && needs.build-and-deploy.result == 'success'
+    permissions:
+      # Assumes the AWS deploy role. The `environment:` binding below is what
+      # scopes this job's OIDC `sub` to `repo:<org/repo>:environment:<name>`,
+      # which is the subject the trust policy matches. NOTE it is not by itself
+      # a reviewer gate: an Environment only blocks a job once required-reviewer
+      # protection rules are configured on it in repo settings, and as of this
+      # change none of this repo's Environments have any. See #1648.
+      id-token: write
+      contents: read
     # Bind to the same named environment as build-and-deploy so that
     # vars.AWS_ROLE_TO_ASSUME resolves to the per-environment scoped value.
-    environment: ${{ needs.prepare.outputs.environment }}
+    environment: ${{ needs.prepare.outputs.target_environment }}
 
     steps:
       - name: Configure AWS credentials
@@ -272,9 +358,10 @@ jobs:
           sleep 30
 
       - name: Test health endpoint
+        env:
+          FUNCTION_URL_RAW: ${{ steps.get-url.outputs.url }}
         run: |
-          URL="${{ steps.get-url.outputs.url }}"
-          URL="${URL%/}"
+          URL="${FUNCTION_URL_RAW%/}"
           echo "Testing health endpoint: $URL/health"
 
           for i in {1..5}; do
@@ -294,9 +381,10 @@ jobs:
           exit 1
 
       - name: Run smoke tests
+        env:
+          FUNCTION_URL_RAW: ${{ steps.get-url.outputs.url }}
         run: |
-          URL="${{ steps.get-url.outputs.url }}"
-          URL="${URL%/}"
+          URL="${FUNCTION_URL_RAW%/}"
 
           echo "Running basic smoke tests..."
 
@@ -319,19 +407,21 @@ jobs:
     runs-on: ubuntu-latest
     needs: [prepare, build-and-deploy, test-deployment]
     if: always()
+    permissions:
+      contents: read
 
     steps:
       - name: Download deployment info
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: deployment-info-lambda-${{ needs.prepare.outputs.environment }}
+          name: deployment-info-lambda-${{ needs.prepare.outputs.target_environment }}
         continue-on-error: true
 
       - name: Post summary
         run: |
           echo "## AWS Lambda Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** ${{ needs.prepare.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ needs.prepare.outputs.target_environment }}" >> $GITHUB_STEP_SUMMARY
           echo "**Image Tag:** ${{ needs.prepare.outputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
           echo "**Status:** ${{ needs.build-and-deploy.result }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
