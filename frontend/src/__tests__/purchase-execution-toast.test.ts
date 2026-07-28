@@ -173,6 +173,15 @@ function lastToastMessage(): string | null {
   return last?.querySelector('.toast-message')?.textContent ?? last?.textContent ?? null;
 }
 
+/** Return the text of every rendered toast, oldest first. */
+function allToastMessages(): string[] {
+  const container = document.getElementById('toast-container');
+  if (!container) return [];
+  return Array.from(container.querySelectorAll('.toast')).map(
+    (t) => t.querySelector('.toast-message')?.textContent ?? t.textContent ?? '',
+  );
+}
+
 /** Return the kind class of the most recently rendered toast (success/error/warning). */
 function lastToastKind(): string | null {
   const container = document.getElementById('toast-container');
@@ -840,5 +849,144 @@ describe('handleExecutePurchase — double-submit guard (#644)', () => {
     expect(api.executePurchase).not.toHaveBeenCalled();
     expect(btn.disabled).toBe(false);
     expect(btn.textContent).toBe('Send for Approval');
+  });
+});
+
+// ── #1503: payment-option coercion must be disclosed to the user ─────────────
+//
+// The backend does not reject a payment option the target provider cannot
+// express (Azure has exactly two billing plans, so an inherited AWS-style
+// 'partial-upfront' token has nowhere to land). It coerces to the closest
+// supported schedule and reports it in `payment_adjustments`. That coercion is
+// only defensible if the user is actually TOLD -- otherwise their billing
+// schedule changes behind their back, which is the failure #1503 reported.
+//
+// These are the end-to-end guards: a green unit test on the formatter alone
+// could not prove the notice survives to a toast the user actually sees.
+describe('#1503 — payment-option coercion is disclosed in the purchase toast', () => {
+  function buildAzureBucket(id: string) {
+    return {
+      key: `key-${id}`,
+      label: `Bucket ${id}`,
+      provider: 'azure',
+      service: `svc-${id}`,
+      recs: [buildMinimalRec()],
+      payment: 'partial-upfront',
+      capacityPercent: 100,
+    };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (recs.getFanOutBuckets as jest.Mock).mockReturnValue([]);
+    (recs.getPurchaseModalRecommendations as jest.Mock).mockReturnValue([buildMinimalRec()]);
+    (plans.closePurchaseModal as jest.Mock).mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    document.body.textContent = '';
+  });
+
+  test('single path — partial-upfront coerced to monthly raises a warning toast', async () => {
+    (api.executePurchase as jest.Mock).mockResolvedValue({
+      execution_id: 'exec-adj-1',
+      status: 'queued',
+      email_sent: true,
+      approval_recipient: 'approver@example.com',
+      payment_adjustments: [
+        {
+          rec_index: 0,
+          provider: 'azure',
+          service: 'vm',
+          requested_payment_option: 'partial-upfront',
+          applied_payment_option: 'monthly',
+          reason: 'payment option "partial-upfront" is not in azure\'s supported set',
+        },
+      ],
+    });
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const messages = allToastMessages();
+    // The success toast must still be shown -- disclosure is additive.
+    expect(messages.some((m) => m.includes('Approval request sent to'))).toBe(true);
+    // ...and the coercion must be surfaced, naming both schedules so the user
+    // can tell what they asked for from what they are actually getting.
+    const notice = messages.find((m) => m.includes('Billing schedule adjusted'));
+    expect(notice).toBeDefined();
+    expect(notice).toContain('Partial Upfront');
+    expect(notice).toContain('Pay Monthly');
+    expect(notice).toContain('AZURE');
+    // Warning, and non-expiring: an irreversible billing-schedule change must
+    // not scroll away before the user reads it.
+    expect(lastToastKind()).toBe('warning');
+  });
+
+  test('single path — no adjustments means no extra toast (no noise on the common case)', async () => {
+    (api.executePurchase as jest.Mock).mockResolvedValue({
+      execution_id: 'exec-adj-2',
+      status: 'queued',
+      email_sent: true,
+      approval_recipient: 'approver@example.com',
+      // payment_adjustments intentionally absent: everything was canonical.
+    });
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const messages = allToastMessages();
+    expect(messages.some((m) => m.includes('Billing schedule adjusted'))).toBe(false);
+    expect(lastToastKind()).toBe('success');
+  });
+
+  test('fan-out path — adjustments from every bucket are disclosed, incl. email-failed buckets', async () => {
+    (recs.getPurchaseModalRecommendations as jest.Mock).mockReturnValue([]);
+    (recs.getFanOutBuckets as jest.Mock).mockReturnValue([
+      buildAzureBucket('a'),
+      buildAzureBucket('b'),
+    ]);
+
+    const adjustment = (recIndex: number) => ({
+      rec_index: recIndex,
+      provider: 'azure',
+      service: 'vm',
+      requested_payment_option: 'partial-upfront',
+      applied_payment_option: 'monthly',
+      reason: 'no azure equivalent',
+    });
+
+    (api.executePurchase as jest.Mock)
+      .mockResolvedValueOnce({
+        execution_id: 'exec-a',
+        status: 'queued',
+        email_sent: true,
+        approval_recipient: 'alice@example.com',
+        payment_adjustments: [adjustment(0)],
+      })
+      // Bucket b's approval email failed to send, but the pending execution
+      // still exists carrying the coerced schedule, so its adjustment must
+      // be disclosed too rather than dropped with the "failed" bucket.
+      .mockResolvedValueOnce({
+        execution_id: 'exec-b',
+        status: 'queued',
+        email_sent: false,
+        email_reason: 'SMTP timeout',
+        payment_adjustments: [adjustment(0)],
+      });
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const notice = allToastMessages().find((m) => m.includes('Billing schedule adjusted'));
+    expect(notice).toBeDefined();
+    // Both buckets contributed, so the count must be 2 -- proving the
+    // email-failed bucket's coercion was not silently dropped.
+    expect(notice).toContain('2 recommendations');
+    expect(notice).toContain('Partial Upfront');
+    expect(notice).toContain('Pay Monthly');
   });
 });

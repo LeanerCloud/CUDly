@@ -2025,25 +2025,28 @@ type ExecutePurchaseRequest struct {
 
 // validateExecutePurchaseRequest handles the permission check, body parse,
 // and recommendation-list bounds + scope checks. Extracted so executePurchase
-// itself stays linear and under the gocyclo threshold.
-func (h *Handler) validateExecutePurchaseRequest(ctx context.Context, req *events.LambdaFunctionURLRequest) (ExecutePurchaseRequest, *Session, error) {
+// itself stays linear and under the gocyclo threshold. The returned
+// PaymentAdjustment slice carries any payment-option coercions performed by
+// the per-rec validation, for the response to surface to the caller (#1503
+// follow-up); it is empty/nil when every rec was already canonical.
+func (h *Handler) validateExecutePurchaseRequest(ctx context.Context, req *events.LambdaFunctionURLRequest) (ExecutePurchaseRequest, *Session, []PaymentAdjustment, error) {
 	session, err := h.requirePermission(ctx, req, "execute", "purchases")
 	if err != nil {
-		return ExecutePurchaseRequest{}, nil, err
+		return ExecutePurchaseRequest{}, nil, nil, err
 	}
 	var execReq ExecutePurchaseRequest
 	if err := json.Unmarshal([]byte(req.Body), &execReq); err != nil {
-		return ExecutePurchaseRequest{}, nil, NewClientError(400, "invalid request body")
+		return ExecutePurchaseRequest{}, nil, nil, NewClientError(400, "invalid request body")
 	}
 	const maxRecommendations = 1000
 	if len(execReq.Recommendations) == 0 {
-		return ExecutePurchaseRequest{}, nil, NewClientError(400, "no recommendations provided")
+		return ExecutePurchaseRequest{}, nil, nil, NewClientError(400, "no recommendations provided")
 	}
 	if len(execReq.Recommendations) > maxRecommendations {
-		return ExecutePurchaseRequest{}, nil, NewClientError(400, fmt.Sprintf("too many recommendations: %d (max %d)", len(execReq.Recommendations), maxRecommendations))
+		return ExecutePurchaseRequest{}, nil, nil, NewClientError(400, fmt.Sprintf("too many recommendations: %d (max %d)", len(execReq.Recommendations), maxRecommendations))
 	}
 	if err := normalizeCapacityPercent(&execReq); err != nil {
-		return ExecutePurchaseRequest{}, nil, err
+		return ExecutePurchaseRequest{}, nil, nil, err
 	}
 	// Scope: reject the whole request if any recommendation targets an
 	// account outside the session's allowed_accounts. Safer than silently
@@ -2052,7 +2055,7 @@ func (h *Handler) validateExecutePurchaseRequest(ctx context.Context, req *event
 	// Runs before per-rec content validation so an out-of-scope request is
 	// rejected as 403 regardless of the rec's Term/Payment/Count contents.
 	if err := h.validatePurchaseRecommendationScope(ctx, session, execReq.Recommendations); err != nil {
-		return ExecutePurchaseRequest{}, nil, err
+		return ExecutePurchaseRequest{}, nil, nil, err
 	}
 	// Per-rec Provider/Service/Term/Payment/Count validation at the API
 	// boundary so a malformed client-supplied rec (e.g. Term:7, Payment:"foo",
@@ -2060,15 +2063,16 @@ func (h *Handler) validateExecutePurchaseRequest(ctx context.Context, req *event
 	// execute time (#643). This is scoped to the web execute path only — the
 	// retry path replays recs from an already-validated execution and must
 	// not be re-gated by the same rules.
-	if err := validateExecutePurchaseRecommendations(execReq.Recommendations); err != nil {
-		return ExecutePurchaseRequest{}, nil, err
+	adjustments, recErr := validateExecutePurchaseRecommendations(execReq.Recommendations)
+	if recErr != nil {
+		return ExecutePurchaseRequest{}, nil, nil, recErr
 	}
 	// Cross-check the audit-only capacity_percent against the scaled rec
 	// counts so the persisted execution can't claim a capacity that
 	// disagrees with what was actually purchased (#647). Skipped per-rec
 	// when the rec carries no recommended_count.
 	if err := validateCapacityConsistency(execReq.Recommendations, execReq.CapacityPercent); err != nil {
-		return ExecutePurchaseRequest{}, nil, err
+		return ExecutePurchaseRequest{}, nil, nil, err
 	}
 	// Enforce the per-permission Constraints (MaxPurchaseAmount, Providers,
 	// Services, Regions, AccountIDs) configured on the granting
@@ -2080,9 +2084,9 @@ func (h *Handler) validateExecutePurchaseRequest(ctx context.Context, req *event
 	// splitting a large purchase across recs or by a no-upfront commitment
 	// whose real cost is entirely recurring.
 	if err := h.enforcePurchaseConstraints(ctx, session, execReq.Recommendations); err != nil {
-		return ExecutePurchaseRequest{}, nil, err
+		return ExecutePurchaseRequest{}, nil, nil, err
 	}
-	return execReq, session, nil
+	return execReq, session, adjustments, nil
 }
 
 // enforcePurchaseConstraints builds the per-recommendation
@@ -2199,15 +2203,22 @@ func normalizeCapacityPercent(execReq *ExecutePurchaseRequest) error {
 
 // validateExecutePurchaseRecommendations runs the per-rec #643 boundary
 // validation over every rec in a web execute request, returning the first
-// failure. Extracted so validateExecutePurchaseRequest stays under the
-// gocyclo threshold.
-func validateExecutePurchaseRecommendations(recs []config.RecommendationRecord) error {
+// failure. On success it also returns the payment-option coercions that
+// occurred (nil-free, in rec order) so the response can surface them to the
+// caller (#1503 follow-up). Extracted so validateExecutePurchaseRequest stays
+// under the gocyclo threshold.
+func validateExecutePurchaseRecommendations(recs []config.RecommendationRecord) ([]PaymentAdjustment, error) {
+	var adjustments []PaymentAdjustment
 	for i := range recs {
-		if err := validatePurchaseRecommendation(&recs[i], i); err != nil {
-			return err
+		adjustment, err := validatePurchaseRecommendation(&recs[i], i)
+		if err != nil {
+			return nil, err
+		}
+		if adjustment != nil {
+			adjustments = append(adjustments, *adjustment)
 		}
 	}
-	return nil
+	return adjustments, nil
 }
 
 // finalizePurchaseStatus flips an execution's stored status to "failed" if
@@ -2482,7 +2493,7 @@ func newPendingExecution(req *ExecutePurchaseRequest, totalUpfront, totalSavings
 }
 
 func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	execReq, session, err := h.validateExecutePurchaseRequest(ctx, req)
+	execReq, session, paymentAdjustments, err := h.validateExecutePurchaseRequest(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -2531,7 +2542,7 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	}
 	if dupExec != nil {
 		logging.Infof("concurrent duplicate purchase submit collapsed to existing execution %s", dupExec.ExecutionID)
-		return buildDuplicatePurchaseResponse(dupExec), nil
+		return withPaymentAdjustments(buildDuplicatePurchaseResponse(dupExec), paymentAdjustments), nil
 	}
 
 	// Direct-execute path (issue #289): a session with execute-any or
@@ -2546,7 +2557,7 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 		if err := h.authorizeSessionExecuteDirect(ctx, session, creatorID); err != nil {
 			return nil, err
 		}
-		return h.directExecutePurchase(ctx, req, execution, session)
+		return h.directExecutePurchase(ctx, req, execution, session, paymentAdjustments)
 	}
 
 	// Send approval email synchronously so the response can surface the
@@ -2557,7 +2568,18 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	emailSent, emailReason, recipient := h.sendPurchaseApprovalEmail(ctx, req, execution, execReq.Recommendations, totalUpfront, totalSavings)
 	status := h.finalizePurchaseStatus(ctx, execution, emailSent, emailReason)
 
-	return buildApprovalPendingResponse(executionID, status, len(execReq.Recommendations), totalUpfront, totalSavings, emailSent, emailReason, recipient), nil
+	return withPaymentAdjustments(buildApprovalPendingResponse(executionID, status, len(execReq.Recommendations), totalUpfront, totalSavings, emailSent, emailReason, recipient), paymentAdjustments), nil
+}
+
+// withPaymentAdjustments attaches the payment-option coercion notices to an
+// executePurchase response body under "payment_adjustments" (#1503 follow-up).
+// The key is omitted entirely when no coercion happened, so existing clients
+// see an unchanged response on the common canonical-input case.
+func withPaymentAdjustments(resp map[string]any, adjustments []PaymentAdjustment) map[string]any {
+	if len(adjustments) > 0 {
+		resp["payment_adjustments"] = adjustments
+	}
+	return resp
 }
 
 // buildApprovalPendingResponse assembles the JSON-serialisable response body
@@ -2612,7 +2634,9 @@ func buildApprovalPendingResponse(
 //     This is the only email the direct-execute flow emits -- no approval
 //     email precedes it -- so it is the path where the executed-notification
 //     matters most.
-//  4. Return a "completed" status to the caller.
+//  4. Return a "completed" status to the caller, carrying any payment-option
+//     coercion notices (paymentAdjustments, from the request validation) so
+//     the direct-execute response surfaces them like the approval path does.
 //
 // The audit fields are best-effort if ApproveAndExecute's SavePurchaseExecution
 // races with our pre-call stamp -- but in practice ApproveAndExecute calls
@@ -2621,7 +2645,7 @@ func buildApprovalPendingResponse(
 // TransitionExecutionStatus. The critical audit invariant is that a non-nil
 // executed_by_user_id always co-occurs with a non-nil pre_approval_skip_reason,
 // and both are set atomically in the same SavePurchaseExecution call here.
-func (h *Handler) directExecutePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution, session *Session) (any, error) {
+func (h *Handler) directExecutePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution, session *Session, paymentAdjustments []PaymentAdjustment) (any, error) {
 	t0 := time.Now()
 	executionID := execution.ExecutionID
 	logging.Infof("purchase[%s]: directExecutePurchase entry (auth=session)", executionID)
@@ -2661,7 +2685,7 @@ func (h *Handler) directExecutePurchase(ctx context.Context, req *events.LambdaF
 	// guard live inside sendPurchaseExecutedEmail. session.Email is the actor
 	// who direct-executed, matching the actor passed to ApproveAndExecute above.
 	h.sendPurchaseExecutedEmail(ctx, req, execution, session.Email)
-	return map[string]any{
+	return withPaymentAdjustments(map[string]any{
 		"execution_id":         executionID,
 		"status":               "completed",
 		"recommendation_count": len(execution.Recommendations),
@@ -2669,7 +2693,7 @@ func (h *Handler) directExecutePurchase(ctx context.Context, req *events.LambdaF
 		"estimated_savings":    execution.EstimatedSavings,
 		"direct_execute":       true,
 		"message":              "Purchase executed immediately (direct-execute permission).",
-	}, nil
+	}, paymentAdjustments), nil
 }
 
 // archeraEducationURL returns dashboardBase + "/archera-insurance", or "" when

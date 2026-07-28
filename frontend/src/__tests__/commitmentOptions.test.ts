@@ -11,10 +11,12 @@ import {
   populatePaymentSelect,
   getPaymentLabel,
   normalizePaymentValue,
+  formatPaymentAdjustmentNotice,
   CommitmentConfig,
   PaymentOption,
   TermOption
 } from '../commitmentOptions';
+import type { PaymentAdjustment } from '../api/types';
 
 describe('commitmentOptions', () => {
   describe('getCommitmentConfig', () => {
@@ -633,8 +635,14 @@ describe('commitmentOptions', () => {
         expect(normalizePaymentValue('all-upfront', 'azure')).toBe('upfront');
       });
 
-      it('should convert partial-upfront to upfront for Azure', () => {
-        expect(normalizePaymentValue('partial-upfront', 'azure')).toBe('upfront');
+      // Regression test for #1503: partial-upfront has no Azure equivalent
+      // and must land on 'monthly', never 'upfront'. Azure's billing plan is
+      // immutable after purchase and both plans cost the same total, so
+      // pre-selecting 'upfront' would hand the user an irreversible full
+      // upfront charge they never chose. Mirrors the Go-side assertion in
+      // internal/config/validation_test.go:TestNormalizePaymentOption.
+      it('should convert partial-upfront to monthly (not upfront) for Azure', () => {
+        expect(normalizePaymentValue('partial-upfront', 'azure')).toBe('monthly');
       });
 
       it('should convert no-upfront to monthly for Azure', () => {
@@ -815,4 +823,62 @@ describe('commitmentOptions', () => {
       expect(isValidCombination('aws', 'rds', 1, 'partial-upfront')).toBe(true);
     });
   });
+
+  // #1503: the backend coerces a payment option the target provider cannot
+  // express (Azure has only Upfront/Monthly) instead of rejecting it. That is
+  // only acceptable if the change is disclosed, so this formatter is the copy
+  // every purchase-submit path renders. A null return means "nothing to say".
+  describe('formatPaymentAdjustmentNotice', () => {
+    const adj = (over: Partial<PaymentAdjustment> = {}): PaymentAdjustment => ({
+      rec_index: 0,
+      provider: 'azure',
+      service: 'vm',
+      requested_payment_option: 'partial-upfront',
+      applied_payment_option: 'monthly',
+      reason: 'no azure equivalent',
+      ...over,
+    });
+
+    it('returns null when there is nothing to disclose', () => {
+      expect(formatPaymentAdjustmentNotice(undefined)).toBeNull();
+      expect(formatPaymentAdjustmentNotice([])).toBeNull();
+    });
+
+    it('names both the requested and the applied schedule for a single rec', () => {
+      const msg = formatPaymentAdjustmentNotice([adj()]);
+      // Human labels, not raw API tokens -- the user picked "Partial Upfront"
+      // in the UI, so that is the wording they will recognise.
+      expect(msg).toContain('Partial Upfront');
+      expect(msg).toContain('Pay Monthly');
+      expect(msg).toContain('AZURE');
+      expect(msg).toContain('vm');
+      // The raw tokens must not leak into user-facing copy.
+      expect(msg).not.toContain('partial-upfront');
+    });
+
+    it('collapses a batch to the distinct requested -> applied pairs', () => {
+      const msg = formatPaymentAdjustmentNotice([
+        adj({ rec_index: 0 }),
+        adj({ rec_index: 1 }),
+        adj({ rec_index: 2 }),
+      ]);
+      // Count reflects every affected rec...
+      expect(msg).toContain('3 recommendations');
+      // ...but the identical mapping is stated once, not three times.
+      expect(msg?.match(/Partial Upfront/g)).toHaveLength(1);
+    });
+
+    it('lists every distinct mapping when a batch was coerced differently', () => {
+      const msg = formatPaymentAdjustmentNotice([
+        adj({ requested_payment_option: 'partial-upfront', applied_payment_option: 'monthly' }),
+        adj({ requested_payment_option: 'all-upfront', applied_payment_option: 'upfront' }),
+      ]);
+      expect(msg).toContain('2 recommendations');
+      expect(msg).toContain('Partial Upfront');
+      expect(msg).toContain('All Upfront');
+      expect(msg).toContain('Pay Monthly');
+      expect(msg).toContain('Pay Upfront');
+    });
+  });
+
 });
