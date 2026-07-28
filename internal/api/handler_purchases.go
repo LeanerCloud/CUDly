@@ -1816,7 +1816,17 @@ func (h *Handler) persistRetryExecution(ctx context.Context, failedExec *config.
 	// "<root-key>:<failedAcctID>:<acctID>" whose derived tokens miss the AWS
 	// ClientToken, the EC2 RI tag-guard and the Azure two-step lookup alike.
 	// Carrying the scope keeps a per-account retry a single-account re-drive
-	// against the identical lineage key, so the provider dedupes it.
+	// against the identical lineage key, which is the precondition for the
+	// provider-side dedupe to engage at all.
+	//
+	// Whether it then DOES engage is per-provider and not universal: AWS (all
+	// services), Azure reservations and GCP CUDs reproduce the token and
+	// dedupe, but Azure savings-plans has no server-side idempotency key and
+	// names its order alias from time.Now().UnixNano(), so a re-drive of a
+	// landed Azure SP order still duplicates it. purchase.recIsSafeToRedrive
+	// encodes exactly that exclusion, but it currently gates only the reaper's
+	// re-drive, not this user-facing retry (issue #1668). Scope propagation is
+	// necessary for dedupe everywhere and sufficient everywhere except Azure SP.
 	//
 	// Copied by value rather than by pointer so the successor and the
 	// historical failed row never share a *string, matching the defensive

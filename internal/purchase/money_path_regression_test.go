@@ -3,6 +3,7 @@ package purchase
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"testing"
 
@@ -358,23 +359,24 @@ func TestMultiAccountPartialSuccessIsAcked(t *testing.T) {
 		"root must reflect partial success, never 'failed' (double-spend mislabel #642/#1014)")
 }
 
-// TestScopelessPerAccountKeyRefusesToFanOut is the issue #1537 defense-in-depth
-// guard at the purchase layer.
+// scopelessRunResult is what runScopelessRow observed: the tokens of every
+// commitment purchase that reached the fake cloud (one entry == one real
+// purchase), and the error executePurchase returned.
+type scopelessRunResult struct {
+	err    error
+	tokens []string
+}
+
+// runScopelessRow drives executePurchase for a plan execution that carries NO
+// cloud_account_id, against a plan whose accounts are `accounts`, and reports
+// what actually got bought.
 //
-// The primary fix keeps cloud_account_id on a per-account row's retry successor
-// (api.persistRetryExecution). This is the second gate, for a row that reaches
-// the executor scopeless while its idempotency lineage is already per-account —
-// concretely, a successor minted by the pre-#1537 retry handler that is still
-// pending/approved when the fix deploys. Fanning such a row out would re-suffix
-// its key ("root:acct-A" -> "root:acct-A:acct-B"), derive tokens matching
-// nothing the first attempt used, and re-buy every account that already
-// committed. It must fail loud with ZERO purchases instead.
-func TestScopelessPerAccountKeyRefusesToFanOut(t *testing.T) {
+// The whole provider chain is wired and WOULD happily sell, so a missing or
+// fail-open guard shows up as extra purchases rather than as an
+// unexpected-mock-call panic that a require.Error would misread as "refused".
+func runScopelessRow(t *testing.T, exec *config.PurchaseExecution, accounts []config.CloudAccount) scopelessRunResult {
+	t.Helper()
 	ctx := context.Background()
-	accounts := []config.CloudAccount{
-		{ID: "acct-A", Name: "A", Provider: "aws", ExternalID: "111111111111", AWSAuthMode: "access_keys"},
-		{ID: "acct-B", Name: "B", Provider: "aws", ExternalID: "222222222222", AWSAuthMode: "access_keys"},
-	}
 
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
@@ -390,25 +392,36 @@ func TestScopelessPerAccountKeyRefusesToFanOut(t *testing.T) {
 	mockStore.GetPurchasePlanFn = func(_ context.Context, id string) (*config.PurchasePlan, error) {
 		return &config.PurchasePlan{ID: id, Name: "Plan X"}, nil
 	}
+	// Fn overrides, not testify expectations: whether the plan's accounts are
+	// consulted at all is part of what is under test.
 	mockStore.GetPlanAccountsFn = func(_ context.Context, _ string) ([]config.CloudAccount, error) {
 		return accounts, nil
 	}
+	mockStore.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		for i := range accounts {
+			if accounts[i].ID == id {
+				acct := accounts[i]
+				return &acct, nil
+			}
+		}
+		return nil, nil
+	}
 	mockStore.SavePurchaseExecutionFn = func(_ context.Context, _ *config.PurchaseExecution) error { return nil }
 
-	// The whole provider chain is wired and WOULD happily sell: without the
-	// guard this run completes and buys for both accounts. Counting the
-	// purchases (rather than leaving the chain unwired and reading an
-	// unexpected-mock-call panic as "refused") is what makes this test fail on
-	// pre-guard code instead of passing for the wrong reason.
-	var purchases int
 	var mu sync.Mutex
+	var tokens []string
 	mockStore.On("SavePurchaseHistory", mock.Anything, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil).Maybe()
 	mockEmail.On("SendPurchaseConfirmation", mock.Anything, mock.AnythingOfType("email.NotificationData")).Return(nil).Maybe()
 	mockStore.On("IncrementPlanCurrentStep", mock.Anything, "plan-x").Return(nil).Maybe()
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil).Maybe()
 	mockProviderInst.On("GetServiceClient", mock.Anything, common.ServiceEC2, mock.Anything).Return(mockServiceClient, nil).Maybe()
-	mockServiceClient.On("PurchaseCommitment", mock.Anything, mock.Anything, mock.Anything).
-		Run(func(mock.Arguments) { mu.Lock(); purchases++; mu.Unlock() }).
+	mockServiceClient.On("PurchaseCommitment", mock.Anything, mock.Anything, mock.AnythingOfType("common.PurchaseOptions")).
+		Run(func(args mock.Arguments) {
+			opts := args.Get(2).(common.PurchaseOptions)
+			mu.Lock()
+			tokens = append(tokens, opts.IdempotencyToken)
+			mu.Unlock()
+		}).
 		Return(common.PurchaseResult{Success: true, CommitmentID: "ri-ok"}, nil).Maybe()
 
 	manager := &Manager{
@@ -419,32 +432,104 @@ func TestScopelessPerAccountKeyRefusesToFanOut(t *testing.T) {
 		dashboardURL:    "https://dashboard.example.com",
 	}
 
-	orphan := &config.PurchaseExecution{
-		ExecutionID: "successor-of-acct-A-row",
-		// Scope lost in transit; the lineage key still says "account A".
+	err := manager.executePurchase(ctx, exec)
+
+	mu.Lock()
+	defer mu.Unlock()
+	out := append([]string(nil), tokens...)
+	sort.Strings(out)
+	return scopelessRunResult{err: err, tokens: out}
+}
+
+// scopelessPerAccountRow is the row shape both tests below start from: a
+// successor minted by the pre-#1537 retry handler that is still pending or
+// approved when the fix deploys. Its cloud_account_id is nil, but its lineage
+// key is still the per-account "<root-key>:<accountID>" that
+// executeForAccount stamped.
+func scopelessPerAccountRow(accountID string) *config.PurchaseExecution {
+	return &config.PurchaseExecution{
+		ExecutionID:    "successor-of-" + accountID + "-row",
 		CloudAccountID: nil,
-		IdempotencyKey: "root-lineage:acct-A",
+		IdempotencyKey: "root-lineage:" + accountID,
 		PlanID:         "plan-x",
 		Source:         common.PurchaseSourceWeb,
 		Recommendations: []config.RecommendationRecord{
 			{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, UpfrontCost: 300, Selected: true},
 		},
 	}
+}
 
-	err := manager.executePurchase(ctx, orphan)
+// TestScopelessPerAccountRowSelfHealsToItsAccount is the issue #1537
+// defense-in-depth guard at the purchase layer, recovery half.
+//
+// The primary fix keeps cloud_account_id on a per-account row's retry successor
+// (api.persistRetryExecution). This is the second gate, for a row that reaches
+// the executor scopeless while its lineage is already per-account. Fanning such
+// a row out would re-suffix its key ("root-lineage:acct-A" ->
+// "root-lineage:acct-A:acct-B"), derive tokens matching nothing the first
+// attempt used, and re-buy every account that already committed.
+//
+// When the scoped account is still on the plan the lineage key is durable proof
+// of intent, so the executor re-attaches the scope and runs the single-account
+// re-drive the row was always meant to be: exactly ONE purchase, under the
+// IDENTICAL token the original attempt used, so a commitment that actually
+// landed dedupes. Refusing here instead would be a dead end — the successor of
+// a refused row carries the same nil scope and the same key, so it would be
+// refused forever, and its predecessor already 409s as "already retried".
+func TestScopelessPerAccountRowSelfHealsToItsAccount(t *testing.T) {
+	accounts := []config.CloudAccount{
+		{ID: "acct-A", Name: "A", Provider: "aws", ExternalID: "111111111111", AWSAuthMode: "access_keys"},
+		{ID: "acct-B", Name: "B", Provider: "aws", ExternalID: "222222222222", AWSAuthMode: "access_keys"},
+	}
+	orphan := scopelessPerAccountRow("acct-A")
 
-	mu.Lock()
-	got := purchases
-	mu.Unlock()
-	assert.Zero(t, got,
-		"a scopeless row whose lineage key is already per-account must buy NOTHING; each purchase here is an account that already committed being bought again (issue #1537)")
+	got := runScopelessRow(t, orphan, accounts)
 
-	require.Error(t, err,
+	require.NoError(t, got.err,
+		"a scopeless row whose account is still on the plan must complete as a single-account re-drive, not dead-end on a refusal it can never recover from")
+	assert.Equal(t, []string{common.DeriveIdempotencyToken("root-lineage:acct-A", 0)}, got.tokens,
+		"exactly ONE purchase, under the token the ORIGINAL acct-A attempt derived. A second token is acct-B being bought again; a different single token would miss the provider's dedupe guard (issue #1537)")
+
+	require.NotNil(t, orphan.CloudAccountID,
+		"the recovered scope must be stamped on the row so the repair persists (executeAndFinalize saves it, and cloud_account_id is in SavePurchaseExecution's ON CONFLICT SET)")
+	assert.Equal(t, "acct-A", *orphan.CloudAccountID)
+}
+
+// TestScopelessPerAccountRowRefusesWhenAccountLeftThePlan is the fail-closed
+// half, and the case a plan-account-set matcher gets wrong.
+//
+// Detecting per-account-ness by matching the plan's CURRENT accounts fails OPEN
+// exactly when the scoped account has since been removed from the plan (or
+// deleted and re-added under a new ID): nothing matches, no refusal fires, and
+// the row re-fans-out and re-buys every remaining account under freshly
+// suffixed keys. Detecting it by the colon that only executeForAccount ever
+// writes into a lineage key does not have that hole.
+//
+// There is nothing to re-attach to here, so the only safe outcome is to refuse
+// and buy NOTHING.
+func TestScopelessPerAccountRowRefusesWhenAccountLeftThePlan(t *testing.T) {
+	// acct-C has been removed from the plan since its row failed.
+	accounts := []config.CloudAccount{
+		{ID: "acct-A", Name: "A", Provider: "aws", ExternalID: "111111111111", AWSAuthMode: "access_keys"},
+		{ID: "acct-B", Name: "B", Provider: "aws", ExternalID: "222222222222", AWSAuthMode: "access_keys"},
+	}
+	orphan := scopelessPerAccountRow("acct-C")
+
+	got := runScopelessRow(t, orphan, accounts)
+
+	assert.Empty(t, got.tokens,
+		"a scopeless per-account row whose account left the plan must buy NOTHING; every purchase here is an account that already committed being bought again under a fresh, undeduplicated token (issue #1537)")
+	assert.Nil(t, orphan.CloudAccountID,
+		"no plan account matches the lineage key, so nothing may be stamped as the recovered scope")
+
+	require.Error(t, got.err,
 		"the refusal must surface as an error, not a silent skip, so the row lands 'failed' and an operator sees it")
-	assert.Contains(t, err.Error(), "refusing to fan out",
+	assert.Contains(t, got.err.Error(), "refusing to fan out",
 		"the error must be the #1537 refusal itself, not an incidental downstream failure")
-	assert.Contains(t, err.Error(), "acct-A",
-		"the error must name the account the lineage key is scoped to so an operator can re-drive the right row")
+	assert.Contains(t, got.err.Error(), "no longer on plan",
+		"the error must say WHY the scope could not be recovered, so the operator knows to re-add the account or cancel")
+	assert.Contains(t, got.err.Error(), "acct-C",
+		"the error must name the departed account, since re-adding THAT account is the operator's way out")
 }
 
 // TestRootKeyStillFansOutThroughExecutePurchase is the counterpart to the guard
