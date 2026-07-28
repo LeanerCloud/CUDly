@@ -112,6 +112,13 @@ type PurchaseRequest struct {
 // (single visible Azure subscription, AWS STS identity, ambient GCP project)
 // is unambiguous for the life of the server process, so there is no second
 // scope for a token to collide with.
+//
+// Normalization here is limited to trimming, because it is the only rule that
+// is safe for all three providers. Case is deliberately NOT folded: AWS named
+// profiles are case-sensitive section names in ~/.aws/config, so lower-casing
+// one could name a profile that does not exist or a different one that does.
+// Azure subscription IDs ARE case-insensitive and do need folding -- see
+// azureCredentialScope in azure_compute_ri.go, which wraps this.
 func CredentialScope(explicit string, envVars ...string) string {
 	if s := strings.TrimSpace(explicit); s != "" {
 		return s

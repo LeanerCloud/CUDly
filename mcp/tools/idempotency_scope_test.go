@@ -22,18 +22,43 @@ import (
 //
 // An input the tool declares it ignores must not be able to change purchase
 // identity, so both calls must produce byte-identical tokens.
+//
+// Every account-level plan type is covered, not a representative one. Database
+// needs its own term/payment because validateDatabaseSavingsPlan
+// (aws_savingsplans.go) permits only 1yr/no-upfront, which is why the shared
+// 3yr fixture cannot carry it. Today the canonicalization branches on
+// `spType == SPTypeEC2Instance`, so Database is account-level by construction
+// and cannot regress on its own; the case exists so that a refactor which
+// instead enumerates the account-level types explicitly cannot quietly leave
+// Database out of the list.
 func TestAccountLevelSavingsPlanRegionCannotForkIdempotencyToken(t *testing.T) {
 	t.Parallel()
 
-	for _, spType := range []string{string(SPTypeCompute), string(SPTypeSageMaker)} {
-		t.Run(spType, func(t *testing.T) {
+	cases := []struct {
+		spType        SPType
+		termYears     int
+		paymentOption PaymentOption
+	}{
+		{spType: SPTypeCompute, termYears: int(TermThreeYear), paymentOption: PaymentOptionNoUpfront},
+		{spType: SPTypeSageMaker, termYears: int(TermThreeYear), paymentOption: PaymentOptionNoUpfront},
+		{spType: SPTypeDatabase, termYears: int(TermOneYear), paymentOption: PaymentOptionNoUpfront},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.spType), func(t *testing.T) {
 			t.Parallel()
 
-			withoutRegion := validSavingsPlansArgs()
-			withoutRegion.SPType = spType
-			withRegion := validSavingsPlansArgs()
-			withRegion.SPType = spType
-			withRegion.Region = "eu-west-1"
+			argsFor := func(region string) savingsPlansPurchaseArgs {
+				args := validSavingsPlansArgs()
+				args.SPType = string(tc.spType)
+				args.TermYears = tc.termYears
+				args.PaymentOption = string(tc.paymentOption)
+				args.Region = region
+				return args
+			}
+
+			withoutRegion := argsFor("")
+			withRegion := argsFor("eu-west-1")
 
 			recA, regionA, _, _, err := savingsPlanRecommendationFromArgs(withoutRegion)
 			require.NoError(t, err)
@@ -205,4 +230,135 @@ func TestResolveClientTrimsCredentialScope(t *testing.T) {
 				"ProviderConfig must see the same normalized credential the idempotency token scopes on")
 		})
 	}
+}
+
+// azurePurchaseIdentity drives a REAL Azure purchase through the tool's own
+// handler and reports the two things that decide purchase identity: the
+// idempotency token the provider would dedupe on, and the subscription the
+// ProviderConfig would authenticate with.
+//
+// It goes through handle() rather than re-deriving the scope expression
+// because that expression is exactly what is under test: a test that recomputed
+// azureCredentialScope(...) itself would stay green if handle() stopped calling
+// it.
+func azurePurchaseIdentity(t *testing.T, subscriptionID string) (token, cfgSubscriptionID string) {
+	t.Helper()
+
+	fake := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true}}
+	var gotCfg *provider.ProviderConfig
+	tool := &azureComputeRIPurchaseTool{
+		createProvider: func(_ string, cfg *provider.ProviderConfig) (provider.Provider, error) {
+			gotCfg = cfg
+			return &recordingProvider{
+				fakeProvider: &fakeProvider{name: "azure"},
+				client:       fake,
+				gotService:   new(common.ServiceType),
+				gotRegion:    new(string),
+			}, nil
+		},
+	}
+
+	args := validAzureComputeArgs()
+	args.AzureSubscriptionID = subscriptionID
+	args.DryRun = boolPtr(false)
+	args.Confirm = boolPtr(true)
+
+	_, resp, err := tool.handle(context.Background(), nil, args)
+	require.NoError(t, err)
+	require.True(t, resp.Success)
+	require.NotNil(t, gotCfg, "createProvider must have been called with a config")
+	return fake.lastOpts.IdempotencyToken, gotCfg.AzureSubscriptionID
+}
+
+// TestAzureSubscriptionCaseCannotForkIdempotencyToken is the regression guard
+// for a double-spend on the Azure purchase path.
+//
+// ARM subscription IDs are case-insensitive GUIDs, and nothing in
+// providers/azure canonicalizes them. So a purchase issued with
+// azure_subscription_id="ABC12345-..." (the spelling the Azure portal hands
+// you) that times out, then retried with the override omitted so the value
+// comes from a lower-case AZURE_SUBSCRIPTION_ID, named the SAME subscription
+// through two different idempotency tokens. Azure's dedupe
+// (reservations.FindReservationOrderByIdempotencyToken) matches on the token
+// tag across the tenant-wide order list, so the retry's lookup missed the
+// first order and bought a SECOND reservation.
+//
+// This is the same shape as the untrimmed-credential fork fixed in 44b6094 --
+// purchase identity forked by a difference the provider does not recognize --
+// and it fails on the pre-fix code, which folded the verbatim string into the
+// token.
+func TestAzureSubscriptionCaseCannotForkIdempotencyToken(t *testing.T) {
+	t.Parallel()
+
+	// Same subscription, two spellings: as pasted from the portal, and as
+	// AZURE_SUBSCRIPTION_ID conventionally holds it.
+	const (
+		portalCase = "ABC12345-1234-1234-1234-1234567890AB"
+		envCase    = "abc12345-1234-1234-1234-1234567890ab"
+		// A genuinely different subscription, as the control: the fix must
+		// canonicalize case without collapsing distinct accounts onto one
+		// token, which would dedupe away a legitimate second purchase.
+		otherSubscription = "99999999-9999-9999-9999-999999999999"
+	)
+
+	portalToken, portalCfg := azurePurchaseIdentity(t, portalCase)
+	envToken, envCfg := azurePurchaseIdentity(t, envCase)
+	otherToken, _ := azurePurchaseIdentity(t, otherSubscription)
+
+	assert.Equal(t, portalToken, envToken,
+		"the same subscription in two cases must derive ONE token -- two tokens means the retry misses Azure's tenant-wide lookup and buys a second reservation")
+	assert.NotEqual(t, portalToken, otherToken,
+		"two genuinely different subscriptions must still derive different tokens")
+
+	assert.Equal(t, envCase, portalCfg,
+		"ProviderConfig must see the same canonicalized subscription the token scopes on")
+	assert.Equal(t, envCase, envCfg)
+}
+
+// TestAWSProfileCaseIsPreserved pins the boundary of the Azure fix: AWS named
+// profiles are section names in ~/.aws/config and ARE case-sensitive, so
+// "Prod" and "prod" are two different profiles that may authenticate as two
+// different accounts.
+//
+// Without this, a later "just normalize credential scope everywhere" cleanup
+// would look harmless and would both send a real purchase to a profile that
+// may not exist and collapse two genuinely distinct accounts onto one
+// idempotency token.
+func TestAWSProfileCaseIsPreserved(t *testing.T) {
+	t.Parallel()
+
+	purchaseAs := func(profile string) (token, cfgProfile string) {
+		fake := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true}}
+		var gotCfg *provider.ProviderConfig
+		tool := &awsEC2RIPurchaseTool{
+			createProvider: func(_ string, cfg *provider.ProviderConfig) (provider.Provider, error) {
+				gotCfg = cfg
+				return &recordingProvider{
+					fakeProvider: &fakeProvider{name: "aws"},
+					client:       fake,
+					gotService:   new(common.ServiceType),
+					gotRegion:    new(string),
+				}, nil
+			},
+		}
+
+		args := validEC2Args()
+		args.AWSProfile = profile
+		args.DryRun = boolPtr(false)
+		args.Confirm = boolPtr(true)
+
+		_, resp, err := tool.handle(context.Background(), nil, args)
+		require.NoError(t, err)
+		require.True(t, resp.Success)
+		require.NotNil(t, gotCfg, "createProvider must have been called with a config")
+		return fake.lastOpts.IdempotencyToken, gotCfg.AWSProfile
+	}
+
+	upperToken, upperCfg := purchaseAs("Prod")
+	lowerToken, lowerCfg := purchaseAs("prod")
+
+	assert.Equal(t, "Prod", upperCfg, "an AWS profile name must reach the provider config verbatim")
+	assert.Equal(t, "prod", lowerCfg)
+	assert.NotEqual(t, upperToken, lowerToken,
+		"AWS profile names are case-sensitive, so two cases are two accounts and must keep two tokens -- the Azure case-folding fix must not leak here")
 }

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -93,6 +94,36 @@ func (t *azureComputeRIPurchaseTool) Register(s *mcp.Server) error {
 	return nil
 }
 
+// azureCredentialScope resolves the Azure subscription a purchase is billed
+// to, lower-cased. Every use of the subscription ID in this file goes through
+// it -- the idempotency scope in handle AND the ProviderConfig in resolveClient
+// -- so the two cannot normalize it differently. That is the same reason both
+// already route through CredentialScope rather than one of them reading
+// args.AzureSubscriptionID raw.
+//
+// Case folding is the load-bearing part. ARM subscription IDs are
+// case-insensitive GUIDs and nothing in providers/azure canonicalizes them
+// (resolveAzureSubscriptionID forwards the configured value verbatim into the
+// request path), so "ABC12345-..." pasted out of the portal and the lower-case
+// "abc12345-..." that AZURE_SUBSCRIPTION_ID normally holds address the SAME
+// subscription while deriving DIFFERENT idempotency tokens. A purchase issued
+// under the first spelling that times out, then retried under the second (the
+// override omitted, so the value comes from the environment), therefore misses
+// reservations.FindReservationOrderByIdempotencyToken -- which matches on the
+// token tag across the TENANT-wide order list -- and buys a SECOND reservation.
+// That is the defect family 44b6094 fixed for untrimmed input: purchase
+// identity forked by a difference the provider itself does not recognize.
+// Whitespace was normalized there; case was not.
+//
+// Deliberately Azure-only rather than folded into CredentialScope: AWS named
+// profiles are case-SENSITIVE (they are section names in ~/.aws/config), so
+// lower-casing one would point a real purchase at a profile that does not
+// exist, or at a different one that does. GCP project IDs are lower-case by
+// grammar and need no folding.
+func azureCredentialScope(explicit string, envVars ...string) string {
+	return strings.ToLower(CredentialScope(explicit, envVars...))
+}
+
 func (t *azureComputeRIPurchaseTool) handle(ctx context.Context, _ *mcp.CallToolRequest, args azureComputeRIPurchaseArgs) (*mcp.CallToolResult, PurchaseResponse, error) {
 	rec, region, dryRun, confirm, err := azureComputeRecommendationFromArgs(args)
 	if err != nil {
@@ -106,7 +137,7 @@ func (t *azureComputeRIPurchaseTool) handle(ctx context.Context, _ *mcp.CallTool
 		Confirm:         confirm,
 		ResolveClient:   t.resolveClient(args, region),
 		Nonce:           args.IdempotencyNonce,
-		CredentialScope: CredentialScope(args.AzureSubscriptionID, "AZURE_SUBSCRIPTION_ID"),
+		CredentialScope: azureCredentialScope(args.AzureSubscriptionID, "AZURE_SUBSCRIPTION_ID"),
 	})
 	if err != nil {
 		return nil, PurchaseResponse{}, err
@@ -178,9 +209,17 @@ func azureComputeRecommendationFromArgs(args azureComputeRIPurchaseArgs) (rec co
 // trimmed region returned by azureComputeRecommendationFromArgs -- not
 // args.Region -- so a real purchase never resolves the provider/service
 // client against a raw, un-trimmed value.
+//
+// The subscription goes through azureCredentialScope, the same function the
+// idempotency scope uses, so the account the token names and the account the
+// purchase authenticates against are normalized identically by construction.
+// No environment variable is passed here (unlike the handler's scope) because
+// an empty AzureSubscriptionID is how this config asks the provider factory to
+// resolve the subscription itself; ARM treats the ID case-insensitively, so
+// lower-casing it does not change which subscription is addressed.
 func (t *azureComputeRIPurchaseTool) resolveClient(args azureComputeRIPurchaseArgs, region string) ResolveClientFunc {
 	return func(ctx context.Context) (provider.ServiceClient, error) {
-		cfg := &provider.ProviderConfig{Name: string(common.ProviderAzure), AzureSubscriptionID: CredentialScope(args.AzureSubscriptionID), Region: region}
+		cfg := &provider.ProviderConfig{Name: string(common.ProviderAzure), AzureSubscriptionID: azureCredentialScope(args.AzureSubscriptionID), Region: region}
 		prov, err := t.createProvider(string(common.ProviderAzure), cfg)
 		if err != nil {
 			return nil, err

@@ -14,10 +14,20 @@ import (
 
 const searchRecommendationsName = "cudly_search_recommendations"
 
+// searchRecommendationsDescription ships in the tool schema, so the model
+// reads it as the contract for what calling this costs. It states the
+// guarantee that matters (nothing is ever bought) without claiming the call is
+// free: an AWS reservation search that omits term_years and payment_option
+// fans out to six Cost Explorer requests (searchCombos), and Cost Explorer
+// bills per request. Saying "spends no money" would invite a model to re-run
+// searches in a loop believing that has no cost.
 const searchRecommendationsDescription = "Search for reserved-capacity purchase recommendations (RI/SP/CUD) " +
-	"across AWS, Azure, or GCP. Read-only: makes no purchase and spends no money -- there is no dry_run or " +
-	"confirm parameter because nothing is ever bought. Use this first to find what to buy, then feed a result's " +
-	"region/resource_type/count into the matching cudly_<provider>_<product>_<action>_purchase tool."
+	"across AWS, Azure, or GCP. Read-only: makes no purchase and buys no commitment -- there is no dry_run or " +
+	"confirm parameter because nothing is ever bought. It is not free of charge, though: an AWS search issues " +
+	"one or more Cost Explorer requests (up to 6 when term_years and payment_option are both omitted, more " +
+	"with pagination), and AWS bills those per request, so avoid re-running the same search in a loop. Use " +
+	"this first to find what to buy, then feed a result's region/resource_type/count into the matching " +
+	"cudly_<provider>_<product>_<action>_purchase tool."
 
 // searchRecommendationsArgs mirrors common.RecommendationParams, adding the
 // provider selector and the optional per-call credential overrides from the
