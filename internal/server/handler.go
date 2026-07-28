@@ -9,6 +9,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/purchase"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/google/uuid"
@@ -286,8 +287,11 @@ func (app *Application) handleCleanupExpiredRecords(ctx context.Context) (map[st
 
 	// Clean up old execution records (30+ days)
 	if app.Config != nil {
-		const retentionDays = 30
-		deleted, err := app.Config.CleanupOldExecutions(ctx, retentionDays)
+		// Shared with the plan health score's lookback window
+		// (internal/api/plan_health.go): that score counts failed/canceled
+		// executions over exactly the period this sweep guarantees is
+		// retained, so the two must never drift apart.
+		deleted, err := app.Config.CleanupOldExecutions(ctx, config.DefaultExecutionTTLDays)
 		if err != nil {
 			log.Printf("Warning: failed to cleanup old executions: %v", err)
 		} else {

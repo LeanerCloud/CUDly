@@ -1286,6 +1286,19 @@ func (m *MockConfigStore) GetExecutionsByStatuses(ctx context.Context, statuses 
 	return v, args.Error(1)
 }
 
+// CountExecutionsByPlanAndStatus mocks the CountExecutionsByPlanAndStatus operation.
+func (m *MockConfigStore) CountExecutionsByPlanAndStatus(ctx context.Context, statuses []string, since time.Time) (map[string]config.ExecutionStatusCounts, error) {
+	args := m.Called(ctx, statuses, since)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(map[string]config.ExecutionStatusCounts)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected map[string]config.ExecutionStatusCounts, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
 // GetPlannedExecutions mocks the GetPlannedExecutions operation.
 func (m *MockConfigStore) GetPlannedExecutions(ctx context.Context, statuses []string, limit int) ([]config.PurchaseExecution, error) {
 	args := m.Called(ctx, statuses, limit)

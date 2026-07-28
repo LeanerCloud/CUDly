@@ -1204,6 +1204,76 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 	return s.queryExecutions(ctx, query, statuses, limit)
 }
 
+// CountExecutionsByPlanAndStatus returns, keyed by plan ID, the exact number
+// of executions in each of the supplied statuses that last changed state at
+// or after `since`.
+//
+// Aggregated with GROUP BY rather than counted from a GetExecutionsByStatuses
+// page: that method's DESC + LIMIT truncation would silently understate any
+// plan whose executions fall outside the newest `limit` rows, which for the
+// plan health score means an unhealthy plan quietly renders as healthy once
+// newer rows from other plans push its failures out of the window. The result
+// set here is bounded by plans x statuses, not by execution volume, so it
+// needs no limit of its own.
+//
+// The window is on updated_at, NOT scheduled_date, because for the terminal
+// statuses this method exists to count those are different dates pointing in
+// opposite directions. A plan's executions are created up front for the whole
+// ramp, so a pending row carries a scheduled_date months in the FUTURE;
+// canceling it (CancelExecutionAtomic) leaves that future date untouched.
+// Windowing on scheduled_date would therefore count a purchase cancelled
+// today under a date next year, and answer "how many rows are scheduled
+// recently-or-later" instead of "how many changed state recently".
+// updated_at is stamped by CancelExecutionAtomic and
+// TransitionExecutionStatus, and backstopped by the
+// update_purchase_executions_updated_at trigger, so it is when the row
+// actually entered the status being counted.
+//
+// plan_id has been nullable since migration 000033 (direct-execute purchases
+// from the Recommendations page have no originating plan, and deleting a plan
+// SET NULLs its executions). Those rows belong to no plan and are excluded in
+// SQL; the scan still goes through sql.NullString so a NULL can never turn a
+// per-plan count into a scan error that blanks the score for every plan.
+func (s *PostgresStore) CountExecutionsByPlanAndStatus(ctx context.Context, statuses []string, since time.Time) (map[string]ExecutionStatusCounts, error) {
+	counts := make(map[string]ExecutionStatusCounts)
+	if len(statuses) == 0 {
+		return counts, nil
+	}
+
+	rows, err := s.db.Query(ctx, `
+		SELECT plan_id, status, COUNT(*)
+		FROM purchase_executions
+		WHERE status = ANY($1)
+		  AND plan_id IS NOT NULL
+		  AND updated_at >= $2
+		GROUP BY plan_id, status
+	`, statuses, since)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count executions by plan and status: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var planID sql.NullString
+		var status string
+		var n int
+		if scanErr := rows.Scan(&planID, &status, &n); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan execution status count: %w", scanErr)
+		}
+		if !planID.Valid {
+			continue
+		}
+		if counts[planID.String] == nil {
+			counts[planID.String] = ExecutionStatusCounts{}
+		}
+		counts[planID.String][status] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate execution status counts: %w", err)
+	}
+	return counts, nil
+}
+
 // GetPlannedExecutions returns executions whose Status is any of the supplied
 // values, ordered by scheduled_date ASC (soonest first), capped at `limit`.
 // Used by the Planned Purchases handler where the user expects to act on
@@ -1627,50 +1697,117 @@ func (s *PostgresStore) GetScheduledExecutionsDue(ctx context.Context) ([]Purcha
 
 // CleanupOldExecutions deletes purchase executions older than retentionDays.
 //
-// Two independent cleanup branches, each with its own retention window so
+// Three independent cleanup branches, each with its own retention window so
 // that a row far in one dimension doesn't block cleanup in the other:
 //
-//  1. Terminal-state cleanup: `status IN ('completed', 'cancelled', 'canceled') AND
-//     scheduled_date < NOW() - retention`. Both spellings are included to
-//     cover legacy rows ('cancelled') and new code rows ('canceled', canonical
-//     US spelling per StatusCanceled / migration 000089). Keeps recent
-//     completions visible in the UI for at least `retention` days before purging.
+//  1. Completed-state cleanup: `status = 'completed' AND scheduled_date <
+//     NOW() - retention`. Keeps recent completions visible in the UI for at
+//     least `retention` days before purging. `scheduled_date` is the right
+//     clock here because a completed row executed on (or very near) the day
+//     it was scheduled for.
 //
-//  2. Expired-execution cleanup: `expires_at IS NOT NULL AND expires_at <
-//     NOW() - retention`. A row whose approval token has been expired
-//     for longer than `retention` is dead — the user can no longer act
-//     on it, and no transition code ever writes an 'expired' status
-//     (the valid_status CHECK doesn't include it), so without this
-//     branch the row would accumulate indefinitely.
+//  2. Canceled-state cleanup: `status IN ('cancelled', 'canceled') AND
+//     updated_at < NOW() - retention`. Both spellings are included to cover
+//     legacy rows ('cancelled') and new code rows ('canceled', canonical US
+//     spelling per StatusCanceled / migration 000089).
 //
-// The two branches are OR'd — a row that qualifies under EITHER is
-// deleted, regardless of the other column. An earlier revision of this
-// function incorrectly AND'd the `scheduled_date` gate with both
-// branches, which meant pending rows with a far-future `scheduled_date`
-// but a long-past `expires_at` never got cleaned up (a user scheduling a
-// 2-year-out purchase with a 30-day approval window would leave a dead
-// row accumulating for 1.9 years after the approval expired).
+//     This branch retains on `updated_at`, NOT `scheduled_date`, and must
+//     stay that way: CountExecutionsByPlanAndStatus windows the plan health
+//     score's canceled count on `updated_at` over exactly this retention
+//     period (see internal/api/plan_health.go planHealthLookbackDays), and
+//     CancelExecutionAtomic stamps `updated_at` while leaving
+//     `scheduled_date` untouched. Retaining on `scheduled_date` therefore
+//     purged rows the score was still counting: cancel a purchase whose
+//     scheduled_date is already past the horizon (a plan's rows are created
+//     up front, and parseCreatePurchasesRequest accepts a past start date)
+//     and the next sweep deleted it the same day, silently raising that
+//     plan's health score by up to 20 points overnight with no operator
+//     action. Nothing accumulates indefinitely: a genuinely old canceled
+//     row still has an old `updated_at`.
 //
-// NULL `expires_at` is excluded from branch 2 so rows that never had an
-// expiration deadline are safe from expiry-based cleanup.
+//     This cuts the other way too, and the change is user-visible: a
+//     canceled row with a FUTURE `scheduled_date` used to be retained
+//     forever, because `scheduled_date < NOW() - retention` was never true
+//     for it. It now leaves History `retention` days after the
+//     cancellation rather than `retention` days after the date it was
+//     scheduled for, so a purchase canceled today for a 2-year-out date
+//     disappears in a month instead of in two years. That closes an
+//     unbounded-retention leak and is the behavior the health window
+//     already assumed.
+//
+//  3. Expired-row cleanup: `expires_at IS NOT NULL AND expires_at < NOW() -
+//     retention`, for any status the health score does not count. This is
+//     the row's own TTL column (SavePurchaseExecution writes it from
+//     PurchaseExecution.TTL), NOT the approval-token deadline -- that is a
+//     separate column, `approval_token_expires_at`, added by migration
+//
+//  000051. A row whose TTL lapsed longer than `retention` ago is dead, so
+//     without this branch it would accumulate indefinitely.
+//
+//     Every status in HealthScoredExecutionStatuses is excluded here, which
+//     is the whole reason that slice is exported rather than spelled out
+//     twice. `expires_at` is written once at insert and never rewritten
+//     when a row later reaches a terminal status, so it can be arbitrarily
+//     older than the terminal transition. Without the exclusion, a row that
+//     failed or was canceled TODAY but carries a lapsed `expires_at` is
+//     purged by this branch the same day, while the score is still counting
+//     it -- reintroducing through this branch the exact overnight score
+//     jump branch 2 exists to prevent, and at up to -40 for `failed`, twice
+//     canceled's worst case. Their own terminal-status branches govern them.
+//
+//     `failed` deliberately has no cleanup branch of its own: the health
+//     score's lookback comment (internal/api/plan_health.go
+//     planHealthLookbackDays) documents that this sweep "never deletes
+//     failed ones", and the score's window depends on that being true.
+//
+//     Note on reachability: `expires_at` currently has exactly one writer,
+//     SavePurchaseExecution via timeFromTTL(execution.TTL), and no
+//     production path assigns PurchaseExecution.TTL, so rows created by
+//     current code leave it NULL and this branch is inert for them. It can
+//     still hold non-NULL values on legacy imported rows, which is why the
+//     exclusion is written defensively rather than omitted.
+//
+// The branches are OR'd: a row that qualifies under ANY is deleted,
+// regardless of the other columns. An earlier revision of this function
+// incorrectly AND'd the `scheduled_date` gate with both branches, which
+// meant pending rows with a far-future `scheduled_date` but a long-past
+// `expires_at` never got cleaned up (a 2-year-out purchase whose row TTL
+// lapsed would leave a dead row accumulating for 1.9 years). Keep each
+// branch fully parenthesized so a future edit can't change the predicate's
+// meaning through AND/OR precedence.
+//
+// NULL `expires_at` is excluded from branch 3 so rows that never had a TTL
+// are safe from expiry-based cleanup -- which, per the reachability note
+// above, is every row current code writes.
 func (s *PostgresStore) CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error) {
-	// Both spellings are included: 'cancelled' (legacy, pre-migration 000089
-	// rows) and 'canceled' (canonical, written by new code after the
+	// Branch 2 lists both spellings: 'cancelled' (legacy, pre-migration
+	// 000089 rows) and 'canceled' (canonical, written by new code after the
 	// follow-up to #1277). #1278 will drop 'cancelled' once all rows are
 	// normalized.
+	//
+	// Branch 3's exclusion is parameterized from
+	// HealthScoredExecutionStatuses instead of repeating a literal list, so
+	// a status added to the plan health score extends this exclusion
+	// automatically and the two cannot drift. `status` is NOT NULL
+	// (migration 000001), so `<> ALL` is not exposed to three-valued logic.
 	query := `
 		DELETE FROM purchase_executions
 		WHERE (
-		        status IN ('completed', 'cancelled', 'canceled')
+		        status = 'completed'
 		    AND scheduled_date < NOW() - INTERVAL '1 day' * $1
 		      )
 		   OR (
-		        expires_at IS NOT NULL
-		    AND expires_at    < NOW() - INTERVAL '1 day' * $1
+		        status IN ('cancelled', 'canceled')
+		    AND updated_at     < NOW() - INTERVAL '1 day' * $1
+		      )
+		   OR (
+		        status <> ALL($2)
+		    AND expires_at IS NOT NULL
+		    AND expires_at     < NOW() - INTERVAL '1 day' * $1
 		      )
 	`
 
-	result, err := s.db.Exec(ctx, query, retentionDays)
+	result, err := s.db.Exec(ctx, query, retentionDays, HealthScoredExecutionStatuses)
 	if err != nil {
 		return 0, fmt.Errorf("failed to cleanup old executions: %w", err)
 	}

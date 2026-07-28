@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -33,6 +34,10 @@ func TestHandler_listPlans(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
+	// listPlans now also counts each plan's failed/canceled executions to
+	// compute its health-score badge (issue #340 follow-up).
+	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses, mock.AnythingOfType("time.Time")).
+		Return(map[string]config.ExecutionStatusCounts{}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -45,6 +50,12 @@ func TestHandler_listPlans(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Len(t, result.Plans, 2)
+	// Neither seeded plan has ramp-schedule or execution data that would
+	// trigger a penalty, so both score a perfect 100.
+	require.NotNil(t, result.Plans[0].HealthScore)
+	require.NotNil(t, result.Plans[1].HealthScore)
+	assert.Equal(t, 100, *result.Plans[0].HealthScore)
+	assert.Equal(t, 100, *result.Plans[1].HealthScore)
 }
 
 func TestHandler_listPlans_AccountIDsFilter(t *testing.T) {
@@ -67,6 +78,8 @@ func TestHandler_listPlans_AccountIDsFilter(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
 	mockStore.On("ListPurchasePlans", ctx, expectedFilter).Return(plans, nil)
+	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses, mock.AnythingOfType("time.Time")).
+		Return(map[string]config.ExecutionStatusCounts{}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -81,6 +94,195 @@ func TestHandler_listPlans_AccountIDsFilter(t *testing.T) {
 
 	assert.Len(t, result.Plans, 1)
 	assert.Equal(t, "Account Plan", result.Plans[0].Name)
+}
+
+// TestHandler_listPlans_HealthScoreReflectsFailedExecutions is the
+// end-to-end wiring check for the issue #340 health-score badge: a plan
+// with failed executions in the store must come back from listPlans with a
+// penalized HealthScore and the matching HealthFactors entry, and a
+// failed execution belonging to a DIFFERENT plan must not bleed into this
+// plan's score.
+func TestHandler_listPlans_HealthScoreReflectsFailedExecutions(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+
+	troubledPlanID := "11111111-1111-1111-1111-111111111111"
+	otherPlanID := "22222222-2222-2222-2222-222222222222"
+	plans := []config.PurchasePlan{
+		{ID: troubledPlanID, Name: "Troubled Plan", Enabled: true},
+		{ID: otherPlanID, Name: "Other Plan", Enabled: true},
+	}
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
+	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses, mock.AnythingOfType("time.Time")).
+		Return(map[string]config.ExecutionStatusCounts{
+			troubledPlanID: {"failed": 2},
+			otherPlanID:    {config.StatusCanceled: 1},
+		}, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-token"}}
+
+	result, err := handler.listPlans(ctx, req, map[string]string{})
+	require.NoError(t, err)
+	require.Len(t, result.Plans, 2)
+
+	byID := make(map[string]PlanWithHealth, 2)
+	for _, p := range result.Plans {
+		byID[p.ID] = p
+	}
+
+	troubled := byID[troubledPlanID]
+	require.NotNil(t, troubled.HealthScore)
+	assert.Equal(t, 100-2*penaltyPerFailedExec, *troubled.HealthScore)
+	require.Len(t, troubled.HealthFactors, 1)
+	assert.Equal(t, HealthFactorFailedExecutions, troubled.HealthFactors[0].Code)
+
+	other := byID[otherPlanID]
+	require.NotNil(t, other.HealthScore)
+	assert.Equal(t, 100-penaltyPerCanceledExec, *other.HealthScore)
+	require.Len(t, other.HealthFactors, 1)
+	assert.Equal(t, HealthFactorCanceledExecutions, other.HealthFactors[0].Code)
+}
+
+// TestHandler_listPlans_HealthScoreUnknownOnCountsFetchError pins the
+// no-fabricated-score contract: when the execution counts can't be read the
+// request still succeeds (the Plans page is not primarily about execution
+// history), but HealthScore stays nil so it serializes as null and the UI
+// renders an explicit "unknown" badge. Substituting any concrete default --
+// 100 reads as healthy, 0 as broken -- would put a number in front of an
+// operator that is indistinguishable from a measured one.
+func TestHandler_listPlans_HealthScoreUnknownOnCountsFetchError(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+
+	plans := []config.PurchasePlan{
+		{ID: "11111111-1111-1111-1111-111111111111", Name: "Some Plan", Enabled: true},
+	}
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
+	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses, mock.AnythingOfType("time.Time")).
+		Return(nil, errors.New("db unavailable"))
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-token"}}
+
+	result, err := handler.listPlans(ctx, req, map[string]string{})
+	require.NoError(t, err)
+	require.Len(t, result.Plans, 1)
+	assert.Nil(t, result.Plans[0].HealthScore)
+	assert.Empty(t, result.Plans[0].HealthFactors)
+
+	// The wire form must carry an explicit null, not omit the key: the UI
+	// distinguishes null ("unknown") from absent ("older API response").
+	encoded, err := json.Marshal(result.Plans[0])
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"health_score":null`)
+}
+
+// TestHandler_listPlans_HealthUsesExactCountsNotTruncatedPage guards the
+// truncation bug: health scoring must read exact per-plan counts aggregated
+// in SQL, never count rows out of GetExecutionsByStatuses, whose DESC+LIMIT
+// page is capped across ALL plans. With enough execution rows system-wide, a
+// plan's own failures fall outside that page and it renders a confident
+// "healthy" badge while actually being unhealthy.
+func TestHandler_listPlans_HealthUsesExactCountsNotTruncatedPage(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+
+	planID := "11111111-1111-1111-1111-111111111111"
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).
+		Return([]config.PurchasePlan{{ID: planID, Name: "Old Failures", Enabled: true}}, nil)
+	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses, mock.AnythingOfType("time.Time")).
+		Return(map[string]config.ExecutionStatusCounts{planID: {"failed": 3}}, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-token"}}
+
+	result, err := handler.listPlans(ctx, req, map[string]string{})
+	require.NoError(t, err)
+	require.Len(t, result.Plans, 1)
+	require.NotNil(t, result.Plans[0].HealthScore)
+	assert.Equal(t, 100-3*penaltyPerFailedExec, *result.Plans[0].HealthScore)
+
+	// The capped page must not be consulted at all: reintroducing it would
+	// silently reinstate the truncation.
+	mockStore.AssertNotCalled(t, "GetExecutionsByStatuses", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestHandler_listPlans_HealthCountsUseTheLookbackWindow pins that the
+// documented window actually reaches the store. Without a bound the counts
+// cover whatever history happened to survive cleanup, and since
+// CleanupOldExecutions purges terminal rows but never "failed" ones, a plan
+// that failed once years ago would stay penalized forever.
+func TestHandler_listPlans_HealthCountsUseTheLookbackWindow(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).
+		Return([]config.PurchasePlan{{ID: "11111111-1111-1111-1111-111111111111", Enabled: true}}, nil)
+
+	var gotSince time.Time
+	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses, mock.MatchedBy(func(since time.Time) bool {
+		gotSince = since
+		return true
+	})).Return(map[string]config.ExecutionStatusCounts{}, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-token"}}
+
+	before := time.Now()
+	_, err := handler.listPlans(ctx, req, map[string]string{})
+	require.NoError(t, err)
+
+	// The window opens planHealthLookbackDays before the request, give or
+	// take the wall-clock time the handler itself took.
+	expected := before.AddDate(0, 0, -planHealthLookbackDays)
+	assert.WithinDuration(t, expected, gotSince, time.Minute)
+	assert.True(t, gotSince.Before(before), "since must be in the past, got %v", gotSince)
+}
+
+// TestHandler_listPlans_EmptyListSkipsCountsQuery: with no plans to score
+// there is nothing to attach health to, so the aggregate query must not run.
+func TestHandler_listPlans_EmptyListSkipsCountsQuery(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).
+		Return([]config.PurchasePlan{}, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-token"}}
+
+	result, err := handler.listPlans(ctx, req, map[string]string{})
+	require.NoError(t, err)
+	assert.Empty(t, result.Plans)
+	mockStore.AssertNotCalled(t, "CountExecutionsByPlanAndStatus", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestHandler_createPlan(t *testing.T) {

@@ -277,6 +277,12 @@ func (r *RampSchedule) IsComplete() bool {
 	return r.CurrentStep >= r.TotalSteps
 }
 
+// ExecutionStatusCounts maps an execution status value to the number of
+// executions in that status, for a single plan. Returned by
+// CountExecutionsByPlanAndStatus; a status with no rows is simply absent
+// from the map, so a plain lookup yields the correct zero.
+type ExecutionStatusCounts map[string]int
+
 // PurchaseExecution represents a single execution of a purchase plan.
 type PurchaseExecution struct {
 	PlanID           string                 `json:"plan_id" dynamodbav:"plan_id"`
@@ -391,6 +397,35 @@ const StatusCanceled = "canceled"
 // (#1278) normalizes all rows to StatusCanceled once old code is gone, after
 // which every reference to this constant can be deleted.
 const LegacyStatusCanceled = "cancel" + "led"
+
+// StatusFailed is the terminal status written when an execution's purchase
+// attempt errors out, and by the stuck-purchase reaper (internal/purchase/
+// reaper.go) for rows left in approved/running past its threshold.
+const StatusFailed = "failed"
+
+// HealthScoredExecutionStatuses are the execution statuses the plan health
+// score counts (internal/api/plan_health.go). It lives here, in the package
+// that owns both the status constants and the retention sweep, because two
+// unrelated-looking pieces of code have to agree on it exactly:
+//
+//   - CountExecutionsByPlanAndStatus is asked for these statuses and windows
+//     them on updated_at.
+//   - CleanupOldExecutions must not delete a row in one of these statuses
+//     while that window still covers it. Retaining on any other clock lets
+//     the sweep purge a row the score is still counting, which shows up as a
+//     plan's health score jumping overnight with no operator action.
+//
+// Keeping one exported slice rather than a literal list on each side is what
+// makes that agreement structural: adding a status to the score
+// automatically extends the sweep's exclusion, so the two cannot drift.
+//
+// Both spellings of canceled are present for the duration of the
+// expand-contract rename (migration 000089, contract in #1278).
+var HealthScoredExecutionStatuses = []string{
+	StatusFailed,
+	StatusCanceled,
+	LegacyStatusCanceled,
+}
 
 // IsCancelable reports whether an execution may still be canceled. Only the
 // pre-purchase states ("pending"/"notified"/"scheduled") qualify: once a row

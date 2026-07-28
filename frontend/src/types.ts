@@ -160,6 +160,11 @@ export interface LocalPlan {
   next_execution_date?: string;
   custom_step_percent?: number;
   custom_interval_days?: number;
+  // Read-time-only health-score badge data (issue #340 follow-up). Optional
+  // so a response from before this feature shipped still renders cleanly;
+  // explicitly null when the backend could not compute a score.
+  health_score?: number | null;
+  health_factors?: api.PlanHealthFactor[];
 }
 
 export interface SavePlanData {

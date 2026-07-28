@@ -3070,4 +3070,183 @@ describe('Plans Module', () => {
       expect(paymentSelect.value).toBe('all-upfront');
     });
   });
+
+  // Issue #340 follow-up (PR #376): per-plan health-score badge.
+  describe('plan health-score badge', () => {
+    // Mirror of the band thresholds in plans.ts. Declared here rather than
+    // imported because plans.ts does not export them; if they diverge the
+    // boundary cases below fail, which is the point.
+    const HEALTH_SCORE_GOOD_BOUNDARY = 80;
+    const HEALTH_SCORE_WARN_BOUNDARY = 50;
+
+    const basePlan = {
+      id: 'plan-1',
+      name: 'Test Plan',
+      enabled: true,
+      auto_purchase: true,
+      services: {
+        ec2: { provider: 'aws', service: 'ec2', enabled: true, term: 1, payment: 'all-upfront', coverage: 80 }
+      },
+      ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0 }
+    };
+
+    test('renders a green badge for a healthy score (>= 80)', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{ ...basePlan, health_score: 90, health_factors: [] }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      expect(list?.innerHTML).toContain('badge-success');
+      expect(list?.innerHTML).toContain('Health: 90');
+    });
+
+    test('renders an amber badge for a medium score (50-79)', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{
+          ...basePlan,
+          health_score: 65,
+          health_factors: [{ code: 'behind_schedule', penalty: 20, note: 'on step 1, expected step 3 by now' }]
+        }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      expect(list?.innerHTML).toContain('badge-warning');
+      expect(list?.innerHTML).toContain('Health: 65');
+    });
+
+    test('renders a red badge for a poor score (< 50)', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{
+          ...basePlan,
+          health_score: 30,
+          health_factors: [
+            { code: 'overdue', penalty: 30, note: 'next purchase date has passed' },
+            { code: 'failed_executions', penalty: 40, note: '4 failed execution(s)' }
+          ]
+        }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      expect(list?.innerHTML).toContain('badge-danger');
+      expect(list?.innerHTML).toContain('Health: 30');
+    });
+
+    test('omits the badge entirely when health_score is absent (pre-feature API response)', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({ plans: [{ ...basePlan }] });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      expect(list?.innerHTML).not.toContain('Health:');
+    });
+
+    // Regression guard for the fabricated-score bug: when the backend can't
+    // compute a score it sends null, and the UI must say so. Pre-fix the
+    // backend substituted 100 on a store failure, painting every plan with a
+    // confident green "healthy" badge built from data it never read.
+    test('renders an explicit unknown badge when health_score is null', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{ ...basePlan, health_score: null }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      expect(list?.innerHTML).toContain('Health: unknown');
+      expect(list?.innerHTML).toContain('badge-muted');
+      // Critically, it must NOT be dressed up as a healthy score.
+      expect(list?.innerHTML).not.toContain('badge-success');
+      expect(list?.innerHTML).not.toContain('Health: 100');
+    });
+
+    // Band boundaries, not just mid-band samples: with only 90/65/30 the
+    // suite cannot tell `>=` from `>`, so flipping either comparison would
+    // silently reclassify every plan sitting exactly on a threshold.
+    test.each([
+      [HEALTH_SCORE_GOOD_BOUNDARY, 'badge-success'],
+      [HEALTH_SCORE_GOOD_BOUNDARY - 1, 'badge-warning'],
+      [HEALTH_SCORE_WARN_BOUNDARY, 'badge-warning'],
+      [HEALTH_SCORE_WARN_BOUNDARY - 1, 'badge-danger'],
+    ])('score %i sits in the %s band', async (score, expectedClass) => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{ ...basePlan, health_score: score, health_factors: [] }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      expect(list?.innerHTML).toContain(expectedClass);
+      expect(list?.innerHTML).toContain(`Health: ${score}`);
+    });
+
+    // A score outside the 0-100 the API contracts to send is no more
+    // trustworthy than a NaN. Banding it would paint -1 red and 101 green as
+    // though both had been measured.
+    test.each([-1, 101, 1000])('renders unknown for out-of-range score %i', async (score) => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{ ...basePlan, health_score: score }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      expect(list?.innerHTML).toContain('Health: unknown');
+      expect(list?.innerHTML).toContain('badge-muted');
+      expect(list?.innerHTML).not.toContain(`Health: ${score}`);
+    });
+
+    // A garbled score off the wire is an uncomputable score, so it must
+    // reach the same "unknown" badge rather than silently vanishing (which
+    // reads as "this deploy predates the feature").
+    test('renders unknown rather than dropping the badge for a non-finite score', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{ ...basePlan, health_score: NaN }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      expect(list?.innerHTML).toContain('Health: unknown');
+      expect(list?.innerHTML).not.toContain('Health: NaN');
+    });
+
+    test('escapes health factor notes in the tooltip (XSS regression)', async () => {
+      const maliciousNote = '"><img src=x onerror=alert(1)>';
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{
+          ...basePlan,
+          health_score: 40,
+          health_factors: [{ code: 'stalled', penalty: 15, note: maliciousNote }]
+        }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      // Pre-fix, the unescaped `"` would close the title attribute early and
+      // the rest would parse as a live <img onerror> element. Post-fix the
+      // quote is entity-encoded so the whole malicious string stays inert
+      // text inside the title attribute -- assert on the parsed DOM (not the
+      // raw HTML string, since HTML serializers are free to leave `<`/`>`
+      // un-re-escaped inside an already-safe attribute value).
+      expect(list?.querySelector('img')).toBeNull();
+      const badge = list?.querySelector('.badge-danger[title]');
+      expect(badge?.getAttribute('title')).toContain(maliciousNote);
+    });
+  });
 });

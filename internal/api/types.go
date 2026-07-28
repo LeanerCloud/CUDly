@@ -442,7 +442,25 @@ type RecommendationDetailResponse struct {
 
 // PlansResponse holds the purchase plans response.
 type PlansResponse struct {
-	Plans []config.PurchasePlan `json:"plans"`
+	Plans []PlanWithHealth `json:"plans"`
+}
+
+// PlanWithHealth wraps a config.PurchasePlan with its computed health-score
+// badge data for the Plans list view (issue #340 follow-up, PR #376). The
+// score/factors are derived at read time from the plan's own attributes and
+// its recent executions -- see computePlanHealth in plan_health.go -- and
+// are never persisted, so they can't drift into the config.PurchasePlan
+// struct (and by extension the DynamoDB/Postgres columns backing it).
+//
+// HealthScore is a pointer so "not computable" stays distinguishable from a
+// real score: when the execution counts the score depends on can't be read,
+// the field serializes as null and the UI renders an explicit "unknown"
+// badge. Any concrete default would be a fabricated number an operator
+// could not tell apart from a measured one.
+type PlanWithHealth struct {
+	config.PurchasePlan
+	HealthScore   *int               `json:"health_score"`
+	HealthFactors []PlanHealthFactor `json:"health_factors,omitempty"`
 }
 
 // CurrentUserResponse holds the current user response.

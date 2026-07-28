@@ -45,7 +45,46 @@ func (h *Handler) listPlans(ctx context.Context, req *events.LambdaFunctionURLRe
 		}
 	}
 
-	return &PlansResponse{Plans: plans}, nil
+	return &PlansResponse{Plans: h.attachPlanHealth(ctx, plans, now)}, nil
+}
+
+// attachPlanHealth computes the per-plan health-score badge (issue #340
+// follow-up) for every plan in the list, from exact per-plan execution
+// counts over the trailing planHealthLookbackDays
+// (config.StoreInterface.CountExecutionsByPlanAndStatus, aggregated in SQL)
+// rather than from a capped page of execution rows, which would understate
+// plans whose executions fall outside the newest page.
+//
+// If the counts fetch fails, every plan's HealthScore is left nil, which
+// serializes as `"health_score": null` and renders as an explicit "unknown"
+// badge. A score is a number operators make purchasing decisions from, so
+// an uncomputable one must stay absent: substituting a default (100 reads
+// as "healthy", 0 as "broken") would be a fabricated number indistinguishable
+// from a real one. The request itself still succeeds -- the Plans page is
+// not primarily about execution history, so a 500 here would be a worse
+// trade than a visibly-unknown badge.
+func (h *Handler) attachPlanHealth(ctx context.Context, plans []config.PurchasePlan, now time.Time) []PlanWithHealth {
+	result := make([]PlanWithHealth, len(plans))
+	for i := range plans {
+		result[i] = PlanWithHealth{PurchasePlan: plans[i]}
+	}
+	if len(plans) == 0 {
+		return result
+	}
+
+	since := now.AddDate(0, 0, -planHealthLookbackDays)
+	countsByPlan, err := h.config.CountExecutionsByPlanAndStatus(ctx, planHealthExecutionStatuses, since)
+	if err != nil {
+		logging.Warnf("listPlans: CountExecutionsByPlanAndStatus failed, plan health reported as unknown: %v", err)
+		return result
+	}
+
+	for i := range plans {
+		score, factors := computePlanHealth(plans[i], now, countsByPlan[plans[i].ID])
+		result[i].HealthScore = &score
+		result[i].HealthFactors = factors
+	}
+	return result
 }
 
 // calculateNextExecutionDate calculates the next execution date for a plan.

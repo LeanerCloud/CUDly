@@ -227,6 +227,24 @@ export interface Plan {
   // Such plans are surfaced under an "Unassigned" section in the Plans UI
   // so operators can find and re-scope them (issue #973).
   unassigned?: boolean;
+  // Health score/factors are computed at read time on GET /plans (never
+  // persisted) by computePlanHealth server-side (issue #340 follow-up).
+  // Optional so an older cached response served during a partial deploy
+  // still renders the card cleanly -- the badge just doesn't appear.
+  // Explicitly null when the backend could not compute a score; clients
+  // must render that as "unknown" rather than substituting a default.
+  health_score?: number | null;
+  health_factors?: PlanHealthFactor[];
+}
+
+// PlanHealthFactor is one penalty subtracted from a plan's health score
+// (issue #340 follow-up). `code` is a fixed vocabulary from the backend
+// (see internal/api/plan_health.go); `note` is a human-readable reason
+// suitable for the health-badge tooltip.
+export interface PlanHealthFactor {
+  code: string;
+  penalty: number;
+  note: string;
 }
 
 export interface CreatePlanRequest {
