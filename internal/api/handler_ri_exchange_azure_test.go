@@ -48,18 +48,22 @@ func (m *mockAzureExchangeOpsClient) ExecuteExchange(ctx context.Context, sessio
 	return result, args.Error(1)
 }
 
-// ownsAzureSource stubs the tenant-wide reservation listing that the issue
-// #1527 ownership gate consults, reporting "res-1" (the source every valid
-// request body below names) as billed to subscription "sub-1".
+// ownsAzureSource stubs the tenant-wide reservation listing that the
+// source-side gates consult, reporting "res-1" (the source every valid
+// request body below names) as billed to subscription "sub-1" and located in
+// eastus -- the same region those bodies target, i.e. an ordinary same-region
+// exchange. The region matters because exchangeRegions folds each source's
+// region into the Regions constraint dimension; leaving it empty would put
+// unknownRegionConstraint into every downstream test's constraint set.
 //
-// Registered on tests whose subject lies downstream of the gate, so they
+// Registered on tests whose subject lies downstream of the gates, so they
 // reach the behavior they actually assert. Maybe() because tests that are
-// refused earlier -- by validation, allowed_accounts scope, or the
-// permission constraints -- never get this far, and must not be required
-// to. Tests whose subject IS the gate register their own listing instead.
+// refused earlier -- by validation or allowed_accounts scope -- never get
+// this far, and must not be required to. Tests whose subject IS a source-side
+// gate register their own listing instead.
 func ownsAzureSource(m *mockAzureExchangeOpsClient) {
 	m.On("ListExchangeableReservations", mock.Anything).Return([]azurecompute.ExchangeableReservation{
-		{ReservationID: "res-1", BillingScopeID: "/subscriptions/sub-1", Quantity: 1},
+		{ReservationID: "res-1", BillingScopeID: "/subscriptions/sub-1", Region: "eastus", Quantity: 1},
 	}, nil).Maybe()
 }
 
@@ -1262,7 +1266,8 @@ func TestExecuteAzureExchange_ConstraintSetPinsAllDimensions(t *testing.T) {
 	assert.Equal(t, []string{"acct-sub-1"}, c.AccountIDs, "AccountIDs must name the CloudAccount the exchange is billed to")
 	assert.Equal(t, []string{"azure"}, c.Providers)
 	assert.Equal(t, []string{"compute"}, c.Services)
-	assert.Equal(t, []string{"eastus", "westeurope"}, c.Regions, "Regions must cover every target location, de-duplicated in first-seen order")
+	assert.Equal(t, []string{"eastus", "westeurope"}, c.Regions,
+		"Regions must cover every target location plus every source region, de-duplicated in first-seen order (the source here is in eastus, which the targets already name)")
 	assert.InDelta(t, 100.00, c.MaxPurchaseAmount, 0.0001)
 }
 
@@ -1750,6 +1755,12 @@ func TestGetAzureCompatibleOfferings_ForeignSourceReservationRefused(t *testing.
 // cannot establish ownership, and permitting the exchange would restore the
 // exact gap the gate exists to close. 502 rather than 500 because the
 // upstream dependency, not this service, is what failed.
+//
+// The handler is built inline rather than via newAzureExecuteMoneyPathHandler
+// because the listing now precedes the constraint check -- the Regions
+// dimension cannot be assembled without knowing where the sources live -- so
+// a listing failure legitimately returns before HasPermissionForConstraintsAPI
+// is ever called, and that expectation must be optional here.
 func TestExecuteAzureExchange_SourceOwnershipLookupFailureRefuses(t *testing.T) {
 	ctx := context.Background()
 	opsClient := new(mockAzureExchangeOpsClient)
@@ -1757,7 +1768,24 @@ func TestExecuteAzureExchange_SourceOwnershipLookupFailureRefuses(t *testing.T) 
 		Return(nil, fmt.Errorf("azure: list reservations: transport timeout"))
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })
 
-	h := newAzureExecuteMoneyPathHandler(t, opsClient)
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
+	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange", mock.Anything).
+		Return(true, nil).Maybe()
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	mockStore := &MockConfigStore{}
+	mockStore.GetCloudAccountByExternalIDFn = func(_ context.Context, _, _ string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: "acct-1"}, nil
+	}
+
+	h := &Handler{
+		auth:                 mockAuth,
+		config:               mockStore,
+		azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient },
+	}
 	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer tok"},
 		Body:    validAzureExecuteBody,
@@ -1865,4 +1893,257 @@ func TestRequireAzureSourceOwnership_DenialsAreIndistinguishable(t *testing.T) {
 		"a caller must not be able to tell an existing foreign reservation from a nonexistent one")
 	assert.NotContains(t, foreign.Error(), "sub-2",
 		"the owning subscription must never be echoed back")
+}
+
+// --- the Regions constraint must bound the SOURCES too, not only the targets ---
+
+// newAzureRegionScopedHandler builds a handler whose caller holds
+// execute:ri-exchange constrained to exactly one region, emulating
+// auth.matchAllRegionsConstraint's all-match rule: the permission grants the
+// request only when EVERY region in the submitted constraint set is the
+// permitted one. Comparison is a plain equality test because the constraint
+// set reaches the auth layer canonically lower-cased.
+//
+// captured receives the constraint set the handler submitted, so a test can
+// assert which regions the handler thought the operation touches rather than
+// only that it was denied.
+func newAzureRegionScopedHandler(t *testing.T, ctx context.Context, opsClient azureExchangeClient, permittedRegion string, captured *[]auth.PermissionConstraints) *Handler {
+	t.Helper()
+	permits := func(sets []auth.PermissionConstraints) bool {
+		*captured = sets
+		for _, s := range sets {
+			for _, r := range s.Regions {
+				if r != permittedRegion {
+					return false
+				}
+			}
+		}
+		return true
+	}
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
+	allowAnyAccountScope(mockAuth)
+	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange",
+		mock.MatchedBy(permits)).Return(true, nil).Maybe()
+	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange",
+		mock.MatchedBy(func(sets []auth.PermissionConstraints) bool { return !permits(sets) })).Return(false, nil).Maybe()
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	mockStore := &MockConfigStore{}
+	mockStore.GetCloudAccountByExternalIDFn = func(_ context.Context, _, _ string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: "acct-1"}, nil
+	}
+
+	return &Handler{
+		auth:                 mockAuth,
+		config:               mockStore,
+		azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient },
+	}
+}
+
+// foreignRegionSourceBody names a source reservation the caller's own
+// subscription DOES pay for, but which lives in a region the caller is not
+// permitted in, while every target stays inside the permitted region.
+const foreignRegionSourceBody = `{
+	"subscription_id": "sub-1",
+	"sources": [{"reservation_id": "res-west", "quantity": 1}],
+	"targets": [{"sku": "Standard_D4s_v3", "location": "eastus", "term": "P1Y", "quantity": 1}],
+	"max_payment_due": "100.00",
+	"currency": "USD"
+}`
+
+// TestExecuteAzureExchange_SourceRegionOutsidePermissionRefused asserts the
+// security property, not the shape of the constraint set: a caller permitted
+// only in eastus must be DENIED an exchange whose source reservation lives in
+// westeurope, even though every target is in eastus.
+//
+// Pre-fix the Regions dimension was built from targetLocations alone, so this
+// request submitted Regions{"eastus"}, the permission granted it, and the
+// exchange committed: a westeurope commitment the caller was never authorized
+// to touch is handed back to Azure and its value relocated to eastus,
+// irreversibly. Nothing else covered the gap -- requireAzureSourceOwnership
+// keys on the reservation's BillingScopeID (which legitimately is sub-1 here),
+// and no other gate reads a source's region at all. The AWS analog is safe
+// only because AWS exchanges are same-region; cross-region is precisely what
+// this endpoint exists to do.
+//
+// TestExecuteAzureExchange_ConstraintSetPinsAllDimensions cannot catch this:
+// it asserts the constraint set as built, so it stayed green with the gap
+// present.
+//
+// No CalculateExchange or ExecuteExchange expectation is registered, so
+// testify fails this test the instant a regression lets execution past the
+// gate -- the money path must not be reached at all.
+func TestExecuteAzureExchange_SourceRegionOutsidePermissionRefused(t *testing.T) {
+	ctx := context.Background()
+	var captured []auth.PermissionConstraints
+
+	opsClient := new(mockAzureExchangeOpsClient)
+	opsClient.On("ListExchangeableReservations", mock.Anything).Return([]azurecompute.ExchangeableReservation{
+		{ReservationID: "res-west", BillingScopeID: "/subscriptions/sub-1", Region: "westeurope", Quantity: 1},
+	}, nil)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := newAzureRegionScopedHandler(t, ctx, opsClient, "eastus", &captured)
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    foreignRegionSourceBody,
+	})
+
+	require.Error(t, err, "an eastus-only caller must not be able to consume a westeurope reservation")
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	require.Len(t, captured, 1)
+	assert.Contains(t, captured[0].Regions, "westeurope",
+		"the source's own region must reach the permission check; the exchange mutates it too")
+	opsClient.AssertNotCalled(t, "CalculateExchange", mock.Anything, mock.Anything, mock.Anything)
+	opsClient.AssertNotCalled(t, "ExecuteExchange", mock.Anything, mock.Anything)
+}
+
+// TestExecuteAzureExchange_UnreportedSourceRegionRefused covers the
+// empty-region trap. ExchangeableReservation.Region "may be empty for
+// reservations with AppliedScopeType == Shared", so the fold must not simply
+// skip a source Azure described without a region -- that would make "we don't
+// know where this is" mean "no region restriction applies", the same fail-open
+// shape PR #1495 fixed. The unknownRegionConstraint sentinel makes it deny
+// instead.
+func TestExecuteAzureExchange_UnreportedSourceRegionRefused(t *testing.T) {
+	ctx := context.Background()
+	var captured []auth.PermissionConstraints
+
+	opsClient := new(mockAzureExchangeOpsClient)
+	opsClient.On("ListExchangeableReservations", mock.Anything).Return([]azurecompute.ExchangeableReservation{
+		// Billed to the caller's own subscription, but Azure reported no region.
+		{ReservationID: "res-1", BillingScopeID: "/subscriptions/sub-1", Region: "", Quantity: 1},
+	}, nil)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := newAzureRegionScopedHandler(t, ctx, opsClient, "eastus", &captured)
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody, // sources: res-1, targets: eastus
+	})
+
+	require.Error(t, err, "a source whose region Azure did not report must deny, never fall through as unconstrained")
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	require.Len(t, captured, 1)
+	assert.Contains(t, captured[0].Regions, unknownRegionConstraint,
+		"an unreported source region must surface as a sentinel no permission can name, not be dropped")
+	opsClient.AssertNotCalled(t, "CalculateExchange", mock.Anything, mock.Anything, mock.Anything)
+	opsClient.AssertNotCalled(t, "ExecuteExchange", mock.Anything, mock.Anything)
+}
+
+// TestExecuteAzureExchange_UnreportedSourceRegionAllowedWithoutRegionScope is
+// the other half of the sentinel's contract: it denies a region-scoped
+// permission, but must NOT penalize a caller who has no Regions constraint at
+// all (auth.matchAllRegionsConstraint treats an empty permission list as "no
+// restriction"). Otherwise every Shared-scope reservation would become
+// unexchangeable for everyone.
+func TestExecuteAzureExchange_UnreportedSourceRegionAllowedWithoutRegionScope(t *testing.T) {
+	ctx := context.Background()
+	opsClient := new(mockAzureExchangeOpsClient)
+	opsClient.On("ListExchangeableReservations", mock.Anything).Return([]azurecompute.ExchangeableReservation{
+		{ReservationID: "res-1", BillingScopeID: "/subscriptions/sub-1", Region: "", Quantity: 1},
+	}, nil)
+	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
+		&azurecompute.ExchangePreview{SessionID: "sess-shared", NetPayable: toPtr(10.00), NetPayableCurrency: "USD"},
+		[]azurecompute.CompatibleOffering{}, nil,
+	)
+	opsClient.On("ExecuteExchange", ctx, "sess-shared").Return(
+		&azurecompute.ExchangeResult{SessionID: "sess-shared", Status: "Succeeded"}, nil,
+	)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	// newAzureExecuteMoneyPathHandler models an unconstrained permission.
+	h := newAzureExecuteMoneyPathHandler(t, opsClient)
+	resp, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody,
+	})
+	require.NoError(t, err, "a caller with no Regions constraint must not be blocked by the unknown-region sentinel")
+	require.NotNil(t, resp)
+}
+
+// TestExchangeRegions covers the fold itself, including the branches that are
+// awkward to drive through the whole handler.
+func TestExchangeRegions(t *testing.T) {
+	owned := []azurecompute.ExchangeableReservation{
+		{ReservationID: "res-east", Region: "eastus"},
+		{ReservationID: "res-west", Region: "WestEurope"},
+		{ReservationID: "res-blank", Region: "   "},
+		{ReservationID: "res-none"},
+	}
+	target := func(location string) AzureExchangeTargetBody {
+		return AzureExchangeTargetBody{Location: location}
+	}
+	source := func(id string) AzureExchangeSourceBody {
+		return AzureExchangeSourceBody{ReservationID: id, Quantity: 1}
+	}
+
+	tests := []struct {
+		name    string
+		targets []AzureExchangeTargetBody
+		sources []AzureExchangeSourceBody
+		want    []string
+	}{
+		{
+			name:    "a source region outside the targets is added to the set",
+			targets: []AzureExchangeTargetBody{target("eastus")},
+			sources: []AzureExchangeSourceBody{source("res-west")},
+			want:    []string{"eastus", "westeurope"},
+		},
+		{
+			name:    "a same-region exchange collapses to one entry",
+			targets: []AzureExchangeTargetBody{target("EastUS")},
+			sources: []AzureExchangeSourceBody{source("res-east")},
+			want:    []string{"eastus"},
+		},
+		{
+			name:    "source regions are matched case-insensitively by reservation id",
+			targets: []AzureExchangeTargetBody{target("eastus")},
+			sources: []AzureExchangeSourceBody{source("RES-WEST")},
+			want:    []string{"eastus", "westeurope"},
+		},
+		{
+			name:    "a blank source region yields the sentinel, never nothing",
+			targets: []AzureExchangeTargetBody{target("eastus")},
+			sources: []AzureExchangeSourceBody{source("res-blank")},
+			want:    []string{"eastus", unknownRegionConstraint},
+		},
+		{
+			name:    "a source Azure reported without a region yields the sentinel",
+			targets: []AzureExchangeTargetBody{target("eastus")},
+			sources: []AzureExchangeSourceBody{source("res-none")},
+			want:    []string{"eastus", unknownRegionConstraint},
+		},
+		{
+			name:    "a source absent from the tenant listing yields the sentinel",
+			targets: []AzureExchangeTargetBody{target("eastus")},
+			sources: []AzureExchangeSourceBody{source("res-unheard-of")},
+			want:    []string{"eastus", unknownRegionConstraint},
+		},
+		{
+			name:    "several unknown sources collapse into a single sentinel entry",
+			targets: []AzureExchangeTargetBody{target("eastus")},
+			sources: []AzureExchangeSourceBody{source("res-none"), source("res-blank")},
+			want:    []string{"eastus", unknownRegionConstraint},
+		},
+		{
+			name:    "every distinct region on both sides survives",
+			targets: []AzureExchangeTargetBody{target("eastus"), target("northeurope")},
+			sources: []AzureExchangeSourceBody{source("res-west"), source("res-east")},
+			want:    []string{"eastus", "northeurope", "westeurope"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, exchangeRegions(tt.targets, tt.sources, owned))
+		})
+	}
 }
