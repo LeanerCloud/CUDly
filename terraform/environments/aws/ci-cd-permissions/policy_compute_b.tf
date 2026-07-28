@@ -28,6 +28,44 @@
 #    SA from enumerating key policies of unrelated workloads sharing the
 #    account (account-wide key-policy reconnaissance). Split from the main
 #    policy because the 6144-char limit was reached.
+#
+#  - KMSTagOnCreate: kms:TagResource against a key that does NOT exist
+#    yet (the CreateKey Tags parameter, per the AWS KMS API reference's
+#    "Required permissions" for CreateKey) can never satisfy
+#    aws:ResourceTag/Project: there is no resource, so no resource tag,
+#    at authorization time. KMSMutateTaggedOnly's tag-on-EXISTING-key
+#    grant (policy_compute.tf) therefore denies kms:TagResource during
+#    aws_kms_key creation with Terraform's `tags` argument, breaking
+#    every `terraform apply` that creates a new CMK (e.g. the OIDC
+#    signing key in modules/compute/aws/lambda/signing-key.tf). AWS
+#    authorizes tag-on-create via the aws:RequestTag/aws:TagKeys
+#    condition keys instead, which inspect the tags being attached in
+#    the request rather than tags already on the resource; see
+#    "Controlling access during AWS requests" in the IAM user guide.
+#    This MUST stay a separate statement: folding aws:RequestTag into
+#    KMSMutateTaggedOnly would AND it with that statement's
+#    aws:ResourceTag condition, which is exactly the unsatisfiable
+#    combination this statement exists to avoid. Kept resource-unscoped
+#    (Resource = "*") like KMSCreateAndRead/KMSReadTaggedOnly, since the
+#    key ARN isn't known until CreateKey returns; the condition is what
+#    limits it to CUDly-tagged create calls. StringEqualsIgnoreCase
+#    matches the case-insensitive convention documented on
+#    KMSMutateTaggedOnly (policy_compute.tf) for the same Project tag.
+#    Added here (rather than policy_compute.tf) because the main policy
+#    is within ~60 characters of the 6144-char limit; this statement
+#    would not reliably fit.
+#    aws:RequestTag alone would be an unintended privilege escalation:
+#    it says nothing about the resource's CURRENT tags, so without more
+#    it would let a leaked deploy token call kms:TagResource on ANY
+#    existing key in the account (not just ones it creates), self-attach
+#    Project=CUDly, and then use KMSMutateTaggedOnly to disable, delete,
+#    or rewrite the key policy of that now-mistagged key, i.e. hijack a
+#    key it never created. The added Null condition on
+#    aws:ResourceTag/Project restricts the statement to resources with
+#    NO Project tag yet (true for a brand-new key mid-CreateKey, false
+#    for anything already tagged, ours or not), so it can only ever
+#    perform the initial tag-on-create and can't be used to claim an
+#    existing key.
 
 resource "aws_iam_policy" "compute_b" {
   name        = "cudly-deploy-compute-b"
@@ -94,6 +132,27 @@ resource "aws_iam_policy" "compute_b" {
         Condition = {
           StringEqualsIgnoreCase = {
             "aws:ResourceTag/Project" = "CUDly"
+          }
+        }
+      },
+      {
+        # kms:TagResource for the CreateKey Tags parameter. See the
+        # KMSTagOnCreate note in the file header comment above for why
+        # this must be a separate, aws:RequestTag-gated statement rather
+        # than folded into KMSMutateTaggedOnly's aws:ResourceTag gate,
+        # and why the Null condition on aws:ResourceTag/Project is
+        # required to stop this from being usable to hijack an existing,
+        # unrelated key by self-tagging it.
+        Sid      = "KMSTagOnCreate"
+        Effect   = "Allow"
+        Action   = ["kms:TagResource"]
+        Resource = "*"
+        Condition = {
+          StringEqualsIgnoreCase = {
+            "aws:RequestTag/Project" = "CUDly"
+          }
+          Null = {
+            "aws:ResourceTag/Project" = "true"
           }
         }
       },
