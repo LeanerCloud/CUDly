@@ -56,6 +56,121 @@ func termPlan(term string) (string, error) {
 	}
 }
 
+// machineFamilyCommitmentType maps a GCP machine series (the segment of a
+// machine type before the first "-") onto the computepb.Commitment_Type enum
+// member whose discount actually applies to that series.
+//
+// The mapping is not cosmetic: computepb.Commitment.Type selects which machine
+// series the CUD discounts, and the SDK's own enum doc states that
+// "Type GENERAL_PURPOSE specifies a commitment that applies only to eligible
+// resources of general purpose N1 machine series". An N1 commitment therefore
+// buys nothing for an N2/C3/M3 fleet.
+//
+// Deliberately absent (they fall through to the fail-loud path in
+// commitmentTypeForMachineType):
+//   - m4 and x4, whose commitment types are split into size-specific buckets
+//     (MEMORY_OPTIMIZED_M4 vs MEMORY_OPTIMIZED_M4_6TB;
+//     MEMORY_OPTIMIZED_X4_480_6T, _X4_960_12T, _X4_1440_24T, ...). The bucket
+//     is not derivable from the machine-type name alone, and guessing one
+//     reintroduces the exact mis-purchase this mapping exists to prevent.
+//   - t2a and any series GCP has not published a Commitment_Type for.
+var machineFamilyCommitmentType = map[string]computepb.Commitment_Type{
+	// General purpose. GENERAL_PURPOSE is the N1-only member.
+	"n1": computepb.Commitment_GENERAL_PURPOSE,
+	// Legacy custom machine types are named "custom-<vCPUs>-<MB>" with no family
+	// segment and are N1; every other family prefixes its own custom types
+	// ("n2-custom-...", "e2-custom-..."), which the family lookup already
+	// handles. Without this entry a valid N1-custom recommendation would be
+	// refused rather than committed under the type that actually discounts it.
+	"custom": computepb.Commitment_GENERAL_PURPOSE,
+
+	"n2":  computepb.Commitment_GENERAL_PURPOSE_N2,
+	"n2d": computepb.Commitment_GENERAL_PURPOSE_N2D,
+	"n4":  computepb.Commitment_GENERAL_PURPOSE_N4,
+	"n4d": computepb.Commitment_GENERAL_PURPOSE_N4D,
+	"e2":  computepb.Commitment_GENERAL_PURPOSE_E2,
+	"t2d": computepb.Commitment_GENERAL_PURPOSE_T2D,
+	"c4":  computepb.Commitment_GENERAL_PURPOSE_C4,
+	"c4a": computepb.Commitment_GENERAL_PURPOSE_C4A,
+	"c4d": computepb.Commitment_GENERAL_PURPOSE_C4D,
+
+	// Compute optimized. COMPUTE_OPTIMIZED is the C2-only member.
+	"c2":  computepb.Commitment_COMPUTE_OPTIMIZED,
+	"c2d": computepb.Commitment_COMPUTE_OPTIMIZED_C2D,
+	"c3":  computepb.Commitment_COMPUTE_OPTIMIZED_C3,
+	"c3d": computepb.Commitment_COMPUTE_OPTIMIZED_C3D,
+	"h3":  computepb.Commitment_COMPUTE_OPTIMIZED_H3,
+	"h4d": computepb.Commitment_COMPUTE_OPTIMIZED_H4D,
+
+	// Memory optimized. Per the SDK enum doc, MEMORY_OPTIMIZED covers the M1
+	// and M2 series; M3 has its own member.
+	"m1": computepb.Commitment_MEMORY_OPTIMIZED,
+	"m2": computepb.Commitment_MEMORY_OPTIMIZED,
+	"m3": computepb.Commitment_MEMORY_OPTIMIZED_M3,
+
+	// Accelerator optimized. ACCELERATOR_OPTIMIZED is the A2-only member; A3 is
+	// resolved by sub-series below.
+	"a2": computepb.Commitment_ACCELERATOR_OPTIMIZED,
+	"a4": computepb.Commitment_ACCELERATOR_OPTIMIZED_A4,
+
+	// Graphics optimized.
+	"g2": computepb.Commitment_GRAPHICS_OPTIMIZED,
+	"g4": computepb.Commitment_GRAPHICS_OPTIMIZED_G4,
+
+	// Storage optimized.
+	"z3": computepb.Commitment_STORAGE_OPTIMIZED_Z3,
+}
+
+// a3SubFamilyCommitmentType resolves the A3 series, whose commitment buckets
+// differ by GPU tier. Unlike M4/X4 the tier IS encoded in the machine-type name
+// (a3-highgpu-8g vs a3-megagpu-8g vs a3-ultragpu-8g), so it is derivable. Any
+// other A3 sub-series falls through to the fail-loud path rather than being
+// folded into ACCELERATOR_OPTIMIZED_A3.
+var a3SubFamilyCommitmentType = map[string]computepb.Commitment_Type{
+	"highgpu":  computepb.Commitment_ACCELERATOR_OPTIMIZED_A3,
+	"megagpu":  computepb.Commitment_ACCELERATOR_OPTIMIZED_A3_MEGA,
+	"ultragpu": computepb.Commitment_ACCELERATOR_OPTIMIZED_A3_ULTRA,
+}
+
+// commitmentTypeForMachineType derives the commitment Type from the recommended
+// machine type (e.g. "n2-highmem-8" -> GENERAL_PURPOSE_N2).
+//
+// An unmappable family returns an error rather than defaulting: a commitment
+// bought under the wrong Type does not discount the recommended instances at
+// all, so the customer pays the full 1- or 3-year commitment on top of undimmed
+// on-demand charges while the purchase is reported as realized savings (issue
+// #1538). Refusing the purchase is the strictly cheaper failure.
+func commitmentTypeForMachineType(machineType string) (computepb.Commitment_Type, error) {
+	normalized := strings.ToLower(strings.TrimSpace(machineType))
+	if normalized == "" {
+		return computepb.Commitment_UNDEFINED_TYPE, errors.New(
+			"commitmentTypeForMachineType: empty machine type; cannot derive the GCP commitment type (issue #1538)")
+	}
+
+	segments := strings.Split(normalized, "-")
+	family := segments[0]
+
+	if family == "a3" {
+		if len(segments) < 2 {
+			return computepb.Commitment_UNDEFINED_TYPE, fmt.Errorf(
+				"commitmentTypeForMachineType: machine type %q has no A3 sub-series segment; cannot tell ACCELERATOR_OPTIMIZED_A3 from _A3_MEGA/_A3_ULTRA (issue #1538)", machineType)
+		}
+		commitType, ok := a3SubFamilyCommitmentType[segments[1]]
+		if !ok {
+			return computepb.Commitment_UNDEFINED_TYPE, fmt.Errorf(
+				"commitmentTypeForMachineType: unsupported A3 sub-series %q in machine type %q; refusing to purchase rather than guessing an ACCELERATOR_OPTIMIZED_A3* bucket (issue #1538)", segments[1], machineType)
+		}
+		return commitType, nil
+	}
+
+	commitType, ok := machineFamilyCommitmentType[family]
+	if !ok {
+		return computepb.Commitment_UNDEFINED_TYPE, fmt.Errorf(
+			"commitmentTypeForMachineType: no GCP commitment type is known for machine family %q (machine type %q); refusing to purchase rather than defaulting to GENERAL_PURPOSE, which only discounts the N1 series (issue #1538)", family, machineType)
+	}
+	return commitType, nil
+}
+
 // termYearsFromTerm returns the commitment length in years for a term label,
 // defaulting to 1 for any 1-year or unrecognized value and 3 for 3-year labels.
 func termYearsFromTerm(term string) int {
@@ -624,6 +739,16 @@ func (c *ComputeEngineClient) buildInsertRequest(rec common.Recommendation, opts
 		return nil, "", fmt.Errorf("buildInsertRequest: %w", err)
 	}
 
+	// The commitment Type selects which machine series the CUD discounts. It was
+	// pinned to GENERAL_PURPOSE (N1-only) while the recommended machine type was
+	// read into Description alone, so an N2/C3/M3/... recommendation bought a
+	// commitment that applied to none of its instances: full commitment spend
+	// plus undimmed on-demand charges, booked as realized savings (issue #1538).
+	commitType, err := commitmentTypeForMachineType(rec.ResourceType)
+	if err != nil {
+		return nil, "", fmt.Errorf("buildInsertRequest: %w", err)
+	}
+
 	// GCP's computepb.Commitment has no Labels field, and the RegionCommitments
 	// client exposes no SetLabels call -- CUDs cannot be tagged or labeled via
 	// the API. Encode the source into Description so customers can still filter
@@ -651,19 +776,20 @@ func (c *ComputeEngineClient) buildInsertRequest(rec common.Recommendation, opts
 	commitment := &computepb.Commitment{
 		Name:        stringPtr(commitmentName),
 		Plan:        stringPtr(plan),
-		Type:        stringPtr("GENERAL_PURPOSE"),
+		Type:        stringPtr(commitType.String()),
 		Description: stringPtr(description),
 		Resources: []*computepb.ResourceCommitment{
 			{
-				Type:   stringPtr("VCPU"),
+				Type:   stringPtr(computepb.ResourceCommitment_VCPU.String()),
 				Amount: int64Ptr(int64(rec.Count)),
 			},
 			{
 				// GCP's ResourceCommitment.Type enum is VCPU/MEMORY/LOCAL_SSD/
 				// ACCELERATOR; the memory member is "MEMORY" (the Amount is still in
 				// MB). Sending "MEMORY_MB" is an invalid enum value and GCP rejects
-				// the commitments.insert, failing the purchase (issue #1022).
-				Type:   stringPtr("MEMORY"),
+				// the commitments.insert, failing the purchase (issue #1022). Taking
+				// the wire value from the SDK enum keeps that compiler-checked.
+				Type:   stringPtr(computepb.ResourceCommitment_MEMORY.String()),
 				Amount: int64Ptr(memMB),
 			},
 		},

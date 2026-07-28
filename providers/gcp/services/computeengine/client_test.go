@@ -1599,3 +1599,199 @@ func TestGetRecommendations_ActiveRecIncluded(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1, "an ACTIVE recommendation must be included")
 }
+
+// TestCommitmentTypeForMachineType_MapsFamilyToSDKEnum is the issue #1538
+// regression at unit level: the commitment Type must follow the recommended
+// machine series, not a fixed GENERAL_PURPOSE (which only discounts N1).
+func TestCommitmentTypeForMachineType_MapsFamilyToSDKEnum(t *testing.T) {
+	cases := []struct {
+		machineType string
+		want        computepb.Commitment_Type
+	}{
+		{"n1-standard-1", computepb.Commitment_GENERAL_PURPOSE},
+		// Legacy N1 custom machine types carry no family segment.
+		{"custom-4-8192", computepb.Commitment_GENERAL_PURPOSE},
+		// Family-prefixed custom types resolve on their own family, not on N1.
+		{"n2-custom-8-16384", computepb.Commitment_GENERAL_PURPOSE_N2},
+		{"e2-custom-4-8192", computepb.Commitment_GENERAL_PURPOSE_E2},
+		{"n2-standard-16", computepb.Commitment_GENERAL_PURPOSE_N2},
+		{"n2-highmem-8", computepb.Commitment_GENERAL_PURPOSE_N2},
+		{"n2d-standard-4", computepb.Commitment_GENERAL_PURPOSE_N2D},
+		{"n4-standard-8", computepb.Commitment_GENERAL_PURPOSE_N4},
+		{"n4d-standard-8", computepb.Commitment_GENERAL_PURPOSE_N4D},
+		{"e2-medium", computepb.Commitment_GENERAL_PURPOSE_E2},
+		{"t2d-standard-8", computepb.Commitment_GENERAL_PURPOSE_T2D},
+		{"c4-standard-8", computepb.Commitment_GENERAL_PURPOSE_C4},
+		{"c4a-standard-8", computepb.Commitment_GENERAL_PURPOSE_C4A},
+		{"c4d-standard-8", computepb.Commitment_GENERAL_PURPOSE_C4D},
+		{"c2-standard-16", computepb.Commitment_COMPUTE_OPTIMIZED},
+		{"c2d-standard-16", computepb.Commitment_COMPUTE_OPTIMIZED_C2D},
+		{"c3-highcpu-22", computepb.Commitment_COMPUTE_OPTIMIZED_C3},
+		{"c3d-standard-8", computepb.Commitment_COMPUTE_OPTIMIZED_C3D},
+		{"h3-standard-88", computepb.Commitment_COMPUTE_OPTIMIZED_H3},
+		{"h4d-highmem-192", computepb.Commitment_COMPUTE_OPTIMIZED_H4D},
+		{"m1-ultramem-40", computepb.Commitment_MEMORY_OPTIMIZED},
+		{"m2-megamem-416", computepb.Commitment_MEMORY_OPTIMIZED},
+		{"m3-ultramem-32", computepb.Commitment_MEMORY_OPTIMIZED_M3},
+		{"a2-highgpu-1g", computepb.Commitment_ACCELERATOR_OPTIMIZED},
+		{"a3-highgpu-8g", computepb.Commitment_ACCELERATOR_OPTIMIZED_A3},
+		{"a3-megagpu-8g", computepb.Commitment_ACCELERATOR_OPTIMIZED_A3_MEGA},
+		{"a3-ultragpu-8g", computepb.Commitment_ACCELERATOR_OPTIMIZED_A3_ULTRA},
+		{"a4-highgpu-8g", computepb.Commitment_ACCELERATOR_OPTIMIZED_A4},
+		{"g2-standard-4", computepb.Commitment_GRAPHICS_OPTIMIZED},
+		{"g4-standard-48", computepb.Commitment_GRAPHICS_OPTIMIZED_G4},
+		{"z3-highmem-88", computepb.Commitment_STORAGE_OPTIMIZED_Z3},
+		// Case and surrounding whitespace must not change the outcome.
+		{"  N2-STANDARD-16  ", computepb.Commitment_GENERAL_PURPOSE_N2},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.machineType, func(t *testing.T) {
+			got, err := commitmentTypeForMachineType(tc.machineType)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got,
+				"machine type %q must commit under %s, not a fixed GENERAL_PURPOSE (issue #1538)",
+				tc.machineType, tc.want.String())
+		})
+	}
+}
+
+// TestCommitmentTypeForMachineType_UnmappableFailsLoud asserts the money-path
+// rule: an unknown or size-bucket-ambiguous family must return an explicit
+// error, never a GENERAL_PURPOSE default.
+func TestCommitmentTypeForMachineType_UnmappableFailsLoud(t *testing.T) {
+	cases := []struct {
+		name        string
+		machineType string
+	}{
+		{"empty", ""},
+		{"whitespace only", "   "},
+		{"unknown family", "zz9-standard-4"},
+		{"arm t2a has no commitment type", "t2a-standard-8"},
+		{"m4 splits into size buckets", "m4-megamem-28"},
+		{"x4 splits into size buckets", "x4-megamem-960-metal"},
+		{"unknown a3 sub-series", "a3-edgegpu-8g"},
+		{"a3 with no sub-series segment", "a3"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := commitmentTypeForMachineType(tc.machineType)
+			require.Error(t, err, "unmappable machine type must fail loud, not default")
+			assert.Equal(t, computepb.Commitment_UNDEFINED_TYPE, got)
+			assert.NotEqual(t, computepb.Commitment_GENERAL_PURPOSE, got,
+				"must never fall back to GENERAL_PURPOSE (issue #1538)")
+			assert.Contains(t, err.Error(), "commitmentTypeForMachineType",
+				"error must name the failing step")
+		})
+	}
+}
+
+// TestComputeEngineClient_PurchaseCommitment_TypeMatchesMachineFamily is the
+// issue #1538 wire-level regression. It asserts on the Type actually carried by
+// the InsertRegionCommitmentRequest handed to the SDK client, so a fix that only
+// corrects an intermediate value cannot make it pass.
+func TestComputeEngineClient_PurchaseCommitment_TypeMatchesMachineFamily(t *testing.T) {
+	cases := []struct {
+		machineType string
+		wantType    computepb.Commitment_Type
+	}{
+		{"n1-standard-4", computepb.Commitment_GENERAL_PURPOSE},
+		{"n2-standard-16", computepb.Commitment_GENERAL_PURPOSE_N2},
+		{"n2-highmem-8", computepb.Commitment_GENERAL_PURPOSE_N2},
+		{"c3-highcpu-22", computepb.Commitment_COMPUTE_OPTIMIZED_C3},
+		{"m3-ultramem-32", computepb.Commitment_MEMORY_OPTIMIZED_M3},
+		{"a3-megagpu-8g", computepb.Commitment_ACCELERATOR_OPTIMIZED_A3_MEGA},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.machineType, func(t *testing.T) {
+			ctx := context.Background()
+			client, _ := NewClient(ctx, "test-project", "us-central1")
+
+			mockService := &MockCommitmentsService{operation: &MockOperation{err: nil}}
+			client.SetCommitmentsService(mockService)
+			t.Cleanup(func() {
+				assert.NotNil(t, mockService.lastInsertReq,
+					"the purchase must actually reach the SDK Insert call")
+			})
+
+			rec := common.Recommendation{
+				ResourceType: tc.machineType,
+				Term:         "1yr",
+				Count:        8,
+				Details:      common.ComputeDetails{MemoryGB: 64.0},
+			}
+
+			result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+			require.NoError(t, err)
+			require.True(t, result.Success)
+
+			require.NotNil(t, mockService.lastInsertReq)
+			require.NotNil(t, mockService.lastInsertReq.CommitmentResource)
+			gotType := mockService.lastInsertReq.CommitmentResource.GetType()
+			assert.Equal(t, tc.wantType.String(), gotType,
+				"%s must be committed as %s; buying %s instead discounts nothing (issue #1538)",
+				tc.machineType, tc.wantType.String(), gotType)
+		})
+	}
+}
+
+// TestComputeEngineClient_PurchaseCommitment_UnmappableFamilyRefuses asserts the
+// purchase is refused before any Insert reaches GCP when the machine family
+// cannot be mapped, rather than spending real money on a GENERAL_PURPOSE CUD.
+func TestComputeEngineClient_PurchaseCommitment_UnmappableFamilyRefuses(t *testing.T) {
+	for _, machineType := range []string{"", "t2a-standard-8", "x4-megamem-960-metal"} {
+		t.Run(machineType, func(t *testing.T) {
+			ctx := context.Background()
+			client, _ := NewClient(ctx, "test-project", "us-central1")
+
+			mockService := &MockCommitmentsService{operation: &MockOperation{err: nil}}
+			client.SetCommitmentsService(mockService)
+			t.Cleanup(func() {
+				assert.Empty(t, mockService.insertReqs,
+					"no Insert may reach GCP for an unmappable machine family (issue #1538)")
+			})
+
+			rec := common.Recommendation{
+				ResourceType: machineType,
+				Term:         "1yr",
+				Count:        8,
+				Details:      common.ComputeDetails{MemoryGB: 64.0},
+			}
+
+			result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+			require.Error(t, err, "an unmappable machine family must fail the purchase")
+			assert.False(t, result.Success)
+			assert.Contains(t, err.Error(), "buildInsertRequest")
+			assert.Nil(t, mockService.lastInsertReq)
+		})
+	}
+}
+
+// TestComputeEngineClient_PurchaseCommitment_ResourceTypesUseSDKEnums pins the
+// VCPU/MEMORY wire values to the computepb.ResourceCommitment enum members. The
+// "MEMORY_MB" spelling that issue #1022 fixed is an invalid enum value GCP
+// rejects; sourcing both from the SDK keeps that regression compiler-checked.
+func TestComputeEngineClient_PurchaseCommitment_ResourceTypesUseSDKEnums(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	mockService := &MockCommitmentsService{operation: &MockOperation{err: nil}}
+	client.SetCommitmentsService(mockService)
+
+	rec := common.Recommendation{
+		ResourceType: "n2-standard-8",
+		Term:         "1yr",
+		Count:        8,
+		Details:      common.ComputeDetails{MemoryGB: 32.0},
+	}
+
+	_, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	require.NoError(t, err)
+	require.NotNil(t, mockService.lastInsertReq)
+	resources := mockService.lastInsertReq.CommitmentResource.GetResources()
+	require.Len(t, resources, 2)
+	assert.Equal(t, computepb.ResourceCommitment_VCPU.String(), resources[0].GetType())
+	assert.Equal(t, computepb.ResourceCommitment_MEMORY.String(), resources[1].GetType())
+}
