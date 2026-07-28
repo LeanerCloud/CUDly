@@ -955,7 +955,7 @@ func TestComputeEngineClient_GetRecommendations_PageCapFires(t *testing.T) {
 // for a 4-vCPU n1-standard-4 commitment in us-central1. The operation groups have
 // three ops:
 //  1. A machine-type op whose resource path ends in the machine type (n1-standard-4) --
-//     used by extractResourceTypeFromOperations to set rec.ResourceType.
+//     used by extractResourceTypeFromRecommendation to set rec.ResourceType.
 //  2. A VCPU commitment resource op whose numeric Value is the VCPU count --
 //     used by extractVCPUCountFromRecommendation to set rec.Count = 4.
 //  3. A MEMORY commitment resource op whose numeric Value is 6144 MB --
@@ -988,7 +988,7 @@ func realisticCUDRecommendation() *recommenderpb.Recommendation {
 					Operations: []*recommenderpb.Operation{
 						{
 							// Machine type op: resource path ends in the machine type name,
-							// so extractResourceTypeFromOperations sets rec.ResourceType = "n1-standard-4".
+							// so extractResourceTypeFromRecommendation sets rec.ResourceType = "n1-standard-4".
 							Action:   "add",
 							Resource: "projects/test/zones/us-central1-a/machineTypes/n1-standard-4",
 						},
@@ -1611,6 +1611,9 @@ func TestCommitmentTypeForMachineType_MapsFamilyToSDKEnum(t *testing.T) {
 		{"n1-standard-1", computepb.Commitment_GENERAL_PURPOSE},
 		// Legacy N1 custom machine types carry no family segment.
 		{"custom-4-8192", computepb.Commitment_GENERAL_PURPOSE},
+		// Legacy shared-core members of the N1 lineage.
+		{"f1-micro", computepb.Commitment_GENERAL_PURPOSE},
+		{"g1-small", computepb.Commitment_GENERAL_PURPOSE},
 		// Family-prefixed custom types resolve on their own family, not on N1.
 		{"n2-custom-8-16384", computepb.Commitment_GENERAL_PURPOSE_N2},
 		{"e2-custom-4-8192", computepb.Commitment_GENERAL_PURPOSE_E2},
@@ -1633,14 +1636,6 @@ func TestCommitmentTypeForMachineType_MapsFamilyToSDKEnum(t *testing.T) {
 		{"m1-ultramem-40", computepb.Commitment_MEMORY_OPTIMIZED},
 		{"m2-megamem-416", computepb.Commitment_MEMORY_OPTIMIZED},
 		{"m3-ultramem-32", computepb.Commitment_MEMORY_OPTIMIZED_M3},
-		{"a2-highgpu-1g", computepb.Commitment_ACCELERATOR_OPTIMIZED},
-		{"a3-highgpu-8g", computepb.Commitment_ACCELERATOR_OPTIMIZED_A3},
-		{"a3-megagpu-8g", computepb.Commitment_ACCELERATOR_OPTIMIZED_A3_MEGA},
-		{"a3-ultragpu-8g", computepb.Commitment_ACCELERATOR_OPTIMIZED_A3_ULTRA},
-		{"a4-highgpu-8g", computepb.Commitment_ACCELERATOR_OPTIMIZED_A4},
-		{"g2-standard-4", computepb.Commitment_GRAPHICS_OPTIMIZED},
-		{"g4-standard-48", computepb.Commitment_GRAPHICS_OPTIMIZED_G4},
-		{"z3-highmem-88", computepb.Commitment_STORAGE_OPTIMIZED_Z3},
 		// Case and surrounding whitespace must not change the outcome.
 		{"  N2-STANDARD-16  ", computepb.Commitment_GENERAL_PURPOSE_N2},
 	}
@@ -1670,8 +1665,6 @@ func TestCommitmentTypeForMachineType_UnmappableFailsLoud(t *testing.T) {
 		{"arm t2a has no commitment type", "t2a-standard-8"},
 		{"m4 splits into size buckets", "m4-megamem-28"},
 		{"x4 splits into size buckets", "x4-megamem-960-metal"},
-		{"unknown a3 sub-series", "a3-edgegpu-8g"},
-		{"a3 with no sub-series segment", "a3"},
 	}
 
 	for _, tc := range cases {
@@ -1683,6 +1676,40 @@ func TestCommitmentTypeForMachineType_UnmappableFailsLoud(t *testing.T) {
 				"must never fall back to GENERAL_PURPOSE (issue #1538)")
 			assert.Contains(t, err.Error(), "commitmentTypeForMachineType",
 				"error must name the failing step")
+		})
+	}
+}
+
+// TestCommitmentTypeForMachineType_FamiliesNeedingExtraResourcesRefuse covers
+// the families whose Commitment_Type exists in the SDK but whose commitment
+// also requires an ACCELERATOR or LOCAL_SSD resource. buildInsertRequest sends
+// only VCPU and MEMORY, so declaring one of those types would either be
+// rejected by GCP or -- worse -- buy a commitment covering the cheap vCPU/RAM
+// and none of the GPU or local-SSD capacity that dominates its cost.
+func TestCommitmentTypeForMachineType_FamiliesNeedingExtraResourcesRefuse(t *testing.T) {
+	cases := []struct {
+		machineType  string
+		wantResource computepb.ResourceCommitment_Type
+	}{
+		{"a2-highgpu-1g", computepb.ResourceCommitment_ACCELERATOR},
+		{"a3-highgpu-8g", computepb.ResourceCommitment_ACCELERATOR},
+		{"a3-megagpu-8g", computepb.ResourceCommitment_ACCELERATOR},
+		{"a3-ultragpu-8g", computepb.ResourceCommitment_ACCELERATOR},
+		{"a4-highgpu-8g", computepb.ResourceCommitment_ACCELERATOR},
+		{"g2-standard-4", computepb.ResourceCommitment_ACCELERATOR},
+		{"g4-standard-48", computepb.ResourceCommitment_ACCELERATOR},
+		{"z3-highmem-88", computepb.ResourceCommitment_LOCAL_SSD},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.machineType, func(t *testing.T) {
+			got, err := commitmentTypeForMachineType(tc.machineType)
+			require.Error(t, err,
+				"%s needs a %s resource this client does not send; it must refuse, not declare the type anyway",
+				tc.machineType, tc.wantResource.String())
+			assert.Equal(t, computepb.Commitment_UNDEFINED_TYPE, got)
+			assert.Contains(t, err.Error(), tc.wantResource.String(),
+				"error must name the resource kind that is missing")
 		})
 	}
 }
@@ -1701,7 +1728,7 @@ func TestComputeEngineClient_PurchaseCommitment_TypeMatchesMachineFamily(t *test
 		{"n2-highmem-8", computepb.Commitment_GENERAL_PURPOSE_N2},
 		{"c3-highcpu-22", computepb.Commitment_COMPUTE_OPTIMIZED_C3},
 		{"m3-ultramem-32", computepb.Commitment_MEMORY_OPTIMIZED_M3},
-		{"a3-megagpu-8g", computepb.Commitment_ACCELERATOR_OPTIMIZED_A3_MEGA},
+		{"custom-4-8192", computepb.Commitment_GENERAL_PURPOSE},
 	}
 
 	for _, tc := range cases {
@@ -1741,7 +1768,7 @@ func TestComputeEngineClient_PurchaseCommitment_TypeMatchesMachineFamily(t *test
 // purchase is refused before any Insert reaches GCP when the machine family
 // cannot be mapped, rather than spending real money on a GENERAL_PURPOSE CUD.
 func TestComputeEngineClient_PurchaseCommitment_UnmappableFamilyRefuses(t *testing.T) {
-	for _, machineType := range []string{"", "t2a-standard-8", "x4-megamem-960-metal"} {
+	for _, machineType := range []string{"", "t2a-standard-8", "x4-megamem-960-metal", "a3-megagpu-8g", "z3-highmem-88"} {
 		t.Run(machineType, func(t *testing.T) {
 			ctx := context.Background()
 			client, _ := NewClient(ctx, "test-project", "us-central1")
@@ -1770,9 +1797,13 @@ func TestComputeEngineClient_PurchaseCommitment_UnmappableFamilyRefuses(t *testi
 }
 
 // TestComputeEngineClient_PurchaseCommitment_ResourceTypesUseSDKEnums pins the
-// VCPU/MEMORY wire values to the computepb.ResourceCommitment enum members. The
-// "MEMORY_MB" spelling that issue #1022 fixed is an invalid enum value GCP
-// rejects; sourcing both from the SDK keeps that regression compiler-checked.
+// VCPU/MEMORY wire values that reach GCP. The "MEMORY_MB" spelling issue #1022
+// fixed is an invalid enum value GCP rejects on commitments.insert.
+//
+// The expectations are deliberately literal strings, not
+// computepb.ResourceCommitment_*.String(): comparing an SDK-derived expected
+// against an SDK-derived actual passes no matter which member the code picks,
+// so it would pin nothing. The literals are what GCP actually accepts.
 func TestComputeEngineClient_PurchaseCommitment_ResourceTypesUseSDKEnums(t *testing.T) {
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
@@ -1792,6 +1823,139 @@ func TestComputeEngineClient_PurchaseCommitment_ResourceTypesUseSDKEnums(t *test
 	require.NotNil(t, mockService.lastInsertReq)
 	resources := mockService.lastInsertReq.CommitmentResource.GetResources()
 	require.Len(t, resources, 2)
-	assert.Equal(t, computepb.ResourceCommitment_VCPU.String(), resources[0].GetType())
-	assert.Equal(t, computepb.ResourceCommitment_MEMORY.String(), resources[1].GetType())
+	assert.Equal(t, "VCPU", resources[0].GetType())
+	assert.Equal(t, "MEMORY", resources[1].GetType(),
+		"the memory member is MEMORY, not MEMORY_MB (issue #1022)")
+}
+
+// commitmentOnlyCUDRecommendation builds a CUD Recommender payload whose
+// operations reference ONLY the commitment resource -- no machineTypes
+// operation anywhere. This is the shape the commitment recommender is expected
+// to emit, and it is the case where taking "the last path segment of the first
+// operation with a non-empty Resource" yields the commitment NAME ("cud-001"),
+// which would then be read as machine family "cud".
+func commitmentOnlyCUDRecommendation() *recommenderpb.Recommendation {
+	vcpuVal, _ := structpb.NewValue(4.0)
+	memVal, _ := structpb.NewValue(6144.0)
+	memTypeFilter, _ := structpb.NewValue("MEMORY")
+	const commitmentResource = "//compute.googleapis.com/projects/test/regions/us-central1/commitments/cud-001"
+
+	return &recommenderpb.Recommendation{
+		Name: "projects/test/locations/us-central1/recommenders/google.compute.commitment.UsageCommitmentRecommender/recommendations/rec-002",
+		PrimaryImpact: &recommenderpb.Impact{
+			Category: recommenderpb.Impact_COST,
+			Projection: &recommenderpb.Impact_CostProjection{
+				CostProjection: &recommenderpb.CostProjection{
+					Cost: &money.Money{Units: -200, CurrencyCode: "USD"},
+				},
+			},
+		},
+		Content: &recommenderpb.RecommendationContent{
+			OperationGroups: []*recommenderpb.OperationGroup{
+				{
+					Operations: []*recommenderpb.Operation{
+						{
+							Action:       "add",
+							ResourceType: "compute.googleapis.com/Commitment",
+							Resource:     commitmentResource,
+							Path:         "/resources/0/amount",
+							PathValue:    &recommenderpb.Operation_Value{Value: vcpuVal},
+						},
+						{
+							Action:       "add",
+							ResourceType: "compute.googleapis.com/Commitment",
+							Resource:     commitmentResource,
+							Path:         "/resources/1/amount",
+							PathValue:    &recommenderpb.Operation_Value{Value: memVal},
+							PathFilters: map[string]*structpb.Value{
+								"/resources/1/type": memTypeFilter,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// TestExtractResourceTypeFromRecommendation_CommitmentOnlyOpsFailLoud is the
+// guard for the input side of issue #1538. The previous extractor returned the
+// last "/" segment of the first operation with a non-empty Resource, so a
+// commitment-only payload yielded the commitment name "cud-001", which
+// commitmentTypeForMachineType would then reject as machine family "cud" -- a
+// misleading cause for a payload that simply carries no machine type.
+func TestExtractResourceTypeFromRecommendation_CommitmentOnlyOpsFailLoud(t *testing.T) {
+	rec := &common.Recommendation{}
+
+	err := extractResourceTypeFromRecommendation(commitmentOnlyCUDRecommendation(), rec)
+
+	require.Error(t, err, "a payload with no machineTypes operation must fail loud")
+	assert.Contains(t, err.Error(), "no machine type in recommendation operations")
+	assert.Contains(t, err.Error(), "/machineTypes/",
+		"error must name the path segment that was looked for")
+	assert.Contains(t, err.Error(), "commitments/cud-001",
+		"error must name the resource paths that were actually found")
+	assert.Empty(t, rec.ResourceType,
+		"ResourceType must stay empty, not be filled with the commitment name")
+	assert.NotEqual(t, "cud-001", rec.ResourceType)
+}
+
+// TestPurchaseCommitment_CommitmentOnlyRecommendationRefuses ties the input-side
+// guard to the money path: a recommendation converted from a commitment-only
+// payload must refuse the purchase with a cause naming the missing machine
+// type, and no Insert may reach GCP.
+func TestPurchaseCommitment_CommitmentOnlyRecommendationRefuses(t *testing.T) {
+	ctx := context.Background()
+	client, err := NewClient(ctx, "test-project", "us-central1")
+	require.NoError(t, err)
+
+	converted := client.convertGCPRecommendation(ctx, commitmentOnlyCUDRecommendation(), common.RecommendationParams{Term: "1yr"})
+	require.NotNil(t, converted, "the recommendation stays visible; only the purchase is refused")
+	require.Empty(t, converted.ResourceType,
+		"a commitment-only payload must not yield a machine type (issue #1538)")
+
+	mockService := &MockCommitmentsService{operation: &MockOperation{err: nil}}
+	client.SetCommitmentsService(mockService)
+	t.Cleanup(func() {
+		assert.Empty(t, mockService.insertReqs,
+			"no Insert may reach GCP for a recommendation with no machine type (issue #1538)")
+	})
+
+	converted.Count = 4
+	converted.Details = common.ComputeDetails{MemoryGB: 6.0}
+
+	result, err := client.PurchaseCommitment(ctx, *converted, common.PurchaseOptions{})
+	require.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), "no machine type on the recommendation",
+		"the cause must name the missing machine type, not an invented machine family")
+	assert.NotContains(t, err.Error(), "cud",
+		"the commitment name must never surface as a machine family")
+}
+
+// TestMachineTypeFromResourcePath_SelectsOnlyMachineTypePaths pins the selector
+// itself: only a /machineTypes/<name> path yields a machine type.
+func TestMachineTypeFromResourcePath_SelectsOnlyMachineTypePaths(t *testing.T) {
+	accepted := map[string]string{
+		"projects/test/zones/us-central1-a/machineTypes/n2-standard-16":          "n2-standard-16",
+		"projects/test/machineTypes/n1-standard-1":                               "n1-standard-1",
+		"//compute.googleapis.com/projects/p/zones/z/machineTypes/c3-highcpu-22": "c3-highcpu-22",
+	}
+	for path, want := range accepted {
+		got, ok := machineTypeFromResourcePath(path)
+		assert.True(t, ok, "%q names a machine type", path)
+		assert.Equal(t, want, got)
+	}
+
+	rejected := []string{
+		"//compute.googleapis.com/projects/test/regions/us-central1/commitments/cud-001",
+		"projects/test/zones/us-central1-a/instances/vm-1",
+		"projects/test/zones/us-central1-a/machineTypes/",
+		"",
+	}
+	for _, path := range rejected {
+		got, ok := machineTypeFromResourcePath(path)
+		assert.False(t, ok, "%q does not name a machine type", path)
+		assert.Empty(t, got)
+	}
 }
