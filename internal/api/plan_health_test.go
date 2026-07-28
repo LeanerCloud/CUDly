@@ -27,6 +27,20 @@ func factorCodes(factors []PlanHealthFactor) []PlanHealthFactorCode {
 	return codes
 }
 
+// factorByCode returns the single factor carrying code, failing the test if
+// it is absent. Used by the tests that assert on Note wording, which is what
+// the operator actually reads off the tooltip.
+func factorByCode(t *testing.T, factors []PlanHealthFactor, code PlanHealthFactorCode) PlanHealthFactor {
+	t.Helper()
+	for _, f := range factors {
+		if f.Code == code {
+			return f
+		}
+	}
+	require.Failf(t, "factor not found", "no %q factor in %v", code, factorCodes(factors))
+	return PlanHealthFactor{}
+}
+
 func TestComputePlanHealth_HealthyPlanScoresPerfect(t *testing.T) {
 	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 	plan := config.PurchasePlan{
@@ -204,6 +218,39 @@ func TestComputePlanHealth_BehindSchedule(t *testing.T) {
 	assert.Equal(t, 100-20, score)
 }
 
+// TestComputePlanHealth_BehindScheduleNoteClampsExpectedStepToTotalSteps is
+// the regression guard for the fabricated step number in the tooltip: once a
+// plan is past its ramp's full duration, daysSinceStart / StepIntervalDays
+// keeps climbing past TotalSteps, so the note quoted a step the plan does
+// not have ("expected step 12 by now" for a 4-step plan). The penalty was
+// always right; the number an operator was asked to reconcile against was
+// invented by the arithmetic.
+//
+// Asserts the exact rendered note, not just the code: the previous tests
+// covering this same arithmetic (ScoreClampsAtZeroWhenPenaltiesStack) checked
+// only codes and the clamped score, which is why nothing caught it.
+func TestComputePlanHealth_BehindScheduleNoteClampsExpectedStepToTotalSteps(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	plan := config.PurchasePlan{
+		Enabled: true,
+		RampSchedule: config.RampSchedule{
+			StepIntervalDays: 7,
+			CurrentStep:      2,
+			TotalSteps:       4,
+			// 90 days in: the raw quotient is 12, which is 8 steps beyond
+			// anything this plan will ever have.
+			StartDate: now.AddDate(0, 0, -90),
+		},
+	}
+
+	score, factors := computePlanHealth(plan, now, nil)
+
+	f := factorByCode(t, factors, HealthFactorBehindSchedule)
+	assert.Equal(t, "on step 2, expected step 4 by now", f.Note)
+	assert.Equal(t, 20, f.Penalty)
+	assert.Equal(t, 100-20, score)
+}
+
 func TestComputePlanHealth_StalledAndBehindScheduleAreMutuallyExclusive(t *testing.T) {
 	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 	plan := config.PurchasePlan{
@@ -358,6 +405,12 @@ func TestComputePlanHealth_ScoreClampsAtZeroWhenPenaltiesStack(t *testing.T) {
 	assert.Contains(t, factorCodes(factors), HealthFactorBehindSchedule)
 	assert.Contains(t, factorCodes(factors), HealthFactorFailedExecutions)
 	assert.Contains(t, factorCodes(factors), HealthFactorCanceledExecutions)
+	// This plan is 90 days into a 10-step weekly ramp, so the raw quotient
+	// is 12. The note must quote the plan's last step, not a step it will
+	// never reach.
+	assert.Equal(t,
+		"on step 1, expected step 10 by now",
+		factorByCode(t, factors, HealthFactorBehindSchedule).Note)
 }
 
 func TestComputePlanHealth_UnrelatedExecutionStatusesAreNotCounted(t *testing.T) {

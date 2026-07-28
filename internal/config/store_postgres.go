@@ -1697,46 +1697,81 @@ func (s *PostgresStore) GetScheduledExecutionsDue(ctx context.Context) ([]Purcha
 
 // CleanupOldExecutions deletes purchase executions older than retentionDays.
 //
-// Two independent cleanup branches, each with its own retention window so
+// Three independent cleanup branches, each with its own retention window so
 // that a row far in one dimension doesn't block cleanup in the other:
 //
-//  1. Terminal-state cleanup: `status IN ('completed', 'cancelled', 'canceled') AND
-//     scheduled_date < NOW() - retention`. Both spellings are included to
-//     cover legacy rows ('cancelled') and new code rows ('canceled', canonical
-//     US spelling per StatusCanceled / migration 000089). Keeps recent
-//     completions visible in the UI for at least `retention` days before purging.
+//  1. Completed-state cleanup: `status = 'completed' AND scheduled_date <
+//     NOW() - retention`. Keeps recent completions visible in the UI for at
+//     least `retention` days before purging. `scheduled_date` is the right
+//     clock here because a completed row executed on (or very near) the day
+//     it was scheduled for.
 //
-//  2. Expired-execution cleanup: `expires_at IS NOT NULL AND expires_at <
-//     NOW() - retention`. A row whose approval token has been expired
-//     for longer than `retention` is dead — the user can no longer act
-//     on it, and no transition code ever writes an 'expired' status
-//     (the valid_status CHECK doesn't include it), so without this
-//     branch the row would accumulate indefinitely.
+//  2. Canceled-state cleanup: `status IN ('cancelled', 'canceled') AND
+//     updated_at < NOW() - retention`. Both spellings are included to cover
+//     legacy rows ('cancelled') and new code rows ('canceled', canonical US
+//     spelling per StatusCanceled / migration 000089).
 //
-// The two branches are OR'd — a row that qualifies under EITHER is
-// deleted, regardless of the other column. An earlier revision of this
-// function incorrectly AND'd the `scheduled_date` gate with both
-// branches, which meant pending rows with a far-future `scheduled_date`
-// but a long-past `expires_at` never got cleaned up (a user scheduling a
-// 2-year-out purchase with a 30-day approval window would leave a dead
-// row accumulating for 1.9 years after the approval expired).
+//     This branch retains on `updated_at`, NOT `scheduled_date`, and must
+//     stay that way: CountExecutionsByPlanAndStatus windows the plan health
+//     score's canceled count on `updated_at` over exactly this retention
+//     period (see internal/api/plan_health.go planHealthLookbackDays), and
+//     CancelExecutionAtomic stamps `updated_at` while leaving
+//     `scheduled_date` untouched. Retaining on `scheduled_date` therefore
+//     purged rows the score was still counting: cancel a purchase whose
+//     scheduled_date is already past the horizon (a plan's rows are created
+//     up front, and parseCreatePurchasesRequest accepts a past start date)
+//     and the next sweep deleted it the same day, silently raising that
+//     plan's health score by up to 20 points overnight with no operator
+//     action. Nothing accumulates indefinitely: a genuinely old canceled
+//     row still has an old `updated_at`.
 //
-// NULL `expires_at` is excluded from branch 2 so rows that never had an
+//  3. Expired-execution cleanup: `expires_at IS NOT NULL AND expires_at <
+//     NOW() - retention`, for any status branch 2 does not already govern.
+//     A row whose approval token has been expired for longer than
+//     `retention` is dead: the user can no longer act on it, and no
+//     transition code ever writes an 'expired' status (the valid_status
+//     CHECK doesn't include it), so without this branch the row would
+//     accumulate indefinitely.
+//
+//     Canceled statuses are excluded here for the same reason branch 2
+//     exists. `expires_at` is fixed when the approval window opens and is
+//     never rewritten on cancel, so a 'notified' row whose token expired
+//     40 days ago and that an operator cancels today would otherwise be
+//     purged by this branch the same day, reintroducing the exact score
+//     jump branch 2 prevents. Their own `updated_at` window governs them.
+//
+// The branches are OR'd: a row that qualifies under ANY is deleted,
+// regardless of the other columns. An earlier revision of this function
+// incorrectly AND'd the `scheduled_date` gate with both branches, which
+// meant pending rows with a far-future `scheduled_date` but a long-past
+// `expires_at` never got cleaned up (a user scheduling a 2-year-out
+// purchase with a 30-day approval window would leave a dead row
+// accumulating for 1.9 years after the approval expired). Keep each
+// branch fully parenthesized so a future edit can't change the predicate's
+// meaning through AND/OR precedence.
+//
+// NULL `expires_at` is excluded from branch 3 so rows that never had an
 // expiration deadline are safe from expiry-based cleanup.
 func (s *PostgresStore) CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error) {
 	// Both spellings are included: 'cancelled' (legacy, pre-migration 000089
 	// rows) and 'canceled' (canonical, written by new code after the
 	// follow-up to #1277). #1278 will drop 'cancelled' once all rows are
-	// normalized.
+	// normalized. `status` is NOT NULL (migration 000001), so the NOT IN in
+	// branch 3 can't be tripped up by three-valued logic.
 	query := `
 		DELETE FROM purchase_executions
 		WHERE (
-		        status IN ('completed', 'cancelled', 'canceled')
+		        status = 'completed'
 		    AND scheduled_date < NOW() - INTERVAL '1 day' * $1
 		      )
 		   OR (
-		        expires_at IS NOT NULL
-		    AND expires_at    < NOW() - INTERVAL '1 day' * $1
+		        status IN ('cancelled', 'canceled')
+		    AND updated_at     < NOW() - INTERVAL '1 day' * $1
+		      )
+		   OR (
+		        status NOT IN ('cancelled', 'canceled')
+		    AND expires_at IS NOT NULL
+		    AND expires_at     < NOW() - INTERVAL '1 day' * $1
 		      )
 	`
 

@@ -69,6 +69,15 @@ const (
 	// statement about the plan now, so both factors count the same recent
 	// period, the one retention guarantees is fully populated.
 	//
+	// Agreeing on the length is necessary but not sufficient: the sweep has
+	// to measure it from the same column. CountExecutionsByPlanAndStatus
+	// windows on updated_at, so CleanupOldExecutions retains canceled rows
+	// on updated_at too (its branch 2, and the canceled exclusion on its
+	// expires_at branch). If either side is moved back onto scheduled_date,
+	// the sweep starts deleting rows this score is still counting and a
+	// plan's score jumps by up to 20 points overnight with nothing having
+	// changed about the plan.
+	//
 	// Every factor note names the window, so the number on screen is never
 	// ambiguous about what it covers.
 	planHealthLookbackDays = config.DefaultExecutionTTLDays
@@ -206,8 +215,8 @@ func canceledExecutionsFactor(counts config.ExecutionStatusCounts) (PlanHealthFa
 //   - stalled (-15): enabled, past the first scheduled interval, but no
 //     step has executed yet (CurrentStep == 0).
 //   - behind_schedule (-20): CurrentStep lags the step implied by
-//     StartDate + StepIntervalDays, in any other case (including a
-//     disabled plan that was never started).
+//     StartDate + StepIntervalDays and capped at TotalSteps, in any other
+//     case (including a disabled plan that was never started).
 //
 // Plans with no positive StepIntervalDays (e.g. "immediate" ramp schedules)
 // have no schedule position to fall behind on and are skipped entirely --
@@ -238,7 +247,19 @@ func scheduleFactor(plan config.PurchasePlan, now time.Time) (PlanHealthFactor, 
 		}, true
 	}
 
+	// Clamp to the steps the plan actually has. Elapsed time keeps growing
+	// after the ramp's full duration has passed, so the raw quotient runs
+	// past TotalSteps: a 4-step weekly ramp started 90 days ago yields 12.
+	// Reporting "expected step 12 by now" for a 4-step plan quotes a step
+	// the plan does not have, and an operator checking the plan against it
+	// finds nothing to reconcile. The comparison and the note are clamped
+	// together on purpose -- clamping only the note would let the factor
+	// fire on a step number it never displays, and clamping only the
+	// comparison would leave the fabricated number on screen.
 	expectedStep := daysSinceStart / ramp.StepIntervalDays
+	if ramp.TotalSteps > 0 && expectedStep > ramp.TotalSteps {
+		expectedStep = ramp.TotalSteps
+	}
 	if ramp.CurrentStep >= expectedStep {
 		return PlanHealthFactor{}, false
 	}

@@ -2782,6 +2782,41 @@ func TestPGXMock_CleanupOldExecutions_IncludesCanonicalStatus(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestPGXMock_CleanupOldExecutions_RetainsCanceledOnUpdatedAt pins the shape
+// of the retention predicate in the fast unit suite. The behavioral proof
+// (which rows actually survive) lives in the integration test
+// TestPostgresStoreDB_CleanupOldExecutions_RetainsCanceledInsideHealthWindow;
+// this guard catches a refactor that quietly moves the canceled branch back
+// onto scheduled_date, which would let the sweep delete rows the plan health
+// score is still counting on updated_at.
+//
+// Each anchor is asserted separately so a failure names the branch that
+// regressed instead of just "the SQL changed".
+func TestPGXMock_CleanupOldExecutions_RetainsCanceledOnUpdatedAt(t *testing.T) {
+	anchors := map[string]string{
+		"canceled branch retains on updated_at":      `(?s)status IN \('cancelled', 'canceled'\)\s+AND updated_at`,
+		"completed branch retains on scheduled_date": `(?s)status = 'completed'\s+AND scheduled_date`,
+		"expires_at branch skips canceled rows":      `(?s)status NOT IN \('cancelled', 'canceled'\)\s+AND expires_at IS NOT NULL`,
+	}
+
+	for name, pattern := range anchors {
+		t.Run(name, func(t *testing.T) {
+			mock := newMock(t)
+			store := storeWith(mock)
+			ctx := context.Background()
+
+			mock.ExpectExec(pattern).
+				WithArgs(pgxmock.AnyArg()).
+				WillReturnResult(pgxmock.NewResult("DELETE", 1))
+
+			n, err := store.CleanupOldExecutions(ctx, 30)
+			require.NoError(t, err)
+			assert.Equal(t, int64(1), n)
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
 // ─── CountExecutionsByPlanAndStatus ──────────────────────────────────────────
 
 // TestPGXMock_CountExecutionsByPlanAndStatus_AggregatesInSQL is the

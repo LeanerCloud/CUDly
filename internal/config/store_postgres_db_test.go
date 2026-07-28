@@ -1248,3 +1248,169 @@ func TestPostgresStoreDB_SaveRIExchangeRecord_DefaultsEmptyPaymentDue(t *testing
 	require.NoError(t, err, "PaymentDue must parse as a float; got %q", retrieved.PaymentDue)
 	assert.Equal(t, 0.0, parsed, "empty PaymentDue must round-trip as numeric zero")
 }
+
+// TestPostgresStoreDB_CleanupOldExecutions_RetainsCanceledInsideHealthWindow
+// is the regression guard for the retention/health-window mismatch: the
+// cleanup sweep used to retain canceled rows on `scheduled_date` while
+// CountExecutionsByPlanAndStatus counts them on `updated_at`.
+//
+// CancelExecutionAtomic stamps `updated_at` and leaves `scheduled_date`
+// alone, and a plan's executions are created up front (with
+// parseCreatePurchasesRequest accepting a past start date), so a purchase
+// canceled TODAY can carry a `scheduled_date` from 40 days ago. Under the
+// old predicate the very next sweep deleted it, even though the plan health
+// score was still counting it, and the plan's badge silently gained up to
+// 20 points overnight with no operator action.
+//
+// Runs against a real PostgreSQL rather than pgxmock because the defect is
+// in what the predicate MEANS, not in how it is spelled: only the database
+// can answer which rows actually survive.
+func TestPostgresStoreDB_CleanupOldExecutions_RetainsCanceledInsideHealthWindow(t *testing.T) {
+	conn := setupTestContainerDB(t)
+	if conn == nil {
+		return
+	}
+
+	cleanupTestData(t, conn)
+
+	store := NewPostgresStore(conn)
+	ctx := context.Background()
+
+	plan := &PurchasePlan{
+		Name:                   "Retention Window Plan",
+		Enabled:                true,
+		NotificationDaysBefore: 7,
+		Services:               map[string]ServiceConfig{},
+		RampSchedule:           PresetRampSchedules["immediate"],
+	}
+	require.NoError(t, store.CreatePurchasePlan(ctx, plan))
+
+	// Rows are inserted with raw SQL so scheduled_date / updated_at /
+	// expires_at can be set independently. The updated_at trigger is BEFORE
+	// UPDATE only, so an explicit INSERT value is preserved.
+	const retentionDays = 30
+	cases := []struct {
+		name          string
+		status        string
+		scheduledDays int  // offset in days from now (negative = past)
+		updatedDays   int  // offset in days from now
+		expiresDays   *int // nil => NULL expires_at
+		shouldSurvive bool
+		why           string
+	}{
+		{
+			name:          "canceled-today-old-scheduled-date",
+			status:        StatusCanceled,
+			scheduledDays: -40,
+			updatedDays:   0,
+			shouldSurvive: true,
+			why:           "canceled inside the health window; the score still counts it",
+		},
+		{
+			name:          "canceled-today-old-scheduled-date-and-expired-token",
+			status:        StatusCanceled,
+			scheduledDays: -40,
+			updatedDays:   0,
+			expiresDays:   intPtr(-40),
+			shouldSurvive: true,
+			why:           "expires_at branch must not purge what the canceled branch retains",
+		},
+		{
+			// Deliberately the LegacyStatusCanceled constant, i.e. the
+			// pre-migration-000089 double-l DB value. The label avoids
+			// spelling it out only to keep the misspell linter quiet.
+			name:          "legacy-spelling-canceled-today-old-scheduled-date",
+			status:        LegacyStatusCanceled,
+			scheduledDays: -40,
+			updatedDays:   0,
+			shouldSurvive: true,
+			why:           "the legacy spelling is retained on updated_at too",
+		},
+		{
+			name:          "canceled-long-ago",
+			status:        StatusCanceled,
+			scheduledDays: -40,
+			updatedDays:   -40,
+			shouldSurvive: false,
+			why:           "genuinely past retention; the fix must not disable cleanup",
+		},
+		{
+			name:          "completed-old-scheduled-date",
+			status:        "completed",
+			scheduledDays: -40,
+			updatedDays:   0,
+			shouldSurvive: false,
+			why:           "completed rows still retain on scheduled_date",
+		},
+		{
+			name:          "notified-with-long-expired-token",
+			status:        "notified",
+			scheduledDays: 400,
+			updatedDays:   0,
+			expiresDays:   intPtr(-40),
+			shouldSurvive: false,
+			why:           "dead approval token; the expires_at branch still reaps non-canceled rows",
+		},
+		{
+			name:          "pending-old-scheduled-date-no-expiry",
+			status:        "pending",
+			scheduledDays: -40,
+			updatedDays:   0,
+			shouldSurvive: true,
+			why:           "non-terminal with no expiry deadline is never swept",
+		},
+	}
+
+	byExecutionID := make(map[string]string, len(cases))
+	for _, tc := range cases {
+		execID := uuid.New().String()
+		byExecutionID[execID] = tc.name
+
+		var expiresAt any
+		if tc.expiresDays != nil {
+			expiresAt = time.Now().AddDate(0, 0, *tc.expiresDays)
+		}
+
+		_, err := conn.Exec(ctx, `
+			INSERT INTO purchase_executions
+			    (plan_id, execution_id, status, step_number,
+			     scheduled_date, expires_at, created_at, updated_at)
+			VALUES ($1, $2, $3, 1, $4, $5, NOW(), $6)
+		`,
+			plan.ID,
+			execID,
+			tc.status,
+			time.Now().AddDate(0, 0, tc.scheduledDays),
+			expiresAt,
+			time.Now().AddDate(0, 0, tc.updatedDays),
+		)
+		require.NoErrorf(t, err, "seeding %s", tc.name)
+	}
+
+	deleted, err := store.CleanupOldExecutions(ctx, retentionDays)
+	require.NoError(t, err)
+
+	rows, err := conn.Query(ctx,
+		`SELECT execution_id FROM purchase_executions WHERE plan_id = $1`, plan.ID)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	survived := make(map[string]bool)
+	for rows.Next() {
+		var execID string
+		require.NoError(t, rows.Scan(&execID))
+		survived[byExecutionID[execID]] = true
+	}
+	require.NoError(t, rows.Err())
+
+	wantDeleted := int64(0)
+	for _, tc := range cases {
+		if tc.shouldSurvive {
+			assert.Truef(t, survived[tc.name], "%s must SURVIVE the sweep: %s", tc.name, tc.why)
+		} else {
+			assert.Falsef(t, survived[tc.name], "%s must be DELETED: %s", tc.name, tc.why)
+			wantDeleted++
+		}
+	}
+	assert.Equal(t, wantDeleted, deleted, "RowsAffected must match the rows actually purged")
+}
