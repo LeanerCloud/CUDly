@@ -127,10 +127,12 @@ if [[ "$PROVIDER_TYPE" == "aws" ]]; then
   AWS_ROLE_ARN="arn:aws:sts::${AWS_ACCOUNT_ID}:assumed-role/${AWS_ROLE_NAME}"
   EXPECTED_CONDITION="attribute.aws_role == '${AWS_ROLE_ARN}'"
   # google.subject is the full session ARN here and GCP caps it at 127 chars.
-  # "arn:aws:sts::<12 digits>:assumed-role/<role>/<session>" leaves
-  # 127 - 38 - len(role) - 1 for the session name, which AWS allows up to 64.
-  if [[ $((127 - 38 - ${#AWS_ROLE_NAME} - 1)) -lt 64 ]]; then
-    echo "Note: role name '${AWS_ROLE_NAME}' leaves only $((127 - 38 - ${#AWS_ROLE_NAME} - 1)) characters" >&2
+  # "arn:aws:sts::<12 digits>:assumed-role/" is 39 characters, and the session
+  # name is preceded by a "/", so the role name leaves 127 - 39 - len(role) - 1
+  # for a session name that AWS allows to reach 64.
+  AWS_SESSION_BUDGET=$((127 - 39 - ${#AWS_ROLE_NAME} - 1))
+  if [[ $AWS_SESSION_BUDGET -lt 64 ]]; then
+    echo "Note: role name '${AWS_ROLE_NAME}' leaves only ${AWS_SESSION_BUDGET} characters" >&2
     echo "      for the session name before google.subject exceeds GCP's 127-character" >&2
     echo "      limit. Longer session names will be rejected at token-exchange time." >&2
   fi
@@ -174,15 +176,21 @@ if ! gcloud iam workload-identity-pools describe "$POOL_ID" \
     --display-name="CUDly WIF pool" --quiet
 else
   echo "Reusing existing pool '${POOL_ID}'"
-  # GCP principal identifiers are pool-scoped, not provider-scoped: the grant
-  # below names an attribute value, and any provider in this pool that can mint
-  # that attribute satisfies it. A pool dedicated to this provider keeps the
-  # trust boundary equal to the attribute condition set below.
-  echo "Note: principal identifiers are pool-scoped, not provider-scoped. Another" >&2
-  echo "      provider in this pool that maps the same attribute value would also" >&2
-  echo "      satisfy the grant below. Use a pool dedicated to CUDly (--pool-id)" >&2
-  echo "      unless you intend to share it." >&2
 fi
+
+# GCP principal identifiers are pool-scoped, not provider-scoped: the grant below
+# names an attribute value, and any provider in this pool that can mint that
+# attribute satisfies it. A pool dedicated to this provider keeps the trust
+# boundary equal to the attribute condition set below.
+#
+# Printed unconditionally, not only when reusing a pool: a pool this run creates
+# fresh is equally exposed the moment a second provider is added to it later, and
+# that operator would otherwise never have seen the warning. No script can close
+# this - GCP has no provider-scoped principal form - so a notice is the ceiling.
+echo "Note: principal identifiers are pool-scoped, not provider-scoped. Another" >&2
+echo "      provider in pool '${POOL_ID}' that maps the same attribute value would" >&2
+echo "      also satisfy the grant below. Keep this pool dedicated to CUDly" >&2
+echo "      (--pool-id) unless you intend to share it." >&2
 
 # ── Idempotent provider creation ───────────────────────────────────────────────
 if ! gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
@@ -326,8 +334,13 @@ fi
 # Narrow grants for identities other than this run's are not removed (they may
 # belong to a second legitimate CUDly account), but they are surfaced: a re-run
 # with a corrected role or subject otherwise leaves the previous one impersonating.
-OTHER_GRANTS=$(grep -F "iam.googleapis.com/${POOL_RESOURCE}/" <<<"$SA_BINDINGS" \
-  | grep -vF -- "$MEMBER" || true)
+# The member is compared as a whole field, not with `grep -vF`. A substring
+# exclusion drops every line CONTAINING this run's member, so a sibling grant
+# whose member merely starts with it is suppressed: pinning CUDly-Execution would
+# hide an existing grant to CUDly-Execution-Admin, in exactly the "re-ran with a
+# corrected role" case this notice exists to surface.
+OTHER_GRANTS=$(awk -F'\t' -v pool="iam.googleapis.com/${POOL_RESOURCE}/" -v m="$MEMBER" \
+  'index($2, pool) && $2 != m' <<<"$SA_BINDINGS" || true)
 if [[ -n "$OTHER_GRANTS" ]]; then
   echo "Note: ${SA_EMAIL} is also impersonable by other identities in pool '${POOL_ID}':" >&2
   while IFS= read -r grant_line; do
