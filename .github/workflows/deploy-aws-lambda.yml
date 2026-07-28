@@ -147,16 +147,32 @@ jobs:
             TAG="$COMMIT_SHA"
           fi
 
-          # A git ref name may contain ';', '$', '`', '(', ')' and '|', so a
-          # release tag is attacker-settable shell metacharacter soup. Constrain
-          # it to the OCI tag grammar so it cannot poison the $GITHUB_OUTPUT
-          # write below with a newline or a heredoc delimiter, and stays valid
-          # if it is ever wired to Terraform's custom_image_tag (it is not
-          # today; the image tag is derived inside the build module). The check
-          # runs against a shell variable rather than an already-expanded
-          # expression, so unlike the original it actually validates something.
-          if [[ ! "$TAG" =~ ^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$ ]]; then
-            echo "::error::Refusing unsafe image tag: must match ^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$"
+          # Shell metacharacters in a tag (';', '$', '`', '|') are already inert:
+          # the value arrives via `env:` and is only ever referenced quoted, so
+          # it is data, not code. What a charset filter must actually stop is a
+          # NEWLINE, because this value is written to $GITHUB_OUTPUT as a single
+          # `tag=<value>` line — a newline would let a crafted tag append extra
+          # attacker-chosen output keys, and those outputs are consumed by the
+          # two credentialed downstream jobs.
+          #
+          # So reject control characters and reject empty, and allow the rest of
+          # the git ref charset. A stricter OCI-grammar filter would reject
+          # `release/1.0` and `v1.2.3+build.5` — both legitimate git tags, and
+          # this repo already uses slash-namespaced ones — hard-failing a
+          # production deploy for no security gain.
+          #
+          # NOTE: this deliberately does NOT enforce the OCI tag grammar,
+          # because the value is cosmetic today: it reaches only
+          # deployment-info.json (via `jq --arg`) and the step summary.
+          # Terraform derives the real image tag from the git commit in
+          # modules/build. If this is ever wired to `custom_image_tag`, add an
+          # OCI-grammar check HERE at the same time.
+          if [ -z "$TAG" ]; then
+            echo "::error::Refusing empty image tag"
+            exit 1
+          fi
+          if [[ "$TAG" =~ [[:cntrl:]] ]]; then
+            echo "::error::Refusing image tag containing control characters or newlines"
             exit 1
           fi
 
@@ -267,9 +283,11 @@ jobs:
         id: outputs
         run: |
           cd terraform/environments/aws
-          echo "function_url=$(terraform output -raw lambda_function_url 2>/dev/null | grep -v '::' || echo "")" >> $GITHUB_OUTPUT
-          echo "function_name=$(terraform output -raw lambda_function_name 2>/dev/null | grep -v '::' || echo "")" >> $GITHUB_OUTPUT
-          echo "log_group=$(terraform output -raw lambda_log_group_name 2>/dev/null | grep -v '::' || echo "")" >> $GITHUB_OUTPUT
+          {
+            echo "function_url=$(terraform output -raw lambda_function_url 2>/dev/null | grep -v '::' || echo "")"
+            echo "function_name=$(terraform output -raw lambda_function_name 2>/dev/null | grep -v '::' || echo "")"
+            echo "log_group=$(terraform output -raw lambda_log_group_name 2>/dev/null | grep -v '::' || echo "")"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Save deployment info
         env:
@@ -350,7 +368,7 @@ jobs:
             echo "Failed to get function URL from AWS Lambda API for $FUNCTION_NAME"
             exit 1
           fi
-          echo "url=$FUNCTION_URL" >> $GITHUB_OUTPUT
+          echo "url=$FUNCTION_URL" >> "$GITHUB_OUTPUT"
 
       - name: Wait for Lambda to be ready
         run: |
@@ -417,31 +435,44 @@ jobs:
           name: deployment-info-lambda-${{ needs.prepare.outputs.target_environment }}
         continue-on-error: true
 
+      # Every value arrives via `env:`, including the ones whose safety is
+      # currently guaranteed by a check in a DIFFERENT job. Relying on "an
+      # upstream job validated this" makes the rule "raw interpolation is fine
+      # when someone else checked" — an implicit invariant that breaks silently
+      # the moment the upstream guard moves. One uniform rule instead.
       - name: Post summary
+        env:
+          TARGET_ENVIRONMENT: ${{ needs.prepare.outputs.target_environment }}
+          IMAGE_TAG: ${{ needs.prepare.outputs.image_tag }}
+          DEPLOY_RESULT: ${{ needs.build-and-deploy.result }}
+          TEST_RESULT: ${{ needs.test-deployment.result }}
         run: |
-          echo "## AWS Lambda Deployment Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** ${{ needs.prepare.outputs.target_environment }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Image Tag:** ${{ needs.prepare.outputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Status:** ${{ needs.build-and-deploy.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          set -euo pipefail
 
-          if [ -f deployment-info.json ]; then
-            echo "### Deployment Details" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
-            cat deployment-info.json >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          fi
+          {
+            echo "## AWS Lambda Deployment Summary"
+            echo ""
+            echo "**Environment:** $TARGET_ENVIRONMENT"
+            echo "**Image Tag:** $IMAGE_TAG"
+            echo "**Status:** $DEPLOY_RESULT"
+            echo ""
 
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Job Results" >> $GITHUB_STEP_SUMMARY
-          echo "- Deploy: ${{ needs.build-and-deploy.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Test: ${{ needs.test-deployment.result }}" >> $GITHUB_STEP_SUMMARY
+            if [ -f deployment-info.json ]; then
+              echo "### Deployment Details"
+              echo '```json'
+              cat deployment-info.json
+              echo '```'
+            fi
 
-          if [ "${{ needs.build-and-deploy.result }}" == "success" ] && [ "${{ needs.test-deployment.result }}" == "success" ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Deployment successful!**" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Deployment failed. Check logs for details.**" >> $GITHUB_STEP_SUMMARY
-          fi
+            echo ""
+            echo "### Job Results"
+            echo "- Deploy: $DEPLOY_RESULT"
+            echo "- Test: $TEST_RESULT"
+            echo ""
+
+            if [ "$DEPLOY_RESULT" = "success" ] && [ "$TEST_RESULT" = "success" ]; then
+              echo "**Deployment successful!**"
+            else
+              echo "**Deployment failed. Check logs for details.**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
