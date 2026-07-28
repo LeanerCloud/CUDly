@@ -34,8 +34,13 @@ onboarding flow is broken until the generator and `aws-cfn-deploy.sh.tmpl` are
 taught to emit the subject. The `aws-wif-cli.sh.tmpl` path does not go through
 CloudFormation at all: `format=cli` is a first-class user-selectable download,
 so a customer choosing the CLI bundle still gets exactly the subject-less
-role #1543 describes. The tfvars path is fail-closed (Terraform's variable
-validation rejects the omission) but misleads the operator first.
+role #1543 describes. The tfvars path is fail-closed, but not for the reason
+one might assume: with `oidc_subject_claim` commented out there is no value
+for a `validation` block to inspect, so the validations never fire. What makes
+it fail-closed is the **absent default** on the variable, which makes
+Terraform prompt for the value interactively or hard-error under
+`-input=false`. The validations only apply once a value exists. The security
+property holds; the operator is still misled by the "Optional" label first.
 **Status:** ⚠️ Still valid — tracked as a follow-up to #1543 in #1640, and not
 fixed in that PR because `internal/` was owned by concurrent in-flight
 branches.
@@ -60,7 +65,7 @@ purchases are irreversible multi-year spend.
 **Resolved by:** #1543 — removes the `HasSubject` condition and the
 subject-less trust statement, and makes `OIDCSubjectClaim` a required
 parameter (no `Default`, `MinLength: 1`, `AllowedPattern` rejecting
-whitespace-only values and any `*` or `$`), mirroring the Terraform module's
+any whitespace, `*` or `$`), mirroring the Terraform module's
 `oidc_subject_claim` validation.
 
 `$` is rejected because `AssumeRolePolicyDocument` is an IAM policy document
@@ -166,7 +171,7 @@ other control on this trust policy.
 **Description**: A whitespace-only audience value previously created a trust policy that no token matches.
 **Status:** ✔️ Resolved
 
-**Resolved by:** Added `AllowedPattern` and `ConstraintDescription` to the `OIDCAudience` parameter. Empty strings remain allowed (HasAudience stays false); whitespace-only and leading/trailing-whitespace values are now rejected at change-set creation time. #1543 tightened the pattern to `^$|^[^\\s*$]$|^[^\\s*$][^*$]*[^\\s*$]$`, additionally rejecting `*` and `$` for the IAM policy-variable-expansion reason described in the #1543 entry above.
+**Resolved by:** Added `AllowedPattern` and `ConstraintDescription` to the `OIDCAudience` parameter. Empty strings remain allowed (HasAudience stays false); whitespace-only and leading/trailing-whitespace values are now rejected at change-set creation time. #1543 tightened the pattern to `^$|^[^\\s*$]+$`, additionally rejecting `*`, `$` and interior whitespace for the IAM policy-variable-expansion reason described in the #1543 entry above.
 
 ### Original implementation plan
 

@@ -39,10 +39,10 @@ Parameters:
       literal string sts.amazonaws.com, so only tokens carrying exactly that
       audience are accepted.
     Default: ""
-    AllowedPattern: "^$|^[^\\s*$]$|^[^\\s*$][^*$]*[^\\s*$]$"
+    AllowedPattern: "^$|^[^\\s*$]+$"
     ConstraintDescription: >
-      OIDCAudience must be empty, or a non-whitespace string with no
-      leading/trailing whitespace and containing no '$' or '*'.
+      OIDCAudience must be empty, or a string containing no whitespace, '$'
+      or '*' anywhere.
       '$' is rejected because the trust policy is an IAM policy document and
       IAM expands ${...} policy variables inside Condition values: an audience
       of ${accounts.google.com:aud} would expand to the presented token's own
@@ -69,17 +69,19 @@ Parameters:
       so any tenant of that issuer could assume this role and place
       irreversible multi-year commitment purchases in this account.
       Azure AD managed identity: the object ID of the managed identity.
-      GCP service account: the service account's 21-digit numeric unique ID.
-      That is the sub claim accounts.google.com actually issues; it is not the
-      service account email. The system:serviceaccount:<namespace>:<name> form
-      is the Kubernetes subject format and belongs to a cluster OIDC issuer,
-      not to accounts.google.com.
+      GCP service account: the service account's numeric unique ID (typically
+      21 digits; Google documents it as a numeric string without guaranteeing
+      a length). That is the sub claim accounts.google.com actually issues; it
+      is not the service account email.
+      The system:serviceaccount:<namespace>:<name> form is the Kubernetes
+      subject format and belongs to a cluster OIDC issuer, not to
+      accounts.google.com.
       Mirrors the required oidc_subject_claim variable in the Terraform module.
     MinLength: 1
-    AllowedPattern: "^[^\\s*$]$|^[^\\s*$][^*$]*[^\\s*$]$"
+    AllowedPattern: "^[^\\s*$]+$"
     ConstraintDescription: >
-      OIDCSubjectClaim is required and must be a non-empty string with no
-      leading/trailing whitespace and containing no '$' or '*'.
+      OIDCSubjectClaim is required and must be a non-empty string containing
+      no whitespace, '$' or '*' anywhere.
       '$' is rejected because the trust policy below is an IAM policy document
       (Version 2012-10-17) and IAM expands ${...} policy variables inside
       Condition values. A subject of ${accounts.google.com:sub} would expand

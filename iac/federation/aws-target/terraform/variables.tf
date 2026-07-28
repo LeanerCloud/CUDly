@@ -29,10 +29,14 @@ variable "oidc_audience" {
   # Same IAM policy-variable expansion hazard as oidc_subject_claim: an
   # audience of ${accounts.google.com:aud} expands to the token's own aud
   # claim and matches every token. Audience is the only other control on this
-  # trust policy, so it gets the same guard.
+  # trust policy, so it gets the same guard, including the whitespace
+  # rejection that keeps it equivalent to the CloudFormation AllowedPattern
+  # ^$|^[^\s*$]+$. An empty audience still passes (it contains none of the
+  # rejected characters) and falls back to sts.amazonaws.com, matching that
+  # pattern's ^$ branch without needing an explicit empty-string clause.
   validation {
-    condition     = !can(regex("[*$]", var.oidc_audience))
-    error_message = "oidc_audience must not contain '$' or '*'. IAM expands $${...} policy variables inside Condition values, so a value such as $${accounts.google.com:aud} would expand to the token's own aud claim and match every token. '*' is compared literally by StringEquals."
+    condition     = !can(regex("[\\s*$]", var.oidc_audience))
+    error_message = "oidc_audience must not contain whitespace, '$' or '*'. IAM expands $${...} policy variables inside Condition values, so a value such as $${accounts.google.com:aud} would expand to the token's own aud claim and match every token. '*' is compared literally by StringEquals."
   }
 }
 
@@ -40,8 +44,10 @@ variable "oidc_subject_claim" {
   description = <<-EOT
     Subject (sub) claim used to restrict OIDC trust to a specific identity.
     Azure AD managed identity: the object ID of the managed identity.
-    GCP service account:       the service account's 21-digit numeric unique
-                               ID. That is the sub claim accounts.google.com
+    GCP service account:       the service account's numeric unique ID
+                               (typically 21 digits; Google documents it as a
+                               numeric string without guaranteeing a length).
+                               That is the sub claim accounts.google.com
                                actually issues; it is not the SA email. The
                                system:serviceaccount:<namespace>:<name> form
                                is the Kubernetes subject format and belongs to
@@ -61,9 +67,14 @@ variable "oidc_subject_claim" {
   # expands to the presented token's own sub claim, making the condition a
   # tautology that matches every identity the issuer can mint. Reject '$'
   # outright rather than emit a trust policy that only looks restricted.
+  # Whitespace is rejected in the same expression so this stays byte-for-byte
+  # equivalent to the CloudFormation AllowedPattern ^[^\s*$]+$ that the
+  # template's ConstraintDescription claims to mirror. No real OIDC subject
+  # (GCP numeric IDs, Azure GUIDs, system:serviceaccount:, GitHub, GitLab,
+  # SPIFFE, Auth0, Bitbucket) contains whitespace.
   validation {
-    condition     = !can(regex("[*$]", var.oidc_subject_claim))
-    error_message = "oidc_subject_claim must not contain '$' or '*'. IAM expands $${...} policy variables inside Condition values, so a value such as $${accounts.google.com:sub} would expand to the token's own sub claim and match every identity the issuer can mint. '*' is compared literally by StringEquals and would silently produce a role nobody can assume."
+    condition     = !can(regex("[\\s*$]", var.oidc_subject_claim))
+    error_message = "oidc_subject_claim must not contain whitespace, '$' or '*'. IAM expands $${...} policy variables inside Condition values, so a value such as $${accounts.google.com:sub} would expand to the token's own sub claim and match every identity the issuer can mint. '*' is compared literally by StringEquals and would silently produce a role nobody can assume."
   }
 }
 
