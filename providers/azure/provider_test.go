@@ -1450,6 +1450,92 @@ func TestAzureProvider_GetAccounts_ConcurrentColdCache_SingleARMCall(t *testing.
 		"concurrent cold-cache GetAccounts must issue exactly one ARM list call (single-flight)")
 }
 
+// TestAzureProvider_ConcurrentCredentialSwapAndFetch_NoDataRace guards the
+// publication of the two swappable fields.
+//
+// SetCredential / SetSubscriptionsClient used to write p.cred and
+// p.subscriptionsClient as plain assignments and only THEN take accountsMu to
+// invalidate, while fetchAccounts read both from a goroutine running on behalf
+// of every caller that joined the single-flight. That is an unsynchronized
+// read/write pair, and the window it opens can hand the fetch a new credential
+// paired with the old subscriptions client.
+//
+// The hammer below is deliberately free of happens-before edges between the
+// swapping goroutines and the fetching ones -- an ordered handshake (e.g.
+// waiting on firstInFlight before swapping) would establish exactly the
+// ordering that makes the race invisible to -race. Value assertions are
+// intentionally absent: this test's assertion IS the race detector, so it must
+// run under `go test -race` to be meaningful.
+func TestAzureProvider_ConcurrentCredentialSwapAndFetch_NoDataRace(t *testing.T) {
+	clearAzureSubscriptionEnv(t)
+
+	p := &AzureProvider{cred: &mockTokenCredential{}}
+	p.SetSubscriptionsClient(twoSubscriptionPages())
+
+	const (
+		readers = 8
+		rounds  = 25
+	)
+
+	stop := make(chan struct{})
+	var swappers sync.WaitGroup
+	swappers.Add(2)
+	go func() {
+		defer swappers.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			p.SetCredential(&mockTokenCredential{})
+		}
+	}()
+	go func() {
+		defer swappers.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			p.SetSubscriptionsClient(twoSubscriptionPages())
+		}
+	}()
+
+	var wg sync.WaitGroup
+	errs := make(chan error, readers*rounds)
+	for i := 0; i < readers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for r := 0; r < rounds; r++ {
+				// Both readers of the swapped fields: GetAccounts reaches
+				// fetchAccounts, GetServiceClientForAccount builds a client
+				// straight from the credential.
+				if _, err := p.GetAccounts(context.Background()); err != nil {
+					errs <- err
+					return
+				}
+				if _, err := p.GetServiceClientForAccount(context.Background(), common.ServiceCompute, "eastus", "sub-1"); err != nil {
+					errs <- err
+					return
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(stop)
+	swappers.Wait()
+	close(errs)
+
+	// require.* only from the test goroutine, never the workers.
+	for err := range errs {
+		require.NoError(t, err)
+	}
+}
+
 // Swapping the credential or the subscriptions client must drop the cached
 // subscription list. The cache records what the PREVIOUS credential/client
 // could see; serving it afterwards would report subscriptions the new

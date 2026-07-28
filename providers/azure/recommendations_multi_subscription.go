@@ -41,6 +41,16 @@ type SubscriptionFailure struct {
 	Err            error
 }
 
+// ErrSubscriptionNotAccessible is the cause recorded for a subscription named
+// by RecommendationParams.AccountFilter that is not among the subscriptions
+// visible to the authenticated principal.
+//
+// It is a distinct sentinel (rather than a formatted string) so a caller can
+// tell "the principal cannot see this subscription" -- a durable access or
+// configuration problem -- apart from a transient per-subscription ARM failure
+// that a retry might clear.
+var ErrSubscriptionNotAccessible = errors.New("subscription is not accessible to the authenticated principal")
+
 // PartialSubscriptionFailureError reports that an org-wide fan-out completed
 // with some subscriptions queried successfully and others not.
 //
@@ -67,7 +77,11 @@ type SubscriptionFailure struct {
 // Failing the whole sweep on one transient subscription error would be worse
 // than a partial result, which is why the successful data is still returned.
 type PartialSubscriptionFailureError struct {
-	// Attempted is how many subscriptions the fan-out queried.
+	// Attempted is how many subscriptions the sweep was supposed to cover:
+	// the ones actually queried plus any named by AccountFilter that the
+	// principal cannot see (those are never queried, but they were asked
+	// for, so leaving them out of the denominator would under-report the
+	// gap this error exists to surface).
 	Attempted int
 	// Succeeded is how many returned a result. Always < Attempted and > 0:
 	// an all-failed sweep is a plain error, not a partial one.
@@ -77,6 +91,15 @@ type PartialSubscriptionFailureError struct {
 }
 
 func (e *PartialSubscriptionFailureError) Error() string {
+	// Failed is exported and the zero value is constructible, so an
+	// externally-built or zero-valued instance must format rather than panic
+	// on Failed[0] -- an error type that panics when logged turns a partial
+	// sweep into a crash at exactly the moment the operator needs the message.
+	if len(e.Failed) == 0 {
+		return fmt.Sprintf(
+			"azure recommendations incomplete: %d of %d subscriptions succeeded; no failures recorded",
+			e.Succeeded, e.Attempted)
+	}
 	return fmt.Sprintf(
 		"azure recommendations incomplete: %d of %d subscriptions succeeded; %d failed (%s): %v",
 		e.Succeeded, e.Attempted, len(e.Failed),
@@ -188,12 +211,17 @@ func NewMultiSubscriptionRecommendationsClient(cred azcore.TokenCredential, acco
 // that treats any non-nil error as fatal gets a loud failure rather than a
 // silently incomplete sweep. Either way the incompleteness is visible in the
 // return values, not just in a log line.
+//
+// The same signal covers params.AccountFilter entries that name no accessible
+// subscription: they are reported as ErrSubscriptionNotAccessible failures
+// rather than silently dropped from the sweep, so a partially-satisfied filter
+// never returns a nil error (see selectSubscriptions).
 func (m *MultiSubscriptionRecommendationsClient) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	if params == nil {
 		return nil, fmt.Errorf("params cannot be nil")
 	}
 
-	targets, err := m.selectSubscriptions(params.AccountFilter)
+	targets, unmatched, err := m.selectSubscriptions(params.AccountFilter)
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +251,7 @@ func (m *MultiSubscriptionRecommendationsClient) GetRecommendations(ctx context.
 		return nil, err
 	}
 
-	return mergeSubscriptionResults(targets, results, errs)
+	return mergeSubscriptionResults(targets, results, errs, unmatched)
 }
 
 // selectSubscriptions narrows the fan-out to params.AccountFilter.
@@ -245,42 +273,77 @@ func (m *MultiSubscriptionRecommendationsClient) GetRecommendations(ctx context.
 // this client exists to provide. A non-empty filter that matches nothing is
 // an error rather than an empty result: returning zero recommendations would
 // be indistinguishable from "these subscriptions have no savings available".
-func (m *MultiSubscriptionRecommendationsClient) selectSubscriptions(filter []string) ([]subscriptionClient, error) {
+//
+// A filter that matches SOME of its entries and misses others is the same
+// hazard at smaller scale, so the misses are reported too, via the second
+// return value: an operator who scopes a sweep to sub-A and sub-B, and whose
+// principal has since lost Reader on sub-B, must not be handed sub-A's
+// recommendations with a nil error -- sub-B would read as "no savings
+// available" rather than "never queried". The misses are folded into the
+// partial-failure error by mergeSubscriptionResults rather than failing the
+// call outright, because a stored filter covering many subscriptions must not
+// become a total collection outage the moment one of them is deleted or
+// access to it is revoked. That is the same trade-off
+// PartialSubscriptionFailureError already makes for per-subscription API
+// failures: keep the data, but make the gap a programmatic signal.
+//
+// Returns (selected, unmatchedFilterEntries, error). unmatched is nil when the
+// filter is empty or every entry matched.
+func (m *MultiSubscriptionRecommendationsClient) selectSubscriptions(filter []string) ([]subscriptionClient, []string, error) {
 	if len(filter) == 0 {
-		return m.subscriptions, nil
+		return m.subscriptions, nil, nil
 	}
 
-	wanted := make(map[string]struct{}, len(filter))
-	for _, id := range filter {
-		wanted[id] = struct{}{}
-	}
-
-	selected := make([]subscriptionClient, 0, len(m.subscriptions))
+	available := make(map[string]subscriptionClient, len(m.subscriptions))
 	for _, sub := range m.subscriptions {
-		if _, ok := wanted[sub.subscriptionID]; ok {
-			selected = append(selected, sub)
-		}
+		available[sub.subscriptionID] = sub
 	}
+
+	// Iterate the filter (not m.subscriptions) so every requested entry is
+	// accounted for as either matched or missed. Duplicate filter entries are
+	// collapsed via seen so one subscription is neither queried twice nor
+	// double-counted in Attempted.
+	seen := make(map[string]struct{}, len(filter))
+	selected := make([]subscriptionClient, 0, len(filter))
+	var unmatched []string
+	for _, id := range filter {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		if sub, ok := available[id]; ok {
+			selected = append(selected, sub)
+			continue
+		}
+		unmatched = append(unmatched, id)
+	}
+
 	if len(selected) == 0 {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"azure multi-subscription recommendations: account filter %v matches none of the %d accessible subscriptions",
 			filter, len(m.subscriptions))
 	}
-	return selected, nil
+	return selected, unmatched, nil
 }
 
 // mergeSubscriptionResults concatenates successful per-subscription results,
 // logging a warning for each subscription that failed, and applies the
 // all-attempted-failed guard described in GetRecommendations' doc comment.
 // subs, results and errs are index-aligned.
-func mergeSubscriptionResults(subs []subscriptionClient, results [][]common.Recommendation, errs []error) ([]common.Recommendation, error) {
+//
+// unmatched carries the AccountFilter entries that named no accessible
+// subscription (see selectSubscriptions). They were never queried, so they
+// have no results slot, but they count towards both Attempted and Failed:
+// a requested subscription that could not be reached is a gap in the sweep
+// whether the reason was an ARM error or missing access.
+func mergeSubscriptionResults(subs []subscriptionClient, results [][]common.Recommendation, errs []error, unmatched []string) ([]common.Recommendation, error) {
 	total := 0
 	for _, r := range results {
 		total += len(r)
 	}
 
 	out := make([]common.Recommendation, 0, total)
-	failed := make([]SubscriptionFailure, 0, len(subs))
+	failed := make([]SubscriptionFailure, 0, len(subs)+len(unmatched))
 	for i, err := range errs {
 		if err != nil {
 			failed = append(failed, SubscriptionFailure{SubscriptionID: subs[i].subscriptionID, Err: err})
@@ -289,11 +352,19 @@ func mergeSubscriptionResults(subs []subscriptionClient, results [][]common.Reco
 		}
 		out = append(out, results[i]...)
 	}
+	// Appended after the queried subscriptions' failures so failed[0] keeps
+	// naming a real API error when there is one -- that is the cause the
+	// all-failed guard below wraps, and the one an operator can act on.
+	for _, id := range unmatched {
+		failed = append(failed, SubscriptionFailure{SubscriptionID: id, Err: ErrSubscriptionNotAccessible})
+		logging.Warnf("Azure subscription %s was requested by the account filter but is not accessible; it was not queried", id)
+	}
 
+	attempted := len(subs) + len(unmatched)
 	if len(failed) == 0 {
 		return out, nil
 	}
-	if len(failed) == len(subs) {
+	if len(failed) == attempted {
 		return nil, fmt.Errorf("all %d Azure subscriptions failed to return recommendations: %w", len(failed), failed[0].Err)
 	}
 
@@ -301,8 +372,8 @@ func mergeSubscriptionResults(subs []subscriptionClient, results [][]common.Reco
 	// did not, so the caller can tell an incomplete sweep from a complete one
 	// that happened to find nothing. See PartialSubscriptionFailureError.
 	return out, &PartialSubscriptionFailureError{
-		Attempted: len(subs),
-		Succeeded: len(subs) - len(failed),
+		Attempted: attempted,
+		Succeeded: attempted - len(failed),
 		Failed:    failed,
 	}
 }

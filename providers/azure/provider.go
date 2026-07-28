@@ -171,9 +171,15 @@ func resolveAzureSubscriptionID(config *provider.ProviderConfig) string {
 // Drops any cached subscription list: the cache holds what the PREVIOUS
 // client returned, and serving that after the client is swapped would answer
 // with a different source's subscriptions.
+//
+// The swap and the invalidation happen under a single accountsMu write so a
+// concurrent fetch can never observe the new client alongside the old cache
+// generation -- see the accountsMu comment on AzureProvider.
 func (p *AzureProvider) SetSubscriptionsClient(client SubscriptionsClient) {
+	p.accountsMu.Lock()
+	defer p.accountsMu.Unlock()
 	p.subscriptionsClient = client
-	p.InvalidateAccountsCache()
+	p.invalidateAccountsCacheLocked()
 }
 
 // SetCredentialProvider sets the credential provider (for testing)
@@ -191,9 +197,56 @@ func (p *AzureProvider) SetCredentialProvider(credProvider CredentialProvider) {
 // and -- via GetRecommendationsClient's fan-out -- fan out across them.
 // Today every caller installs the credential before the first accounts fetch,
 // so this is a guard against a future reordering rather than a live leak.
+//
+// The credential is published under accountsMu, the same lock fetchAccounts
+// snapshots it under: writing it outside the lock and only then taking the
+// lock to invalidate leaves a window in which an in-flight fetch pairs the new
+// credential with the old subscriptions client.
 func (p *AzureProvider) SetCredential(cred azcore.TokenCredential) {
+	p.accountsMu.Lock()
+	defer p.accountsMu.Unlock()
 	p.cred = cred
-	p.InvalidateAccountsCache()
+	p.invalidateAccountsCacheLocked()
+}
+
+// credential returns the installed credential.
+//
+// Reads go through accountsMu -- the same lock SetCredential publishes under
+// -- so a credential swap concurrent with client construction is a defined
+// handoff rather than a data race. Returns nil when no credential has been
+// installed yet; every client-construction caller runs after an IsConfigured()
+// check, which is what guarantees a non-nil result there.
+func (p *AzureProvider) credential() azcore.TokenCredential {
+	p.accountsMu.RLock()
+	defer p.accountsMu.RUnlock()
+	return p.cred
+}
+
+// credentialAndSubscriptionsClient snapshots both swappable fields under a
+// single read lock.
+//
+// Taking them together matters: reading them under two separate locks could
+// pair a credential with a subscriptions client installed by a different
+// SetX call, which is precisely the mixed-state hazard the locking exists to
+// prevent. The returned client is nil when none was injected, in which case
+// the caller builds a real one from cred.
+func (p *AzureProvider) credentialAndSubscriptionsClient() (azcore.TokenCredential, SubscriptionsClient) {
+	p.accountsMu.RLock()
+	defer p.accountsMu.RUnlock()
+	return p.cred, p.subscriptionsClient
+}
+
+// publishCredential installs cred under accountsMu without touching the
+// accounts cache.
+//
+// Used by IsConfigured's lazy ambient-credential resolution, which only runs
+// when no credential was installed at all. Unlike SetCredential it does not
+// invalidate: there is no previous credential whose subscription list could
+// have been cached under it.
+func (p *AzureProvider) publishCredential(cred azcore.TokenCredential) {
+	p.accountsMu.Lock()
+	defer p.accountsMu.Unlock()
+	p.cred = cred
 }
 
 // Name returns the provider name
@@ -218,7 +271,7 @@ func (p *AzureProvider) DisplayName() string {
 // time-bounded cache or single-flight retry.
 func (p *AzureProvider) IsConfigured() bool {
 	// If credential was injected via SetCredential, skip the Once path.
-	if p.cred != nil {
+	if p.credential() != nil {
 		return true
 	}
 
@@ -234,7 +287,7 @@ func (p *AzureProvider) IsConfigured() bool {
 			p.credErr = err
 			return
 		}
-		p.cred = cred
+		p.publishCredential(cred)
 	})
 	return p.credErr == nil
 }
@@ -261,11 +314,9 @@ func (p *AzureProvider) ValidateCredentials(ctx context.Context) error {
 	}
 
 	// Use injected client if available (for testing)
-	var subClient SubscriptionsClient
-	if p.subscriptionsClient != nil {
-		subClient = p.subscriptionsClient
-	} else {
-		client, err := armsubscriptions.NewClient(p.cred, nil)
+	cred, subClient := p.credentialAndSubscriptionsClient()
+	if subClient == nil {
+		client, err := armsubscriptions.NewClient(cred, nil)
 		if err != nil {
 			return fmt.Errorf("failed to create subscriptions client: %w", err)
 		}
@@ -324,11 +375,9 @@ func (p *AzureProvider) GetRegions(ctx context.Context) ([]common.Region, error)
 	}
 
 	// Use injected client if available (for testing)
-	var subClient SubscriptionsClient
-	if p.subscriptionsClient != nil {
-		subClient = p.subscriptionsClient
-	} else {
-		client, err := armsubscriptions.NewClient(p.cred, nil)
+	cred, subClient := p.credentialAndSubscriptionsClient()
+	if subClient == nil {
+		client, err := armsubscriptions.NewClient(cred, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create subscriptions client: %w", err)
 		}
@@ -430,23 +479,26 @@ func (p *AzureProvider) GetServiceClientForAccount(ctx context.Context, service 
 // the given subscription and region. It is the shared backend for both
 // GetServiceClient and GetServiceClientForAccount.
 func (p *AzureProvider) newServiceClientForSubscription(service common.ServiceType, subscriptionID, region string) (provider.ServiceClient, error) {
+	// Snapshot once so every branch below builds its client from the same
+	// credential, even if a SetCredential lands mid-call.
+	cred := p.credential()
 	switch service {
 	case common.ServiceCompute:
-		return NewComputeClient(p.cred, subscriptionID, region), nil
+		return NewComputeClient(cred, subscriptionID, region), nil
 	case common.ServiceRelationalDB:
-		return NewDatabaseClient(p.cred, subscriptionID, region), nil
+		return NewDatabaseClient(cred, subscriptionID, region), nil
 	case common.ServiceCache:
-		return NewCacheClient(p.cred, subscriptionID, region), nil
+		return NewCacheClient(cred, subscriptionID, region), nil
 	case common.ServiceNoSQL:
-		return NewCosmosDBClient(p.cred, subscriptionID, region), nil
+		return NewCosmosDBClient(cred, subscriptionID, region), nil
 	case common.ServiceMemoryDB:
-		return NewManagedRedisClient(p.cred, subscriptionID, region), nil
+		return NewManagedRedisClient(cred, subscriptionID, region), nil
 	case common.ServiceSavingsPlansAll:
-		return NewSavingsPlansClient(p.cred, subscriptionID, region), nil
+		return NewSavingsPlansClient(cred, subscriptionID, region), nil
 	case common.ServiceSearch:
-		return NewSearchClient(p.cred, subscriptionID, region), nil
+		return NewSearchClient(cred, subscriptionID, region), nil
 	case common.ServiceDataWarehouse:
-		return NewSynapseClient(p.cred, subscriptionID, region), nil
+		return NewSynapseClient(cred, subscriptionID, region), nil
 	default:
 		return nil, fmt.Errorf("unsupported service: %s", service)
 	}
@@ -491,7 +543,7 @@ func (p *AzureProvider) GetRecommendationsClient(ctx context.Context) (provider.
 	}
 
 	if p.subscriptionID != "" {
-		return NewRecommendationsClient(p.cred, p.subscriptionID)
+		return NewRecommendationsClient(p.credential(), p.subscriptionID)
 	}
 
 	accounts, err := p.getOrFetchAccounts(ctx)
@@ -501,6 +553,14 @@ func (p *AzureProvider) GetRecommendationsClient(ctx context.Context) (provider.
 	if len(accounts) == 0 {
 		return nil, fmt.Errorf("no Azure subscriptions found")
 	}
+
+	// Snapshot after the accounts resolve, so the three branches below all
+	// build their client from one credential rather than re-reading it per
+	// branch. A SetCredential landing between the fetch and this read would
+	// still pair a fresh credential with a list resolved under the previous
+	// one; SetCredential invalidates the cache precisely so the NEXT call
+	// re-resolves, which is the guarantee this layer offers.
+	cred := p.credential()
 	// Step 1: an explicitly configured target is validated against the
 	// discovered subscriptions FIRST, before any default resolution.
 	//
@@ -520,18 +580,18 @@ func (p *AzureProvider) GetRecommendationsClient(ctx context.Context) (provider.
 				"%s is set to %q, which is not among the %d subscriptions visible to this principal",
 				azureSubscriptionIDEnv, target, len(accounts))
 		}
-		return NewRecommendationsClient(p.cred, target)
+		return NewRecommendationsClient(cred, target)
 	}
 
 	// Step 2: no explicit target, but a default may still resolve -- notably
 	// the single-discovered-subscription case, which resolveDefaultSubscription
 	// marks as the default.
 	if defaultID := getDefaultSubscriptionID(accounts); defaultID != "" {
-		return NewRecommendationsClient(p.cred, defaultID)
+		return NewRecommendationsClient(cred, defaultID)
 	}
 
 	// Step 3: scope is genuinely ambiguous -- fan out across the whole org.
-	client, err := NewMultiSubscriptionRecommendationsClient(p.cred, accounts)
+	client, err := NewMultiSubscriptionRecommendationsClient(cred, accounts)
 	if err != nil {
 		return nil, err
 	}
@@ -548,7 +608,7 @@ func (p *AzureProvider) GetRecommendationsClientForAccount(ctx context.Context, 
 	if subscriptionID == "" {
 		return nil, fmt.Errorf("subscriptionID must not be empty")
 	}
-	return NewRecommendationsClient(p.cred, subscriptionID)
+	return NewRecommendationsClient(p.credential(), subscriptionID)
 }
 
 // Register the Azure provider with the global registry

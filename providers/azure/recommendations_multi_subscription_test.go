@@ -3,6 +3,7 @@ package azure
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 
@@ -230,6 +231,20 @@ func TestMultiSubscriptionRecommendationsClient_PartialFailureKeepsSuccessfulRes
 		"the subscriptions that succeeded must still be returned alongside the partial-failure error")
 }
 
+// PartialSubscriptionFailureError and its fields are exported, so a
+// zero-value or externally-constructed instance is reachable. Formatting one
+// must not panic on Failed[0] -- an error type that crashes when logged fails
+// at exactly the moment the operator needs its message.
+func TestPartialSubscriptionFailureError_ErrorWithNoFailures(t *testing.T) {
+	var zero PartialSubscriptionFailureError
+
+	require.NotPanics(t, func() { _ = fmt.Sprintf("%v", &zero) },
+		"formatting a zero-value PartialSubscriptionFailureError must not panic")
+	assert.Contains(t, zero.Error(), "no failures recorded")
+	assert.Empty(t, zero.FailedSubscriptionIDs())
+	assert.Empty(t, zero.Unwrap())
+}
+
 func TestMultiSubscriptionRecommendationsClient_GetRecommendations_AllFail(t *testing.T) {
 	accounts := twoTestAccounts()
 	withFakeSubscriptionClients(t, map[string]*fakeRecommendationsClient{
@@ -331,6 +346,77 @@ func TestMultiSubscriptionRecommendationsClient_GetRecommendations_AccountFilter
 	assert.Contains(t, err.Error(), "matches none of the 2 accessible subscriptions")
 	assert.Equal(t, int64(0), fake1.calls.Load())
 	assert.Equal(t, int64(0), fake2.calls.Load())
+}
+
+// TestMultiSubscriptionRecommendationsClient_GetRecommendations_AccountFilterPartiallyMatches
+// is the regression test for a silently narrowed sweep.
+//
+// The all-miss case above errors loudly, but a filter matching SOME of its
+// entries used to drop the misses on the floor and return a nil error. The
+// scenario that makes that dangerous: an operator scopes a sweep to sub-1 and
+// sub-2, the principal has since lost Reader on sub-2 so it is absent from the
+// discovered list, and the sweep returns only sub-1's rows with err == nil.
+// sub-2 then reads as "no savings available" -- indistinguishable from a
+// genuine empty result, and persisted as a shrinking opportunity.
+//
+// The requested-but-unreachable subscription must therefore appear in the
+// partial-failure error, while the subscription that DID answer still returns
+// its data.
+func TestMultiSubscriptionRecommendationsClient_GetRecommendations_AccountFilterPartiallyMatches(t *testing.T) {
+	accounts := twoTestAccounts()
+	fake1 := &fakeRecommendationsClient{recs: []common.Recommendation{{Account: "sub-1", Service: common.ServiceCompute}}}
+	fake2 := &fakeRecommendationsClient{recs: []common.Recommendation{{Account: "sub-2", Service: common.ServiceCache}}}
+	withFakeSubscriptionClients(t, map[string]*fakeRecommendationsClient{
+		"sub-1": fake1,
+		"sub-2": fake2,
+	})
+
+	client, err := NewMultiSubscriptionRecommendationsClient(&mockAzureTokenCredential{}, accounts)
+	require.NoError(t, err)
+
+	recs, err := client.GetRecommendations(context.Background(), &common.RecommendationParams{
+		AccountFilter: []string{"sub-1", "sub-not-visible"},
+	})
+
+	var partial *PartialSubscriptionFailureError
+	require.ErrorAs(t, err, &partial,
+		"a filter entry matching no accessible subscription must not be silently dropped")
+	assert.Equal(t, 2, partial.Attempted,
+		"a requested-but-unreachable subscription still counts towards the sweep's intended scope")
+	assert.Equal(t, 1, partial.Succeeded)
+	require.Len(t, partial.Failed, 1)
+	assert.Equal(t, "sub-not-visible", partial.Failed[0].SubscriptionID)
+	assert.ErrorIs(t, err, ErrSubscriptionNotAccessible,
+		"the cause must be distinguishable from a transient ARM failure")
+
+	// The subscription that DID match still returns its data, so one revoked
+	// subscription does not become a total collection outage.
+	assert.Equal(t, []common.Recommendation{{Account: "sub-1", Service: common.ServiceCompute}}, recs)
+	assert.Equal(t, int64(1), fake1.calls.Load(), "the matched subscription must be queried")
+	assert.Equal(t, int64(0), fake2.calls.Load(), "a subscription outside the filter must not be queried")
+}
+
+// A duplicate AccountFilter entry must not query its subscription twice nor
+// inflate Attempted -- the filter is a set, and double-counting would
+// double-count that subscription's recommendations.
+func TestMultiSubscriptionRecommendationsClient_GetRecommendations_AccountFilterDeduplicates(t *testing.T) {
+	accounts := twoTestAccounts()
+	fake1 := &fakeRecommendationsClient{recs: []common.Recommendation{{Account: "sub-1", Service: common.ServiceCompute}}}
+	fake2 := &fakeRecommendationsClient{}
+	withFakeSubscriptionClients(t, map[string]*fakeRecommendationsClient{
+		"sub-1": fake1,
+		"sub-2": fake2,
+	})
+
+	client, err := NewMultiSubscriptionRecommendationsClient(&mockAzureTokenCredential{}, accounts)
+	require.NoError(t, err)
+
+	recs, err := client.GetRecommendations(context.Background(), &common.RecommendationParams{
+		AccountFilter: []string{"sub-1", "sub-1"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []common.Recommendation{{Account: "sub-1", Service: common.ServiceCompute}}, recs)
+	assert.Equal(t, int64(1), fake1.calls.Load(), "a duplicated filter entry must be queried once")
 }
 
 // An empty AccountFilter keeps the org-wide default: every visible

@@ -168,21 +168,38 @@ func cloneAccounts(accounts []common.Account) []common.Account {
 func (p *AzureProvider) InvalidateAccountsCache() {
 	p.accountsMu.Lock()
 	defer p.accountsMu.Unlock()
+	p.invalidateAccountsCacheLocked()
+}
+
+// invalidateAccountsCacheLocked is InvalidateAccountsCache's body, for callers
+// that already hold accountsMu for writing.
+//
+// It exists so SetCredential and SetSubscriptionsClient can publish the new
+// field AND invalidate in one critical section: sync.RWMutex is not reentrant,
+// so they cannot call InvalidateAccountsCache while holding the lock, and
+// releasing it between the two steps would reopen the window where an
+// in-flight fetch sees the new credential against the old cache generation.
+func (p *AzureProvider) invalidateAccountsCacheLocked() {
 	p.cachedAccounts = nil
 	p.accountsGen++
 }
 
 // fetchAccounts performs the actual ARM subscriptions.List call and resolves
-// the default subscription. It holds no lock and issues the network round-trip
-// on the caller's goroutine; getOrFetchAccounts serializes concurrent cold-cache
-// callers via singleflight so this runs at most once per cache-population window.
+// the default subscription. It holds no lock across the network round-trip and
+// runs on the caller's goroutine; getOrFetchAccounts serializes concurrent
+// cold-cache callers via singleflight so this runs at most once per
+// cache-population window.
+//
+// The credential and injected client are snapshotted together under a single
+// read lock before the call. This runs on behalf of every caller that joined
+// the singleflight, so a SetCredential/SetSubscriptionsClient from another
+// goroutine would otherwise be an unsynchronized read -- and, worse, could
+// pair the old client with the new credential mid-fetch.
 func (p *AzureProvider) fetchAccounts(ctx context.Context) ([]common.Account, error) {
 	// Use injected client if available (for testing)
-	var subClient SubscriptionsClient
-	if p.subscriptionsClient != nil {
-		subClient = p.subscriptionsClient
-	} else {
-		client, err := armsubscriptions.NewClient(p.cred, nil)
+	cred, subClient := p.credentialAndSubscriptionsClient()
+	if subClient == nil {
+		client, err := armsubscriptions.NewClient(cred, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create subscriptions client: %w", err)
 		}
