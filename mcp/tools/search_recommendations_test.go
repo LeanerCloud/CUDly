@@ -196,6 +196,73 @@ func TestSearchRecommendationsTrimsRegionFilters(t *testing.T) {
 	assert.Equal(t, []string{"123456789012"}, client.lastParams.AccountFilter, "AccountFilter entries must be trimmed")
 }
 
+// TestSearchRecommendationsTrimsCredentialOverrides covers the three
+// credential override fields, which trimSearchArgsIdentifiers normalized
+// every other identifier except. They select the account/subscription/
+// project the search runs against, so a padded " my-profile " reached
+// ProviderConfig raw and failed credential resolution for a reason the
+// resulting error never mentions -- reading as "these credentials are
+// broken" rather than "this name has a stray space". Asserted on
+// ProviderConfig itself, since that is what actually authenticates.
+func TestSearchRecommendationsTrimsCredentialOverrides(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		provider string
+		service  common.ServiceType
+		args     searchRecommendationsArgs
+		got      func(cfg *provider.ProviderConfig) string
+		want     string
+	}{
+		{
+			name:     "aws profile",
+			provider: "aws",
+			service:  common.ServiceEC2,
+			args:     searchRecommendationsArgs{Provider: "aws", Service: "ec2", AWSProfile: "  my-profile  "},
+			got:      func(c *provider.ProviderConfig) string { return c.AWSProfile },
+			want:     "my-profile",
+		},
+		{
+			name:     "azure subscription id",
+			provider: "azure",
+			service:  common.ServiceCompute,
+			args:     searchRecommendationsArgs{Provider: "azure", Service: "compute", AzureSubscriptionID: "  sub-x  "},
+			got:      func(c *provider.ProviderConfig) string { return c.AzureSubscriptionID },
+			want:     "sub-x",
+		},
+		{
+			name:     "gcp project id",
+			provider: "gcp",
+			service:  common.ServiceCompute,
+			args:     searchRecommendationsArgs{Provider: "gcp", Service: "compute", GCPProjectID: "  proj-a  "},
+			got:      func(c *provider.ProviderConfig) string { return c.GCPProjectID },
+			want:     "proj-a",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			client := &fakeRecommendationsClient{}
+			fp := &fakeProvider{name: tc.provider, services: []common.ServiceType{tc.service}, recClient: client}
+			var gotCfg *provider.ProviderConfig
+			tool := &searchRecommendationsTool{
+				createProvider: func(_ string, cfg *provider.ProviderConfig) (provider.Provider, error) {
+					gotCfg = cfg
+					return fp, nil
+				},
+			}
+
+			_, _, err := tool.handle(context.Background(), nil, tc.args)
+			require.NoError(t, err)
+			require.NotNil(t, gotCfg)
+			assert.Equal(t, tc.want, tc.got(gotCfg),
+				"credential overrides must reach ProviderConfig trimmed, like every other identifier")
+		})
+	}
+}
+
 func TestSearchRecommendationsInvalidProvider(t *testing.T) {
 	t.Parallel()
 	tool := newTestSearchTool(&fakeProvider{})

@@ -776,3 +776,37 @@ func TestBillingPlanForPaymentOption_EmptyHasItsOwnMessage(t *testing.T) {
 	require.Error(t, blankErr)
 	assert.Contains(t, blankErr.Error(), "no payment option was supplied")
 }
+
+// TestBillingPlanForPaymentOption_UnrecognizedIsNotBlamedOnPartialUpfront
+// extends the same split one step further: before this, EVERY unrecognized
+// value was reported as "partial-upfront has no azure equivalent", so a typo
+// ("montly") or a value from another provider's vocabulary ("prepaid") was
+// diagnosed as a partial-upfront problem the caller never had. Only an
+// actual partial-upfront should mention partial-upfront; anything else is
+// simply not a recognized option.
+func TestBillingPlanForPaymentOption_UnrecognizedIsNotBlamedOnPartialUpfront(t *testing.T) {
+	t.Parallel()
+
+	for _, unrecognized := range []string{"bogus", "prepaid", "montly", "PARTIAL"} {
+		_, err := BillingPlanForPaymentOption(unrecognized)
+		require.Errorf(t, err, "payment_option=%q must error", unrecognized)
+		assert.Containsf(t, err.Error(), "is not a recognized payment option",
+			"payment_option=%q should be diagnosed as unrecognized", unrecognized)
+		assert.NotContainsf(t, err.Error(), "partial-upfront has no azure equivalent",
+			"payment_option=%q is not partial-upfront, so the error must not blame it", unrecognized)
+		assert.Containsf(t, err.Error(), unrecognized,
+			"the error must quote the value actually supplied")
+	}
+
+	// partial-upfront itself keeps its specific message: it is a real payment
+	// option on other providers, so the caller needs to know Azure has no
+	// equivalent rather than that they typo'd.
+	_, partialErr := BillingPlanForPaymentOption("partial-upfront")
+	require.Error(t, partialErr)
+	assert.Contains(t, partialErr.Error(), "partial-upfront has no azure equivalent")
+	// Case and whitespace are normalized by the switch, so these reach the
+	// same case rather than falling through to the unrecognized branch.
+	_, paddedErr := BillingPlanForPaymentOption("  Partial-Upfront  ")
+	require.Error(t, paddedErr)
+	assert.Contains(t, paddedErr.Error(), "partial-upfront has no azure equivalent")
+}

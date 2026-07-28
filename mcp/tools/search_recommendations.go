@@ -415,6 +415,16 @@ func trimSearchArgsIdentifiers(args searchRecommendationsArgs) searchRecommendat
 	args.IncludeRegions = trimAll(args.IncludeRegions)
 	args.ExcludeRegions = trimAll(args.ExcludeRegions)
 	args.AccountFilter = trimAll(args.AccountFilter)
+	// The credential overrides flow straight into ProviderConfig via
+	// providerConfigFromArgs, where they select the account/subscription/
+	// project the search runs against. A padded " my-profile " fails profile
+	// resolution for a reason the error never mentions (the whitespace),
+	// which reads as "these credentials are broken" rather than "this name
+	// has a stray space". The purchase tools normalize the same three fields
+	// through CredentialScope for the equivalent reason.
+	args.AWSProfile = strings.TrimSpace(args.AWSProfile)
+	args.AzureSubscriptionID = strings.TrimSpace(args.AzureSubscriptionID)
+	args.GCPProjectID = strings.TrimSpace(args.GCPProjectID)
 	return args
 }
 

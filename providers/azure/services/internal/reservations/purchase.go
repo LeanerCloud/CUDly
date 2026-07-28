@@ -113,9 +113,22 @@ func BillingPlanForPaymentOption(paymentOption string) (armreservations.Reservat
 			"azure reservations support only upfront or monthly billing, and no payment option was supplied; " +
 				"set it explicitly (upfront or monthly) rather than relying on a default, because Azure's own " +
 				"default is upfront and would charge the whole commitment immediately")
-	default:
+	case "partial-upfront":
+		// Named explicitly rather than folded into default: partial-upfront is
+		// a real payment option elsewhere in CUDly (AWS offers it), so the
+		// caller needs to know Azure specifically has no equivalent. Handled
+		// as its own case so the switch's already-normalized value decides it,
+		// rather than re-lowercasing inside default.
 		return "", fmt.Errorf(
 			"azure reservations support only upfront or monthly billing; %q is not available (partial-upfront has no azure equivalent)",
+			paymentOption)
+	default:
+		// Anything else is a typo or an unknown value. Blaming partial-upfront
+		// here would misdirect debugging: %q is not partial-upfront, so saying
+		// "partial-upfront has no azure equivalent" describes a value the
+		// caller never supplied.
+		return "", fmt.Errorf(
+			"azure reservations support only upfront or monthly billing; %q is not a recognized payment option",
 			paymentOption)
 	}
 }
