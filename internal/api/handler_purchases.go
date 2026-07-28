@@ -1744,6 +1744,19 @@ func checkRetryRateGates(failedExec *config.PurchaseExecution, req *events.Lambd
 	return nil
 }
 
+// clonePtr returns a pointer to a copy of *p, or nil when p is nil, so a
+// value copied between two records never leaves them aliasing the same
+// pointee. nil is preserved rather than collapsed to a zero value: on
+// PurchaseExecution.CloudAccountID nil means "no account scope" (a root or
+// ambient-credentials execution) and is not interchangeable with "".
+func clonePtr[T any](p *T) *T {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
 // persistRetryExecution builds the successor PurchaseExecution and
 // writes it + the predecessor linkage + suppressions in a single tx.
 // Returns the populated newExecution so the caller can send the
@@ -1789,11 +1802,42 @@ func (h *Handler) persistRetryExecution(ctx context.Context, failedExec *config.
 	// planned execution stays attributed to its plan + ramp step (CR
 	// #168 review). For ad-hoc executions PlanID is "" and StepNumber
 	// is 0, so propagation is a no-op for the non-plan case.
+	//
+	// CloudAccountID propagates for the same reason, and it is load-bearing on
+	// the money path (issue #1537). A multi-account plan fans out into one
+	// purchase_executions row per cloud account, each stamped with
+	// CloudAccountID plus a per-account idempotency key "<root-key>:<acctID>"
+	// (purchase.executeForAccount). Those per-account rows reach
+	// status="failed" on their own and are therefore retryable. Dropping
+	// CloudAccountID here left the successor with a nil account scope, which
+	// purchase.executePurchase reads as "root execution" and re-fans-out across
+	// EVERY account on the plan: the accounts that already committed were
+	// purchased a SECOND time, under re-suffixed keys
+	// "<root-key>:<failedAcctID>:<acctID>" whose derived tokens miss the AWS
+	// ClientToken, the EC2 RI tag-guard and the Azure two-step lookup alike.
+	// Carrying the scope keeps a per-account retry a single-account re-drive
+	// against the identical lineage key, which is the precondition for the
+	// provider-side dedupe to engage at all.
+	//
+	// Whether it then DOES engage is per-provider and not universal: AWS (all
+	// services), Azure reservations and GCP CUDs reproduce the token and
+	// dedupe, but Azure savings-plans has no server-side idempotency key and
+	// names its order alias from time.Now().UnixNano(), so a re-drive of a
+	// landed Azure SP order still duplicates it. purchase.recIsSafeToRedrive
+	// encodes exactly that exclusion, but it currently gates only the reaper's
+	// re-drive, not this user-facing retry (issue #1668). Scope propagation is
+	// necessary for dedupe everywhere and sufficient everywhere except Azure SP.
+	//
+	// Copied by value rather than by pointer so the successor and the
+	// historical failed row never share a *string, matching the defensive
+	// deep copy of Recommendations above.
+	cloudAccountID := clonePtr(failedExec.CloudAccountID)
 	newExecution := &config.PurchaseExecution{
 		ExecutionID:            newExecutionID,
 		IdempotencyKey:         idempotencyKey,
 		PlanID:                 failedExec.PlanID,
 		StepNumber:             failedExec.StepNumber,
+		CloudAccountID:         cloudAccountID,
 		Status:                 "pending",
 		ScheduledDate:          time.Now(),
 		Recommendations:        copiedRecs,
