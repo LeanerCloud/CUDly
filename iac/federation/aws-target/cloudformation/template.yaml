@@ -34,10 +34,21 @@ Parameters:
       Expected audience (aud) in the incoming OIDC token.
       Azure: api://<client_id>  or  <client_id>
       GCP:   https://iam.googleapis.com/projects/<project_number>/locations/global/workloadIdentityPools/<pool_id>/providers/<provider_id>
-      Leave empty to skip audience matching, or supply a non-whitespace string.
+      Leaving this empty does NOT skip audience matching. Both the trust
+      policy condition and the OIDC provider ClientIdList fall back to the
+      literal string sts.amazonaws.com, so only tokens carrying exactly that
+      audience are accepted.
     Default: ""
-    AllowedPattern: "^$|^\\S$|^\\S.*\\S$"
-    ConstraintDescription: "OIDCAudience must be either empty or a non-whitespace string (no leading/trailing whitespace)."
+    AllowedPattern: "^$|^[^\\s*$]+$"
+    ConstraintDescription: >
+      OIDCAudience must be empty, or a string containing no whitespace, '$'
+      or '*' anywhere.
+      '$' is rejected because the trust policy is an IAM policy document and
+      IAM expands ${...} policy variables inside Condition values: an audience
+      of ${accounts.google.com:aud} would expand to the presented token's own
+      aud claim and therefore match every token.
+      '*' is rejected because StringEquals compares it literally rather than
+      as a wildcard, silently producing a role nobody can assume.
 
   OIDCThumbprint:
     Type: String
@@ -52,9 +63,34 @@ Parameters:
   OIDCSubjectClaim:
     Type: String
     Description: >
-      Optional subject (sub) claim to restrict which identity can assume the role.
-      Leave empty to allow any authenticated subject from this issuer.
-    Default: ""
+      REQUIRED. Subject (sub) claim identifying the single workload allowed to
+      assume this role. There is deliberately no default: without a :sub
+      condition the trust policy accepts EVERY identity the issuer can mint,
+      so any tenant of that issuer could assume this role and place
+      irreversible multi-year commitment purchases in this account.
+      Azure AD managed identity: the object ID of the managed identity.
+      GCP service account: the service account's numeric unique ID (typically
+      21 digits; Google documents it as a numeric string without guaranteeing
+      a length). That is the sub claim accounts.google.com actually issues; it
+      is not the service account email.
+      The system:serviceaccount:<namespace>:<name> form is the Kubernetes
+      subject format and belongs to a cluster OIDC issuer, not to
+      accounts.google.com.
+      Mirrors the required oidc_subject_claim variable in the Terraform module.
+    MinLength: 1
+    AllowedPattern: "^[^\\s*$]+$"
+    ConstraintDescription: >
+      OIDCSubjectClaim is required and must be a non-empty string containing
+      no whitespace, '$' or '*' anywhere.
+      '$' is rejected because the trust policy below is an IAM policy document
+      (Version 2012-10-17) and IAM expands ${...} policy variables inside
+      Condition values. A subject of ${accounts.google.com:sub} would expand
+      to the presented token's own sub claim, making the condition a tautology
+      that matches EVERY identity the issuer can mint. That is exactly the
+      hole this parameter exists to close, so it is rejected at submission
+      time rather than deployed.
+      '*' is rejected because StringEquals compares it literally rather than
+      as a wildcard, silently producing a role nobody can assume.
 
   RoleName:
     Type: String
@@ -63,7 +99,6 @@ Parameters:
 
 Conditions:
   HasAudience: !Not [!Equals [!Ref OIDCAudience, ""]]
-  HasSubject: !Not [!Equals [!Ref OIDCSubjectClaim, ""]]
 
 Resources:
   OIDCProvider:
@@ -156,26 +191,19 @@ Resources:
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
-          # Use Fn::If to conditionally include :sub restriction alongside :aud
-          - !If
-            - HasSubject
-            - Effect: Allow
-              Principal:
-                Federated: !GetAtt OIDCProvider.Arn
-              Action: sts:AssumeRoleWithWebIdentity
-              Condition:
-                StringEquals:
-                  !Sub "${OIDCIssuerHost}:aud":
-                    !If [HasAudience, !Ref OIDCAudience, sts.amazonaws.com]
-                  !Sub "${OIDCIssuerHost}:sub": !Ref OIDCSubjectClaim
-            - Effect: Allow
-              Principal:
-                Federated: !GetAtt OIDCProvider.Arn
-              Action: sts:AssumeRoleWithWebIdentity
-              Condition:
-                StringEquals:
-                  !Sub "${OIDCIssuerHost}:aud":
-                    !If [HasAudience, !Ref OIDCAudience, sts.amazonaws.com]
+          # Both :aud and :sub are always enforced. There is intentionally no
+          # subject-less variant of this statement: omitting :sub would trust
+          # every identity the issuer can mint. OIDCSubjectClaim is a required
+          # parameter, so this condition can never collapse to an empty match.
+          - Effect: Allow
+            Principal:
+              Federated: !GetAtt OIDCProvider.Arn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                !Sub "${OIDCIssuerHost}:aud":
+                  !If [HasAudience, !Ref OIDCAudience, sts.amazonaws.com]
+                !Sub "${OIDCIssuerHost}:sub": !Ref OIDCSubjectClaim
       ManagedPolicyArns:
         - !Ref CUDlyPolicy
 
