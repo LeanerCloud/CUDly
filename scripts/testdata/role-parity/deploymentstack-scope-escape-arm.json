@@ -30,6 +30,20 @@
           "[concat('/subscriptions/', subscription().subscriptionId)]"
         ]
       }
+    },
+    {
+      "type": "Microsoft.Resources/deploymentStacks",
+      "apiVersion": "2022-08-01-preview",
+      "name": "nested-stack",
+      "properties": {
+        "actionOnUnmanage": {
+          "resources": "detach"
+        },
+        "denySettings": {
+          "mode": "none"
+        },
+        "template": {}
+      }
     }
   ]
 }

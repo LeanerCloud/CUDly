@@ -30,6 +30,25 @@
           "[concat('/subscriptions/', subscription().subscriptionId)]"
         ]
       }
+    },
+    {
+      "type": "microsoft.authorization/roledefinitions",
+      "apiVersion": "2022-04-01",
+      "name": "test-role-escalation",
+      "properties": {
+        "roleName": "CUDly Test Role Escalation",
+        "type": "CustomRole",
+        "permissions": [
+          {
+            "actions": [
+              "*"
+            ]
+          }
+        ],
+        "assignableScopes": [
+          "[concat('/subscriptions/', subscription().subscriptionId)]"
+        ]
+      }
     }
   ]
 }

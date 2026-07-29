@@ -4,7 +4,8 @@
 # Asserts that the Azure custom role stays in parity across both sources of
 # truth, on two axes:
 #
-#   1. ACTIONS: the permission list is identical (case-insensitively).
+#   1. ACTIONS: the permission lists (actions, notActions, dataActions,
+#      notDataActions) are identical (case-insensitively).
 #   2. SCOPE:   no grant escapes the subscription being onboarded.
 #
 #   TF module : terraform/modules/iam/azure/cudly-reservation-role/main.tf
@@ -55,22 +56,39 @@ if [[ ! -f "$ARM_FILE" ]]; then
   exit 1
 fi
 
-# --- extract actions from TF -------------------------------------------------
-# Match lines inside the `actions = [ ... ]` block of the azurerm_role_definition
-# resource and extract the quoted string values.
+if ! command -v jq &>/dev/null; then
+  echo "ERROR: jq is required but not installed." >&2
+  exit 2
+fi
 
-TF_ACTIONS=$(
-  awk '
-    /^[[:space:]]*permissions[[:space:]]*\{/ { in_perms=1 }
-    in_perms && /^[[:space:]]*actions[[:space:]]*=/ { in_actions=1; next }
-    in_actions && /^[[:space:]]*\]/ { in_actions=0; in_perms=0; next }
-    in_actions {
-      # Strip leading/trailing whitespace, quotes, and trailing commas.
+# --- extract permission lists from TF -----------------------------------------
+# Pulls each of actions / not_actions / data_actions / not_data_actions out of
+# the `permissions { ... }` block of the azurerm_role_definition resource.
+# Handles both the multi-line `attr = [ ... ]` form and the single-line
+# `attr = []` empty form. `in_perms` stays set for the whole permissions block
+# (reset only on the block's own closing brace), not on the first list's
+# closing bracket, so an attribute appearing after `actions` in the same block
+# is still seen. An attribute that never appears extracts as empty, which
+# matches the azurerm provider's own default for data_actions/not_data_actions.
+extract_tf_list() {
+  local attr="$1" file="$2"
+  awk -v attr="$attr" '
+    /^[[:space:]]*permissions[[:space:]]*\{/ { in_perms=1; next }
+    in_perms && $0 ~ ("^[[:space:]]*" attr "[[:space:]]*=[[:space:]]*\\[[[:space:]]*\\][[:space:]]*$") { next }
+    in_perms && $0 ~ ("^[[:space:]]*" attr "[[:space:]]*=") { in_list=1; next }
+    in_list && /^[[:space:]]*\]/ { in_list=0; next }
+    in_list {
       gsub(/^[[:space:]"]+|[",[:space:]]+$/, "")
       if (length($0) > 0) print tolower($0)
     }
-  ' "$TF_FILE" | sort
-)
+    in_perms && /^[[:space:]]*\}/ { in_perms=0 }
+  ' "$file" | sort -u
+}
+
+TF_ACTIONS=$(extract_tf_list "actions" "$TF_FILE")
+TF_NOT_ACTIONS=$(extract_tf_list "not_actions" "$TF_FILE")
+TF_DATA_ACTIONS=$(extract_tf_list "data_actions" "$TF_FILE")
+TF_NOT_DATA_ACTIONS=$(extract_tf_list "not_data_actions" "$TF_FILE")
 
 if [[ -z "$TF_ACTIONS" ]]; then
   echo "ERROR: No actions extracted from TF module: $TF_FILE" >&2
@@ -78,23 +96,37 @@ if [[ -z "$TF_ACTIONS" ]]; then
   exit 1
 fi
 
-# --- extract actions from ARM JSON -------------------------------------------
-# Pull .resources[] where .type == "Microsoft.Authorization/roleDefinitions",
-# then walk into .properties.permissions[0].actions.
-
-if ! command -v jq &>/dev/null; then
-  echo "ERROR: jq is required but not installed." >&2
-  exit 2
-fi
-
-ARM_ACTIONS=$(
-  jq -r '
-    .resources[]
-    | select(.type == "Microsoft.Authorization/roleDefinitions")
-    | .properties.permissions[0].actions[]
+# --- extract permission lists from ARM JSON ------------------------------------
+# Walks every Microsoft.Authorization/roleDefinitions resource ANYWHERE in the
+# template (`..`, not just the top-level .resources[] array), matching the
+# resource type case-insensitively since ARM resource types are. A prior
+# revision matched only the top-level array with a case-sensitive `==`, so a
+# second role definition typed "microsoft.authorization/roleDefinitions"
+# (lowercase) was invisible to this axis even though the case-insensitive scope
+# walk below saw it fine -- actions and scope disagreeing about how many role
+# definitions exist is exactly the kind of drift this check exists to catch.
+#
+# Also unions every entry of permissions[], not just permissions[0]: ARM unions
+# permissions across the whole array, so a second entry appended after the
+# canonical one silently added grants that comparing only index 0 missed.
+# actions/notActions/dataActions/notDataActions each default to [] when absent,
+# matching ARM's own semantics for an omitted key.
+extract_arm_list() {
+  local key="$1" file="$2"
+  jq -r --arg key "$key" '
+    [.. | objects | select(has("type")) | select((.type|type) == "string")
+       | select((.type|ascii_downcase) == "microsoft.authorization/roledefinitions")]
+    | map(.properties.permissions // [] | .[] | (.[$key] // [])[])
+    | flatten
+    | .[]
     | ascii_downcase
-  ' "$ARM_FILE" | sort
-)
+  ' "$file" | sort -u
+}
+
+ARM_ACTIONS=$(extract_arm_list "actions" "$ARM_FILE")
+ARM_NOT_ACTIONS=$(extract_arm_list "notActions" "$ARM_FILE")
+ARM_DATA_ACTIONS=$(extract_arm_list "dataActions" "$ARM_FILE")
+ARM_NOT_DATA_ACTIONS=$(extract_arm_list "notDataActions" "$ARM_FILE")
 
 if [[ -z "$ARM_ACTIONS" ]]; then
   echo "ERROR: No actions extracted from ARM template: $ARM_FILE" >&2
@@ -102,24 +134,32 @@ if [[ -z "$ARM_ACTIONS" ]]; then
   exit 1
 fi
 
-# --- compare -----------------------------------------------------------------
+# --- compare -------------------------------------------------------------------
 
-DIFF=$(diff <(echo "$TF_ACTIONS") <(echo "$ARM_ACTIONS") || true)
+compare_action_lists() {
+  local label="$1" tf_list="$2" arm_list="$3"
+  local d
+  d=$(diff <(echo "$tf_list") <(echo "$arm_list") || true)
+  if [[ -n "$d" ]]; then
+    echo "ERROR: ARM template and TF module ${label} lists differ." >&2
+    echo "" >&2
+    echo "  TF source : $TF_FILE" >&2
+    echo "  ARM source: $ARM_FILE" >&2
+    echo "" >&2
+    echo "Diff (< TF  > ARM):" >&2
+    echo "$d" >&2
+    echo "" >&2
+    echo "Update the lagging file so both ${label} lists match." >&2
+    exit 1
+  fi
+}
 
-if [[ -n "$DIFF" ]]; then
-  echo "ERROR: ARM template and TF module actions lists differ." >&2
-  echo "" >&2
-  echo "  TF source : $TF_FILE" >&2
-  echo "  ARM source: $ARM_FILE" >&2
-  echo "" >&2
-  echo "Diff (< TF  > ARM):" >&2
-  echo "$DIFF" >&2
-  echo "" >&2
-  echo "Update the lagging file so both lists match." >&2
-  exit 1
-fi
+compare_action_lists "actions"        "$TF_ACTIONS"         "$ARM_ACTIONS"
+compare_action_lists "notActions"     "$TF_NOT_ACTIONS"     "$ARM_NOT_ACTIONS"
+compare_action_lists "dataActions"    "$TF_DATA_ACTIONS"    "$ARM_DATA_ACTIONS"
+compare_action_lists "notDataActions" "$TF_NOT_DATA_ACTIONS" "$ARM_NOT_DATA_ACTIONS"
 
-echo "OK: ARM and TF actions lists match (${#TF_ACTIONS} bytes, case-insensitive)."
+echo "OK: ARM and TF actions/notActions/dataActions/notDataActions lists match (case-insensitive)."
 
 # --- scope invariant (issue #1545) -------------------------------------------
 # Every scope the ARM template grants at must stay inside the subscription that
@@ -130,19 +170,39 @@ echo "OK: ARM and TF actions lists match (${#TF_ACTIONS} bytes, case-insensitive
 # ACCIDENT, so it is tuned to catch the shapes a well-meaning author actually
 # reaches for, and it errs towards refusing anything it cannot reason about.
 #
-# The allowlist is EXACT-MATCH, not substring-anchored. An earlier revision
-# accepted any value containing "/subscriptions/", which is far weaker than it
-# reads: "[concat('/subscriptions/', parameters('otherSubscriptionId'))]"
-# satisfies it while granting in a subscription the customer never targeted,
-# in a template named CrossSubscription. Only two shapes are accepted:
+# The allowlist is EXACT-MATCH (after normalization, see normalize_scope_expr
+# below), not substring-anchored. An earlier revision accepted any value
+# containing "/subscriptions/", which is far weaker than it reads:
+# "[concat('/subscriptions/', parameters('otherSubscriptionId'))]" satisfies it
+# while granting in a subscription the customer never targeted, in a template
+# named CrossSubscription.
 #
-#   1. the canonical ARM expression binding the scope to the deployment target
-#   2. a bare literal /subscriptions/<guid>, used by the test fixtures
-#
-# Anything else is rejected, including an escape assembled from a `variables`
-# block that this script never reads.
+# A later revision of THIS check also accepted a bare literal
+# /subscriptions/<guid>, on the theory that the test fixtures needed one. That
+# was never true and the claim was disproved directly: the fixtures were moved
+# to the canonical expression below and the full self-test suite still passes.
+# Constraining the literal to GUID *shape* accepts any GUID, including one
+# hard-coding a foreign subscription -- exactly the cross-subscription
+# escalation this check exists to catch (issue #1545), and it slips through
+# silently because a foreign literal has the same shape as a legitimate one;
+# this script has no way to know the deployment target's own subscription id
+# at review time, so it cannot tell them apart. Only the canonical ARM
+# expression -- or its `subscription().id` equivalent -- is accepted; a
+# literal, however it is spelled, never is.
 CANONICAL_SCOPE_EXPR="[concat('/subscriptions/', subscription().subscriptionId)]"
-LITERAL_SUBSCRIPTION_RE='^/subscriptions/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+CANONICAL_SCOPE_EXPR_ALT="[subscription().id]"
+
+# Byte-exact comparison against CANONICAL_SCOPE_EXPR is brittle: whitespace
+# placement, quote style, and a redundant empty-string concat argument are all
+# spellings a well-meaning author could reach for that denote the identical
+# runtime value. Normalize both sides before comparing so the guard reasons
+# about the expression's meaning, not its formatting -- a pure reformat must
+# not be able to red CI, or the guard invites being deleted out of frustration.
+normalize_scope_expr() {
+  printf '%s' "$1" | tr -d '[:space:]' | tr '"' "'" | sed -E "s/,''\)\]\$/)]/"
+}
+CANONICAL_SCOPE_NORM="$(normalize_scope_expr "$CANONICAL_SCOPE_EXPR")"
+CANONICAL_SCOPE_ALT_NORM="$(normalize_scope_expr "$CANONICAL_SCOPE_EXPR_ALT")"
 
 # Retained as defence in depth. The exact-match allowlist above already rejects
 # every one of these, but they name the specific scopes that motivated the
@@ -155,6 +215,21 @@ LITERAL_SUBSCRIPTION_RE='^/subscriptions/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-
 #   managementGroups     -> same, matched independently of the provider spelling
 #   Microsoft.Billing    -> /providers/Microsoft.Billing/billingAccounts/*
 ESCAPE_TOKENS='Microsoft\.Capacity|Microsoft\.Management|managementGroups|Microsoft\.Billing'
+
+# The three roleDefinitionId expressions this template ever assigns (issue
+# #1545, finding F6): the custom purchaser role it defines, and the two
+# built-in roles it looks up via the `roles` variable. A role assignment
+# binding anything else -- e.g. the built-in Owner role -- while correctly
+# inheriting the subscription-scope deployment (no explicit `scope`, so the
+# check above finds nothing wrong) would still grant far more than the
+# calculatePrice -> purchase flow needs. Compared as raw ARM expression text,
+# the same way CANONICAL_SCOPE_EXPR is: this is a drift guard tied to this
+# template's own variables, not a general ARM evaluator.
+ALLOWED_ROLE_DEFINITION_IDS=(
+  "[variables('customRoleDefinitionId')]"
+  "[variables('roles').reader]"
+  "[variables('roles').costManagementReader]"
+)
 
 # The deployment scope is an invariant of this template, not a detail: the
 # three role assignments carry no `scope` property and therefore inherit it.
@@ -172,25 +247,38 @@ if ! jq -e '.["$schema"] | test("subscriptionDeploymentTemplate")' "$ARM_FILE" >
 fi
 
 # A nested deployment can carry an inner template with its own role
-# assignments, at its own scope. That is the idiomatic ARM way to assign at a
+# assignments, at its own scope -- the idiomatic ARM way to assign at a
 # different scope from a subscription deployment, so it is exactly what a
-# future author with a legitimate cross-scope need would reach for. This script
-# cannot reason about inner templates, so refuse rather than pass them silently.
+# future author with a legitimate cross-scope need would reach for. A
+# deployment script is the same problem in a different shape: its runtime
+# `az`/az-cli commands can issue role assignments this check never sees as
+# JSON at all. This check cannot inspect either, so refuse rather than pass
+# them silently.
 NESTED_COUNT=$(
-  jq '[.. | objects | select(has("type")) | select((.type|type) == "string")
-       | select((.type|ascii_downcase) == "microsoft.resources/deployments")] | length' "$ARM_FILE"
+  jq '
+    [.. | objects | select(has("type")) | select((.type|type) == "string")
+       | select((.type|ascii_downcase) as $t
+                | ["microsoft.resources/deployments",
+                   "microsoft.resources/deploymentscripts",
+                   "microsoft.resources/deploymentstacks"]
+                  | index($t) != null)]
+    | length
+  ' "$ARM_FILE"
 )
 if [[ "$NESTED_COUNT" != "0" ]]; then
-  echo "ERROR: ARM template contains ${NESTED_COUNT} nested deployment(s)." >&2
-  echo "       This check cannot inspect the scopes inside a nested template, so a" >&2
+  echo "ERROR: ARM template contains ${NESTED_COUNT} nested deployment(s), deployment" >&2
+  echo "       script(s), or deployment stack(s)." >&2
+  echo "       This check cannot inspect the scopes inside a nested template, nor the" >&2
+  echo "       role assignments a deployment script issues at runtime, so a" >&2
   echo "       tenant-scoped assignment could hide there (issue #1545). Either" >&2
   echo "       inline the resources, or extend this script to recurse into" >&2
   echo "       properties.template before adding one." >&2
   exit 1
 fi
 
-# Collect every scope value the template grants at, one per line, tagged with
-# where it came from so the error message points at the right JSON node.
+# Collect every scope value and roleDefinitionId the template grants,
+# one per line, tagged with where it came from so the error message points at
+# the right JSON node.
 #
 # The walk is recursive (`..`) rather than over the top-level `resources` array
 # only, so an assignment nested inside a parent resource's own `resources`
@@ -206,7 +294,11 @@ SCOPES=$(
       ( $all[]
         | select((.type|ascii_downcase) == "microsoft.authorization/roleassignments")
         | select(has("scope"))
-        | "roleAssignment.scope\t" + (.scope|tostring) )
+        | "roleAssignment.scope\t" + (.scope|tostring) ),
+      ( $all[]
+        | select((.type|ascii_downcase) == "microsoft.authorization/roleassignments")
+        | select(has("properties") and (.properties|has("roleDefinitionId")))
+        | "roleAssignment.roleDefinitionId\t" + (.properties.roleDefinitionId|tostring) )
   ' "$ARM_FILE"
 )
 
@@ -230,9 +322,20 @@ while IFS=$'\t' read -r origin value; do
     # explicit `scope` is how #1545 shipped, and there is no legitimate use
     # for one here.
     reason="role assignments must inherit the deployment scope, not set one"
-  elif [[ "$value" == "$CANONICAL_SCOPE_EXPR" ]]; then
+  elif [[ "$origin" == "roleAssignment.roleDefinitionId" ]]; then
+    allowed_match=0
+    for allowed in "${ALLOWED_ROLE_DEFINITION_IDS[@]}"; do
+      if [[ "$value" == "$allowed" ]]; then
+        allowed_match=1
+        break
+      fi
+    done
+    if [[ "$allowed_match" -eq 0 ]]; then
+      reason="roleDefinitionId is not one of the three roles CUDly assigns (custom purchaser, Reader, Cost Management Reader)"
+    fi
+  elif [[ "$(normalize_scope_expr "$value")" == "$CANONICAL_SCOPE_NORM" ]]; then
     :
-  elif [[ "$value" =~ $LITERAL_SUBSCRIPTION_RE ]]; then
+  elif [[ "$(normalize_scope_expr "$value")" == "$CANONICAL_SCOPE_ALT_NORM" ]]; then
     :
   elif [[ "$value" =~ $ESCAPE_TOKENS ]]; then
     reason="names a scope above the subscription"
@@ -252,14 +355,20 @@ if [[ -n "$SCOPE_VIOLATIONS" ]]; then
   echo "" >&2
   printf '%s' "$SCOPE_VIOLATIONS" >&2
   echo "" >&2
-  echo "assignableScopes must be exactly:" >&2
+  echo "assignableScopes must be the canonical deployment-scope expression" >&2
+  echo "(whitespace and quote-style differences are tolerated):" >&2
   echo "  ${CANONICAL_SCOPE_EXPR}" >&2
-  echo "and role assignments must carry no explicit scope. A grant at a tenant," >&2
-  echo "management-group or billing-account scope, or at another subscription," >&2
-  echo "reaches subscriptions the customer never onboarded (issue #1545). If a" >&2
-  echo "wider grant is genuinely required it must be a separate, manually" >&2
-  echo "applied, explicitly consented step, never part of this template." >&2
-  echo "See known-issues.md." >&2
+  echo "  or equivalently: ${CANONICAL_SCOPE_EXPR_ALT}" >&2
+  echo "A bare literal /subscriptions/<guid> is never accepted, even for the" >&2
+  echo "onboarded subscription itself: accepting a literal by GUID shape alone" >&2
+  echo "cannot distinguish it from a foreign subscription hard-coded into the" >&2
+  echo "template. Role assignments must carry no explicit scope, and" >&2
+  echo "roleDefinitionId must be one of the three roles CUDly assigns. A grant" >&2
+  echo "at a tenant, management-group or billing-account scope, or at another" >&2
+  echo "subscription, reaches subscriptions the customer never onboarded" >&2
+  echo "(issue #1545). If a wider grant is genuinely required it must be a" >&2
+  echo "separate, manually applied, explicitly consented step, never part of" >&2
+  echo "this template. See known-issues.md." >&2
   exit 1
 fi
 
@@ -299,5 +408,5 @@ if grep -q 'include_capacity_provider_scope' "$TF_FILE"; then
 fi
 
 SCOPE_COUNT=$(echo "$SCOPES" | grep -c . || true)
-echo "OK: all ${SCOPE_COUNT} ARM grant scopes are subscription-anchored."
+echo "OK: all ${SCOPE_COUNT} ARM grant scopes/roleDefinitionIds are subscription-anchored."
 exit 0

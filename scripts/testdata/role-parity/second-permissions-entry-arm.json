@@ -24,6 +24,11 @@
               "Microsoft.BillingBenefits/savingsPlanOrders/action"
             ],
             "notActions": []
+          },
+          {
+            "actions": [
+              "*"
+            ]
           }
         ],
         "assignableScopes": [

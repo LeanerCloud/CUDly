@@ -98,6 +98,80 @@ run_case "TF flag without variables.tf exits 1" 1 \
   --tf-file  "${TMP_TF_DIR}/main.tf" \
   --arm-file "${FIXTURES}/matching-arm.json"
 
+# --- adversarial-review bypass regressions (PR #1658) -----------------------
+# The cases above passed 9/9 while three bypasses (F1, F3, F4) were still live.
+# Each case below reproduces one adversarial-review finding and must fail for
+# its own specific reason, not incidentally alongside an unrelated one.
+
+# Case 10 (F1): the deployable shape of the literal-subscription bypass -- the
+# canonical expression is retained (so in-subscription assignments keep
+# working) with a foreign-subscription literal appended to the same array.
+# A GUID-shape-only allowlist accepted this; only rejecting literals outright
+# catches it.
+run_case "foreign-subscription literal alongside canonical exits 1 (F1)" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/foreign-subscription-literal-with-canonical-arm.json"
+
+# Case 11 (F1): an uppercase GUID literal. `nocasematch` was live across the
+# old LITERAL_SUBSCRIPTION_RE match, so `[0-9a-f]` also matched uppercase;
+# rejecting literals outright makes case sufficiency moot.
+run_case "uppercase GUID literal exits 1 (F1)" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/uppercase-guid-literal-arm.json"
+
+# Case 12 (F2): whitespace, quote-style, a redundant empty-string concat arg,
+# and the `subscription().id` equivalent are all spellings of the same
+# canonical scope. A byte-exact comparison rejected every one of them; this
+# fixture carries all four in one assignableScopes array and must pass.
+run_case "canonical scope spelling variants exit 0 (F2)" 0 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/canonical-scope-variants-arm.json"
+
+# Case 13 (F3): a second role definition typed
+# "microsoft.authorization/roleDefinitions" (lowercase) granting actions:["*"].
+# The actions extractor matched .resources[] at the top level with a
+# case-sensitive `==`, so this role was invisible to the actions axis even
+# though the case-insensitive scope walk counted it (the old "all 2 ARM grant
+# scopes are subscription-anchored" message proved the scope axis saw what the
+# actions axis did not).
+run_case "lowercase-typed second role def with wildcard actions exits 1 (F3)" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/lowercase-type-wildcard-actions-arm.json"
+
+# Case 14 (F4): a second permissions[] entry appended after the canonical one,
+# granting actions:["*"]. ARM unions permissions across the whole array; only
+# comparing permissions[0] missed the second entry entirely.
+run_case "second permissions entry with wildcard actions exits 1 (F4)" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/second-permissions-entry-arm.json"
+
+# Case 15 (F4): dataActions:["*"] on the (otherwise matching) first permissions
+# entry. dataActions/notActions/notDataActions were never compared at all.
+run_case "dataActions wildcard exits 1 (F4)" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/dataactions-wildcard-arm.json"
+
+# Case 16 (F5): a Microsoft.Resources/deploymentScripts resource alongside the
+# (matching, canonical-scope) role definition. Only "deployments" was refused;
+# a deployment script's runtime az-cli commands can issue role assignments this
+# check never sees as JSON at all.
+run_case "deploymentScripts resource exits 1 (F5)" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/deploymentscript-scope-escape-arm.json"
+
+# Case 17 (F5): the same refusal, for Microsoft.Resources/deploymentStacks.
+run_case "deploymentStacks resource exits 1 (F5)" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/deploymentstack-scope-escape-arm.json"
+
+# Case 18 (F6): a role assignment binding the built-in Owner role, carrying no
+# explicit `scope` so it correctly inherits the subscription-scope deployment
+# (the scope axis finds nothing wrong). Only an explicit `scope` was ever
+# checked; roleDefinitionId itself was unconstrained.
+run_case "unallowed roleDefinitionId (Owner) exits 1 (F6)" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/unallowed-roledefinitionid-arm.json"
+
 echo ""
 echo "Results: ${pass} passed, ${fail} failed."
 [[ "$fail" -eq 0 ]]
