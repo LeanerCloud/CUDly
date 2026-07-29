@@ -126,5 +126,26 @@ for temporary AWS credentials via `sts:AssumeRoleWithWebIdentity`, and injects `
 
 ### Trust policy conditions
 
-The trust policy allows only workflows from `repo:LeanerCloud/CUDly:*`. If you fork CUDly or use a
-different repo, set `github_repo` in `terraform.tfvars` to the new `owner/repo` value and re-apply.
+The trust policy does **not** allow all workflows from the repo: `repo:LeanerCloud/CUDly:*` would
+let any branch, including an unprotected feature branch, mint valid deploy credentials. Instead the
+OIDC `sub` claim is checked against an explicit, enumerated allowlist (`role.tf`'s
+`token.actions.githubusercontent.com:sub` condition):
+
+- `repo:LeanerCloud/CUDly:ref:refs/heads/main`, for workflows dispatched on `main` with no
+  `environment:` binding.
+- `repo:LeanerCloud/CUDly:environment:<name>`, one entry per exact environment name a job that
+  assumes this role binds to. A job's `environment:` **replaces** the ref-based subject with an
+  environment-scoped one (never both), so every such value must be listed explicitly or that job
+  cannot authenticate. See the comment above the `sub` list in `role.tf` for the full derivation:
+  which workflow/job each entry covers, and what was deliberately left out and why (`pull_request`
+  jobs, and an unreachable `workflow_call` input path), kept in one place so it cannot drift out of
+  sync with the policy itself.
+
+If you fork CUDly or use a different repo, set `github_repo` in `terraform.tfvars` to the new
+`owner/repo` value and re-apply; the prefix changes, the enumerated suffixes do not. If you add a
+new workflow job that assumes this role and binds to a not-yet-listed `environment:`, add its exact
+subject to `role.tf` and re-apply *before* that job runs, or `configure-aws-credentials` fails with
+`AssumeRoleWithWebIdentity`/`Not authorized`.
+
+Related: #1648 (this allowlist gap), #1660 (the environments themselves have no protection rules
+yet), #1674 (binds the destroy workflows' jobs to environments covered by this list).
