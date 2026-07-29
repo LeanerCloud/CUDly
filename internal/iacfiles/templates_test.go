@@ -252,7 +252,7 @@ func TestGCPWIFTfvarsMarksPinnedIdentityRequired(t *testing.T) {
 			t.Errorf("%s (%s): pinning the trusted identity is required, not recommended; terraform apply fails without it", path, tc.name)
 		}
 		if !strings.Contains(tc.rendered, "REQUIRED") {
-			t.Errorf("%s (%s): expected the pinned-identity variable to be labelled REQUIRED", path, tc.name)
+			t.Errorf("%s (%s): expected the pinned-identity variable to be labeled REQUIRED", path, tc.name)
 		}
 		// Emitted uncommented so the blank is visible in the file the customer
 		// edits; a commented-out line reads as an option that was left off.
