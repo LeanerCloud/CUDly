@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"io/fs"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 // federationHandler returns a Handler wired for federation IaC tests.
@@ -1498,4 +1501,154 @@ func TestValidateFederationTargetSource(t *testing.T) {
 			assert.Contains(t, err.Error(), tc.wantSub)
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// aws-target OIDC provider thumbprint guard (issue #1615)
+// ---------------------------------------------------------------------------
+
+const awsTargetCFNTemplate = "../../iac/federation/aws-target/cloudformation/template.yaml"
+
+// allZeroThumbprint is the placeholder that used to be the OIDCThumbprint
+// default. It is not the SHA-1 fingerprint of any certificate, so on the one
+// path where AWS still consults a thumbprint (the JWKS endpoint's TLS
+// certificate does not chain to a CA in AWS's trusted-root library, AWS cannot
+// retrieve that certificate, or the endpoint requires TLS 1.3) it matches
+// nothing and every AssumeRoleWithWebIdentity call fails.
+const allZeroThumbprint = "0000000000000000000000000000000000000000"
+
+// cfnParamBlock returns the lines of a top-level Parameters entry, from
+// "  <name>:" up to the next sibling key at the same indent.
+func cfnParamBlock(t *testing.T, src, name string) string {
+	t.Helper()
+	start := strings.Index(src, "\n  "+name+":\n")
+	require.GreaterOrEqual(t, start, 0, "parameter %s not found in %s", name, awsTargetCFNTemplate)
+	rest := src[start+1:]
+	lines := strings.Split(rest, "\n")
+	var out []string
+	for i, line := range lines {
+		if i > 0 && len(line) > 2 && line[0] == ' ' && line[1] == ' ' && line[2] != ' ' {
+			break
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+// cfnScalar pulls a scalar property out of a parameter block and decodes it
+// with the YAML decoder, so the value under test is exactly what CloudFormation
+// receives rather than a copy retyped into this test.
+func cfnScalar(t *testing.T, block, key string) string {
+	t.Helper()
+	for _, line := range strings.Split(block, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, key+":") {
+			continue
+		}
+		var holder struct {
+			V string `yaml:"v"`
+		}
+		require.NoError(t, yaml.Unmarshal([]byte("v:"+strings.TrimPrefix(trimmed, key+":")), &holder),
+			"could not YAML-decode %s from %q", key, trimmed)
+		return holder.V
+	}
+	t.Fatalf("key %s not found in parameter block:\n%s", key, block)
+	return ""
+}
+
+// TestAWSTargetTemplate_RejectsPlaceholderThumbprint is the regression test for
+// issue #1615. The template used to default OIDCThumbprint to the all-zeros
+// placeholder and validate it only as 40 hex characters, which that placeholder
+// satisfies.
+//
+// The AllowedPattern and MaxLength are read back out of the committed template
+// and evaluated the way CloudFormation evaluates them (anchored full match plus
+// the length cap), so a future edit that relaxes either one fails here.
+func TestAWSTargetTemplate_RejectsPlaceholderThumbprint(t *testing.T) {
+	raw, err := os.ReadFile(awsTargetCFNTemplate)
+	require.NoError(t, err)
+	src := string(raw)
+
+	block := cfnParamBlock(t, src, "OIDCThumbprint")
+
+	// The placeholder must not be reachable by leaving the parameter alone.
+	require.Equal(t, "", cfnScalar(t, block, "Default"),
+		"OIDCThumbprint must default to empty so ThumbprintList is omitted and IAM "+
+			"retrieves the issuer's real thumbprint")
+
+	pattern := cfnScalar(t, block, "AllowedPattern")
+	maxLen, err := strconv.Atoi(cfnScalar(t, block, "MaxLength"))
+	require.NoError(t, err, "MaxLength must be an integer")
+
+	re, err := regexp.Compile(pattern)
+	require.NoError(t, err, "AllowedPattern must be a valid regular expression")
+
+	// CloudFormation applies AllowedPattern as a full match and MaxLength
+	// independently; a value is accepted only when it clears both.
+	accepted := func(v string) bool {
+		return len(v) <= maxLen && re.FindString(v) == v && re.MatchString(v)
+	}
+
+	mustAccept := []struct{ value, why string }{
+		{"", "empty: ThumbprintList is omitted and IAM retrieves the real thumbprint"},
+		{"08745487e891c19e3078c1f2a07e452950ef36f6", "a real root CA thumbprint"},
+		{"990F4193972F2BECF12DDEDA5237F9C952F20D9E", "uppercase hex"},
+		{"1" + strings.Repeat("0", 39), "non-zero digit in the first position only"},
+		{strings.Repeat("0", 39) + "1", "non-zero digit in the last position only"},
+		{strings.Repeat("0", 20) + "9" + strings.Repeat("0", 19), "non-zero digit in the middle only"},
+		{strings.Repeat("0", 39) + "F", "non-zero position holding an uppercase hex letter"},
+		{strings.Repeat("0", 39) + "a", "non-zero position holding a lowercase hex letter"},
+	}
+	for _, tc := range mustAccept {
+		assert.True(t, accepted(tc.value), "must accept %q (%s)", tc.value, tc.why)
+	}
+
+	mustReject := []struct{ value, why string }{
+		{allZeroThumbprint, "the #1615 placeholder itself"},
+		{strings.Repeat("0", 39), "all zeros, one character short"},
+		{strings.Repeat("0", 41), "all zeros, one character long"},
+		{"0", "a single zero"},
+		{strings.Repeat("a", 41), "41 hex characters: caught by MaxLength, not the pattern"},
+		{strings.Repeat("a", 40) + "\n", "trailing newline: MaxLength rejects it even if $ matched before it"},
+		{strings.Repeat("g", 40), "not hexadecimal"},
+		{"0x" + strings.Repeat("0", 38), "hex-literal prefix"},
+		{" " + strings.Repeat("a", 39), "leading whitespace"},
+		{strings.Repeat("a", 39) + " ", "trailing whitespace"},
+		{"*", "wildcard"},
+		{"${accounts.google.com:sub}", "an IAM policy variable"},
+	}
+	for _, tc := range mustReject {
+		assert.False(t, accepted(tc.value), "must reject %q (%s)", tc.value, tc.why)
+	}
+}
+
+// TestAWSTargetTemplate_ThumbprintWiring asserts the second, independent layer
+// of the #1615 guard and the resource wiring it protects. The Rules assertion
+// duplicates the AllowedPattern's rejection of the placeholder on purpose, so
+// neither a regex "simplification" nor a submission path that skips one layer
+// can readmit it alone.
+func TestAWSTargetTemplate_ThumbprintWiring(t *testing.T) {
+	raw, err := os.ReadFile(awsTargetCFNTemplate)
+	require.NoError(t, err)
+	src := string(raw)
+
+	assert.Contains(t, src, "Rules:",
+		"template must declare a Rules section; rules are evaluated before any resource is created")
+	assert.Contains(t, src, allZeroThumbprint,
+		"the Rules assertion must name the all-zeros placeholder literally")
+	assert.Contains(t, src, `HasThumbprint: !Not [!Equals [!Ref OIDCThumbprint, ""]]`,
+		"HasThumbprint must be defined as a non-empty OIDCThumbprint")
+
+	// The empty branch must omit ThumbprintList entirely rather than send an
+	// empty or placeholder list, which is what makes IAM retrieve the real
+	// thumbprint for itself.
+	assert.Contains(t, src, `ThumbprintList: !If`,
+		"ThumbprintList must be conditional on HasThumbprint")
+	assert.Contains(t, src, `- !Ref "AWS::NoValue"`,
+		"the empty branch must resolve to AWS::NoValue so the property is omitted")
+
+	// The placeholder must appear only inside the Rules assertion that rejects
+	// it — never as a parameter default or a resource value.
+	assert.NotContains(t, src, `Default: "`+allZeroThumbprint+`"`,
+		"the all-zeros placeholder must not be reintroduced as a default")
 }
