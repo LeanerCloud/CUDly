@@ -17,8 +17,8 @@ const gcpTargetMainTF = "federation/gcp-target/terraform/main.tf"
 // attribute.aws_role. It normalises a session ARN
 // (arn:aws:sts::<acct>:assumed-role/<role>/<session>) down to the role ARN.
 //
-// It is asserted byte-for-byte below so that normalizeAWSRoleAttr — the Go
-// transcription the behavioural tests run — cannot silently drift from the
+// It is asserted byte-for-byte below so that normalizeAWSRoleAttr, the Go
+// transcription the behavioural tests run, cannot silently drift from the
 // expression Terraform actually applies. Editing the mapping fails the string
 // assertion and forces the transcription to be revisited.
 const awsRoleAttributeMapping = `assertion.arn.contains('assumed-role') ? assertion.arn.extract('{account_arn}assumed-role/') + 'assumed-role/' + assertion.arn.extract('assumed-role/{role_name}/') : assertion.arn`
@@ -92,7 +92,7 @@ func TestGCPTargetGrantsImpersonationToOneIdentity(t *testing.T) {
 
 	// Any wildcard in a principal identifier matches every identity in the pool,
 	// whichever role or attribute it is attached to.
-	wildcard := regexp.MustCompile(`principalSet?://[^"]*\*`)
+	wildcard := regexp.MustCompile(`principal(Set)?://[^"]*\*`)
 	if m := wildcard.FindString(tf); m != "" {
 		t.Errorf("%s: wildcard principal identifier %q grants impersonation pool-wide", gcpTargetMainTF, m)
 	}

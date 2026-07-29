@@ -60,7 +60,7 @@ variable "oidc_attribute_mapping" {
 # in those two destinations rather than merely looking wrong:
 #
 #   ' " \ `  terminate the CEL string literal, so the rest of the value rewrites
-#            the condition — aws_role_name = "x') || true || ('" renders an
+#            the condition; aws_role_name = "x') || true || ('" renders an
 #            always-true condition that admits every identity;
 #   *        widens an IAM principal identifier to match every identity;
 #   $        catches a pasted ${...} placeholder, which is not expanded here and

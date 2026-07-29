@@ -123,8 +123,13 @@ resource "google_iam_workload_identity_pool_provider" "cudly" {
   # refused. STS drops the path from assumed-role ARNs, so the same trick does
   # not work through an IAM role.
   #
-  # Kept byte-identical to the mapping in arm/CUDly-CrossSubscription/setup-gcp-wif.sh
-  # so the two customer-facing onboarding paths produce the same provider.
+  # This expression, the attribute_condition below, and the impersonation grant's
+  # member are byte-identical to their counterparts in
+  # arm/CUDly-CrossSubscription/setup-gcp-wif.sh, so the two customer-facing
+  # onboarding paths pin the same identity and the script's condition check
+  # accepts a provider this module created. (The script does not map
+  # attribute.account, which is mapped here and unused by the condition; it
+  # compares conditions, not mappings, so the extra attribute is inert there.)
   attribute_mapping = var.provider_type == "aws" ? {
     "google.subject"     = "assertion.arn"
     "attribute.aws_role" = "assertion.arn.contains('assumed-role') ? assertion.arn.extract('{account_arn}assumed-role/') + 'assumed-role/' + assertion.arn.extract('assumed-role/{role_name}/') : assertion.arn"
@@ -179,14 +184,14 @@ resource "google_iam_workload_identity_pool_provider" "cudly" {
 #
 # Both branches name a single identity, so a future mapping or condition bug
 # cannot widen impersonation beyond the pinned principal:
-#   OIDC — principal://.../subject/<exact sub claim>.
-#   AWS  — principalSet://.../attribute.aws_role/<exact role ARN>. This is the
-#          exact-value form of a principalSet, not a prefix or wildcard: it
-#          admits only identities whose attribute.aws_role equals the value.
-#          Session ARNs carry a per-session suffix, which is why the grant names
-#          the normalised role attribute rather than google.subject; it is not a
-#          reason to fall back to the pool-wide wildcard principalSet this
-#          replaced, which granted impersonation to everything in the pool.
+#   OIDC: principal://.../subject/<exact sub claim>.
+#   AWS:  principalSet://.../attribute.aws_role/<exact role ARN>. This is the
+#         exact-value form of a principalSet, not a prefix or wildcard: it
+#         admits only identities whose attribute.aws_role equals the value.
+#         Session ARNs carry a per-session suffix, which is why the grant names
+#         the normalised role attribute rather than google.subject; it is not a
+#         reason to fall back to the pool-wide wildcard principalSet this
+#         replaced, which granted impersonation to everything in the pool.
 #
 # Principal identifiers are pool-scoped, not provider-scoped: any provider added
 # to this pool that can mint the same attribute value satisfies this grant. Keep
@@ -204,15 +209,15 @@ resource "google_service_account_iam_member" "cudly_wif" {
   # narrowed. `member` is ForceNew, so changing it replaces this resource, and
   # the wrong order breaks federation for live customers:
   #
-  #   depends_on          — attribute_mapping and attribute_condition are updated
-  #                         in place by the provider (neither is ForceNew; both
-  #                         go into the PATCH updateMask), so the provider is
-  #                         reconfigured first. Until that lands, attribute.aws_role
-  #                         still holds the raw session ARN and the new member
-  #                         below would match nothing.
-  #   create_before_destroy — adds the narrow member while the old pool-wide one
-  #                         is still present, so there is no window in which the
-  #                         service account has neither.
+  #   depends_on:            attribute_mapping and attribute_condition are
+  #                          updated in place by the provider (neither is
+  #                          ForceNew; both go into the PATCH updateMask), so the
+  #                          provider is reconfigured first. Until that lands,
+  #                          attribute.aws_role still holds the raw session ARN
+  #                          and the new member below would match nothing.
+  #   create_before_destroy: adds the narrow member while the old pool-wide one
+  #                          is still present, so there is no window in which the
+  #                          service account has neither.
   #
   # Net apply order: reconfigure provider -> add narrow member -> remove the old
   # pool-wide member. Every step keeps at least one matching grant in place.

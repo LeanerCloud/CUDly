@@ -26,7 +26,7 @@ oidc_issuer_uri = "{{.OIDCIssuerURI}}"{{if eq .Source "azure"}}  # Azure: https:
 {{- end}}
 {{- if eq .Source "aws"}}
 # REQUIRED. The bare name of the IAM role CUDly assumes in account
-# {{.SourceAccountID}} — ask your CUDly contact if you are unsure. It is the only
+# {{.SourceAccountID}}. Ask your CUDly contact if you are unsure. It is the only
 # identity that will be able to impersonate the service account above: the
 # Terraform module pins the provider's attribute condition and the impersonation
 # grant to arn:aws:sts::{{.SourceAccountID}}:assumed-role/<this value>.
