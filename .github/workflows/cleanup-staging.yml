@@ -354,8 +354,15 @@ jobs:
       - name: Delete Cloud SQL instance directly (avoids user/DB ordering deadlock)
         env:
           TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
         run: |
-          PROJECT="${{ vars.GCP_PROJECT_ID }}"
+          # Routed via env: rather than interpolated into this script's source,
+          # per the zero-expression-interpolation-in-run-blocks rule from #1641.
+          PROJECT="$GCP_PROJECT_ID"
+          if [ -z "$PROJECT" ]; then
+            echo "::error::vars.GCP_PROJECT_ID is unset; refusing to run Cloud SQL cleanup against an empty project"
+            exit 1
+          fi
           # Find and delete the staging Cloud SQL instance to avoid PostgreSQL dependency errors
           INSTANCE=$(gcloud sql instances list --project="$PROJECT" \
             --filter="name:cudly-staging" --format="value(name)" 2>/dev/null | head -1)
