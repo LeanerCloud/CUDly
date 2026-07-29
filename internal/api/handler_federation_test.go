@@ -1634,8 +1634,9 @@ func TestAWSTargetTemplate_ThumbprintWiring(t *testing.T) {
 
 	assert.Contains(t, src, "Rules:",
 		"template must declare a Rules section; rules are evaluated before any resource is created")
-	assert.Contains(t, src, allZeroThumbprint,
-		"the Rules assertion must name the all-zeros placeholder literally")
+	assert.Equal(t, 1, strings.Count(src, allZeroThumbprint),
+		"the all-zeros placeholder must appear exactly once in the template: in the "+
+			"Rules assertion that rejects it, and nowhere else")
 	assert.Contains(t, src, `HasThumbprint: !Not [!Equals [!Ref OIDCThumbprint, ""]]`,
 		"HasThumbprint must be defined as a non-empty OIDCThumbprint")
 
@@ -1648,7 +1649,7 @@ func TestAWSTargetTemplate_ThumbprintWiring(t *testing.T) {
 		"the empty branch must resolve to AWS::NoValue so the property is omitted")
 
 	// The placeholder must appear only inside the Rules assertion that rejects
-	// it — never as a parameter default or a resource value.
+	// it, never as a parameter default or a resource value.
 	assert.NotContains(t, src, `Default: "`+allZeroThumbprint+`"`,
 		"the all-zeros placeholder must not be reintroduced as a default")
 }

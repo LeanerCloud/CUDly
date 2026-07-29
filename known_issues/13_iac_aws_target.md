@@ -56,7 +56,7 @@ parameter and the `ThumbprintList` property), `iac/federation/aws-target/terrafo
 Terraform sibling defaulted to the same value and permitted it for
 `login.microsoftonline.com` and `accounts.google.com` issuers.
 
-**Impact**: Not the authentication bypass it looks like — see below — but wrong
+**Impact**: Not the authentication bypass it looks like (see below), but wrong
 in both directions, and documented as if the value carried security meaning it
 does not have.
 
@@ -68,8 +68,9 @@ certificate, or when the endpoint requires TLS 1.3
 [CreateOpenIDConnectProvider](https://docs.aws.amazon.com/IAM/latest/APIReference/API_CreateOpenIDConnectProvider.html)).
 Consequences:
 
-- For every publicly-trusted issuer — including both this template documents —
-  the thumbprint is never read. All-zeros is inert there, and so is a correct
+- For a publicly-trusted issuer, including both this template documents, the
+  thumbprint is read only under the fallback conditions listed above, which
+  normal operation does not hit. All-zeros is inert there, and so is a correct
   thumbprint. An attacker still needs a JWKS-host certificate signed by a CA in
   AWS's trusted-root library, and that bar does not move with this parameter.
 - On the fallback path, all-zeros is not the SHA-1 of any certificate, so it
@@ -84,14 +85,14 @@ issuer allowlist was beside the point in both directions.
 
 **Status:** ✔️ Resolved
 
-**Resolved by:** #1615 — `ThumbprintList` is optional on
+**Resolved by:** #1615. `ThumbprintList` is optional on
 `AWS::IAM::OIDCProvider`; when omitted, IAM retrieves and uses the issuer's
 real top intermediate CA thumbprint, which is what the IAM console does by
 default. That is now the default on both paths.
 
 - CloudFormation: `OIDCThumbprint` defaults to empty, a `HasThumbprint`
   condition omits `ThumbprintList` via `AWS::NoValue` when it is, and the
-  placeholder is rejected by two independent layers — an `AllowedPattern`
+  placeholder is rejected by two independent layers: an `AllowedPattern`
   requiring at least one non-zero hex digit, and an unconditional `Rules`
   assertion naming the literal.
 - Terraform: `thumbprint_list` defaults to `[]` and is passed as `null` when
@@ -104,7 +105,7 @@ default. That is now the default on both paths.
 **Upgrade note:** `ThumbprintList` updates with no interruption, so switching
 forms never replaces the OIDC provider or changes its ARN. A CloudFormation
 stack still holding the placeholder fails its next update until the parameter
-is cleared or set to a real thumbprint — deliberate, and such a stack cannot be
+is cleared or set to a real thumbprint. That is deliberate, and such a stack cannot be
 authenticating on the fallback path today anyway. Terraform's `thumbprint_list`
 is Optional+Computed, so clearing it does not clear a value already stored on
 an existing provider; correct those with

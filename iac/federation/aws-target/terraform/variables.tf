@@ -96,9 +96,10 @@ variable "thumbprint_list" {
     AWS verifies the JWKS endpoint's TLS certificate against its own library of
     trusted root CAs, and falls back to these thumbprints only when that
     certificate does not chain to one of them, when AWS cannot retrieve the
-    certificate, or when the endpoint requires TLS 1.3. For both documented
-    issuers (login.microsoftonline.com and accounts.google.com) the value is
-    never consulted, whatever it is set to.
+    certificate, or when the endpoint requires TLS 1.3. Both documented
+    issuers (login.microsoftonline.com and accounts.google.com) present
+    publicly trusted certificates, so for them the value is read only if one of
+    those fallback conditions applies, whatever it is set to.
 
     When the issuer's discovery endpoint and jwks_uri are on different hosts,
     AWS requires the thumbprints of BOTH; supply both entries in that case.
@@ -119,8 +120,8 @@ variable "thumbprint_list" {
   # guard is now unconditional and the default is empty.
   #
   # All-zeros bypasses nothing: it is simply not the SHA-1 of any certificate.
-  # On the primary path AWS never reads it, and on the fallback path it matches
-  # nothing, so role assumption fails outright. Restricting it to Azure AD and
+  # On the primary path AWS does not read it at all, and on the fallback path it
+  # matches nothing, so role assumption fails outright. Restricting it to Azure AD and
   # Google was equally beside the point -- the thumbprint is unread for every
   # publicly-trusted issuer, not only those two, and setting it for a
   # private-CA issuer breaks that issuer no matter which one it is.

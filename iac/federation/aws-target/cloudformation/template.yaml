@@ -57,16 +57,17 @@ Parameters:
       that signed the TLS certificate of the issuer's JWKS endpoint.
       LEAVE THIS EMPTY unless that certificate does not chain to a publicly
       trusted CA. Empty omits the ThumbprintList property entirely, and IAM then
-      retrieves the correct thumbprint itself — the same thing the IAM console
+      retrieves the correct thumbprint itself, which is what the IAM console
       does by default.
       AWS verifies the JWKS endpoint's TLS certificate against its own library of
       trusted root CAs, and falls back to this thumbprint only when that
       certificate does not chain to one of them, when AWS cannot retrieve the
-      certificate, or when the endpoint requires TLS 1.3. For both documented
-      issuers (login.microsoftonline.com and accounts.google.com) the value is
-      therefore never consulted, whatever it is set to.
+      certificate, or when the endpoint requires TLS 1.3. Both documented
+      issuers (login.microsoftonline.com and accounts.google.com) present
+      publicly trusted certificates, so for them the value is read only if one
+      of those fallback conditions applies, whatever it is set to.
       The all-zeros placeholder that used to be the default is now rejected. It
-      does not disable chain verification — it is simply not the SHA-1 of any
+      does not disable chain verification. It is simply not the SHA-1 of any
       certificate, so on the fallback path it matches nothing and every
       AssumeRoleWithWebIdentity call fails. It nulls out the only check that
       path has while reading like a deliberate configuration.
@@ -81,11 +82,11 @@ Parameters:
     # not "simplify" this back to ^$|^[0-9a-fA-F]{40}$, which readmits it.
     # MaxLength caps the upper end (the pattern alone would admit up to 79
     # characters). A well-formed-but-short value (1-39 hex) passes here and is
-    # rejected by the IAM API, which fixes the length at 40 — fail-closed, with
+    # rejected by the IAM API, which fixes the length at 40: fail-closed, with
     # the stack rolling back rather than deploying a broken provider.
     AllowedPattern: "^$|^[0-9a-fA-F]{0,39}[1-9a-fA-F][0-9a-fA-F]{0,39}$"
     ConstraintDescription: >
-      OIDCThumbprint must be empty (recommended — IAM then retrieves the
+      OIDCThumbprint must be empty (recommended, since IAM then retrieves the
       thumbprint itself), or a 40-character hex SHA-1 thumbprint containing at
       least one non-zero digit.
       The all-zeros placeholder is rejected because it is not the fingerprint of
