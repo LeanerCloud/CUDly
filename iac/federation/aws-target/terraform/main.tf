@@ -23,9 +23,20 @@ locals {
 }
 
 resource "aws_iam_openid_connect_provider" "cudly" {
-  url             = local.oidc_issuer_url_normalized
-  client_id_list  = [local.audience]
-  thumbprint_list = var.thumbprint_list
+  url            = local.oidc_issuer_url_normalized
+  client_id_list = [local.audience]
+
+  # null, not [], when no thumbprint is configured: thumbprint_list is optional
+  # on this resource, and leaving it unset is what makes IAM retrieve and use
+  # the issuer's real top intermediate CA thumbprint. An empty list would
+  # instead send a provider that has no thumbprints at all.
+  #
+  # Note for existing deployments: the argument is Optional+Computed, so
+  # clearing it does not clear the value already stored on an existing
+  # provider -- Terraform keeps reading back what is there. A provider created
+  # with the old all-zeros default must be corrected out of band with
+  # `aws iam update-open-id-connect-provider-thumbprint`, or replaced.
+  thumbprint_list = length(var.thumbprint_list) > 0 ? var.thumbprint_list : null
 }
 
 resource "aws_iam_policy" "cudly" {

@@ -86,20 +86,25 @@ variable "role_name" {
 
 variable "thumbprint_list" {
   description = <<-EOT
-    TLS root CA thumbprints for the OIDC provider (40-character hex SHA-1).
-    AWS auto-validates well-known providers (Azure AD, Google); for those the
-    all-zeros placeholder is intentional and accepted.
-    For any other issuer you MUST supply the real root CA SHA-1 thumbprint.
-    Supplying the all-zeros placeholder for a custom issuer is rejected by this
-    module to prevent operators from silently bypassing CA-chain validation.
+    OPTIONAL. TLS thumbprints (40-character hex SHA-1) of the top intermediate
+    CA that signed the certificate of the issuer's JWKS endpoint.
+
+    LEAVE THIS EMPTY unless that certificate does not chain to a publicly
+    trusted CA. An empty list omits the argument entirely, and IAM then
+    retrieves the correct thumbprint itself.
+
+    AWS verifies the JWKS endpoint's TLS certificate against its own library of
+    trusted root CAs, and falls back to these thumbprints only when that
+    certificate does not chain to one of them, when AWS cannot retrieve the
+    certificate, or when the endpoint requires TLS 1.3. For both documented
+    issuers (login.microsoftonline.com and accounts.google.com) the value is
+    never consulted, whatever it is set to.
+
+    When the issuer's discovery endpoint and jwks_uri are on different hosts,
+    AWS requires the thumbprints of BOTH; supply both entries in that case.
   EOT
   type        = list(string)
-  default     = ["0000000000000000000000000000000000000000"]
-
-  validation {
-    condition     = length(var.thumbprint_list) > 0
-    error_message = "thumbprint_list must contain at least one thumbprint."
-  }
+  default     = []
 
   validation {
     condition = alltrue([
@@ -108,18 +113,22 @@ variable "thumbprint_list" {
     error_message = "Each thumbprint in thumbprint_list must be a 40-character SHA-1 hex string."
   }
 
-  # Guard against copy-paste of the all-zeros placeholder for custom OIDC
-  # issuers. AWS natively validates Azure AD and Google endpoints, so
-  # all-zeros is safe for those. Any other issuer URL requires a real CA
-  # thumbprint; the all-zeros value bypasses the CA-chain check entirely.
+  # The all-zeros placeholder used to be this variable's default, guarded by an
+  # issuer allowlist justified as "the all-zeros value bypasses the CA-chain
+  # check entirely". That justification was wrong in both directions, so the
+  # guard is now unconditional and the default is empty.
+  #
+  # All-zeros bypasses nothing: it is simply not the SHA-1 of any certificate.
+  # On the primary path AWS never reads it, and on the fallback path it matches
+  # nothing, so role assumption fails outright. Restricting it to Azure AD and
+  # Google was equally beside the point -- the thumbprint is unread for every
+  # publicly-trusted issuer, not only those two, and setting it for a
+  # private-CA issuer breaks that issuer no matter which one it is.
   validation {
-    condition = !(
-      length(var.thumbprint_list) == 1 &&
-      var.thumbprint_list[0] == "0000000000000000000000000000000000000000" &&
-      !startswith(var.oidc_issuer_url, "https://login.microsoftonline.com/") &&
-      !startswith(var.oidc_issuer_url, "https://accounts.google.com")
-    )
-    error_message = "thumbprint_list is the all-zeros placeholder, which is only safe for Azure AD (login.microsoftonline.com) and Google (accounts.google.com) issuers that AWS validates natively. For any other OIDC issuer you must supply the real root CA SHA-1 thumbprint."
+    condition = alltrue([
+      for t in var.thumbprint_list : t != "0000000000000000000000000000000000000000"
+    ])
+    error_message = "thumbprint_list must not contain the all-zeros placeholder. It is not the fingerprint of any certificate, so whenever AWS actually falls back to thumbprint verification it matches nothing and role assumption fails. Leave thumbprint_list empty to have IAM retrieve the issuer's real thumbprint, or supply that thumbprint."
   }
 }
 

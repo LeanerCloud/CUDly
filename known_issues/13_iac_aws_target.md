@@ -1,6 +1,6 @@
 # Known Issues: IaC AWS Target Federation
 
-> **Audit status (2026-07-28):** `1 still valid · 8 resolved · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-07-29):** `1 still valid · 9 resolved · 0 partially fixed · 0 moved · 0 needs triage`
 
 ## CRITICAL: federation bundle generator never emits `OIDCSubjectClaim`
 
@@ -44,6 +44,75 @@ property holds; the operator is still misled by the "Optional" label first.
 **Status:** ⚠️ Still valid — tracked as a follow-up to #1543 in #1640, and not
 fixed in that PR because `internal/` was owned by concurrent in-flight
 branches.
+
+## ~~HIGH: `OIDCThumbprint` defaults to the all-zeros placeholder for any issuer~~ — RESOLVED
+
+**File**: `iac/federation/aws-target/cloudformation/template.yaml` (`OIDCThumbprint`
+parameter and the `ThumbprintList` property), `iac/federation/aws-target/terraform/variables.tf`
+(`thumbprint_list`)
+**Description**: `OIDCThumbprint` defaulted to
+`0000000000000000000000000000000000000000` and was validated only by
+`AllowedPattern: "^[0-9a-fA-F]{40}$"`, which that placeholder satisfies. The
+Terraform sibling defaulted to the same value and permitted it for
+`login.microsoftonline.com` and `accounts.google.com` issuers.
+
+**Impact**: Not the authentication bypass it looks like — see below — but wrong
+in both directions, and documented as if the value carried security meaning it
+does not have.
+
+AWS verifies the JWKS endpoint's TLS certificate against its own library of
+trusted root CAs, and consults the configured thumbprint only when that
+certificate does not chain to one of them, when AWS cannot retrieve the
+certificate, or when the endpoint requires TLS 1.3
+([IAM User Guide](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_create_oidc_verify-thumbprint.html),
+[CreateOpenIDConnectProvider](https://docs.aws.amazon.com/IAM/latest/APIReference/API_CreateOpenIDConnectProvider.html)).
+Consequences:
+
+- For every publicly-trusted issuer — including both this template documents —
+  the thumbprint is never read. All-zeros is inert there, and so is a correct
+  thumbprint. An attacker still needs a JWKS-host certificate signed by a CA in
+  AWS's trusted-root library, and that bar does not move with this parameter.
+- On the fallback path, all-zeros is not the SHA-1 of any certificate, so it
+  matches nothing and every `AssumeRoleWithWebIdentity` call fails. It does not
+  bypass chain verification; it nulls out the only verification that path has.
+  The failure mode is availability, not takeover.
+
+The parameter therefore had no value that fails open, and the guard the
+Terraform module carried ("the all-zeros value bypasses the CA-chain check
+entirely") was defending against a mechanism that does not exist, while its
+issuer allowlist was beside the point in both directions.
+
+**Status:** ✔️ Resolved
+
+**Resolved by:** #1615 — `ThumbprintList` is optional on
+`AWS::IAM::OIDCProvider`; when omitted, IAM retrieves and uses the issuer's
+real top intermediate CA thumbprint, which is what the IAM console does by
+default. That is now the default on both paths.
+
+- CloudFormation: `OIDCThumbprint` defaults to empty, a `HasThumbprint`
+  condition omits `ThumbprintList` via `AWS::NoValue` when it is, and the
+  placeholder is rejected by two independent layers — an `AllowedPattern`
+  requiring at least one non-zero hex digit, and an unconditional `Rules`
+  assertion naming the literal.
+- Terraform: `thumbprint_list` defaults to `[]` and is passed as `null` when
+  empty; the all-zeros entry is rejected unconditionally rather than for
+  non-allowlisted issuers.
+- Regression coverage in `internal/api/handler_federation_test.go` reads the
+  `AllowedPattern`, `MaxLength` and `Default` back out of the committed
+  template and evaluates them the way CloudFormation does.
+
+**Upgrade note:** `ThumbprintList` updates with no interruption, so switching
+forms never replaces the OIDC provider or changes its ARN. A CloudFormation
+stack still holding the placeholder fails its next update until the parameter
+is cleared or set to a real thumbprint — deliberate, and such a stack cannot be
+authenticating on the fallback path today anyway. Terraform's `thumbprint_list`
+is Optional+Computed, so clearing it does not clear a value already stored on
+an existing provider; correct those with
+`aws iam update-open-id-connect-provider-thumbprint` or replace the resource.
+
+**Still open:** `internal/iacfiles/templates/aws-wif-cli.sh.tmpl:33` hardcodes
+the same placeholder into `aws iam create-open-id-connect-provider`. That file
+is owned by #1640 and was left alone here; noted on that issue.
 
 ## ~~CRITICAL: CloudFormation `:sub` restriction is optional and defaults to trusting every issuer identity~~ — RESOLVED
 
@@ -215,6 +284,15 @@ other control on this trust policy.
 **Status:** ✔️ Resolved
 
 **Resolved by:** Added two `validation` blocks to `thumbprint_list`: one rejects empty lists, the other requires every entry to match `^[0-9a-fA-F]{40}$`. The all-zeros default is preserved (AWS auto-validates well-known providers like Azure AD/Google and accepts the placeholder for them); the validation prevents the typo'd / wrong-length cases that otherwise surface only at runtime. Custom issuers that need a real thumbprint are documented in the variable description.
+
+> **Superseded by #1615.** The reasoning above is wrong: AWS does not
+> "auto-validate" a special set of well-known providers, it validates the JWKS
+> endpoint's TLS certificate against its trusted-root CA library for *every*
+> issuer and reads the thumbprint only as a fallback. Keeping the all-zeros
+> default was therefore not safe-for-those-two, it was inert everywhere it was
+> read and fail-closed everywhere it mattered. The empty-list rejection has
+> also been removed, since an empty list is now the correct default: it makes
+> IAM retrieve the real thumbprint. See the #1615 entry above.
 
 ### Original implementation plan
 
