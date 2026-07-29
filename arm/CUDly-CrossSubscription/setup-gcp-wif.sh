@@ -126,7 +126,19 @@ if [[ "$PROVIDER_TYPE" == "aws" ]]; then
   # token exchange is refused rather than admitted on a partition mismatch.
   AWS_ROLE_ARN="arn:aws:sts::${AWS_ACCOUNT_ID}:assumed-role/${AWS_ROLE_NAME}"
   EXPECTED_CONDITION="attribute.aws_role == '${AWS_ROLE_ARN}'"
-  # google.subject is the full session ARN here and GCP caps it at 127 chars.
+  # attribute.aws_role normalises the session ARN
+  # (arn:aws:sts::<acct>:assumed-role/<role>/<session>) down to the role ARN,
+  # so both EXPECTED_CONDITION above and the IAM grant below can match it
+  # exactly instead of relying on a substring test. Kept in a variable (not
+  # inlined at the create-provider call below) so the reuse path can validate
+  # an existing provider against the exact same expression instead of a
+  # second hand-copied literal that could silently drift from this one.
+  EXPECTED_MAPPING="google.subject=assertion.arn,attribute.aws_role=assertion.arn.contains('assumed-role') ? assertion.arn.extract('{account_arn}assumed-role/') + 'assumed-role/' + assertion.arn.extract('assumed-role/{role_name}/') : assertion.arn"
+  # google.subject is the full session ARN here and GCP caps it at 127 bytes,
+  # not characters (127 chars is used below only because both charset
+  # regexes constraining this value -- --aws-role-name above and
+  # --oidc-subject below -- are ASCII-only, so chars == bytes; this budget
+  # would silently under/over-count if that charset were ever widened).
   # "arn:aws:sts::<12 digits>:assumed-role/" is 39 characters, and the session
   # name is preceded by a "/", so the role name leaves 127 - 39 - len(role) - 1
   # for a session name that AWS allows to reach 64.
@@ -151,6 +163,7 @@ else
   # rejected at token-exchange time, long after this script reported success.
   [[ ${#OIDC_SUBJECT} -le 127 ]] || die "--oidc-subject must be at most 127 characters (google.subject limit); got ${#OIDC_SUBJECT}"
   EXPECTED_CONDITION="google.subject == '${OIDC_SUBJECT}'"
+  EXPECTED_MAPPING="google.subject=assertion.sub"
 fi
 
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
@@ -192,21 +205,34 @@ echo "      provider in pool '${POOL_ID}' that maps the same attribute value wou
 echo "      also satisfy the grant below. Keep this pool dedicated to CUDly" >&2
 echo "      (--pool-id) unless you intend to share it." >&2
 
+# gcloud's `value(...)` printer renders a map field (attributeMapping) as its
+# entries sorted by key and delimiter-joined with ';' by CsvPrinter._AddRecord
+# (the same code path ValuePrinter inherits from), not the comma-joined
+# "key=value,key=value" form the --attribute-mapping flag takes as input.
+# Comparing the raw describe output against EXPECTED_MAPPING as strings would
+# therefore report every correctly-configured provider as mismatched. This
+# splits each side on its own pair separator, re-sorts, and compares parsed
+# key/value pairs so neither the input-vs-output shape difference nor a
+# hypothetical future change to gcloud's own key ordering can produce a false
+# positive; a mapping that actually differs still compares unequal.
+normalize_mapping() {
+  local mapping="$1" pair_sep="$2"
+  local -a pairs
+  IFS="$pair_sep" read -ra pairs <<<"$mapping"
+  printf '%s\n' "${pairs[@]}" | sort
+}
+
 # ── Idempotent provider creation ───────────────────────────────────────────────
 if ! gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
      --project="$PROJECT" --location=global \
      --workload-identity-pool="$POOL_ID" &>/dev/null; then
   echo "Creating ${PROVIDER_TYPE} provider '${PROVIDER_ID}'..."
   if [[ "$PROVIDER_TYPE" == "aws" ]]; then
-    # attribute.aws_role normalises the session ARN
-    # (arn:aws:sts::<acct>:assumed-role/<role>/<session>) down to the role ARN,
-    # so both the condition below and the IAM grant can match it exactly instead
-    # of relying on a substring test.
     gcloud iam workload-identity-pools providers create-aws "$PROVIDER_ID" \
       --project="$PROJECT" --location=global \
       --workload-identity-pool="$POOL_ID" \
       --account-id="$AWS_ACCOUNT_ID" \
-      --attribute-mapping="google.subject=assertion.arn,attribute.aws_role=assertion.arn.contains('assumed-role') ? assertion.arn.extract('{account_arn}assumed-role/') + 'assumed-role/' + assertion.arn.extract('assumed-role/{role_name}/') : assertion.arn" \
+      --attribute-mapping="$EXPECTED_MAPPING" \
       --attribute-condition="$EXPECTED_CONDITION" \
       --quiet
   else
@@ -218,7 +244,7 @@ if ! gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
       --project="$PROJECT" --location=global \
       --workload-identity-pool="$POOL_ID" \
       --issuer-uri="$ISSUER_URI" \
-      --attribute-mapping="google.subject=assertion.sub" \
+      --attribute-mapping="$EXPECTED_MAPPING" \
       --attribute-condition="$EXPECTED_CONDITION" \
       --quiet
   fi
@@ -256,7 +282,29 @@ A condition that is merely non-empty is not a restriction: 'true' and
 Delete the provider and re-run:
 ${DELETE_HINT}"
   fi
-  echo "Reusing existing provider '${PROVIDER_ID}' (attribute condition matches: ${EXISTING_CONDITION})"
+  # The condition alone does not decide who gets in: it is evaluated against
+  # whatever value the mapping produces, so a provider can carry the exact
+  # expected condition while a different mapping feeds it a normalised value
+  # derived from an identity this script never authorised (e.g. one where
+  # attribute.aws_role is built from a caller-controlled ARN path segment
+  # rather than the actual assumed-role name). Validating the condition
+  # without also validating the mapping only checks half of that property.
+  EXISTING_MAPPING=$(gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
+    --project="$PROJECT" --location=global \
+    --workload-identity-pool="$POOL_ID" \
+    --format='value(attributeMapping)')
+  if [[ "$(normalize_mapping "$EXISTING_MAPPING" ';')" != "$(normalize_mapping "$EXPECTED_MAPPING" ',')" ]]; then
+    die "provider '${PROVIDER_ID}' already exists with a different attribute mapping, so this script cannot vouch for which identities enter pool '${POOL_ID}'.
+  found   : ${EXISTING_MAPPING:-(none)}
+  expected: ${EXPECTED_MAPPING}
+A matching attribute condition is not sufficient on its own: the mapping
+decides what value the condition is evaluated against, so a mismatched
+mapping can satisfy the condition while admitting an identity this script
+never authorised.
+Delete the provider and re-run:
+${DELETE_HINT}"
+  fi
+  echo "Reusing existing provider '${PROVIDER_ID}' (attribute condition and mapping match expected values)"
 fi
 
 # ── Grant service account impersonation to one principal ──────────────────────
