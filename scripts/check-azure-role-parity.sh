@@ -61,6 +61,33 @@ if ! command -v jq &>/dev/null; then
   exit 2
 fi
 
+# --- normalize ARM property-key casing ---------------------------------------
+# Azure Resource Manager's resource-provider JSON deserializers are documented
+# as case-insensitive by default, so a resource typed correctly but with a
+# miscased property key -- "Scope" instead of "scope", "RoleDefinitionId",
+# "Properties", "AssignableScopes" -- was invisible to every jq query below:
+# silence, not refusal. The first of those is issue #1545 byte-for-byte apart
+# from one capital letter.
+#
+# Whether ARM itself is genuinely lenient about a specific miscased key (as
+# opposed to accepting a template at all) was not independently verified
+# against a live subscription -- that would require deploying a miscased
+# template to a real tenant, which was not done. Fixing this fail-closed
+# regardless is still correct either way: if ARM does accept the miscased
+# key, this closes a real hole; if it does not, the guard is merely redundant
+# with a deploy-time rejection, never wrong.
+#
+# Lowercase every object key once, into a scratch copy, and query that copy
+# from here on. Every jq field access below that names a non-lowercase ARM
+# property (roleDefinitionId, assignableScopes, notActions, dataActions,
+# notDataActions) is written in lowercase to match; `type`, `properties`,
+# `permissions`, `scope`, `resources`, and `actions` are already all-lowercase
+# in correct ARM spelling, so normalizing them is a no-op either way.
+ARM_FILE_NORM="$(mktemp)"
+trap 'rm -f "$ARM_FILE_NORM"' EXIT
+jq 'walk(if type == "object" then with_entries(.key |= ascii_downcase) else . end)' \
+  "$ARM_FILE" > "$ARM_FILE_NORM"
+
 # --- extract permission lists from TF -----------------------------------------
 # Pulls each of actions / not_actions / data_actions / not_data_actions out of
 # the `permissions { ... }` block of the azurerm_role_definition resource.
@@ -126,17 +153,17 @@ extract_arm_list() {
   jq -r --arg key "$key" '
     [.resources // [] | .. | objects | select(has("type")) | select((.type|type) == "string")
        | select((.type|ascii_downcase) == "microsoft.authorization/roledefinitions")]
-    | map(.properties.permissions // [] | .[] | (.[$key] // [])[])
+    | map(.properties.permissions // [] | .[] | (.[$key|ascii_downcase] // [])[])
     | flatten
     | .[]
     | ascii_downcase
   ' "$file" | sort -u
 }
 
-ARM_ACTIONS=$(extract_arm_list "actions" "$ARM_FILE")
-ARM_NOT_ACTIONS=$(extract_arm_list "notActions" "$ARM_FILE")
-ARM_DATA_ACTIONS=$(extract_arm_list "dataActions" "$ARM_FILE")
-ARM_NOT_DATA_ACTIONS=$(extract_arm_list "notDataActions" "$ARM_FILE")
+ARM_ACTIONS=$(extract_arm_list "actions" "$ARM_FILE_NORM")
+ARM_NOT_ACTIONS=$(extract_arm_list "notActions" "$ARM_FILE_NORM")
+ARM_DATA_ACTIONS=$(extract_arm_list "dataActions" "$ARM_FILE_NORM")
+ARM_NOT_DATA_ACTIONS=$(extract_arm_list "notDataActions" "$ARM_FILE_NORM")
 
 if [[ -z "$ARM_ACTIONS" ]]; then
   echo "ERROR: No actions extracted from ARM template: $ARM_FILE" >&2
@@ -178,7 +205,18 @@ echo "OK: ARM and TF actions/notActions/dataActions/notDataActions lists match (
 # This is a CI drift guard, not a security boundary: anyone who can edit the
 # template can edit this script. It exists to stop the grant being widened by
 # ACCIDENT, so it is tuned to catch the shapes a well-meaning author actually
-# reaches for, and it errs towards refusing anything it cannot reason about.
+# reaches for.
+#
+# It is NOT a general ARM evaluator, and does not refuse everything it cannot
+# reason about: it recognizes a fixed set of resource types
+# (Microsoft.Authorization/roleDefinitions, Microsoft.Authorization/
+# roleAssignments) and separately refuses outright a second fixed set it
+# knows are grant-bearing or opaque and cannot safely inspect (see
+# REFUSED_TYPES below). Any OTHER resource type -- including ones nobody has
+# thought to add to either list yet -- is not inspected at all and passes
+# silently. Closing that gap in general means asserting the template's exact
+# expected set of grants, not enumerating everything to refuse; that is
+# tracked separately in issue #1681 rather than attempted here.
 #
 # The allowlist is EXACT-MATCH (after normalization, see normalize_scope_expr
 # below), not substring-anchored. An earlier revision accepted any value
@@ -267,8 +305,8 @@ ALLOWED_ROLE_DEFINITION_IDS=(
 # Repointing $schema at the management-group template would silently land all
 # of them at management-group scope, covering every child subscription, without
 # changing a single scope string. Pin it explicitly.
-if ! jq -e '.["$schema"] | test("subscriptionDeploymentTemplate")' "$ARM_FILE" >/dev/null 2>&1; then
-  ACTUAL_SCHEMA=$(jq -r '.["$schema"] // "<absent>"' "$ARM_FILE")
+if ! jq -e '.["$schema"] | test("subscriptionDeploymentTemplate")' "$ARM_FILE_NORM" >/dev/null 2>&1; then
+  ACTUAL_SCHEMA=$(jq -r '.["$schema"] // "<absent>"' "$ARM_FILE_NORM")
   echo "ERROR: ARM template is not a subscription-scoped deployment." >&2
   echo "       \$schema: ${ACTUAL_SCHEMA}" >&2
   echo "       Role assignments here carry no explicit scope, so they inherit the" >&2
@@ -277,38 +315,57 @@ if ! jq -e '.["$schema"] | test("subscriptionDeploymentTemplate")' "$ARM_FILE" >
   exit 1
 fi
 
-# A nested deployment can carry an inner template with its own role
-# assignments, at its own scope -- the idiomatic ARM way to assign at a
-# different scope from a subscription deployment, so it is exactly what a
-# future author with a legitimate cross-scope need would reach for. A
-# deployment script is the same problem in a different shape: its runtime
-# `az`/az-cli commands can issue role assignments this check never sees as
-# JSON at all. This check cannot inspect either, so refuse rather than pass
-# them silently.
+# Resource types this check knows it cannot safely inspect, refused outright
+# rather than silently passed:
+#
+#   deployments / deploymentScripts / deploymentStacks -- a nested deployment
+#   can carry an inner template with its own role assignments at its own
+#   scope (the idiomatic ARM way to assign at a different scope from a
+#   subscription deployment), and a deployment script's runtime `az`/az-cli
+#   commands can issue role assignments neither one exposes as JSON this
+#   check can walk.
+#
+#   roleEligibilityScheduleRequests / roleAssignmentScheduleRequests -- Azure
+#   PIM (Privileged Identity Management) resources. These grant a role the
+#   same way a plain roleAssignment does (confirmed: a PIM request binding
+#   the built-in Owner role deploys and grants it) but under a completely
+#   different property shape this check's roleAssignment selectors never
+#   match, so the roleDefinitionId allowlist above is bypassed simply by
+#   changing the resource type.
+#
+#   storageAccounts/providers/roleAssignments -- the legacy ARM spelling for
+#   a role assignment as a child resource (a full `.../providers/...` type
+#   path) rather than a separate top-level roleAssignments resource with a
+#   `scope` property. Same grant, invisible to the same selectors for the
+#   same reason.
 #
 # Rooted at `.resources`, same reasoning as extract_arm_list above: a
 # decorative object elsewhere in the template (variables, outputs) is never
 # deployed, so it must not be able to trip this refusal on a template that is
 # otherwise fine.
-NESTED_COUNT=$(
-  jq '
+REFUSED_TYPES='["microsoft.resources/deployments",
+  "microsoft.resources/deploymentscripts",
+  "microsoft.resources/deploymentstacks",
+  "microsoft.authorization/roleeligibilityschedulerequests",
+  "microsoft.authorization/roleassignmentschedulerequests",
+  "microsoft.storage/storageaccounts/providers/roleassignments"]'
+REFUSED_TYPE_COUNT=$(
+  jq --argjson types "$REFUSED_TYPES" '
     [.resources // [] | .. | objects | select(has("type")) | select((.type|type) == "string")
-       | select((.type|ascii_downcase) as $t
-                | ["microsoft.resources/deployments",
-                   "microsoft.resources/deploymentscripts",
-                   "microsoft.resources/deploymentstacks"]
-                  | index($t) != null)]
+       | select((.type|ascii_downcase) as $t | $types | index($t) != null)]
     | length
-  ' "$ARM_FILE"
+  ' "$ARM_FILE_NORM"
 )
-if [[ "$NESTED_COUNT" != "0" ]]; then
-  echo "ERROR: ARM template contains ${NESTED_COUNT} nested deployment(s), deployment" >&2
-  echo "       script(s), or deployment stack(s)." >&2
-  echo "       This check cannot inspect the scopes inside a nested template, nor the" >&2
-  echo "       role assignments a deployment script issues at runtime, so a" >&2
-  echo "       tenant-scoped assignment could hide there (issue #1545). Either" >&2
-  echo "       inline the resources, or extend this script to recurse into" >&2
-  echo "       properties.template before adding one." >&2
+if [[ "$REFUSED_TYPE_COUNT" != "0" ]]; then
+  echo "ERROR: ARM template contains ${REFUSED_TYPE_COUNT} resource(s) of a type this" >&2
+  echo "       check cannot safely inspect: a nested deployment, deployment script or" >&2
+  echo "       stack, a PIM role-eligibility/role-assignment schedule request, or a" >&2
+  echo "       legacy child-scoped role assignment. Any of these can grant a role this" >&2
+  echo "       check never sees as a plain Microsoft.Authorization/roleAssignments" >&2
+  echo "       resource, so a tenant-scoped or otherwise unreviewed grant could hide" >&2
+  echo "       there (issue #1545). Either inline the resources as a plain role" >&2
+  echo "       assignment, or extend this script to recognize the new shape before" >&2
+  echo "       adding one." >&2
   exit 1
 fi
 
@@ -328,7 +385,7 @@ SCOPES=$(
     [.resources // [] | .. | objects | select(has("type")) | select((.type|type) == "string")] as $all
     | ( $all[]
         | select((.type|ascii_downcase) == "microsoft.authorization/roledefinitions")
-        | (.properties.assignableScopes // [])[]
+        | (.properties.assignablescopes // [])[]
         | "assignableScopes\t" + . ),
       ( $all[]
         | select((.type|ascii_downcase) == "microsoft.authorization/roleassignments")
@@ -336,9 +393,9 @@ SCOPES=$(
         | "roleAssignment.scope\t" + (.scope|tostring) ),
       ( $all[]
         | select((.type|ascii_downcase) == "microsoft.authorization/roleassignments")
-        | select(has("properties") and (.properties|has("roleDefinitionId")))
-        | "roleAssignment.roleDefinitionId\t" + (.properties.roleDefinitionId|tostring) )
-  ' "$ARM_FILE"
+        | select(has("properties") and (.properties|has("roledefinitionid")))
+        | "roleAssignment.roleDefinitionId\t" + (.properties.roledefinitionid|tostring) )
+  ' "$ARM_FILE_NORM"
 )
 
 if [[ -z "$SCOPES" ]]; then

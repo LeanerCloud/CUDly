@@ -198,6 +198,70 @@ run_case "decorative variables object is invisible, exits 0" 0 \
   --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
   --arm-file "${FIXTURES}/decorative-variables-arm.json"
 
+# --- round-4: independent review, key-casing and unmatched-type bypasses ----
+# ARM's resource-provider JSON deserializers are documented case-insensitive
+# for property names; this script's jq queries were not, so a correctly
+# recognized resource with one miscased property key was invisible to the
+# specific check that key feeds -- silence, not refusal. Cases 21-24 are one
+# per miscased key the independent review found live (each on its own,
+# isolated from the others, with a second clean role definition/assignment
+# alongside so the failure is attributable to the miscasing and nothing
+# else). Cases 25-27 are grant-bearing resource types this check's
+# roleAssignments-only type match never saw at all.
+
+# Case 21: a roleAssignment with "Scope" (capital S) set to the tenant-wide
+# Microsoft.Capacity path. has("scope") never matched "Scope", so the
+# assignment's explicit-scope violation -- the exact shape issue #1545
+# shipped as -- was invisible.
+run_case "miscased 'Scope' key on tenant-wide assignment exits 1" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/miscased-scope-arm.json"
+
+# Case 22: a roleAssignment with "RoleDefinitionId" (capitalized) binding
+# built-in Owner, no explicit scope. has("roleDefinitionId") never matched
+# "RoleDefinitionId", so the roleDefinitionId allowlist (F6) was invisible.
+run_case "miscased 'RoleDefinitionId' key on Owner grant exits 1" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/miscased-roledefinitionid-arm.json"
+
+# Case 23: a roleAssignment with "Properties" (capitalized) wrapping an Owner
+# roleDefinitionId. has("properties") never matched "Properties", so nothing
+# inside it -- roleDefinitionId included -- was ever reached.
+run_case "miscased 'Properties' key on Owner grant exits 1" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/miscased-properties-arm.json"
+
+# Case 24: a second, actions-matching role definition whose "AssignableScopes"
+# (capitalized) is the tenant-wide Microsoft.Capacity path. The canonical
+# first role definition kept SCOPES non-empty, so the miscased entry's
+# absence didn't even trip the "no assignableScopes found" fallback -- it
+# just silently contributed nothing, and the template passed.
+run_case "miscased 'AssignableScopes' key exits 1" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/miscased-assignablescopes-arm.json"
+
+# Case 25 (Fix B): Microsoft.Authorization/roleEligibilityScheduleRequests
+# (Azure PIM) binding built-in Owner. Grants a role the same way a plain
+# roleAssignment does, under a property shape this check's
+# roleAssignments-only type match never saw.
+run_case "PIM roleEligibilityScheduleRequests (Owner) exits 1" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/pim-roleeligibility-owner-arm.json"
+
+# Case 26 (Fix B): Microsoft.Authorization/roleAssignmentScheduleRequests
+# (Azure PIM), same reasoning.
+run_case "PIM roleAssignmentScheduleRequests (Owner) exits 1" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/pim-roleassignment-schedule-owner-arm.json"
+
+# Case 27 (Fix B): the legacy ARM spelling for a role assignment as a child
+# resource type path (Microsoft.Storage/storageAccounts/providers/
+# roleAssignments) rather than a top-level roleAssignments resource with a
+# scope property. Same grant, invisible to the same type-string match.
+run_case "legacy child-type roleAssignments (Owner) exits 1" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/legacy-child-roleassignment-owner-arm.json"
+
 echo ""
 echo "Results: ${pass} passed, ${fail} failed."
 [[ "$fail" -eq 0 ]]
