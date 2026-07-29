@@ -21,18 +21,23 @@ on:
 # which the AWS trust policy's sub allowlist accepts (role.tf:30).
 #
 # It is NOT a reviewer gate. GitHub only blocks a job once required-reviewer
-# protection rules are configured on the environment in repo settings, and as of
-# this change NO environment in this repo has any — `dev` exists but carries
-# `protection_rules: []` and no branch policy. Until that is configured
-# out-of-band this destroy job still runs unapproved. See #1660.
+# protection rules are configured on the environment, and at the time of writing
+# no environment in this repo has any. Until that is configured out-of-band this
+# destroy job still runs unapproved. See #1660 for the live state — deliberately
+# not restated here, so this comment cannot rot into false reassurance.
 #
-# Because the environment subject is ref-agnostic, the `guard` job below
-# separately enforces that this workflow may only be dispatched from `main`.
+# The environment subject is ref-agnostic, so the binding does not by itself keep
+# this workflow on `main`. The `guard` job below checks the ref, but that check is
+# defense-in-depth against ACCIDENTS ONLY and is NOT a security boundary:
+# `workflow_dispatch` runs the workflow file as it exists on the dispatched ref, so
+# anyone able to push a branch can delete the check and still present the
+# `environment:dev` subject. The only control that survives that is a deployment
+# branch policy, which GitHub evaluates before the job starts and before the token
+# is minted. See #1660.
 permissions:
   contents: read
 
 env:
-  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
   TF_VERSION: '1.10.0'
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -42,13 +47,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      # See the note in cleanup-staging.yml: an environment binding replaces the
-      # ref-scoped OIDC subject with a ref-agnostic one, and `dev` carries no
-      # deployment_branch_policy, so without this check the binding would widen
-      # the destroy path from main-only to any-branch. Enforced in code because
-      # `main` is unprotected, so a protected-branches policy would match
-      # nothing. Keep until `main` is protected and `dev` has a branch policy
-      # (#1660).
+      # Catches the accidental "dispatched from the wrong branch" case. It does
+      # NOT stop a deliberate one: this file is attacker-controlled on the ref
+      # being dispatched, so the step can simply be deleted on that branch. The
+      # server-side equivalent is a deployment branch policy on `dev`
+      # (custom_branch_policies + a `main` pattern) — which does NOT require
+      # `main` to be a protected branch — tracked in #1660.
       - name: Restrict to main
         env:
           REF: ${{ github.ref }}
@@ -78,6 +82,11 @@ jobs:
     # trust policy matches on. Not a reviewer gate until protection rules exist
     # on this environment -- see the note at the top of this file.
     environment: dev
+    # Set at job level, not workflow level: workflow-level `env:` is resolved
+    # before this job's `dev` environment is in scope, so an environment-scoped
+    # AWS_REGION variable would be invisible there. Matches cleanup-staging.yml.
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
 
     steps:
       - name: Checkout code

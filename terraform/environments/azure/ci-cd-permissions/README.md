@@ -175,8 +175,10 @@ main-branch one, so it cannot authenticate unless `<name>` is in
 
 Note the environment subject is **ref-agnostic** — it does not encode the branch. Adding
 a name here therefore lets any branch that can reach a job bound to that environment
-obtain the deploy service principal. Restrict the branch in the workflow itself, or via
-the environment's `deployment_branch_policy`.
+obtain the deploy service principal. Restrict the branch via the environment's
+`deployment_branch_policy`; a ref check inside the workflow does **not** bind, because
+`workflow_dispatch` runs the workflow file as it exists on the dispatched ref, so the
+check can be removed on that branch.
 
 To allow a new deployment environment, add its name to `var.github_environments`. To
 deploy from a different branch or repo, add a further

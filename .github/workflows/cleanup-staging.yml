@@ -30,14 +30,22 @@ on:
 # What each cloud does with that subject differs; see the per-job comments.
 #
 # It is NOT a reviewer gate. GitHub only blocks a job once required-reviewer
-# protection rules are configured on the environment in repo settings, and as of
-# this change NO environment in this repo has any. `staging` does not exist at
-# all yet, so the first dispatch will AUTO-CREATE it bare — no reviewers, no
-# branch policy. Until that is configured out-of-band these destroy jobs still
-# run unapproved. See #1660.
+# protection rules are configured on the environment, and at the time of writing
+# no environment in this repo has any. Note GitHub AUTO-CREATES a referenced
+# environment bare on first use — no reviewers, no branch policy — so a binding
+# to an environment nobody has configured runs straight through. Until that is
+# configured out-of-band these destroy jobs still run unapproved. See #1660 for
+# the live state; deliberately not restated here so this comment cannot rot into
+# false reassurance.
 #
-# Because the environment subject is ref-agnostic, the `guard` job below
-# separately enforces that this workflow may only be dispatched from `main`.
+# The environment subject is ref-agnostic, so the binding does not by itself keep
+# this workflow on `main`. The `guard` job below checks the ref, but that check is
+# defense-in-depth against ACCIDENTS ONLY and is NOT a security boundary:
+# `workflow_dispatch` runs the workflow file as it exists on the dispatched ref, so
+# anyone able to push a branch can delete the check and still present the
+# `environment:staging` subject. The only control that survives that is a
+# deployment branch policy, which GitHub evaluates before the job starts and
+# before the token is minted. See #1660.
 permissions:
   contents: read
 
@@ -52,17 +60,21 @@ jobs:
     permissions: {}
     steps:
       # An OIDC `sub` is EITHER `…:ref:refs/heads/<branch>` OR
-      # `…:environment:<name>` -- never both. So binding the destroy jobs to an
+      # `…:environment:<name>` -- never both (absent a custom sub-claim
+      # template, and this repo sets none). So binding the destroy jobs to an
       # environment (below) REPLACES the ref-scoped subject with a ref-agnostic
       # one, and neither `dev` nor `staging` carries a deployment_branch_policy.
-      # Without this check that would trade a main-only restriction for
-      # any-branch access -- a widening, on the workflow this change exists to
-      # narrow.
+      # Without a ref check that trades a main-only restriction for any-branch
+      # access -- a widening, on the workflow this change exists to narrow.
       #
-      # Enforced here rather than via the environment's branch policy because
-      # `main` is not a protected branch, so a protected-branches policy would
-      # match nothing and block every deploy. Keep this check until `main` is
-      # protected AND the environments carry an explicit branch policy (#1660).
+      # This step catches the accidental case only. It is NOT a security
+      # boundary: `workflow_dispatch` runs the workflow file as it exists on the
+      # dispatched ref, so anyone who can push a branch can delete this step and
+      # still present the `environment:staging` subject. The control that
+      # survives that is a deployment branch policy on the environment
+      # (custom_branch_policies + a `main` pattern), which GitHub evaluates
+      # before the job starts and before the token is minted, and which does NOT
+      # require `main` to be a protected branch. Tracked in #1660.
       - name: Restrict to main
         env:
           REF: ${{ github.ref }}
@@ -359,8 +371,11 @@ jobs:
           # Routed via env: rather than interpolated into this script's source,
           # per the zero-expression-interpolation-in-run-blocks rule from #1641.
           PROJECT="$GCP_PROJECT_ID"
-          if [ -z "$PROJECT" ]; then
-            echo "::error::vars.GCP_PROJECT_ID is unset; refusing to run Cloud SQL cleanup against an empty project"
+          # Validate the shape, not merely non-emptiness: a whitespace-only or
+          # malformed value would otherwise reach `gcloud --project=`, match no
+          # instance, and silently skip the deletion this step exists to perform.
+          if ! printf '%s' "$PROJECT" | grep -Eq '^[a-z][a-z0-9-]{5,29}$'; then
+            echo "::error::vars.GCP_PROJECT_ID is unset or malformed ('$PROJECT'); refusing to run Cloud SQL cleanup"
             exit 1
           fi
           # Find and delete the staging Cloud SQL instance to avoid PostgreSQL dependency errors
