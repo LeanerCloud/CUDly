@@ -97,14 +97,24 @@ if [[ -z "$TF_ACTIONS" ]]; then
 fi
 
 # --- extract permission lists from ARM JSON ------------------------------------
-# Walks every Microsoft.Authorization/roleDefinitions resource ANYWHERE in the
-# template (`..`, not just the top-level .resources[] array), matching the
-# resource type case-insensitively since ARM resource types are. A prior
-# revision matched only the top-level array with a case-sensitive `==`, so a
-# second role definition typed "microsoft.authorization/roleDefinitions"
-# (lowercase) was invisible to this axis even though the case-insensitive scope
-# walk below saw it fine -- actions and scope disagreeing about how many role
-# definitions exist is exactly the kind of drift this check exists to catch.
+# Walks every Microsoft.Authorization/roleDefinitions resource under the
+# template's `resources` array (`.resources // [] | ..`, not just the
+# top-level .resources[] array itself), matching the resource type
+# case-insensitively since ARM resource types are. A prior revision matched
+# only the top-level array with a case-sensitive `==`, so a second role
+# definition typed "microsoft.authorization/roleDefinitions" (lowercase) was
+# invisible to this axis even though the case-insensitive scope walk below saw
+# it fine -- actions and scope disagreeing about how many role definitions
+# exist is exactly the kind of drift this check exists to catch.
+#
+# The walk is rooted at `.resources`, not the whole document (`..` from `.`):
+# a `..` from the root would also match a decorative object under `variables`
+# or `outputs` that merely happens to carry `"type":
+# "Microsoft.Authorization/roleDefinitions"` for documentation purposes but is
+# never deployed, and red a template whose actions genuinely match. Rooting at
+# `.resources` still finds a role definition nested inside a parent resource's
+# own `resources` array (the same reason the scope walk below is recursive),
+# it just never leaves the tree of things ARM actually deploys.
 #
 # Also unions every entry of permissions[], not just permissions[0]: ARM unions
 # permissions across the whole array, so a second entry appended after the
@@ -114,7 +124,7 @@ fi
 extract_arm_list() {
   local key="$1" file="$2"
   jq -r --arg key "$key" '
-    [.. | objects | select(has("type")) | select((.type|type) == "string")
+    [.resources // [] | .. | objects | select(has("type")) | select((.type|type) == "string")
        | select((.type|ascii_downcase) == "microsoft.authorization/roledefinitions")]
     | map(.properties.permissions // [] | .[] | (.[$key] // [])[])
     | flatten
@@ -198,8 +208,29 @@ CANONICAL_SCOPE_EXPR_ALT="[subscription().id]"
 # runtime value. Normalize both sides before comparing so the guard reasons
 # about the expression's meaning, not its formatting -- a pure reformat must
 # not be able to red CI, or the guard invites being deleted out of frustration.
+#
+# Whitespace is collapsed only where it is immediately adjacent to structural
+# punctuation ([ ] ( ) ,), never between two ordinary characters. A blanket
+# `tr -d '[:space:]'` over the whole expression would also strip whitespace
+# INSIDE the '/subscriptions/' string literal, so a typo like
+# "'/sub scriptions/'" would normalize to the same text as the real literal --
+# tolerating a corrupted value as if it were a reformat of the canonical one.
+# It happens not to be exploitable (the corrupted literal doesn't resolve to a
+# different, wider scope; it just fails to deploy), but a normalizer's whole
+# job is telling "different formatting" apart from "different value", and this
+# blurred that line. Punctuation-adjacent collapsing can't reach inside a
+# literal's content, because that content by construction contains no
+# whitespace next to `[`, `]`, `(`, `)`, or `,`.
 normalize_scope_expr() {
-  printf '%s' "$1" | tr -d '[:space:]' | tr '"' "'" | sed -E "s/,''\)\]\$/)]/"
+  local v="$1"
+  v="$(printf '%s' "$v" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"  # trim the whole value only
+  v="$(printf '%s' "$v" | tr '"' "'")"                                     # quote style is not meaningful
+  v="$(printf '%s' "$v" | sed -E '
+    s/\[[[:space:]]+/[/g; s/[[:space:]]+\]/]/g;
+    s/\([[:space:]]+/(/g; s/[[:space:]]+\)/)/g;
+    s/,[[:space:]]+/,/g; s/[[:space:]]+,/,/g;
+  ')"
+  printf '%s' "$v" | sed -E "s/,''\)\]\$/)]/"  # drop a redundant ,'' arg
 }
 CANONICAL_SCOPE_NORM="$(normalize_scope_expr "$CANONICAL_SCOPE_EXPR")"
 CANONICAL_SCOPE_ALT_NORM="$(normalize_scope_expr "$CANONICAL_SCOPE_EXPR_ALT")"
@@ -254,9 +285,14 @@ fi
 # `az`/az-cli commands can issue role assignments this check never sees as
 # JSON at all. This check cannot inspect either, so refuse rather than pass
 # them silently.
+#
+# Rooted at `.resources`, same reasoning as extract_arm_list above: a
+# decorative object elsewhere in the template (variables, outputs) is never
+# deployed, so it must not be able to trip this refusal on a template that is
+# otherwise fine.
 NESTED_COUNT=$(
   jq '
-    [.. | objects | select(has("type")) | select((.type|type) == "string")
+    [.resources // [] | .. | objects | select(has("type")) | select((.type|type) == "string")
        | select((.type|ascii_downcase) as $t
                 | ["microsoft.resources/deployments",
                    "microsoft.resources/deploymentscripts",
@@ -280,13 +316,16 @@ fi
 # one per line, tagged with where it came from so the error message points at
 # the right JSON node.
 #
-# The walk is recursive (`..`) rather than over the top-level `resources` array
-# only, so an assignment nested inside a parent resource's own `resources`
-# array is still seen. Type matching is case-insensitive because ARM resource
-# types are, while jq's `==` is not.
+# The walk is rooted at `.resources` and recursive (`.resources // [] | ..`)
+# from there, rather than over the top-level `resources` array's direct
+# elements only, so an assignment nested inside a parent resource's own
+# `resources` array is still seen -- but a decorative object under
+# `variables` or `outputs` that is never actually deployed is not, so it
+# cannot red an otherwise-correct template. Type matching is case-insensitive
+# because ARM resource types are, while jq's `==` is not.
 SCOPES=$(
   jq -r '
-    [.. | objects | select(has("type")) | select((.type|type) == "string")] as $all
+    [.resources // [] | .. | objects | select(has("type")) | select((.type|type) == "string")] as $all
     | ( $all[]
         | select((.type|ascii_downcase) == "microsoft.authorization/roledefinitions")
         | (.properties.assignableScopes // [])[]

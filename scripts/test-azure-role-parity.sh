@@ -172,6 +172,32 @@ run_case "unallowed roleDefinitionId (Owner) exits 1 (F6)" 1 \
   --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
   --arm-file "${FIXTURES}/unallowed-roledefinitionid-arm.json"
 
+# --- self-review of the round-2 fix itself -----------------------------------
+# A normalizer exists to make different strings equal, which is exactly what
+# an attacker wants; a recursive JSON walk exists to see more of the
+# template, which is exactly what a false positive comes from. Both cut
+# points identified during self-review before any external reviewer got to
+# them.
+
+# Case 19: a typo'd '/sub scriptions/' (a space inside the string literal, not
+# adjacent to any [ ] ( ) , ) must NOT normalize to the canonical scope. It
+# doesn't grant anything wider -- the corrupted path just fails to deploy --
+# but a normalizer that can't tell "reformatted" from "corrupted" is the
+# textbook shape of the next bypass, so this is refused rather than tolerated.
+run_case "whitespace inside scope string literal exits 1" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/space-inside-literal-arm.json"
+
+# Case 20: a decorative object under `variables` that merely happens to carry
+# "type": "Microsoft.Authorization/roleDefinitions" (e.g. left behind as
+# documentation) and grants wildcard actions at a tenant scope. Never
+# deployed, so it must not be visible to this check at all -- an otherwise
+# clean, matching template must still exit 0. A guard that reds valid input
+# invites being deleted, which is how issue #1545 shipped in the first place.
+run_case "decorative variables object is invisible, exits 0" 0 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/decorative-variables-arm.json"
+
 echo ""
 echo "Results: ${pass} passed, ${fail} failed."
 [[ "$fail" -eq 0 ]]
