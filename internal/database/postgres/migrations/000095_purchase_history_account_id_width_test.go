@@ -19,33 +19,62 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Realistic non-AWS account identifiers that do not fit VARCHAR(20).
+// commitmentRow is the provider-shaped part of a purchase_history row: the
+// account identifier under test plus the provider/service/region/resource_type
+// that a real commitment from that provider carries. Keeping them together
+// means the GCP case inserts a GCP-shaped row rather than borrowing Azure's,
+// so the row each assertion exercises matches the scenario it claims to cover.
+type commitmentRow struct {
+	provider     string
+	service      string
+	region       string
+	resourceType string
+	accountID    string
+}
+
+// The account identifiers that do not fit VARCHAR(20):
 //
-//   - azureSubscriptionID is a 36-character GUID, the shape every Azure
-//     subscription ID has (cloud_accounts.azure_subscription_id is VARCHAR(36)).
-//   - gcpProjectID is 30 characters, the documented GCP maximum (6-30 chars,
-//     lowercase letters / digits / hyphens, starting with a letter).
+//   - azureCommitment carries a 36-character subscription GUID, the shape every
+//     Azure subscription ID has (cloud_accounts.azure_subscription_id is
+//     VARCHAR(36)).
+//   - gcpCommitment carries a 30-character project ID, the documented GCP
+//     maximum (6-30 chars, lowercase letters / digits / hyphens, starting with
+//     a letter).
 //
 // Both reach SavePurchaseHistory as cloud_accounts.external_id, which is
-// VARCHAR(255) at its source, so nothing upstream trims them.
-const (
-	azureSubscriptionID = "3f2504e0-4f89-11d3-9a0c-0305e82c3301"
-	gcpProjectID        = "cudly-production-analytics-001"
+// VARCHAR(255) at its source, so nothing upstream trims them. awsCommitment is
+// the 12-digit control that has always fit.
+var (
+	azureCommitment = commitmentRow{
+		provider: "azure", service: "compute", region: "westeurope",
+		resourceType: "Standard_D4s_v3",
+		accountID:    "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+	}
+	gcpCommitment = commitmentRow{
+		provider: "gcp", service: "compute", region: "europe-west1",
+		resourceType: "n2-standard-4",
+		accountID:    "cudly-production-analytics-001",
+	}
+	awsCommitment = commitmentRow{
+		provider: "aws", service: "ec2", region: "us-east-1",
+		resourceType: "m5.large",
+		accountID:    "123456789012",
+	}
 )
 
 // insertPurchaseHistoryRow issues the same INSERT column set that
 // PostgresStore.SavePurchaseHistory uses for its NOT-NULL-without-default
-// columns, with accountID as purchase_history.account_id. plan_id and
+// columns, with row.accountID as purchase_history.account_id. plan_id and
 // cloud_account_id are omitted (nullable FKs) so the test needs no fixtures.
-func insertPurchaseHistoryRow(ctx context.Context, t *testing.T, pool *pgxpool.Pool, accountID, purchaseID string) error {
+func insertPurchaseHistoryRow(ctx context.Context, t *testing.T, pool *pgxpool.Pool, row commitmentRow, purchaseID string) error {
 	t.Helper()
 	const insertSQL = `
 		INSERT INTO purchase_history (
 			account_id, purchase_id, timestamp, provider, service, region,
 			resource_type, term, payment
-		) VALUES ($1, $2, $3, 'azure', 'compute', 'westeurope',
-			'Standard_D4s_v3', 12, 'All Upfront')`
-	_, err := pool.Exec(ctx, insertSQL, accountID, purchaseID, time.Now())
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, 12, 'All Upfront')`
+	_, err := pool.Exec(ctx, insertSQL, row.accountID, purchaseID, time.Now(),
+		row.provider, row.service, row.region, row.resourceType)
 	return err
 }
 
@@ -101,18 +130,18 @@ func TestMigration095_PurchaseHistoryAccountIDWidth(t *testing.T) {
 
 	// The bug: both non-AWS identifiers are rejected outright.
 	for _, tc := range []struct {
-		name      string
-		accountID string
+		name string
+		row  commitmentRow
 	}{
-		{"azure subscription GUID (36 chars)", azureSubscriptionID},
-		{"gcp project ID (30 chars)", gcpProjectID},
+		{"azure subscription GUID (36 chars)", azureCommitment},
+		{"gcp project ID (30 chars)", gcpCommitment},
 	} {
 		t.Run("pre-migration/"+tc.name, func(t *testing.T) {
-			insErr := insertPurchaseHistoryRow(ctx, t, pool, tc.accountID, "pre-"+tc.accountID)
+			insErr := insertPurchaseHistoryRow(ctx, t, pool, tc.row, "pre-"+tc.row.accountID)
 			require.Error(t, insErr,
 				"pre-fix schema must reject the audit row -- this is the data loss in issue #1603")
 
-			t.Logf("pre-fix rejection for %s: %v", tc.accountID, insErr)
+			t.Logf("pre-fix rejection for %s: %v", tc.row.accountID, insErr)
 
 			var pgErr *pgconn.PgError
 			require.True(t, errors.As(insErr, &pgErr), "expected a Postgres error, got %v", insErr)
@@ -131,22 +160,22 @@ func TestMigration095_PurchaseHistoryAccountIDWidth(t *testing.T) {
 	// ---- Post-migration: the same inserts succeed and round-trip intact.
 	for _, tc := range []struct {
 		name       string
-		accountID  string
+		row        commitmentRow
 		purchaseID string
 	}{
-		{"azure subscription GUID (36 chars)", azureSubscriptionID, "azure-ri-1603"},
-		{"gcp project ID (30 chars)", gcpProjectID, "gcp-cud-1603"},
+		{"azure subscription GUID (36 chars)", azureCommitment, "azure-ri-1603"},
+		{"gcp project ID (30 chars)", gcpCommitment, "gcp-cud-1603"},
 	} {
 		t.Run("post-migration/"+tc.name, func(t *testing.T) {
 			require.NoError(t,
-				insertPurchaseHistoryRow(ctx, t, pool, tc.accountID, tc.purchaseID),
+				insertPurchaseHistoryRow(ctx, t, pool, tc.row, tc.purchaseID),
 				"audit row for an already-billed commitment must persist after 000095")
 
 			var stored string
 			require.NoError(t, pool.QueryRow(ctx,
 				`SELECT account_id FROM purchase_history WHERE purchase_id = $1`,
 				tc.purchaseID).Scan(&stored))
-			assert.Equal(t, tc.accountID, stored,
+			assert.Equal(t, tc.row.accountID, stored,
 				"account_id must round-trip untruncated")
 		})
 	}
@@ -185,7 +214,7 @@ func TestMigration095_DownNarrowsWhenSafe(t *testing.T) {
 
 	// A 12-digit AWS account ID fits VARCHAR(20), so the rollback is lossless.
 	require.NoError(t,
-		insertPurchaseHistoryRow(ctx, t, pool, "123456789012", "aws-ri-down-1603"),
+		insertPurchaseHistoryRow(ctx, t, pool, awsCommitment, "aws-ri-down-1603"),
 		"setup: an AWS audit row must be insertable")
 
 	// One step, so exactly 000095's down migration runs. Targeting a version
@@ -200,7 +229,7 @@ func TestMigration095_DownNarrowsWhenSafe(t *testing.T) {
 	var stored string
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT account_id FROM purchase_history WHERE purchase_id = 'aws-ri-down-1603'`).Scan(&stored))
-	assert.Equal(t, "123456789012", stored, "the lossless rollback must preserve the row")
+	assert.Equal(t, awsCommitment.accountID, stored, "the lossless rollback must preserve the row")
 }
 
 // TestMigration095_DownRefusesToTruncate verifies that the rollback fails
@@ -223,7 +252,7 @@ func TestMigration095_DownRefusesToTruncate(t *testing.T) {
 		"migrations must apply cleanly through 000095")
 
 	require.NoError(t,
-		insertPurchaseHistoryRow(ctx, t, pool, azureSubscriptionID, "azure-ri-down-1603"),
+		insertPurchaseHistoryRow(ctx, t, pool, azureCommitment, "azure-ri-down-1603"),
 		"setup: an Azure audit row must be insertable after 000095")
 
 	// One step, so exactly 000095's down migration runs (see the sibling test).
@@ -237,6 +266,6 @@ func TestMigration095_DownRefusesToTruncate(t *testing.T) {
 	var stored string
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT account_id FROM purchase_history WHERE purchase_id = 'azure-ri-down-1603'`).Scan(&stored))
-	assert.Equal(t, azureSubscriptionID, stored,
+	assert.Equal(t, azureCommitment.accountID, stored,
 		"the refused rollback must leave the audit row untouched")
 }
