@@ -54,16 +54,66 @@ variable "oidc_attribute_mapping" {
   }
 }
 
+# Both values below are interpolated into a single-quoted string literal inside
+# the provider's CEL attribute_condition and into the IAM principal identifier of
+# the impersonation grant. The character checks reject the forms that fail OPEN
+# in those two destinations rather than merely looking wrong:
+#
+#   ' " \ `  terminate the CEL string literal, so the rest of the value rewrites
+#            the condition — aws_role_name = "x') || true || ('" renders an
+#            always-true condition that admits every identity;
+#   *        widens an IAM principal identifier to match every identity;
+#   $        catches a pasted ${...} placeholder, which is not expanded here and
+#            yields a binding matching nothing (or, where expanded, everything).
+#
+# The format checks that follow already exclude those characters. They are kept
+# as separate validations because Terraform reports every failing validation, and
+# "this would rewrite the attribute condition" is far more actionable than a bare
+# charset regex when someone pastes a crafted value.
+
 variable "aws_role_name" {
   description = "AWS IAM role name to restrict trust to (e.g. 'CUDly-Execution'). Required when provider_type is 'aws'. Without this the attribute_condition is null and any IAM role in the account can federate."
   type        = string
   default     = ""
+
+  validation {
+    condition     = !can(regex("['\"\\\\`*$]", var.aws_role_name))
+    error_message = "aws_role_name must not contain quotes, backslashes, backticks, '*' or '$'. It is interpolated into the provider's CEL attribute condition and into the IAM principal identifier of the impersonation grant, where those characters can escape the string literal or widen the grant to every identity."
+  }
+
+  # Matches AWS's own role-name charset [\w+=,.@-]{1,64}. The comma is safe here:
+  # the role name reaches attribute_condition (a plain string), never the
+  # comma-delimited attribute_mapping keys.
+  validation {
+    condition     = var.aws_role_name == "" || can(regex("^[A-Za-z0-9_+=,.@-]{1,64}$", var.aws_role_name))
+    error_message = "aws_role_name must be a bare IAM role name of 1-64 characters from [A-Za-z0-9_+=,.@-] (e.g. \"CUDly-Execution\"), not an ARN or a path."
+  }
 }
 
 variable "oidc_subject" {
   description = "OIDC subject claim to restrict trust to. Required when provider_type is 'oidc'. Without this the attribute_condition is null and any subject from the issuer can federate."
   type        = string
   default     = ""
+
+  validation {
+    condition     = !can(regex("['\"\\\\`*$]", var.oidc_subject))
+    error_message = "oidc_subject must not contain quotes, backslashes, backticks, '*' or '$'. It is interpolated into the provider's CEL attribute condition and into the IAM principal identifier of the impersonation grant, where those characters can escape the string literal or widen the grant to every identity."
+  }
+
+  # '|' is permitted because Auth0/Okta-style subjects use it (google-oauth2|123).
+  # It is inert in both destinations: quotes are rejected above, so it cannot
+  # escape the CEL string literal, and it carries no meaning in a principal path.
+  validation {
+    condition     = var.oidc_subject == "" || can(regex("^[A-Za-z0-9][-A-Za-z0-9._:/@=+~|]*$", var.oidc_subject))
+    error_message = "oidc_subject must start with an alphanumeric character and contain only [-A-Za-z0-9._:/@=+~|] (e.g. \"repo:my-org/my-repo:ref:refs/heads/main\")."
+  }
+
+  # oidc_subject becomes google.subject, which GCP caps at 127 characters. A
+  # longer value is rejected at token-exchange time, long after apply succeeds.
+  validation {
+    condition     = length(var.oidc_subject) <= 127
+    error_message = "oidc_subject must be at most 127 characters: it becomes google.subject, which GCP rejects above that length at token-exchange time."
+  }
 }
 
 # ------------------------------------------------------------------------

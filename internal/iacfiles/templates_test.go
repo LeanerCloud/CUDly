@@ -222,6 +222,52 @@ func TestCLITemplatesShellMetacharsPassThrough(t *testing.T) {
 	}
 }
 
+// TestGCPWIFTfvarsMarksPinnedIdentityRequired proves the generated tfvars file
+// presents aws_role_name / oidc_subject as a blank the operator must fill, not
+// as an optional hardening step. iac/federation/gcp-target/terraform pins both
+// the provider's attribute condition and the impersonation grant to that value
+// and refuses to apply without it, so "Recommended" understated it: a bundle
+// following the old wording could not apply at all.
+func TestGCPWIFTfvarsMarksPinnedIdentityRequired(t *testing.T) {
+	const path = "templates/gcp-wif.tfvars.tmpl"
+
+	awsData := baseData()
+	awsData.Source = "aws"
+	aws := renderCLITemplate(t, path, awsData)
+
+	azureData := baseData()
+	azureData.Source = "azure"
+	azure := renderCLITemplate(t, path, azureData)
+
+	cases := []struct {
+		name     string
+		rendered string
+		assign   string
+	}{
+		{"aws", aws, "aws_role_name = \"\""},
+		{"azure", azure, "oidc_subject = \"\""},
+	}
+	for _, tc := range cases {
+		if strings.Contains(tc.rendered, "Recommended") {
+			t.Errorf("%s (%s): pinning the trusted identity is required, not recommended; terraform apply fails without it", path, tc.name)
+		}
+		if !strings.Contains(tc.rendered, "REQUIRED") {
+			t.Errorf("%s (%s): expected the pinned-identity variable to be labelled REQUIRED", path, tc.name)
+		}
+		// Emitted uncommented so the blank is visible in the file the customer
+		// edits; a commented-out line reads as an option that was left off.
+		if !strings.Contains(tc.rendered, "\n"+tc.assign) {
+			t.Errorf("%s (%s): expected an uncommented %q line for the operator to fill", path, tc.name, tc.assign)
+		}
+	}
+
+	// The AWS branch names the account the role must live in, so the operator
+	// knows which account's role to pin.
+	if !strings.Contains(aws, awsData.SourceAccountID) {
+		t.Errorf("%s (aws): expected the source AWS account ID %q in the aws_role_name guidance", path, awsData.SourceAccountID)
+	}
+}
+
 // TestCLITemplatesOmitRegisterBlock proves the auto-register section is gated
 // on CUDlyAPIURL -- when it's empty, the block disappears entirely.
 func TestCLITemplatesOmitRegisterBlock(t *testing.T) {

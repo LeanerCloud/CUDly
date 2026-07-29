@@ -25,9 +25,19 @@ provider_type   = "oidc"
 oidc_issuer_uri = "{{.OIDCIssuerURI}}"{{if eq .Source "azure"}}  # Azure: https://login.microsoftonline.com/<TENANT_ID>/v2.0{{end}}
 {{- end}}
 {{- if eq .Source "aws"}}
-# aws_role_name = ""  # Recommended: restrict to specific IAM role (e.g. "CUDly-WIF")
+# REQUIRED. The bare name of the IAM role CUDly assumes in account
+# {{.SourceAccountID}} — ask your CUDly contact if you are unsure. It is the only
+# identity that will be able to impersonate the service account above: the
+# Terraform module pins the provider's attribute condition and the impersonation
+# grant to arn:aws:sts::{{.SourceAccountID}}:assumed-role/<this value>.
+# `terraform apply` fails while this is empty; it is not a hardening option.
+aws_role_name = ""  # e.g. "CUDly-Execution"
 {{- else}}
-# oidc_subject  = ""  # Recommended: restrict to specific OIDC subject
+# REQUIRED. The exact `sub` claim CUDly's token carries. It is the only subject
+# that will be able to impersonate the service account above: the Terraform
+# module pins the provider's attribute condition and the impersonation grant to
+# it. `terraform apply` fails while this is empty; it is not a hardening option.
+oidc_subject = ""  # e.g. "repo:my-org/my-repo:ref:refs/heads/main"
 {{- end}}
 
 # --- CUDly auto-registration (optional) ---
