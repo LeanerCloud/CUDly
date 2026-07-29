@@ -162,8 +162,8 @@ func TestMigrations_AutoHealDirty(t *testing.T) {
 			"rollback of the last migration must succeed")
 		versionAfterRollback, _, err := migrations.GetMigrationVersion(ctx, pool, migrationsPath)
 		require.NoError(t, err)
-		require.Equal(t, headVersion-1, versionAfterRollback,
-			"rollback must land exactly one version below head")
+		require.Equal(t, previousMigrationVersion(t, headVersion), versionAfterRollback,
+			"rollback must land on the next migration version that exists below head")
 
 		// Inject dirty=true at headVersion, simulating a migration that started
 		// (schema_migrations updated to dirty) but whose SQL was rolled back
