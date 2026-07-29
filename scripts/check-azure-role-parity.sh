@@ -259,6 +259,18 @@ CANONICAL_SCOPE_EXPR_ALT="[subscription().id]"
 # blurred that line. Punctuation-adjacent collapsing can't reach inside a
 # literal's content, because that content by construction contains no
 # whitespace next to `[`, `]`, `(`, `)`, or `,`.
+#
+# Also lowercased as an explicit final step, not left to the ambient
+# `shopt -s nocasematch` the comparison happens to run under: ARM function
+# names, property accessors, and resource-path segments (subscription IDs,
+# provider namespaces) are all documented case-insensitive, the same reason
+# resource `type` values are matched via ascii_downcase elsewhere in this
+# script. Folding case here explicitly, inside the function whose whole job
+# is "normalize equivalent spellings," keeps that guarantee from silently
+# depending on unrelated code (the roleDefinitionId loop below, or the
+# ESCAPE_TOKENS match) staying inside the same shell-option scope. Safe to
+# do unconditionally: unlike whitespace-stripping, lowercasing is a 1:1
+# character transform that can't collapse two distinct values into one.
 normalize_scope_expr() {
   local v="$1"
   v="$(printf '%s' "$v" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"  # trim the whole value only
@@ -268,7 +280,8 @@ normalize_scope_expr() {
     s/\([[:space:]]+/(/g; s/[[:space:]]+\)/)/g;
     s/,[[:space:]]+/,/g; s/[[:space:]]+,/,/g;
   ')"
-  printf '%s' "$v" | sed -E "s/,''\)\]\$/)]/"  # drop a redundant ,'' arg
+  v="$(printf '%s' "$v" | sed -E "s/,''\)\]\$/)]/")"  # drop a redundant ,'' arg
+  printf '%s' "$v" | tr '[:upper:]' '[:lower:]'
 }
 CANONICAL_SCOPE_NORM="$(normalize_scope_expr "$CANONICAL_SCOPE_EXPR")"
 CANONICAL_SCOPE_ALT_NORM="$(normalize_scope_expr "$CANONICAL_SCOPE_EXPR_ALT")"
@@ -419,9 +432,16 @@ while IFS=$'\t' read -r origin value; do
     # for one here.
     reason="role assignments must inherit the deployment scope, not set one"
   elif [[ "$origin" == "roleAssignment.roleDefinitionId" ]]; then
+    # Compared explicitly lowercased, not left to the ambient nocasematch
+    # this loop happens to run under: the same "ARM identifiers are
+    # case-insensitive" reasoning as normalize_scope_expr above, made
+    # explicit here too so it doesn't silently depend on this comparison
+    # staying inside that shell-option scope.
     allowed_match=0
+    value_lower="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
     for allowed in "${ALLOWED_ROLE_DEFINITION_IDS[@]}"; do
-      if [[ "$value" == "$allowed" ]]; then
+      allowed_lower="$(printf '%s' "$allowed" | tr '[:upper:]' '[:lower:]')"
+      if [[ "$value_lower" == "$allowed_lower" ]]; then
         allowed_match=1
         break
       fi

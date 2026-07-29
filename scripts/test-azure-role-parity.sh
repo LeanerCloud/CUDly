@@ -262,6 +262,23 @@ run_case "legacy child-type roleAssignments (Owner) exits 1" 1 \
   --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
   --arm-file "${FIXTURES}/legacy-child-roleassignment-owner-arm.json"
 
+# Case 28: the canonical scope expression written with uppercase ARM function
+# and property names (CONCAT / SUBSCRIPTION / SUBSCRIPTIONID). ARM identifiers
+# are case-insensitive the same way resource types are; normalize_scope_expr
+# now folds case explicitly rather than relying on the ambient nocasematch
+# scope, so this must still be accepted as canonical.
+run_case "uppercase canonical scope expression exits 0" 0 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/uppercase-canonical-scope-arm.json"
+
+# Case 29: an allowed roleDefinitionId ("[Variables('Roles').Reader]") written
+# with different capitalization than ALLOWED_ROLE_DEFINITION_IDS's own
+# spelling. Must still match -- same reasoning, made explicit rather than
+# implicit in the roleDefinitionId comparison loop.
+run_case "case-varied allowed roleDefinitionId exits 0" 0 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/uppercase-allowed-roledefinitionid-arm.json"
+
 echo ""
 echo "Results: ${pass} passed, ${fail} failed."
 [[ "$fail" -eq 0 ]]
