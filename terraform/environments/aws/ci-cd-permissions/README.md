@@ -147,5 +147,33 @@ new workflow job that assumes this role and binds to a not-yet-listed `environme
 subject to `role.tf` and re-apply *before* that job runs, or `configure-aws-credentials` fails with
 `AssumeRoleWithWebIdentity`/`Not authorized`.
 
-Related: #1648 (this allowlist gap), #1660 (the environments themselves have no protection rules
-yet), #1674 (binds the destroy workflows' jobs to environments covered by this list).
+### This allowlist alone does not restrict deploys to `main`
+
+The owner constraint on this repo is: only `main` may deploy. `ref:refs/heads/main` in the list
+above enforces that for a job with no `environment:` binding. It does **not** enforce it for an
+environment-bound job, because the OIDC `sub` for those is `repo:<repo>:environment:<name>`, which
+is ref-agnostic: it says which environment the job bound to, nothing about which branch triggered
+the run. A `workflow_dispatch` fired from any branch against an environment-bound job presents the
+exact same subject a `main` run would, so this allowlist admits it.
+
+The only control that reattaches the branch requirement is a **deployment branch policy** on each
+environment (`custom_branch_policies` restricted to `main`), configured on the GitHub side. As of
+this writing, per #1660's own evidence, none of the environments below have any protection rules,
+and several do not exist yet. Every environment named in the allowlist above needs this, before this
+policy actually delivers "only main deploys" rather than "only these environments deploy, from any
+branch":
+
+`dev`, `staging`, `prod`, `aws-fargate-dev`, `aws-fargate-staging`, `aws-fargate-prod`, `aws-db-dev`,
+`aws-db-staging`, `aws-db-prod`, `aws-lambda-dev-rollback`, `aws-lambda-staging-rollback`,
+`aws-lambda-prod-rollback`, `aws-fargate-dev-rollback`, `aws-fargate-staging-rollback`,
+`aws-fargate-prod-rollback`.
+
+This module has no GitHub provider configured (no `provider "github"` or `github_repository_*`
+resource anywhere under `terraform/` or `iac/`), so none of the above can be created or configured
+declaratively today; it is a manual, per-environment step in **Settings -> Environments** on the
+repo, same as the required-reviewer rules in #1660. Adding a GitHub Terraform provider so this
+becomes code is #1660's scope, not this module's.
+
+Related: #1648 (this allowlist gap), #1660 (the environments themselves have no protection rules or
+deployment branch policy yet, and don't all exist), #1674 (binds the destroy workflows' jobs to
+environments covered by this list).

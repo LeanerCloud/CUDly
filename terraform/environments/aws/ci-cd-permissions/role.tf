@@ -39,6 +39,22 @@ resource "aws_iam_role" "cudly_deploy" {
             # pattern would only widen what this policy admits, never narrow
             # it usefully.
             #
+            # THIS LIST DOES NOT BY ITSELF RESTRICT DEPLOYS TO `main`. Owner
+            # constraint is "only main may deploy". `ref:refs/heads/main`
+            # enforces that for an unbound job. `environment:<name>` does NOT:
+            # it is ref-agnostic (it encodes which environment the job bound
+            # to, not which branch triggered the run), so a `workflow_dispatch`
+            # from ANY branch against an environment-bound job presents the
+            # identical subject a `main` run would. The only thing that
+            # re-attaches the branch requirement is a deployment branch policy
+            # on the environment itself (GitHub-side, restricting it to
+            # `main`), and per #1648/#1660 none of the environments listed
+            # below have one today -- several do not exist at all yet. Until
+            # that manual step is done per environment, this allowlist
+            # delivers "only these environments deploy, from any branch", not
+            # "only main deploys". See the PR that added this comment for the
+            # full list of environments needing that policy.
+            #
             # Deliberately NOT listed, and why:
             #   - `pull_request` subjects: no job that assumes THIS role
             #     (cudly_deploy) runs on `pull_request`. `aws_sanity.yml` is the
