@@ -1,0 +1,25 @@
+# Fixture: the supported shape. check-gcp-secret-scope.sh must exit 0 on this.
+#
+# Covers the two shapes that must NOT be reported:
+#   1. a per-secret Secret Manager binding (carries a roles/secretmanager.* role
+#      but is not scope-wide)
+#   2. a project-scope grant of a NON-Secret-Manager role (scope-wide but not
+#      Secret Manager)
+
+resource "google_service_account" "workload" {
+  project    = var.project_id
+  account_id = "workload-sa"
+}
+
+resource "google_secret_manager_secret_iam_member" "db_password_reader" {
+  project   = var.project_id
+  secret_id = var.db_password_secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.workload.email}"
+}
+
+resource "google_project_iam_member" "cloud_sql_client" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.workload.email}"
+}
