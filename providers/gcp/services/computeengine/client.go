@@ -78,6 +78,9 @@ func termPlan(term string) (string, error) {
 //     MEMORY_OPTIMIZED_X4_480_6T, _X4_960_12T, _X4_1440_24T, ...). The bucket
 //     is not derivable from the machine-type name alone, and guessing one
 //     reintroduces the exact mis-purchase this mapping exists to prevent.
+//   - f1 and g1 (f1-micro, g1-small), N1's shared-core members. GCP sells no
+//     commitment product for shared-core machine types at all; see
+//     familyNoCommitmentAvailable.
 //   - t2a and any series GCP has not published a Commitment_Type for.
 var machineFamilyCommitmentType = map[string]computepb.Commitment_Type{
 	// General purpose. GENERAL_PURPOSE is the N1-only member.
@@ -88,12 +91,6 @@ var machineFamilyCommitmentType = map[string]computepb.Commitment_Type{
 	// handles. Without this entry a valid N1-custom recommendation would be
 	// refused rather than committed under the type that actually discounts it.
 	"custom": computepb.Commitment_GENERAL_PURPOSE,
-	// f1-micro and g1-small are the legacy shared-core members of the N1
-	// lineage, so GENERAL_PURPOSE is their commitment type. Listed for the same
-	// reason as "custom": they resolved correctly before this mapping existed,
-	// and omitting them would turn a working purchase into a refusal.
-	"f1": computepb.Commitment_GENERAL_PURPOSE,
-	"g1": computepb.Commitment_GENERAL_PURPOSE,
 
 	"n2":  computepb.Commitment_GENERAL_PURPOSE_N2,
 	"n2d": computepb.Commitment_GENERAL_PURPOSE_N2D,
@@ -144,6 +141,22 @@ var familyRequiredResource = map[string]computepb.ResourceCommitment_Type{
 	"z3": computepb.ResourceCommitment_LOCAL_SSD,
 }
 
+// familyNoCommitmentAvailable lists machine families GCP sells no commitment
+// product for at all, so no Commitment_Type mapping -- correct or otherwise --
+// exists to guess. Per the Compute Engine CUD documentation, shared-core
+// machine types are excluded from committed use discounts entirely:
+// https://docs.cloud.google.com/compute/docs/instances/committed-use-discounts-overview
+// f1-micro and g1-small are N1's shared-core members and fall under that
+// exclusion, so they take this dedicated refusal rather than being folded
+// into machineFamilyCommitmentType under GENERAL_PURPOSE: that mapping would
+// buy a real N1 commitment that discounts nothing, since GCP has nothing to
+// apply it to for these families -- the exact issue #1538 failure shape
+// reintroduced by this file's own mapping.
+var familyNoCommitmentAvailable = map[string]bool{
+	"f1": true,
+	"g1": true,
+}
+
 // commitmentTypeForMachineType derives the commitment Type from the recommended
 // machine type (e.g. "n2-highmem-8" -> GENERAL_PURPOSE_N2).
 //
@@ -160,6 +173,11 @@ func commitmentTypeForMachineType(machineType string) (computepb.Commitment_Type
 	}
 
 	family := strings.Split(normalized, "-")[0]
+
+	if familyNoCommitmentAvailable[family] {
+		return computepb.Commitment_UNDEFINED_TYPE, fmt.Errorf(
+			"commitmentTypeForMachineType: GCP sells no commitment product for shared-core machine family %q (machine type %q); shared-core machine types are excluded from committed use discounts entirely, so there is no Commitment_Type to purchase under (issue #1538)", family, machineType)
+	}
 
 	if required, ok := familyRequiredResource[family]; ok {
 		return computepb.Commitment_UNDEFINED_TYPE, fmt.Errorf(

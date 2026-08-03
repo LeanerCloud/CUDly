@@ -1611,9 +1611,6 @@ func TestCommitmentTypeForMachineType_MapsFamilyToSDKEnum(t *testing.T) {
 		{"n1-standard-1", computepb.Commitment_GENERAL_PURPOSE},
 		// Legacy N1 custom machine types carry no family segment.
 		{"custom-4-8192", computepb.Commitment_GENERAL_PURPOSE},
-		// Legacy shared-core members of the N1 lineage.
-		{"f1-micro", computepb.Commitment_GENERAL_PURPOSE},
-		{"g1-small", computepb.Commitment_GENERAL_PURPOSE},
 		// Family-prefixed custom types resolve on their own family, not on N1.
 		{"n2-custom-8-16384", computepb.Commitment_GENERAL_PURPOSE_N2},
 		{"e2-custom-4-8192", computepb.Commitment_GENERAL_PURPOSE_E2},
@@ -1665,6 +1662,8 @@ func TestCommitmentTypeForMachineType_UnmappableFailsLoud(t *testing.T) {
 		{"arm t2a has no commitment type", "t2a-standard-8"},
 		{"m4 splits into size buckets", "m4-megamem-28"},
 		{"x4 splits into size buckets", "x4-megamem-960-metal"},
+		{"f1-micro is shared-core, excluded from all CUDs", "f1-micro"},
+		{"g1-small is shared-core, excluded from all CUDs", "g1-small"},
 	}
 
 	for _, tc := range cases {
@@ -1929,7 +1928,7 @@ func TestPurchaseCommitment_CommitmentOnlyRecommendationRefuses(t *testing.T) {
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "no machine type on the recommendation",
 		"the cause must name the missing machine type, not an invented machine family")
-	assert.NotContains(t, err.Error(), "cud",
+	assert.NotContains(t, err.Error(), "cud-001",
 		"the commitment name must never surface as a machine family")
 }
 
