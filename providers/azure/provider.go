@@ -182,9 +182,34 @@ func (p *AzureProvider) SetSubscriptionsClient(client SubscriptionsClient) {
 	p.invalidateAccountsCacheLocked()
 }
 
-// SetCredentialProvider sets the credential provider (for testing)
+// SetCredentialProvider sets the credential provider (for testing).
+//
+// Published under accountsMu -- the same lock every other swappable field on
+// the provider is published under -- because IsConfigured reads credProvider
+// on its lazy ambient-credential path. Leaving this one field outside the lock
+// would make that read an unsynchronized data race.
+//
+// Unlike SetCredential it does not invalidate the accounts cache: credProvider
+// only feeds IsConfigured's lazy resolution, which runs at most once and only
+// when no credential was installed at all, so at the moment it is read there is
+// no cached subscription list resolved under a different credential.
 func (p *AzureProvider) SetCredentialProvider(credProvider CredentialProvider) {
+	p.accountsMu.Lock()
+	defer p.accountsMu.Unlock()
 	p.credProvider = credProvider
+}
+
+// credentialProvider returns the injected credential provider, or nil when
+// none was installed -- in which case callers fall back to
+// realCredentialProvider.
+//
+// Reads go through accountsMu, the same lock SetCredentialProvider publishes
+// under, so a swap concurrent with IsConfigured's lazy resolution is a defined
+// handoff rather than a data race.
+func (p *AzureProvider) credentialProvider() CredentialProvider {
+	p.accountsMu.RLock()
+	defer p.accountsMu.RUnlock()
+	return p.credProvider
 }
 
 // SetCredential sets the credential directly.
@@ -276,10 +301,8 @@ func (p *AzureProvider) IsConfigured() bool {
 	}
 
 	p.credOnce.Do(func() {
-		var credProvider CredentialProvider
-		if p.credProvider != nil {
-			credProvider = p.credProvider
-		} else {
+		credProvider := p.credentialProvider()
+		if credProvider == nil {
 			credProvider = &realCredentialProvider{}
 		}
 		cred, err := credProvider.NewDefaultAzureCredential()
@@ -349,8 +372,62 @@ func (p *AzureProvider) GetAccounts(ctx context.Context) ([]common.Account, erro
 	return p.getOrFetchAccounts(ctx)
 }
 
-// resolveSubscriptionIDFromCtx calls GetAccounts and returns the default
-// subscription ID, or a descriptive error if none can be resolved.
+// configuredSubscriptionTarget returns the subscription this provider was
+// explicitly told to operate on, together with a label naming the knob it came
+// from so an error can tell the operator what to fix. It mirrors
+// resolveDefaultSubscription's priority: the ProviderConfig field first (which
+// resolveAzureSubscriptionID may itself have taken from the deprecated Profile
+// overload, hence the generic label), then AZURE_SUBSCRIPTION_ID. Both return
+// values are empty when nothing was configured.
+//
+// p.subscriptionID is written once in NewAzureProvider and never mutated
+// afterwards, so it needs no lock (unlike cred/subscriptionsClient/credProvider,
+// which have SetX swappers).
+func (p *AzureProvider) configuredSubscriptionTarget() (target, source string) {
+	if p.subscriptionID != "" {
+		return p.subscriptionID, "the configured Azure subscription ID"
+	}
+	if env := os.Getenv(azureSubscriptionIDEnv); env != "" {
+		return env, azureSubscriptionIDEnv
+	}
+	return "", ""
+}
+
+// validateConfiguredSubscription checks an explicitly configured subscription
+// target against the subscriptions the principal can actually see, returning
+// the validated target -- or ("", nil) when nothing was configured at all.
+//
+// Every caller must run this BEFORE consulting getDefaultSubscriptionID, and
+// that ordering is load-bearing. getDefaultSubscriptionID reads the IsDefault
+// flags set by resolveDefaultSubscription, whose rule 3 marks a lone visible
+// subscription as the default even when a target was configured and did not
+// match it. Consulting that result first would let an invisible target -- an
+// operator typo, or a credential that lost access to the intended subscription
+// -- silently resolve to whichever single subscription happens to be visible,
+// answering a misconfiguration with a plausible wrong subscription instead of
+// an error. Validating the target up front makes it fail loud regardless of how
+// many subscriptions are visible.
+func (p *AzureProvider) validateConfiguredSubscription(accounts []common.Account) (string, error) {
+	target, source := p.configuredSubscriptionTarget()
+	if target == "" {
+		return "", nil
+	}
+	if !accountsContain(accounts, target) {
+		return "", fmt.Errorf(
+			"%s is set to %q, which is not among the %d subscriptions visible to this principal",
+			source, target, len(accounts))
+	}
+	return target, nil
+}
+
+// resolveSubscriptionIDFromCtx calls GetAccounts and returns the subscription
+// to operate on, or a descriptive error if none can be resolved.
+//
+// This backs GetRegions and GetServiceClient, which means it is on the path
+// that enumerates the resources recommendations are computed from -- so it
+// applies the same validate-then-default ordering GetRecommendationsClient
+// does. Without it the same misconfiguration would error on the
+// recommendations path and silently retarget on this one.
 func (p *AzureProvider) resolveSubscriptionIDFromCtx(ctx context.Context) (string, error) {
 	accounts, err := p.GetAccounts(ctx)
 	if err != nil {
@@ -358,6 +435,13 @@ func (p *AzureProvider) resolveSubscriptionIDFromCtx(ctx context.Context) (strin
 	}
 	if len(accounts) == 0 {
 		return "", fmt.Errorf("no Azure subscriptions found")
+	}
+	target, err := p.validateConfiguredSubscription(accounts)
+	if err != nil {
+		return "", err
+	}
+	if target != "" {
+		return target, nil
 	}
 	id := getDefaultSubscriptionID(accounts)
 	if id == "" {
@@ -368,10 +452,14 @@ func (p *AzureProvider) resolveSubscriptionIDFromCtx(ctx context.Context) (strin
 
 // GetRegions returns all available Azure regions using the Subscriptions API
 func (p *AzureProvider) GetRegions(ctx context.Context) ([]common.Region, error) {
-	// Resolve the subscription to query available locations.
+	// Resolve the subscription to query available locations. The wrapper stays
+	// neutral about WHY resolution failed: resolveSubscriptionIDFromCtx now
+	// also rejects a configured subscription the principal cannot see, and
+	// prefixing that with "no Azure subscriptions found" would contradict the
+	// inner error, which fires precisely when subscriptions were found.
 	subscriptionID, err := p.resolveSubscriptionIDFromCtx(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("no Azure subscriptions found to query regions: %w", err)
+		return nil, fmt.Errorf("failed to resolve the Azure subscription to query regions: %w", err)
 	}
 
 	// Use injected client if available (for testing)
@@ -449,7 +537,15 @@ func (p *AzureProvider) GetServiceClient(ctx context.Context, service common.Ser
 		return nil, fmt.Errorf("azure provider is not configured")
 	}
 
-	// Use explicit subscription ID if configured; otherwise resolve from accounts.
+	// Use explicit subscription ID if configured; otherwise resolve from
+	// accounts. A pinned subscription is taken on trust and NOT validated
+	// against the visible list -- same contract as GetRecommendationsClient's
+	// pinned branch. Validating it would force an ARM subscriptions.List on
+	// every pinned call (this is the purchase-execution path), and a pinned
+	// subscription the principal cannot reach fails loud at the first ARM call
+	// anyway. The unpinned branch below is the one that needed a guard,
+	// because there a bad target resolved to a plausible wrong subscription
+	// instead of failing.
 	subscriptionID := p.subscriptionID
 	if subscriptionID == "" {
 		var err error
@@ -562,24 +658,15 @@ func (p *AzureProvider) GetRecommendationsClient(ctx context.Context) (provider.
 	// re-resolves, which is the guarantee this layer offers.
 	cred := p.credential()
 	// Step 1: an explicitly configured target is validated against the
-	// discovered subscriptions FIRST, before any default resolution.
-	//
-	// This ordering is load-bearing. getDefaultSubscriptionID reads the
-	// IsDefault flags set by resolveDefaultSubscription, whose rule 3 marks a
-	// lone visible subscription as the default even when a target was
-	// configured and did not match it. Consulting that result first would let
-	// an invisible target (an operator typo, or a credential that lost access
-	// to the intended subscription) silently resolve to whichever single
-	// subscription happens to be visible -- a misconfiguration answered with
-	// a plausible wrong subscription instead of an error. Validating the
-	// target up front makes it fail loud regardless of how many subscriptions
-	// are visible.
-	if target := os.Getenv(azureSubscriptionIDEnv); target != "" {
-		if !accountsContain(accounts, target) {
-			return nil, fmt.Errorf(
-				"%s is set to %q, which is not among the %d subscriptions visible to this principal",
-				azureSubscriptionIDEnv, target, len(accounts))
-		}
+	// discovered subscriptions FIRST, before any default resolution -- see
+	// validateConfiguredSubscription for why that ordering is load-bearing.
+	// p.subscriptionID is empty on this path (the pinned case returned above),
+	// so the target here is always AZURE_SUBSCRIPTION_ID.
+	target, err := p.validateConfiguredSubscription(accounts)
+	if err != nil {
+		return nil, err
+	}
+	if target != "" {
 		return NewRecommendationsClient(cred, target)
 	}
 

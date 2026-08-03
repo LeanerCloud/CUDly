@@ -264,6 +264,13 @@ func resolveDefaultSubscription(accounts []common.Account, explicitSubID string)
 		// target was configured but not found in the visible subscriptions;
 		// fall through to the single-subscription rule rather than leaving
 		// all accounts as non-default.
+		//
+		// This fall-through is why IsDefault alone must never be trusted to
+		// answer "which subscription did the operator ask for?": with exactly
+		// one visible subscription it reports that subscription as the
+		// default even though the configured target does not match it.
+		// Callers resolving an explicitly configured target must validate it
+		// via validateConfiguredSubscription BEFORE reading IsDefault.
 	}
 
 	// Rule 3: single visible subscription.

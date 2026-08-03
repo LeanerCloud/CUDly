@@ -619,6 +619,13 @@ func TestAzureProvider_GetAccounts(t *testing.T) {
 }
 
 func TestAzureProvider_GetRegions(t *testing.T) {
+	// These subtests resolve through resolveSubscriptionIDFromCtx, which now
+	// validates a configured subscription against the fixture's (single)
+	// subscription list -- so an AZURE_SUBSCRIPTION_ID exported on the
+	// developer's machine or CI runner would fail them for a reason unrelated
+	// to the region listing they guard.
+	clearAzureSubscriptionEnv(t)
+
 	t.Run("success with locations", func(t *testing.T) {
 		subID := "test-subscription"
 		subName := "Test Sub"
@@ -861,7 +868,7 @@ func TestAzureProvider_SetterMethods(t *testing.T) {
 		p := &AzureProvider{}
 		mockProvider := &mockCredentialProvider{}
 		p.SetCredentialProvider(mockProvider)
-		assert.NotNil(t, p.credProvider)
+		assert.NotNil(t, p.credentialProvider())
 	})
 
 	t.Run("SetCredential", func(t *testing.T) {
@@ -873,6 +880,11 @@ func TestAzureProvider_SetterMethods(t *testing.T) {
 }
 
 func TestAzureProvider_GetServiceClient_WithSubscriptionLookup(t *testing.T) {
+	// Same reason as TestAzureProvider_GetRegions: these subtests leave
+	// subscriptionID unset and so resolve through resolveSubscriptionIDFromCtx,
+	// which now validates a configured subscription against the fixture list.
+	clearAzureSubscriptionEnv(t)
+
 	t.Run("fetches subscription when subscriptionID not set", func(t *testing.T) {
 		subID := "fetched-subscription"
 		subName := "Fetched Sub"
@@ -1808,4 +1820,155 @@ func TestAzureProvider_GetRecommendationsClient_MultiSubscriptionFanOut(t *testi
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to resolve Azure subscriptions")
 	})
+}
+
+// resolveSubscriptionIDFromCtx feeds GetRegions and GetServiceClient. Like
+// GetRecommendationsClient it must validate an explicitly configured target
+// against the discovered subscriptions BEFORE consulting the resolved default.
+//
+// Exactly one visible subscription is the case that hides the bug, and the
+// only case this test is worth writing for: resolveDefaultSubscription's rule
+// 3 marks a LONE visible subscription as the default even when a configured
+// target did not match it, so reading the default first silently retargets the
+// operator's request to whichever subscription happens to be visible. With two
+// or more visible subscriptions getDefaultSubscriptionID returns "" and the
+// pre-existing "multiple Azure subscriptions" error fires either way, so such
+// a test would pass with or without the guard and prove nothing.
+func TestAzureProvider_ResolveSubscription_InvisibleConfiguredTargetErrors(t *testing.T) {
+	soloID, soloName := "sub-solo", "Solo Subscription"
+	soloClient := func() *mockSubscriptionsClient {
+		return &mockSubscriptionsClient{
+			listPagerFunc: func(_ *armsubscriptions.ClientListOptions) SubscriptionsPager {
+				return &mockSubscriptionsPager{
+					pages: []armsubscriptions.ClientListResponse{
+						{SubscriptionListResult: armsubscriptions.SubscriptionListResult{
+							Value: []*armsubscriptions.Subscription{{SubscriptionID: &soloID, DisplayName: &soloName}},
+						}},
+					},
+				}
+			},
+			listLocationsPagerFunc: func(_ string, _ *armsubscriptions.ClientListLocationsOptions) LocationsPager {
+				return &mockLocationsPager{}
+			},
+		}
+	}
+
+	t.Run("GetRegions errors on an env target the principal cannot see", func(t *testing.T) {
+		t.Setenv("AZURE_SUBSCRIPTION_ID", "sub-not-visible")
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(soloClient())
+
+		regions, err := p.GetRegions(context.Background())
+		require.Error(t, err,
+			"an invisible configured subscription must not silently retarget to the one visible subscription")
+		assert.Nil(t, regions)
+		assert.Contains(t, err.Error(), "sub-not-visible")
+		assert.Contains(t, err.Error(), "not among the 1 subscriptions visible")
+	})
+
+	// GetServiceClient drives the resource enumeration recommendations are
+	// computed from, so a silent retarget here reports subscription B's
+	// resources to an operator who asked for subscription A.
+	t.Run("GetServiceClient errors on an env target the principal cannot see", func(t *testing.T) {
+		t.Setenv("AZURE_SUBSCRIPTION_ID", "sub-not-visible")
+		p := &AzureProvider{cred: &mockTokenCredential{}} // subscriptionID unset -> resolves via accounts
+		p.SetSubscriptionsClient(soloClient())
+
+		client, err := p.GetServiceClient(context.Background(), common.ServiceCompute, "eastus")
+		require.Error(t, err)
+		assert.Nil(t, client)
+		assert.Contains(t, err.Error(), "sub-not-visible")
+		assert.Contains(t, err.Error(), "not among the 1 subscriptions visible")
+	})
+
+	// The same guard has to cover the ProviderConfig axis, not just the
+	// environment variable: resolveDefaultSubscription's rule 1 reads
+	// p.subscriptionID and falls through to rule 3 identically when it misses.
+	t.Run("GetRegions errors on a config target the principal cannot see", func(t *testing.T) {
+		clearAzureSubscriptionEnv(t)
+		p := &AzureProvider{cred: &mockTokenCredential{}, subscriptionID: "sub-not-visible"}
+		p.SetSubscriptionsClient(soloClient())
+
+		regions, err := p.GetRegions(context.Background())
+		require.Error(t, err)
+		assert.Nil(t, regions)
+		assert.Contains(t, err.Error(), "sub-not-visible")
+		assert.Contains(t, err.Error(), "not among the 1 subscriptions visible")
+	})
+
+	// The guard must reject only targets that are genuinely invisible; a
+	// visible one still resolves, and resolves to itself.
+	t.Run("a visible configured target is still honoured", func(t *testing.T) {
+		t.Setenv("AZURE_SUBSCRIPTION_ID", soloID)
+		var gotSubscriptionID string
+		client := soloClient()
+		client.listLocationsPagerFunc = func(subscriptionID string, _ *armsubscriptions.ClientListLocationsOptions) LocationsPager {
+			gotSubscriptionID = subscriptionID
+			return &mockLocationsPager{}
+		}
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(client)
+
+		_, err := p.GetRegions(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, soloID, gotSubscriptionID)
+	})
+}
+
+// SetCredentialProvider publishes credProvider, which IsConfigured reads on its
+// lazy ambient-credential path. Both must go through accountsMu -- the lock
+// every other swappable field on the provider is published under -- or the
+// write is an unsynchronized data race with that read.
+//
+// credOnce means each provider instance reads credProvider at most once, so
+// the race window is one-shot per instance. Looping over fresh providers is
+// what makes the detector's chances additive instead of resting on a single
+// interleaving.
+func TestAzureProvider_ConcurrentCredentialProviderSwapAndIsConfigured_NoDataRace(t *testing.T) {
+	const (
+		instances = 50
+		readers   = 4
+		swaps     = 4
+	)
+
+	for i := 0; i < instances; i++ {
+		// No credential installed, so IsConfigured takes the credOnce path
+		// that reads credProvider.
+		p := &AzureProvider{}
+		// Install one up front so every IsConfigured resolves deterministically
+		// through the mock rather than depending on ambient Azure credentials
+		// being present on the machine running the test.
+		p.SetCredentialProvider(&mockCredentialProvider{cred: &mockTokenCredential{}})
+
+		start := make(chan struct{})
+		results := make(chan bool, readers)
+		var wg sync.WaitGroup
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for s := 0; s < swaps; s++ {
+				p.SetCredentialProvider(&mockCredentialProvider{cred: &mockTokenCredential{}})
+			}
+		}()
+
+		for r := 0; r < readers; r++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				results <- p.IsConfigured()
+			}()
+		}
+
+		close(start)
+		wg.Wait()
+		close(results)
+
+		// require.* only from the test goroutine, never the workers.
+		for ok := range results {
+			require.True(t, ok, "IsConfigured must resolve the injected credential provider")
+		}
+	}
 }
