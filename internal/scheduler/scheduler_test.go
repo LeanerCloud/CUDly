@@ -753,13 +753,15 @@ func TestScheduler_FetchAndConvert_KeepsPartialSweepData(t *testing.T) {
 
 	// globalCfg nil so the zero-results fallback branch stays out of the way;
 	// collected is non-empty anyway.
-	recs, err := s.fetchAndConvert(ctx, prov, "azure", nil, nil)
+	recs, complete, err := s.fetchAndConvert(ctx, prov, "azure", nil, nil)
 
 	require.NoError(t, err,
 		"a partial multi-subscription sweep must not fail the whole collection")
 	require.Len(t, recs, 1,
 		"the subscriptions that succeeded must still be persisted, not discarded")
 	assert.Equal(t, 3, recs[0].Count, "the surviving subscription's recommendation must be intact")
+	assert.False(t, complete,
+		"a partial sweep must report itself incomplete so the caller withholds stale-row eviction (#1652)")
 }
 
 // The tolerance must be narrow: any error that is NOT a partial-subscription
@@ -777,29 +779,42 @@ func TestScheduler_FetchAndConvert_RealErrorStillFailsLoud(t *testing.T) {
 
 	s := &Scheduler{config: new(MockConfigStore)}
 
-	recs, err := s.fetchAndConvert(ctx, prov, "azure", nil, nil)
+	recs, complete, err := s.fetchAndConvert(ctx, prov, "azure", nil, nil)
 
 	require.Error(t, err, "a genuine error must still fail the collection")
 	assert.Contains(t, err.Error(), "credentials expired")
 	assert.Nil(t, recs)
+	assert.False(t, complete, "a failed sweep is never eviction-eligible")
 }
 
 func TestTolerateIncompleteSweep(t *testing.T) {
-	t.Run("partial failure is swallowed so the caller keeps its data", func(t *testing.T) {
+	// Swallowing the error is only half the contract. The other half is
+	// reporting complete=false, which is what keeps the account out of the
+	// eviction roster; asserting only NoError here would encode the #1652
+	// hazard as intended behavior.
+	t.Run("partial failure is swallowed but reported as incomplete", func(t *testing.T) {
 		partial := &azureprovider.PartialSubscriptionFailureError{
 			Attempted: 2, Succeeded: 1,
 			Failed: []azureprovider.SubscriptionFailure{{SubscriptionID: "sub-1", Err: errors.New("boom")}},
 		}
-		assert.NoError(t, tolerateIncompleteSweep("azure", partial))
+		complete, err := tolerateIncompleteSweep("azure", partial)
+		assert.NoError(t, err, "the collected subscriptions' data must be kept")
+		assert.False(t, complete,
+			"an incomplete sweep must not authorize stale-row eviction for the account (#1652)")
 	})
 
 	t.Run("other errors pass through unchanged", func(t *testing.T) {
 		boom := errors.New("boom")
-		assert.Same(t, boom, tolerateIncompleteSweep("azure", boom))
+		complete, err := tolerateIncompleteSweep("azure", boom)
+		assert.Same(t, boom, err)
+		assert.False(t, complete, "a failed sweep is never eviction-eligible")
 	})
 
-	t.Run("nil stays nil", func(t *testing.T) {
-		assert.NoError(t, tolerateIncompleteSweep("azure", nil))
+	t.Run("nil stays nil and is complete", func(t *testing.T) {
+		complete, err := tolerateIncompleteSweep("azure", nil)
+		assert.NoError(t, err)
+		assert.True(t, complete,
+			"a clean sweep must stay eviction-eligible, otherwise stale rows accumulate forever")
 	})
 }
 
@@ -1116,13 +1131,13 @@ func TestFanOutPerAccount_RespectsParallelismLimit(t *testing.T) {
 		}
 	}
 
-	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, bool, error) {
 		cur := inflight.Add(1)
 		updatePeak(cur)
 		// Small sleep so concurrent workers genuinely overlap.
 		time.Sleep(5 * time.Millisecond)
 		inflight.Add(-1)
-		return []config.RecommendationRecord{{ID: acct.ID}}, nil
+		return []config.RecommendationRecord{{ID: acct.ID}}, true, nil
 	}
 
 	out, outcome := fanOutPerAccount(context.Background(), "Test", accounts, fn)
@@ -1144,8 +1159,8 @@ func TestFanOutPerAccount_AllAccountsFail(t *testing.T) {
 		{ID: "acct-2", Name: "acct-2", ExternalID: "ext-2"},
 		{ID: "acct-3", Name: "acct-3", ExternalID: "ext-3"},
 	}
-	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
-		return nil, fmt.Errorf("cred error for %s", acct.ID)
+	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, bool, error) {
+		return nil, false, fmt.Errorf("cred error for %s", acct.ID)
 	}
 
 	recs, outcome := fanOutPerAccount(context.Background(), "Test", accounts, fn)
@@ -1168,11 +1183,11 @@ func TestFanOutPerAccount_PartialSuccess(t *testing.T) {
 		{ID: "acct-ok-2", Name: "acct-ok-2", ExternalID: "e2"},
 		{ID: "acct-bad", Name: "acct-bad", ExternalID: "ebad"},
 	}
-	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, bool, error) {
 		if acct.ID == "acct-bad" {
-			return nil, fmt.Errorf("transient")
+			return nil, false, fmt.Errorf("transient")
 		}
-		return []config.RecommendationRecord{{ID: acct.ID, Provider: "test"}}, nil
+		return []config.RecommendationRecord{{ID: acct.ID, Provider: "test"}}, true, nil
 	}
 
 	recs, outcome := fanOutPerAccount(context.Background(), "Test", accounts, fn)
@@ -1195,11 +1210,11 @@ func TestFanOutPerAccount_FailedCollectionNotInSucceededAccountIDs(t *testing.T)
 		{ID: "acct-ok", Name: "acct-ok", ExternalID: "e-ok"},
 		{ID: "acct-all-services-failed", Name: "acct-all-services-failed", ExternalID: "e-bad"},
 	}
-	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, bool, error) {
 		if acct.ID == "acct-all-services-failed" {
-			return nil, errors.New("all 6 Azure recommendation services failed: 429 too many requests")
+			return nil, false, errors.New("all 6 Azure recommendation services failed: 429 too many requests")
 		}
-		return []config.RecommendationRecord{{ID: acct.ID, Provider: "azure"}}, nil
+		return []config.RecommendationRecord{{ID: acct.ID, Provider: "azure"}}, true, nil
 	}
 
 	_, outcome := fanOutPerAccount(context.Background(), "Azure", accounts, fn)
@@ -1214,9 +1229,9 @@ func TestFanOutPerAccount_FailedCollectionNotInSucceededAccountIDs(t *testing.T)
 // correctly skips the all-failed error path.
 func TestFanOutPerAccount_ZeroAccounts(t *testing.T) {
 	recs, outcome := fanOutPerAccount(context.Background(), "Test", nil,
-		func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+		func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, bool, error) {
 			t.Fatalf("fn must not be called for zero-accounts input")
-			return nil, nil
+			return nil, false, nil
 		})
 	assert.Empty(t, recs)
 	assert.Zero(t, outcome.SucceededCount)
@@ -1762,7 +1777,7 @@ func TestScheduler_CollectAzureForAccount_MissingSubscriptionIDFailsLoud(t *test
 	ctx := context.Background()
 	scheduler := &Scheduler{config: new(MockConfigStore)}
 
-	recs, err := scheduler.collectAzureForAccount(ctx, config.CloudAccount{
+	recs, complete, err := scheduler.collectAzureForAccount(ctx, config.CloudAccount{
 		ID:            "az-no-sub",
 		Provider:      "azure",
 		AzureAuthMode: "managed_identity",
@@ -1772,6 +1787,7 @@ func TestScheduler_CollectAzureForAccount_MissingSubscriptionIDFailsLoud(t *test
 
 	require.Error(t, err)
 	assert.Nil(t, recs)
+	assert.False(t, complete, "a rejected account is never eviction-eligible")
 	assert.Contains(t, err.Error(), "no azure_subscription_id configured",
 		"an unpinned Azure account must be rejected by name, not fall through to an unscoped org-wide collection")
 	assert.Contains(t, err.Error(), "az-no-sub", "the error must identify the misconfigured account")
