@@ -18,6 +18,7 @@ type testTemplateData struct {
 	OIDCIssuerURL       string
 	OIDCIssuerHost      string
 	OIDCAudience        string
+	OIDCSubjectClaim    string
 	SubscriptionID      string
 	TenantID            string
 	ProjectID           string
@@ -93,12 +94,17 @@ func TestCLITemplatesAutoRegister(t *testing.T) {
 				`"aws_role_arn": "${ROLE_ARN}"`,
 				`"external_id": "${TARGET_ACCOUNT_ID}"`,
 				`TARGET_ACCOUNT_ID=$(aws sts get-caller-identity`,
+				// #1640: the trust policy's :sub condition must be present
+				// unconditionally — there is no longer a code path that omits it.
+				`"${OIDC_HOST}:sub": "${OIDC_SUBJECT_CLAIM}"`,
 			},
 			mustNot: []string{
 				"/api/registrations",
 				`"account_id":`,
 				// WIF flow has no STS external_id
 				`aws_external_id`,
+				// #1640: the subject claim is no longer optional.
+				"Optional: restrict which OIDC subject",
 			},
 		},
 		{
@@ -197,6 +203,46 @@ func TestCLITemplatesAutoRegister(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestAWSWIFCLI_SubjectClaimRequired is the regression test for #1640: the
+// CLI bundle's trust policy used to have an else-branch that silently built a
+// subject-less policy (accepting every identity the issuer can mint) when
+// OIDC_SUBJECT_CLAIM was unset. That branch is gone; this asserts there is no
+// path left in the rendered script that omits the :sub condition, and that
+// the required-value and forbidden-character guards are both present.
+func TestAWSWIFCLI_SubjectClaimRequired(t *testing.T) {
+	rendered := renderCLITemplate(t, "templates/aws-wif-cli.sh.tmpl", baseData()) // OIDCSubjectClaim == ""
+
+	// Exactly one Condition block, and it always carries :sub — no branch
+	// builds a StringEquals map with only :aud.
+	subCondition := `"${OIDC_HOST}:sub": "${OIDC_SUBJECT_CLAIM}"`
+	if n := strings.Count(rendered, subCondition); n != 1 {
+		t.Errorf("expected exactly one :sub condition in the rendered trust policy, found %d", n)
+	}
+	subjectLessCondition := `{"StringEquals": {"${OIDC_HOST}:aud": "${OIDC_AUDIENCE}"}}`
+	if strings.Contains(rendered, subjectLessCondition) {
+		t.Errorf("rendered script still contains a subject-less Condition block: %q", subjectLessCondition)
+	}
+
+	// An unset/empty OIDC_SUBJECT_CLAIM must be rejected before any AWS call.
+	if !strings.Contains(rendered, `if [[ -z "${OIDC_SUBJECT_CLAIM}" ]]`) {
+		t.Error("rendered script must reject an empty OIDC_SUBJECT_CLAIM")
+	}
+	if !strings.Contains(rendered, "OIDC_SUBJECT_CLAIM is required") {
+		t.Error("rendered script must explain that OIDC_SUBJECT_CLAIM is required")
+	}
+	// The empty-value guard must run before the first `aws` invocation, so a
+	// misconfigured run fails loud instead of creating a partial OIDC provider.
+	if guard, firstAWSCall := strings.Index(rendered, `if [[ -z "${OIDC_SUBJECT_CLAIM}" ]]`), strings.Index(rendered, "aws iam"); guard < 0 || firstAWSCall < 0 || guard > firstAWSCall {
+		t.Errorf("the empty-OIDC_SUBJECT_CLAIM guard (offset %d) must run before the first aws iam call (offset %d)", guard, firstAWSCall)
+	}
+
+	// $ and * must be rejected — same characters PR #1602 rejects in the
+	// CloudFormation OIDCSubjectClaim parameter, for the same reason.
+	if !strings.Contains(rendered, `must not contain whitespace, '\$' or '*'`) {
+		t.Error("rendered script must reject whitespace, '$', and '*' in OIDC_SUBJECT_CLAIM")
 	}
 }
 

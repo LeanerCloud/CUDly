@@ -35,6 +35,7 @@ aws cloudformation deploy \
     "OIDCIssuerURL={{.OIDCIssuerURL}}" \
     "OIDCIssuerHost={{.OIDCIssuerHost}}" \
     "OIDCAudience={{.OIDCAudience}}" \
+    "OIDCSubjectClaim={{.OIDCSubjectClaim}}" \
     "RoleName=CUDly-{{.AccountSlug}}" \
   --capabilities CAPABILITY_NAMED_IAM \
   --no-fail-on-empty-changeset

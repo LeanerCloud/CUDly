@@ -84,6 +84,10 @@ type iacData struct {
 	// AWS WIF / cross-account
 	OIDCIssuerURL string
 	OIDCAudience  string
+	// OIDCSubjectClaim restricts the AWS trust policy to a single workload
+	// subject. Empty unless --oidc-subject-claim is passed; every AWS-WIF
+	// template requires it (no working subject-less default, see #1640).
+	OIDCSubjectClaim string
 	// Azure-specific
 	SubscriptionID string
 	TenantID       string
@@ -280,11 +284,12 @@ func singleFileTmpl(target, source, format, slug string) (tmplFile, outName stri
 }
 
 // populateData fills target-specific fields on data from CLI flags.
-func populateData(data *iacData, target, source, tenantID, projectID, saEmail string) bool {
+func populateData(data *iacData, target, source, tenantID, projectID, saEmail, oidcSubjectClaim string) bool {
 	switch target {
 	case "aws":
 		data.OIDCIssuerURL = awsOIDCIssuer(source, tenantID)
 		data.OIDCAudience = awsOIDCAudience(source)
+		data.OIDCSubjectClaim = oidcSubjectClaim
 	case "azure":
 		data.SubscriptionID = data.AccountExternalID
 		data.TenantID = tenantID
@@ -314,6 +319,7 @@ func main() {
 	tenantID := flag.String("tenant-id", "", "Azure tenant ID (required when source or target is azure)")
 	projectID := flag.String("project-id", "", "GCP project ID (defaults to --account-id when target is gcp)")
 	saEmail := flag.String("service-account-email", "", "GCP service account email (defaults to cudly@<project>.iam.gserviceaccount.com)")
+	oidcSubjectClaim := flag.String("oidc-subject-claim", "", "Subject (sub) claim restricting the AWS trust policy to one workload (required when target is aws; no working default, see #1640)")
 	outFile := flag.String("output", "", "Output file path; use '-' to print to stdout (default: derived filename in current directory)")
 	templDir := flag.String("templates-dir", "internal/iacfiles/templates", "Path to templates directory (run from repo root)")
 	modulesDir := flag.String("modules-dir", "iac/federation", "Path to Terraform modules directory (used by --format bundle)")
@@ -334,7 +340,7 @@ func main() {
 	}
 
 	data := iacData{AccountName: *accountName, AccountExternalID: *accountID, AccountSlug: slug, Source: *source}
-	if !populateData(&data, *target, *source, *tenantID, *projectID, *saEmail) {
+	if !populateData(&data, *target, *source, *tenantID, *projectID, *saEmail, *oidcSubjectClaim) {
 		fmt.Fprintf(os.Stderr, "Error: --target must be aws, azure, or gcp (got %q)\n", *target)
 		os.Exit(1)
 	}
