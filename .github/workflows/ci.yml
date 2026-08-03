@@ -299,6 +299,12 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Run govulncheck CVE scanner (all modules)
+        # always(): each scanner step below is independent evidence for the
+        # Security tab. Without this, one scanner failing (e.g. a live npm
+        # advisory) skips every scanner after it in the same job, silently
+        # disabling Go SAST and Terraform IaC coverage repo-wide. The job
+        # still fails overall if any scanner step here fails.
+        if: always()
         run: |
           # Pinned (not @latest): a govulncheck release with new
           # detection logic could silently change the gate's verdict
@@ -315,12 +321,19 @@ jobs:
           done
 
       - name: Run npm audit (frontend)
+        # always(): must not skip the scanners below it just because
+        # govulncheck failed, and its own failure must not skip gosec/Trivy.
+        if: always()
         run: |
           if [ -f frontend/package.json ]; then
             cd frontend && npm audit --audit-level=high
           fi
 
       - name: Run gosec Security Scanner
+        id: gosec
+        # always(): don't let an earlier scanner's failure (e.g. npm audit)
+        # skip Go SAST coverage. The job still fails if gosec itself fails.
+        if: always()
         run: |
           # Install pinned gosec using the job's existing setup-go.
           # The securego/gosec Docker action bundles its own Go toolchain which
@@ -348,12 +361,21 @@ jobs:
           echo "Merged $(jq '.runs | length' gosec-results.sarif) SARIF runs"
 
       - name: Upload gosec results to GitHub Security
-        if: always()
+        # Tolerate a missing SARIF only when the gosec step itself never ran
+        # (e.g. an earlier infra step like checkout/setup-go failed). If
+        # gosec ran and the file is still missing, fail loud instead of
+        # masking it as a skip.
+        if: always() && steps.gosec.outcome != 'skipped'
         uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
         with:
           sarif_file: gosec-results.sarif
 
       - name: Run Trivy vulnerability scanner (filesystem)
+        id: trivy_fs
+        # always(): don't let an earlier scanner's failure skip Trivy fs
+        # coverage. This scan uses the default exit-code 0 (see the IaC
+        # scan comment below), so it does not gate the job on its own.
+        if: always()
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: 'fs'
@@ -370,6 +392,8 @@ jobs:
           version: 'v0.72.0'
 
       - name: Upload Trivy results to GitHub Security
+        # Tolerate a missing SARIF only when the Trivy fs step never ran.
+        if: always() && steps.trivy_fs.outcome != 'skipped'
         uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
         with:
           sarif_file: 'trivy-results.sarif'
@@ -384,6 +408,10 @@ jobs:
       # to the Security tab without gating the job -- matching tfsec's prior
       # soft_fail: true behaviour while preserving Terraform IaC coverage.
       - name: Run Trivy IaC misconfiguration scanner (Terraform)
+        id: trivy_iac
+        # always(): don't let an earlier scanner's failure skip Terraform
+        # IaC coverage.
+        if: always()
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: 'config'
@@ -396,7 +424,8 @@ jobs:
           version: 'v0.72.0'
 
       - name: Upload Trivy IaC results to GitHub Security
-        if: always()
+        # Tolerate a missing SARIF only when the Trivy IaC step never ran.
+        if: always() && steps.trivy_iac.outcome != 'skipped'
         uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
         with:
           sarif_file: 'trivy-config-results.sarif'
