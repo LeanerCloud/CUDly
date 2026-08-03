@@ -964,6 +964,11 @@ func TestListExchangeableAzureRIs_SubscriptionIDOutOfScope(t *testing.T) {
 	})
 	require.Error(t, err, "a scoped session must not list an out-of-scope subscription's reservations")
 	assert.ErrorIs(t, err, errNotFound, "must be the generic scope-check 404, matching the POST siblings")
+	// ownsAzureSource registers ListExchangeableReservations with .Maybe(), so
+	// AssertExpectations above passes whether it was called or not; assert it
+	// explicitly to prove the scope gate refuses the request before the
+	// tenant-wide listing is ever fetched.
+	opsClient.AssertNotCalled(t, "ListExchangeableReservations")
 }
 
 // TestListExchangeableAzureRIs_SubscriptionIDFiltersToOwnRows exercises
