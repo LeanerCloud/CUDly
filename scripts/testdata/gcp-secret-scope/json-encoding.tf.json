@@ -1,0 +1,20 @@
+{
+  "_comment": [
+    "Fixture: the Terraform JSON encoding. Must exit 2 (cannot check), never 0.",
+    "This file DOES contain a project-scope Secret Manager grant. The HCL scanner",
+    "matches block syntax and would find nothing here, so without the explicit",
+    "reject it would report clean, which is the exact failure this guard exists",
+    "to prevent. Kept as .tf.json so it is discovered by the same find as a real",
+    "one would be; it lives outside terraform/ and iac/, so it is only reachable",
+    "when passed explicitly by this test."
+  ],
+  "resource": {
+    "google_project_iam_member": {
+      "project_secrets": {
+        "project": "${var.project_id}",
+        "role": "roles/secretmanager.admin",
+        "member": "serviceAccount:${google_service_account.workload.email}"
+      }
+    }
+  }
+}

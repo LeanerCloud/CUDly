@@ -5,11 +5,25 @@ resource "google_service_account" "cleanup" {
   display_name = "Service account for ${var.function_name}"
 }
 
-# Grant access to Secret Manager
-resource "google_project_iam_member" "cleanup_secrets" {
-  project = var.project_id
-  role    = "roles/secretmanager.secretAccessor"
-  member  = "serviceAccount:${google_service_account.cleanup.email}"
+# Secret Manager access: least-privilege, single-secret binding.
+#
+# This previously granted the cleanup service account project-wide
+# `roles/secretmanager.secretAccessor`, which made every secret in the project
+# readable by a session-cleanup job. That set includes the AES-256-GCM
+# credential-encryption key that decrypts stored customer cloud credentials, the
+# JWT and session secrets, and the SendGrid API key. None of them are reachable
+# from this function's code path.
+#
+# The function reads exactly one secret: the database password, wired into
+# DB_PASSWORD_SECRET in service_config below and resolved once by
+# database.OpenFromEnv (cmd/cleanup-lambda/main.go). Bind only that secret,
+# mirroring the same migration already applied to the Cloud Run module in
+# compute/gcp/cloud-run/main.tf.
+resource "google_secret_manager_secret_iam_member" "cleanup_db_password" {
+  project   = var.project_id
+  secret_id = var.db_password_secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.cleanup.email}"
 }
 
 # Cloud Function (2nd gen)

@@ -1,0 +1,12 @@
+# Fixture: organization scope, `_binding` variant. Must exit 1.
+#
+# Organization scope is the broadest of the three, and `_binding` replaces the
+# whole principal list rather than adding one principal. Split from the former
+# bundled folder+organization fixture so each is asserted on its own: a guard
+# catching only one of them would still have passed the bundled case.
+
+resource "google_organization_iam_binding" "org_secrets" {
+  org_id  = var.org_id
+  role    = "roles/secretmanager.admin"
+  members = ["serviceAccount:${google_service_account.workload.email}"]
+}

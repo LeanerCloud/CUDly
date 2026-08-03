@@ -1,0 +1,10 @@
+# Fixture: folder scope, `_member` variant. Must exit 1.
+#
+# Split out from the former bundled folder+organization fixture so each scope is
+# asserted on its own.
+
+resource "google_folder_iam_member" "folder_secrets" {
+  folder = var.folder_id
+  role   = "roles/secretmanager.secretAccessor"
+  member = "serviceAccount:${google_service_account.workload.email}"
+}

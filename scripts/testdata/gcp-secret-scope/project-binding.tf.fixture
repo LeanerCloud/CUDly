@@ -1,0 +1,12 @@
+# Fixture: project scope, `_binding` variant. Must exit 1.
+#
+# The guard's resource pattern covers `_binding` as well as `_member`, but only
+# the `_member` form had a fixture, so this arm was working-but-untested.
+# `google_project_iam_binding` is authoritative for the role: it replaces the
+# entire principal list for that role at project scope.
+
+resource "google_project_iam_binding" "project_secrets" {
+  project = var.project_id
+  role    = "roles/secretmanager.secretAccessor"
+  members = ["serviceAccount:${google_service_account.workload.email}"]
+}
