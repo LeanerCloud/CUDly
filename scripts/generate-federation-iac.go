@@ -14,19 +14,42 @@
 //
 // Go 1.21+ in PATH. No other dependencies. Run from the repository root.
 //
+// # The --oidc-subject-claim flag
+//
+// Every AWS-target combination other than aws->aws federates via OIDC and
+// requires --oidc-subject-claim: it is the workload subject the generated trust
+// policy pins to, and without it the policy would accept every identity the
+// issuer can mint (#1543, #1602, #1640). Pass the calling workload's subject:
+// a GCP service account's numeric unique ID, or an Azure managed identity's
+// object ID. The value is validated against an allowlist before anything is
+// rendered; see validateOIDCSubjectClaim.
+//
+// The remaining combinations render nothing that reads this flag, so passing it
+// there is an error rather than a no-op: a silently discarded subject claim
+// would look like the trust was pinned when it was not. That is not the same as
+// saying they need no pinning. Each gcp-target combination emits its own
+// REQUIRED pin, none of which --oidc-subject-claim populates:
+//
+//	--source aws   -> <slug>-gcp-wif.tfvars, aws_role_name (blank)
+//	--source azure -> <slug>-gcp-wif.tfvars, oidc_subject (blank)
+//	--source gcp   -> <slug>-gcp-sa-impersonation.tfvars, source_service_account
+//	                  (a <SOURCE_SERVICE_ACCOUNT_EMAIL> placeholder)
+//
 // # Quick examples
 //
 //	# AWS target, Azure source — Terraform tfvars
 //	go run scripts/generate-federation-iac.go \
 //	  --target aws --source azure \
 //	  --account-name "prod-aws" --account-id "123456789012" \
-//	  --tenant-id "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+//	  --tenant-id "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" \
+//	  --oidc-subject-claim "11111111-2222-3333-4444-555555555555"
 //
 //	# AWS target, Azure source — CloudFormation parameters JSON
 //	go run scripts/generate-federation-iac.go \
 //	  --target aws --source azure --format cf-params \
 //	  --account-name "prod-aws" --account-id "123456789012" \
-//	  --tenant-id "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+//	  --tenant-id "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" \
+//	  --oidc-subject-claim "11111111-2222-3333-4444-555555555555"
 //
 //	# AWS target, AWS source — cross-account IAM role tfvars
 //	go run scripts/generate-federation-iac.go \
@@ -53,18 +76,21 @@
 //	go run scripts/generate-federation-iac.go \
 //	  --target aws --source azure --format bundle \
 //	  --account-name "prod-aws" --account-id "123456789012" \
-//	  --tenant-id "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+//	  --tenant-id "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" \
+//	  --oidc-subject-claim "11111111-2222-3333-4444-555555555555"
 //
 //	# Print tfvars to stdout
 //	go run scripts/generate-federation-iac.go \
 //	  --target aws --source gcp \
-//	  --account-name "prod" --account-id "123456789012" --output -
+//	  --account-name "prod" --account-id "123456789012" \
+//	  --oidc-subject-claim "123456789012345678901" --output -
 
 package main
 
 import (
 	"archive/zip"
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -283,8 +309,167 @@ func singleFileTmpl(target, source, format, slug string) (tmplFile, outName stri
 	}
 }
 
-// populateData fills target-specific fields on data from CLI flags.
-func populateData(data *iacData, target, source, tenantID, projectID, saEmail, oidcSubjectClaim string) bool {
+// oidcSubjectClaimMaxLen bounds --oidc-subject-claim. The two subject formats
+// this flag can carry are a GCP service account's numeric unique ID (typically
+// 21 digits; Google documents it as a numeric string without guaranteeing a
+// length) and an Azure managed identity's object ID (a 36-character UUID), so
+// 255 sits far above any real value and exists only to keep an absurd argument
+// out of the generated artifacts.
+const oidcSubjectClaimMaxLen = 255
+
+// displayClaim renders a rejected claim for an error message. Long values are
+// truncated so that a multi-kilobyte argument cannot flood the operator's
+// terminal; the true length is reported instead. Doing this here rather than
+// relying on the length check to run first lets each rejection below report the
+// most useful diagnosis without any of them having to worry about size.
+func displayClaim(claim string) string {
+	const maxShown = 64
+	if len(claim) <= maxShown {
+		return fmt.Sprintf("%q", claim)
+	}
+	// Cutting at a byte offset can split a multi-byte rune. %q escapes the
+	// orphaned bytes rather than emitting them raw, which is also what keeps a
+	// claim carrying terminal control sequences from reaching the terminal.
+	return fmt.Sprintf("%q... (%d bytes total)", claim[:maxShown], len(claim))
+}
+
+// oidcSubjectClaimRE is a positive allowlist, not a denylist, because this
+// script interpolates the value verbatim into three different grammars:
+//   - Bash: aws-cfn-deploy.sh.tmpl renders it into the "OIDCSubjectClaim=..."
+//     double-quoted word passed to `aws cloudformation deploy`.
+//   - JSON: aws-wif-cf-params.json.tmpl renders it as a string value.
+//   - HCL:  aws-wif.tfvars.tmpl renders it as a quoted attribute value.
+//
+// No single escaping helper is correct for all three, so the value is
+// constrained to characters that are inert in every one of them: letters,
+// digits and . _ : / @ = + - with a leading letter or digit so a value can
+// never begin with '-' and be re-read as a flag by a downstream command.
+// Excluded by construction are whitespace and $ * " ' ` \ ( ) { } ; & | < > ,
+// % and newlines.
+//
+// This is deliberately stricter than the AllowedPattern ^[^\s*$]+$ that the
+// CloudFormation template and the Terraform module enforce on the same value.
+// Those two run on a value that is already a typed parameter, so they only need
+// to reject what IAM itself mis-handles: '$' (IAM expands ${...} policy
+// variables inside Condition values) and '*' (compared literally by
+// StringEquals). This check runs earlier, on a value about to become shell,
+// JSON and HCL *source*, so it has to reject the metacharacters of those
+// grammars as well.
+//
+// The practical cost of the extra strictness is nil here: awsOIDCIssuer emits
+// only login.microsoftonline.com, accounts.google.com, or "" for a source it
+// does not recognise, so the only subjects a bundle from this script can
+// legitimately pin are an Azure object-ID UUID and a GCP numeric unique ID.
+// Subject formats from issuers that need the wider pattern, such as Auth0's
+// "<connection>|<id>" and Bitbucket's "{repo-uuid}:{step-uuid}", cannot be
+// produced by this script and remain deployable by editing the tfvars or the
+// CFN parameters directly.
+//
+// For the same reason this disagrees with iac/federation/gcp-target/terraform/
+// variables.tf, whose oidc_subject allowlist deliberately permits '|' for
+// Auth0/Okta subjects. That value reaches a CEL attribute condition and an IAM
+// principal path, where '|' is inert once quotes are excluded. This one reaches
+// a Bash word, where '|' is a pipe. Same field name, different sinks, so the
+// two allowlists are correctly different rather than accidentally divergent.
+var oidcSubjectClaimRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@=+-]*$`)
+
+// subjectClaimMode says what --oidc-subject-claim means for a given
+// target/source pair, so an inapplicable value is rejected instead of silently
+// dropped.
+type subjectClaimMode int
+
+const (
+	// subjectClaimRequired: the pair renders an AWS-WIF trust policy, whose
+	// :sub condition has no safe default. It is first so that the zero value of
+	// subjectClaimMode is the strict one: a mode left unset fails closed.
+	subjectClaimRequired subjectClaimMode = iota
+	// subjectClaimNotApplicable: the pair renders no artifact that reads
+	// .OIDCSubjectClaim, so a supplied claim would be silently discarded.
+	//
+	// This is narrower than "renders no trust to pin". Every gcp-target
+	// combination emits a REQUIRED pin of its own: aws_role_name or
+	// oidc_subject in gcp-wif.tfvars.tmpl, or source_service_account in
+	// gcp-sa-impersonation.tfvars.tmpl when the source is gcp. Those are
+	// different fields which this flag has never populated, and pinning them is
+	// out of scope for --oidc-subject-claim. See the doc comment at the top of
+	// this file for the full per-source table.
+	subjectClaimNotApplicable
+)
+
+// subjectClaimModeFor reports whether --oidc-subject-claim feeds anything for
+// this target/source pair. Only an AWS target with a non-AWS source renders the
+// AWS-WIF artifacts: aws->aws is the cross-account path and selects
+// aws-cross-account.tfvars.tmpl, whose role is trusted by source account plus
+// external ID rather than by an OIDC :sub condition, and no azure or gcp
+// template references .OIDCSubjectClaim at all. Those targets are not
+// necessarily subject-less, they just pin their subject through a different
+// variable (see the subjectClaimNotApplicable comment above).
+func subjectClaimModeFor(target, source string) subjectClaimMode {
+	if target == "aws" && source != "aws" {
+		return subjectClaimRequired
+	}
+	return subjectClaimNotApplicable
+}
+
+// validateOIDCSubjectClaim checks --oidc-subject-claim before any template is
+// rendered. Generation time is the only place this can be enforced for the
+// shell artifact: the operator runs the generated deploy-cfn.sh, by which point
+// the value is already Bash source. The same ordering problem exists in the
+// server-rendered aws-wif-cli.sh, whose OIDC_SUBJECT_CLAIM guard runs *after*
+// the OIDC_SUBJECT_CLAIM="${OIDC_SUBJECT_CLAIM:-<value>}" line that embeds the
+// value, so a command substitution baked into the default has already executed
+// by the time that guard inspects it. A validated value is the only control
+// that runs before either.
+func validateOIDCSubjectClaim(claim string, mode subjectClaimMode) error {
+	if claim == "" {
+		if mode == subjectClaimNotApplicable {
+			return nil
+		}
+		return errors.New("--oidc-subject-claim is required when --target=aws and --source is not aws. " +
+			"Without it the generated trust policy has no :sub condition and every identity the issuer " +
+			"can mint is able to assume the role. Set it to the calling workload's subject claim: " +
+			"a GCP service account's numeric unique ID (not its email), or an Azure managed identity's object ID")
+	}
+	// Applicability first: if the flag does not belong on this combination at
+	// all, saying so is more useful than complaining about its contents.
+	if mode == subjectClaimNotApplicable {
+		return fmt.Errorf("--oidc-subject-claim %s is not applicable to this target/source combination. "+
+			"It pins the AWS workload identity federation trust policy, which is only generated for "+
+			"--target=aws with a non-aws --source. Drop the flag, or correct --target/--source",
+			displayClaim(claim))
+	}
+	if len(claim) > oidcSubjectClaimMaxLen {
+		return fmt.Errorf("--oidc-subject-claim is %d bytes, over the %d-byte limit",
+			len(claim), oidcSubjectClaimMaxLen)
+	}
+	if !oidcSubjectClaimRE.MatchString(claim) {
+		return fmt.Errorf("--oidc-subject-claim %s is not an accepted subject claim: it must start with a letter "+
+			"or digit and contain only letters, digits and the characters . _ : / @ = + - . The value is "+
+			"interpolated verbatim into the generated Bash, JSON and HCL artifacts, so shell metacharacters, "+
+			"quotes and whitespace are rejected rather than escaped", displayClaim(claim))
+	}
+	return nil
+}
+
+// validTargets is the allowlist of target clouds, mirroring
+// validFederationTargets in internal/api/handler_federation.go.
+var validTargets = map[string]bool{"aws": true, "azure": true, "gcp": true}
+
+// populateData fills target-specific fields on data from CLI flags. It reports
+// an error rather than writing an invalid value into data, so a rejected flag
+// stops the run before any template is rendered.
+func populateData(data *iacData, target, source, tenantID, projectID, saEmail, oidcSubjectClaim string) error {
+	// --target is checked first so that a typo there is reported as a bad
+	// --target rather than as an inapplicable --oidc-subject-claim, which would
+	// send the operator off to drop a flag that was never the problem.
+	if !validTargets[target] {
+		return fmt.Errorf("--target must be aws, azure, or gcp (got %q)", target)
+	}
+	// The claim is then validated outside the switch, so the check covers the
+	// targets that must NOT carry a subject claim as well as the one that must.
+	if err := validateOIDCSubjectClaim(oidcSubjectClaim, subjectClaimModeFor(target, source)); err != nil {
+		return err
+	}
 	switch target {
 	case "aws":
 		data.OIDCIssuerURL = awsOIDCIssuer(source, tenantID)
@@ -304,9 +489,12 @@ func populateData(data *iacData, target, source, tenantID, projectID, saEmail, o
 		}
 		data.OIDCIssuerURI = gcpOIDCIssuerURI(source, tenantID)
 	default:
-		return false
+		// Unreachable while validTargets and these arms agree; kept so that
+		// adding a target to the map without an arm here fails loudly instead of
+		// emitting an artifact with no target-specific fields filled in.
+		return fmt.Errorf("--target %q is in validTargets but has no populateData branch", target)
 	}
-	return true
+	return nil
 }
 
 func main() {
@@ -319,7 +507,7 @@ func main() {
 	tenantID := flag.String("tenant-id", "", "Azure tenant ID (required when source or target is azure)")
 	projectID := flag.String("project-id", "", "GCP project ID (defaults to --account-id when target is gcp)")
 	saEmail := flag.String("service-account-email", "", "GCP service account email (defaults to cudly@<project>.iam.gserviceaccount.com)")
-	oidcSubjectClaim := flag.String("oidc-subject-claim", "", "Subject (sub) claim restricting the AWS trust policy to one workload (required when target is aws; no working default, see #1640)")
+	oidcSubjectClaim := flag.String("oidc-subject-claim", "", "Subject (sub) claim restricting the AWS trust policy to one workload: a GCP service account's numeric unique ID or an Azure managed identity's object ID. Required when --target=aws and --source is not aws; there is no working default (see #1640). Letters, digits and . _ : / @ = + - only")
 	outFile := flag.String("output", "", "Output file path; use '-' to print to stdout (default: derived filename in current directory)")
 	templDir := flag.String("templates-dir", "internal/iacfiles/templates", "Path to templates directory (run from repo root)")
 	modulesDir := flag.String("modules-dir", "iac/federation", "Path to Terraform modules directory (used by --format bundle)")
@@ -340,8 +528,8 @@ func main() {
 	}
 
 	data := iacData{AccountName: *accountName, AccountExternalID: *accountID, AccountSlug: slug, Source: *source}
-	if !populateData(&data, *target, *source, *tenantID, *projectID, *saEmail, *oidcSubjectClaim) {
-		fmt.Fprintf(os.Stderr, "Error: --target must be aws, azure, or gcp (got %q)\n", *target)
+	if err := populateData(&data, *target, *source, *tenantID, *projectID, *saEmail, *oidcSubjectClaim); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 

@@ -2,9 +2,15 @@ package iacfiles
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"text/template"
+	"time"
 )
 
 // testTemplateData mirrors the fields that CLI templates read. It's a local
@@ -244,6 +250,207 @@ func TestAWSWIFCLI_SubjectClaimRequired(t *testing.T) {
 	if !strings.Contains(rendered, `must not contain whitespace, '\$' or '*'`) {
 		t.Error("rendered script must reject whitespace, '$', and '*' in OIDC_SUBJECT_CLAIM")
 	}
+}
+
+// awsStubScript returns a stand-in `aws` executable that appends every
+// invocation to logPath and prints a value the caller's `$(...)` captures can
+// consume. It never contacts AWS, so a test that reaches it has proved the
+// guard let the run through.
+func awsStubScript(logPath string) string {
+	return "#!/usr/bin/env bash\n" +
+		// One log line per invocation: the trust-policy argument is multi-line
+		// JSON, so newlines inside the arguments are folded to spaces first.
+		"args=\"$*\"\n" +
+		"printf '%s\\n' \"${args//$'\\n'/ }\" >> '" + logPath + "'\n" +
+		// "None" is what the script's provider-lookup branches expect when no
+		// OIDC provider exists yet, so the rest of the script proceeds.
+		"echo None\n"
+}
+
+// runRenderedWIFScript writes the rendered aws-wif-cli.sh to a temp file, puts a
+// recording `aws` stub first on PATH, runs the script under bash, and returns
+// its exit code, stderr and the list of `aws` invocations the stub saw.
+//
+// PATH is set on the child process only (exec.Cmd.Env). The parent test
+// process's environment is never mutated, so a run here cannot race with, or
+// leak a stub `aws` into, any other test in this package.
+func runRenderedWIFScript(t *testing.T, rendered string, env map[string]string) (exitCode int, stderr string, awsCalls []string) {
+	t.Helper()
+
+	// Fatal, not Skip: this is a security regression test, and a green run that
+	// silently never executed the guard is worse than a red one. bash is already
+	// a hard dependency of this repo (every generated bundle is a bash script,
+	// and pre-commit runs shellcheck over them).
+	bashPath, lookErr := exec.LookPath("bash")
+	if lookErr != nil {
+		t.Fatalf("bash is required to execute the rendered script: %v", lookErr)
+	}
+
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "aws-wif-cli.sh")
+	if err := os.WriteFile(scriptPath, []byte(rendered), 0o600); err != nil {
+		t.Fatalf("write rendered script: %v", err)
+	}
+
+	stubDir := filepath.Join(dir, "bin")
+	if err := os.Mkdir(stubDir, 0o700); err != nil {
+		t.Fatalf("create stub dir: %v", err)
+	}
+	logPath := filepath.Join(dir, "aws-invocations.log")
+	if err := os.WriteFile(filepath.Join(stubDir, "aws"), []byte(awsStubScript(logPath)), 0o755); err != nil {
+		t.Fatalf("write aws stub: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bashPath, scriptPath)
+	// The real PATH is kept after stubDir so the script's `sed`/`echo` still
+	// resolve; stubDir comes first so `aws` resolves to the stub.
+	cmd.Env = []string{"PATH=" + stubDir + string(os.PathListSeparator) + os.Getenv("PATH")}
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	// stdout is captured but not returned: the script's progress chatter is not
+	// under test, and capturing it keeps it out of the test log.
+	var errBuf, outBuf strings.Builder
+	cmd.Stderr = &errBuf
+	cmd.Stdout = &outBuf
+
+	var exitErr *exec.ExitError
+	if err := cmd.Run(); err != nil && !errors.As(err, &exitErr) {
+		t.Fatalf("run rendered script: %v (stderr: %s)", err, errBuf.String())
+	}
+
+	logBytes, err := os.ReadFile(logPath)
+	switch {
+	case os.IsNotExist(err):
+		// The stub was never invoked, which is what the reject cases want.
+	case err != nil:
+		t.Fatalf("read aws invocation log: %v", err)
+	default:
+		for _, line := range strings.Split(strings.TrimSpace(string(logBytes)), "\n") {
+			if line != "" {
+				awsCalls = append(awsCalls, line)
+			}
+		}
+	}
+	return cmd.ProcessState.ExitCode(), errBuf.String(), awsCalls
+}
+
+// TestAWSWIFCLI_SubjectClaimGuardBlocksAWSCalls executes the rendered script
+// instead of only reading it. TestAWSWIFCLI_SubjectClaimRequired asserts on
+// rendered text, which cannot distinguish a guard that works from a guard whose
+// condition is inverted or whose `exit 1` was dropped; this runs Bash against a
+// recording `aws` stub and asserts that an invalid OIDC_SUBJECT_CLAIM produces
+// both a non-zero exit and zero AWS calls, so a broken guard cannot leave a
+// half-created OIDC provider or a subject-less role behind.
+func TestAWSWIFCLI_SubjectClaimGuardBlocksAWSCalls(t *testing.T) {
+	// CUDlyAPIURL is cleared so the auto-registration block (which shells out to
+	// curl and jq) is not rendered: this test is about the subject-claim guard,
+	// and the positive control below runs the script to completion.
+	data := baseData()
+	data.CUDlyAPIURL = ""
+	// A real issuer so OIDC_HOST resolves and the positive control can assert on
+	// the fully-formed "<host>:sub" condition key the trust policy carries.
+	data.OIDCIssuerURL = "https://accounts.google.com"
+	rendered := renderCLITemplate(t, "templates/aws-wif-cli.sh.tmpl", data)
+
+	// The two messages the rendered script's guards emit. Whitespace, $ and *
+	// share one `case` arm, so they share one message.
+	const (
+		wantRequired  = "OIDC_SUBJECT_CLAIM is required"
+		wantForbidden = `OIDC_SUBJECT_CLAIM must not contain whitespace, '$' or '*'.`
+	)
+
+	reject := []struct {
+		name string
+		// env holds the variables set on the child process. Omitting the
+		// OIDC_SUBJECT_CLAIM key leaves the variable unset for that run.
+		env      map[string]string
+		wantText string
+	}{
+		{"unset", map[string]string{}, wantRequired},
+		{"empty", map[string]string{"OIDC_SUBJECT_CLAIM": ""}, wantRequired},
+		{"only whitespace", map[string]string{"OIDC_SUBJECT_CLAIM": "   "}, wantForbidden},
+		{"embedded space", map[string]string{"OIDC_SUBJECT_CLAIM": "abc def"}, wantForbidden},
+		{"tab", map[string]string{"OIDC_SUBJECT_CLAIM": "abc\tdef"}, wantForbidden},
+		{"iam policy variable", map[string]string{"OIDC_SUBJECT_CLAIM": "${accounts.google.com:sub}"}, wantForbidden},
+		{"bare dollar", map[string]string{"OIDC_SUBJECT_CLAIM": "abc$def"}, wantForbidden},
+		{"bare wildcard", map[string]string{"OIDC_SUBJECT_CLAIM": "*"}, wantForbidden},
+		{"embedded wildcard", map[string]string{"OIDC_SUBJECT_CLAIM": "abc*"}, wantForbidden},
+	}
+
+	for _, tc := range reject {
+		t.Run("reject/"+tc.name, func(t *testing.T) {
+			exitCode, stderr, awsCalls := runRenderedWIFScript(t, rendered, tc.env)
+
+			if exitCode == 0 {
+				t.Errorf("OIDC_SUBJECT_CLAIM %q was accepted (exit 0)", tc.env["OIDC_SUBJECT_CLAIM"])
+			}
+			if len(awsCalls) != 0 {
+				t.Errorf("the guard must run before any AWS call, but the aws stub was invoked %d time(s): %v",
+					len(awsCalls), awsCalls)
+			}
+			if !strings.Contains(stderr, tc.wantText) {
+				t.Errorf("stderr must explain the rejection with %q, got:\n%s", tc.wantText, stderr)
+			}
+		})
+	}
+
+	// A hostile value baked into the template's default (the "{{.OIDCSubjectClaim}}"
+	// fallback) is caught by the same guard when it merely contains a forbidden
+	// character, so an operator who edits the generated script by hand is
+	// covered too. This is not a substitute for validating the value at
+	// generation time: the guard runs after the assignment on the
+	// OIDC_SUBJECT_CLAIM="${OIDC_SUBJECT_CLAIM:-<default>}" line, so a command
+	// substitution in the default would already have run. That is why
+	// scripts/generate-federation-iac.go validates the flag before rendering.
+	t.Run("reject/hostile template default", func(t *testing.T) {
+		hostile := baseData()
+		hostile.CUDlyAPIURL = ""
+		hostile.OIDCSubjectClaim = "abc def"
+		exitCode, stderr, awsCalls := runRenderedWIFScript(t,
+			renderCLITemplate(t, "templates/aws-wif-cli.sh.tmpl", hostile), map[string]string{})
+
+		if exitCode == 0 {
+			t.Error("a whitespace-bearing template default was accepted (exit 0)")
+		}
+		if len(awsCalls) != 0 {
+			t.Errorf("the aws stub must not be invoked, got %d call(s): %v", len(awsCalls), awsCalls)
+		}
+		if !strings.Contains(stderr, wantForbidden) {
+			t.Errorf("stderr must explain the rejection with %q, got:\n%s", wantForbidden, stderr)
+		}
+	})
+
+	// Positive control: without it, a guard that rejected every value would
+	// satisfy every assertion above.
+	t.Run("accept/valid subject claim", func(t *testing.T) {
+		exitCode, stderr, awsCalls := runRenderedWIFScript(t, rendered,
+			map[string]string{"OIDC_SUBJECT_CLAIM": "123456789012345678901"})
+
+		if exitCode != 0 {
+			t.Fatalf("a valid OIDC_SUBJECT_CLAIM was rejected (exit %d); stderr:\n%s", exitCode, stderr)
+		}
+		if len(awsCalls) == 0 {
+			t.Fatal("a valid OIDC_SUBJECT_CLAIM must get past the guard and reach the aws calls, but the stub was never invoked")
+		}
+		// The role must actually be created with a trust policy carrying the
+		// :sub condition, resolved to the supplied value.
+		var createRole string
+		for _, call := range awsCalls {
+			if strings.HasPrefix(call, "iam create-role") {
+				createRole = call
+			}
+		}
+		if createRole == "" {
+			t.Fatalf("expected an `aws iam create-role` invocation, got: %v", awsCalls)
+		}
+		if !strings.Contains(createRole, `"accounts.google.com:sub": "123456789012345678901"`) {
+			t.Errorf("the trust policy passed to create-role must pin :sub to the supplied claim, got:\n%s", createRole)
+		}
+	})
 }
 
 // TestCLITemplatesShellMetacharsPassThrough confirms that text/template does
