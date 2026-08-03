@@ -272,37 +272,59 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 // An execution with no recommendations returns false so it falls through to the
 // safe-fail path (nothing to re-drive anyway).
 func allRecsSafeToRedrive(exec *config.PurchaseExecution) bool {
-	if len(exec.Recommendations) == 0 {
-		return false
-	}
-	for _rvc := range exec.Recommendations {
-		rec := exec.Recommendations[_rvc]
-		if !recIsSafeToRedrive(rec) {
-			return false
-		}
-	}
-	return true
+	return RedriveRefusalReason(exec) == ""
 }
 
-// recIsSafeToRedrive reports whether a single recommendation can be safely
-// re-driven. Extracted from allRecsSafeToRedrive to keep that function under
-// the gocyclo budget and to make per-rec exclusions explicit.
-func recIsSafeToRedrive(rec config.RecommendationRecord) bool {
+// RedriveRefusalReason returns a short operator-facing reason why exec must not
+// be re-driven, or "" when every recommendation on it is safe to re-drive. It
+// is the bool form above expressed as an explanation, so the two can never
+// disagree.
+//
+// This is the single source of truth for re-drive safety. Both the reaper's
+// automatic in-place re-drive (via allRecsSafeToRedrive) and the user-facing
+// Retry endpoint (Handler.checkRetryEligibilityGates in internal/api) gate on
+// it, so a provider/service that is unsafe for one is unsafe for the other.
+// Before issue #1668 only the reaper consulted it, and clicking Retry on a
+// landed Azure savings-plans row bought a second savings plan, which cannot be
+// canceled.
+//
+// The reason is rendered verbatim to the operator, so it explains the refusal
+// in product terms rather than naming internals.
+func RedriveRefusalReason(exec *config.PurchaseExecution) string {
+	if len(exec.Recommendations) == 0 {
+		return "this execution carries no recommendations, so what it did or did not purchase cannot be established"
+	}
+	for i := range exec.Recommendations {
+		if reason := recRedriveRefusalReason(exec.Recommendations[i]); reason != "" {
+			return reason
+		}
+	}
+	return ""
+}
+
+// recRedriveRefusalReason returns the reason a single recommendation cannot be
+// safely re-driven, or "" when it can. Extracted from RedriveRefusalReason to
+// keep that function under the gocyclo budget and to make per-rec exclusions
+// explicit.
+func recRedriveRefusalReason(rec config.RecommendationRecord) string {
 	switch rec.Provider {
 	case "", "aws":
 		// Empty provider is legacy AWS. All AWS services honor IdempotencyToken.
-		return true
+		return ""
 	case "azure":
 		// Azure savings-plans uses a timestamp-based alias name and has no
 		// server-side idempotency key, so a re-drive would create a duplicate.
 		// All other Azure services use DoIdempotentPurchaseTwoStep (#729).
-		return rec.Service != "savingsplans" && rec.Service != "savings-plans"
+		if rec.Service == "savingsplans" || rec.Service == "savings-plans" {
+			return "Azure savings plans have no provider-side duplicate guard, so re-driving this purchase would buy a second savings plan that cannot be canceled"
+		}
+		return ""
 	case "gcp":
 		// GCP compute CUDs use RequestId + deterministic name from the token (#654).
-		return true
+		return ""
 	default:
 		// Unknown provider: refuse to re-drive rather than risk a double-buy.
-		return false
+		return fmt.Sprintf("provider %q is not known to reject a duplicate purchase, so re-driving this could buy a second commitment", rec.Provider)
 	}
 }
 

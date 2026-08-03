@@ -3249,6 +3249,10 @@ func TestHandler_retryPurchase_PersistentFailure_BlocksWithOpsHint(t *testing.T)
 		Status:          "failed",
 		Error:           "FROM_EMAIL not configured for this deployment",
 		CreatedByUserID: &creator,
+		// A safe-to-re-drive rec so the re-drive-safety gate (issue #1668),
+		// which runs ahead of the ops-hint gate and refuses a row carrying no
+		// recommendations at all, passes through to the gate under test.
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1, UpfrontCost: 100}},
 	}
 	session := &Session{UserID: retryCallerID}
 	// Caller owns the row; retry-own authorizes it (issue #907).
