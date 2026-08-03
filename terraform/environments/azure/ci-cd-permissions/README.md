@@ -13,6 +13,7 @@ secrets ever need to be stored.
 | `azuread_service_principal.cudly_deploy` | Service principal (identity) |
 | `azuread_application_federated_identity_credential.github_main` | Federated credential for main-branch deployments |
 | `azuread_application_federated_identity_credential.github_pr` | Federated credential for pull-request plan checks |
+| `azuread_application_federated_identity_credential.github_environment` | Federated credential per deployment environment (`var.github_environments`) |
 | `azurerm_role_definition.cudly_deploy` | Custom role with minimum required permissions |
 | `azurerm_role_assignment.cudly_deploy` | Assigns the custom role to the SP at subscription scope |
 | `module.cudly_reservation_role` (`azurerm_role_definition`) | Host-side custom "CUDly Reservation Purchaser" role definition consumed by the runtime container-apps deploy |
@@ -159,12 +160,26 @@ the `az` CLI context for all subsequent steps.
 
 ### Federated credential subjects
 
-Two subjects are registered:
+Azure federated credentials allow no wildcards, so one resource is required per subject:
 
 | Credential | Subject | Use case |
 | --- | --- | --- |
 | `github-actions-main` | `repo:LeanerCloud/CUDly:ref:refs/heads/main` | Deployments from main |
 | `github-actions-pr` | `repo:LeanerCloud/CUDly:pull_request` | Plan runs on PRs |
+| `github-actions-env-<name>` | `repo:LeanerCloud/CUDly:environment:<name>` | Jobs bound to a deployment environment (one per `var.github_environments`) |
 
-If you need to deploy from a different branch or repo, add additional
-`azuread_application_federated_identity_credential` resources to `sp.tf`.
+A job declaring `environment: <name>` presents the **environment** subject, not the
+main-branch one, so it cannot authenticate unless `<name>` is in
+`var.github_environments`. Omitting this is what makes `azure/login` fail with
+`AADSTS70021` on an otherwise-correct workflow (see issue #1648).
+
+Note the environment subject is **ref-agnostic** — it does not encode the branch. Adding
+a name here therefore lets any branch that can reach a job bound to that environment
+obtain the deploy service principal. Restrict the branch via the environment's
+`deployment_branch_policy`; a ref check inside the workflow does **not** bind, because
+`workflow_dispatch` runs the workflow file as it exists on the dispatched ref, so the
+check can be removed on that branch.
+
+To allow a new deployment environment, add its name to `var.github_environments`. To
+deploy from a different branch or repo, add a further
+`azuread_application_federated_identity_credential` resource to `sp.tf`.

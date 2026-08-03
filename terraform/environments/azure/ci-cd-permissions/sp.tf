@@ -23,8 +23,18 @@ resource "azuread_service_principal" "cudly_deploy" {
 # GitHub Actions Federated Identity Credentials
 # =============================================================================
 # Azure federated credentials require one entry per allowed subject (no
-# wildcards). We create two: one for main-branch deployments and one for
-# pull-request plan checks.
+# wildcards), so each named deployment environment needs its own resource.
+#
+# The `github_environment` entries below are what let an environment-bound job
+# authenticate at all. A job carrying `environment: staging` presents the
+# subject `repo:<org/repo>:environment:staging`, NOT the main-branch subject,
+# so without a matching credential `azure/login` fails with AADSTS70021 even
+# though the workflow is running on main. Adding an `environment:` binding to
+# an Azure job and forgetting this is the exact breakage recorded in #1648.
+#
+# NOTE: this module is bootstrap-only (see CLAUDE.md) — it is applied manually
+# by a privileged human, not by the deploy workflow. The Azure destroy job in
+# cleanup-staging.yml cannot authenticate until that re-apply happens.
 
 resource "azuread_application_federated_identity_credential" "github_main" {
   count = var.github_repo != "" ? 1 : 0
@@ -46,4 +56,19 @@ resource "azuread_application_federated_identity_credential" "github_pr" {
   audiences      = ["api://AzureADTokenExchange"]
   issuer         = "https://token.actions.githubusercontent.com"
   subject        = "repo:${var.github_repo}:pull_request"
+}
+
+# One credential per named deployment environment, so environment-bound jobs
+# can authenticate. Mirrors the `environment:{dev,staging,prod}` subjects the
+# AWS role's trust policy already allows
+# (terraform/environments/aws/ci-cd-permissions/role.tf).
+resource "azuread_application_federated_identity_credential" "github_environment" {
+  for_each = var.github_repo != "" ? toset(var.github_environments) : toset([])
+
+  application_id = azuread_application.cudly_deploy.id
+  display_name   = "github-actions-env-${each.value}"
+  description    = "GitHub Actions OIDC — ${var.github_repo} ${each.value} environment"
+  audiences      = ["api://AzureADTokenExchange"]
+  issuer         = "https://token.actions.githubusercontent.com"
+  subject        = "repo:${var.github_repo}:environment:${each.value}"
 }
