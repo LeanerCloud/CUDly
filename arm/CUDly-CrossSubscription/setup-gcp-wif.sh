@@ -260,18 +260,32 @@ else
     --workload-identity-pool="$POOL_ID" \
     --format='value(attributeCondition)')
   # A provider of the other type would emit a credential config that does not
-  # match it and mint an attribute the grant below never names.
-  EXISTING_TYPE=$(gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
-    --project="$PROJECT" --location=global \
-    --workload-identity-pool="$POOL_ID" \
-    --format='value(aws.accountId,oidc.issuerUri)')
-  if [[ "$PROVIDER_TYPE" == "aws" && "$EXISTING_TYPE" != "${AWS_ACCOUNT_ID}"* ]]; then
-    die "provider '${PROVIDER_ID}' already exists but is not an AWS provider for account ${AWS_ACCOUNT_ID} (describe reports: ${EXISTING_TYPE}). Delete it and re-run:
+  # match it and mint an attribute the grant below never names. Compared as an
+  # exact match on the single relevant field, not a prefix/suffix test against
+  # the account-id/issuer-uri pair gcloud tab-joins under `value(a,b)`: a
+  # suffix test here would accept any issuer URI merely ENDING in the expected
+  # one (e.g. an attacker-hosted https://evil.example.com/<expected-issuer>,
+  # whose /.well-known/openid-configuration GCP would then fetch from the
+  # attacker, who can mint a token with any subject), and a prefix test would
+  # accept any account ID merely STARTING with the expected one.
+  if [[ "$PROVIDER_TYPE" == "aws" ]]; then
+    EXISTING_ACCOUNT_ID=$(gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
+      --project="$PROJECT" --location=global \
+      --workload-identity-pool="$POOL_ID" \
+      --format='value(aws.accountId)')
+    if [[ "$EXISTING_ACCOUNT_ID" != "$AWS_ACCOUNT_ID" ]]; then
+      die "provider '${PROVIDER_ID}' already exists but is not an AWS provider for account ${AWS_ACCOUNT_ID} (describe reports account: ${EXISTING_ACCOUNT_ID:-none}). Delete it and re-run:
 ${DELETE_HINT}"
-  fi
-  if [[ "$PROVIDER_TYPE" == "oidc" && "$EXISTING_TYPE" != *"${ISSUER_URI}" ]]; then
-    die "provider '${PROVIDER_ID}' already exists but is not an OIDC provider for issuer ${ISSUER_URI} (describe reports: ${EXISTING_TYPE}). Delete it and re-run:
+    fi
+  else
+    EXISTING_ISSUER=$(gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
+      --project="$PROJECT" --location=global \
+      --workload-identity-pool="$POOL_ID" \
+      --format='value(oidc.issuerUri)')
+    if [[ "$EXISTING_ISSUER" != "$ISSUER_URI" ]]; then
+      die "provider '${PROVIDER_ID}' already exists but is not an OIDC provider for issuer ${ISSUER_URI} (describe reports issuer: ${EXISTING_ISSUER:-none}). Delete it and re-run:
 ${DELETE_HINT}"
+    fi
   fi
   if [[ "$EXISTING_CONDITION" != "$EXPECTED_CONDITION" ]]; then
     die "provider '${PROVIDER_ID}' already exists with a different attribute condition, so this script cannot vouch for which identities enter pool '${POOL_ID}'.
