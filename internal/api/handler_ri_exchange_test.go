@@ -966,6 +966,53 @@ func TestListExchangeableAzureRIs_SubscriptionIDOutOfScope(t *testing.T) {
 	assert.ErrorIs(t, err, errNotFound, "must be the generic scope-check 404, matching the POST siblings")
 }
 
+// TestListExchangeableAzureRIs_SubscriptionIDFiltersToOwnRows exercises
+// filterAzureReservationsBySubscription directly through the handler -- the
+// row-level filter on the ?subscription_id= path, which is the only filter
+// this listing's production callers can actually reach (buildAzureExchangeClient
+// resolves subscriptionID via an exact external_id match, so the
+// no-subscription_id branch that reaches filterAzureReservationsByScope never
+// gets a live Azure client in production; see the doc comment on
+// listExchangeableAzureRIs).
+//
+// The scoped session is authorized for subscription sub-1 (requireAzureSubscriptionScope
+// passes), and the tenant-wide listing the injected client returns mixes rows
+// billed to sub-1 and sub-2 -- the same tenant-wide breadth
+// ListExchangeableReservations always returns regardless of which
+// subscription's credentials made the call. Only the sub-1 row must survive.
+func TestListExchangeableAzureRIs_SubscriptionIDFiltersToOwnRows(t *testing.T) {
+	ctx := context.Background()
+	store := &MockConfigStore{}
+	store.GetCloudAccountByExternalIDFn = func(_ context.Context, provider, externalID string) (*config.CloudAccount, error) {
+		require.Equal(t, "azure", provider)
+		require.Equal(t, "sub-1", externalID)
+		return &config.CloudAccount{ID: "acct-mine", Name: "Mine Team", Provider: "azure", ExternalID: "sub-1"}, nil
+	}
+	stub := &stubAzureExchangeClient{reservations: []azurecompute.ExchangeableReservation{
+		{ReservationID: "res-own", BillingScopeID: "/subscriptions/sub-1", SKU: "Standard_D2s_v3", Quantity: 1, Region: "eastus"},
+		{ReservationID: "res-other", BillingScopeID: "/subscriptions/sub-2", SKU: "Standard_D4s_v3", Quantity: 5, Region: "westeurope"},
+	}}
+
+	h := &Handler{
+		auth:                 scopedAzureAuth(t, "view", "purchases", []string{"acct-mine"}),
+		config:               store,
+		azureExchangeFactory: func(_ string) azureExchangeClient { return stub },
+	}
+
+	res, err := h.listExchangeableAzureRIs(ctx, &events.LambdaFunctionURLRequest{
+		Headers:               map[string]string{"authorization": "Bearer tok"},
+		QueryStringParameters: map[string]string{"subscription_id": "sub-1"},
+	})
+	require.NoError(t, err)
+	resp, ok := res.(*ExchangeableAzureRIsResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Reservations, 1, "only the requested subscription's own reservation must be returned")
+	assert.Equal(t, "res-own", resp.Reservations[0].ReservationID)
+	for _, r := range resp.Reservations {
+		assert.NotEqual(t, "res-other", r.ReservationID, "a reservation billed to a different subscription must never appear")
+	}
+}
+
 // --- Azure credential-resolution path tests (issue #871) ---
 //
 // These tests exercise the production path of buildAzureExchangeClient, which

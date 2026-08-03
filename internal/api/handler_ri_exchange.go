@@ -194,8 +194,10 @@ type azureExchangeClient interface {
 // wired OIDC signer so managed_identity / client_secret / WIF all work.
 //
 // Graceful empty-state rules (returns nil client, nil error):
-//   - subscriptionID is empty AND no Azure accounts are registered at all:
-//     Azure is not configured; the caller returns an empty reservations list.
+//   - subscriptionID is empty: GetCloudAccountByExternalID looks up an exact
+//     match on external_id, and no registered account has an empty
+//     external_id, so this unconditionally misses and the caller returns an
+//     empty reservations list.
 //   - subscriptionID is provided but no matching CloudAccount is found:
 //     treated as "Azure not configured for this subscription".
 //
@@ -259,7 +261,15 @@ func (h *Handler) buildAzureExchangeClient(ctx context.Context, subscriptionID s
 //   - No subscription_id: the listing is narrowed to whatever the session's
 //     allowed_accounts scope covers (filterAzureReservationsByScope).
 //     Unrestricted/admin sessions see everything, matching every other
-//     listing endpoint in this package.
+//     listing endpoint in this package. In production this branch is
+//     defense-in-depth rather than the live path today: buildAzureExchangeClient
+//     resolves subscriptionID via an exact external_id match, so an empty
+//     subscriptionID never matches a registered account and the graceful
+//     empty-state branch below returns before ListExchangeableReservations
+//     is ever called. It becomes the live path the moment a caller can reach
+//     ListExchangeableReservations without a subscription_id -- the
+//     azureExchangeFactory test seam already exercises exactly that -- which
+//     is why the filter stays rather than being deleted as unreachable.
 //
 // Rows that cannot be attributed to a registered CloudAccount (no
 // BillingScopeID, or one that matches no CloudAccount) are dropped rather
@@ -359,6 +369,13 @@ func (h *Handler) filterAzureReservationsByScope(ctx context.Context, session *S
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
 	if auth.IsUnrestrictedAccess(allowed) {
+		// client.ListExchangeableReservations may return a nil slice for zero
+		// results; every other path here returns a non-nil empty slice, so
+		// normalize here too rather than letting an admin session alone see
+		// {"reservations": null}.
+		if reservations == nil {
+			reservations = []azurecompute.ExchangeableReservation{}
+		}
 		return reservations, nil
 	}
 
@@ -369,9 +386,6 @@ func (h *Handler) filterAzureReservationsByScope(ctx context.Context, session *S
 	}
 
 	filtered := filterReservationsByScopeIndex(reservations, azureScopeIndex(accounts), allowed)
-	// Counts, not the dropped reservation/billing-scope identifiers, are safe
-	// to log -- logging the identifiers would just relocate the disclosure
-	// this filter exists to prevent.
 	if dropped := len(reservations) - len(filtered); dropped > 0 {
 		logging.Debugf("azure exchange listing: filtered %d of %d tenant-wide reservations outside session scope", dropped, len(reservations))
 	}
