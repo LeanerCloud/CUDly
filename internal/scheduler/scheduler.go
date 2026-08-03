@@ -687,6 +687,7 @@ func (s *Scheduler) collectAzureAmbient(ctx context.Context, subscriptionID stri
 		return nil, fmt.Errorf("get Azure recommendations client: %w", err)
 	}
 	recs, err := recClient.GetAllRecommendations(ctx)
+	err = tolerateIncompleteSweep("azure", err)
 	if err != nil {
 		return nil, fmt.Errorf("get Azure recommendations: %w", err)
 	}
@@ -706,6 +707,7 @@ func (s *Scheduler) collectGCPAmbient(ctx context.Context) ([]config.Recommendat
 		return nil, fmt.Errorf("get GCP recommendations client: %w", err)
 	}
 	recs, err := recClient.GetAllRecommendations(ctx)
+	err = tolerateIncompleteSweep("gcp", err)
 	if err != nil {
 		return nil, fmt.Errorf("get GCP recommendations: %w", err)
 	}
@@ -770,6 +772,17 @@ func (s *Scheduler) collectAzureRecommendations(ctx context.Context, _ *config.G
 }
 
 func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+	// Every recommendation returned below is tagged with THIS account's UUID
+	// (see tagAccount at the end of this function), so the provider must be
+	// pinned to this account's subscription. An empty AzureSubscriptionID
+	// leaves the provider unpinned, and an unpinned provider now fans out
+	// across every subscription the credential can see -- which would file
+	// other subscriptions' recommendations under this account and expose them
+	// to anyone authorized for it. Fail loud instead; the row is misconfigured.
+	if acct.AzureSubscriptionID == "" {
+		return nil, fmt.Errorf("cloud account %s has no azure_subscription_id configured", acct.ID)
+	}
+
 	azCred, err := credentials.ResolveAzureTokenCredentialWithOpts(ctx, &acct, s.credStore, credentials.AzureResolveOptions{
 		Signer:    s.oidcSigner,
 		IssuerURL: s.oidcIssuerURL,
@@ -788,6 +801,7 @@ func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.Clou
 		return nil, fmt.Errorf("get recommendations client: %w", err)
 	}
 	recs, err := recClient.GetAllRecommendations(ctx)
+	err = tolerateIncompleteSweep("azure", err)
 	if err != nil {
 		return nil, fmt.Errorf("get recommendations: %w", err)
 	}
@@ -856,6 +870,7 @@ func (s *Scheduler) collectGCPForAccount(ctx context.Context, acct config.CloudA
 		return nil, fmt.Errorf("get recommendations client: %w", err)
 	}
 	recs, err := recClient.GetAllRecommendations(ctx)
+	err = tolerateIncompleteSweep("gcp", err)
 	if err != nil {
 		return nil, fmt.Errorf("get recommendations: %w", err)
 	}
@@ -876,6 +891,40 @@ func (s *Scheduler) enabledAccounts(ctx context.Context, providerName string) []
 	return accounts
 }
 
+// tolerateIncompleteSweep converts an org-wide partial-subscription failure
+// into a warning and a nil error, so the caller keeps the recommendations that
+// WERE collected instead of discarding them.
+//
+// Every recommendation-fetch site in this file has the shape
+// `recs, err := ...; if err != nil { return nil, ... }`, which throws the
+// results away. That is correct for a real error, but for a partial sweep it
+// would turn one flaky subscription out of fifty into a total collection
+// outage -- strictly worse than the silent under-collection that
+// PartialSubscriptionFailureError exists to prevent. Routing every site
+// through this helper keeps the policy in one place rather than relying on
+// each call site to remember it.
+//
+// The failed subscription IDs are named in the log so an operator can tell an
+// under-collected sweep from a genuinely shrinking savings opportunity. Any
+// other error is returned unchanged, preserving the existing fail-loud
+// behavior.
+//
+// NOTE: this records the incompleteness in the log only. Surfacing it in the
+// state table's last_collection_error (so the dashboard shows the sweep as
+// partial) needs a partial-note threaded through collectProviderRecommendations
+// and its three per-provider implementations, which is left as follow-up work.
+func tolerateIncompleteSweep(providerName string, err error) error {
+	partial := azureprovider.AsPartialSubscriptionFailure(err)
+	if partial == nil {
+		return err
+	}
+	logging.Warnf(
+		"%s recommendations incomplete: %d of %d subscriptions succeeded; not queried: %s (keeping the %d that did)",
+		providerName, partial.Succeeded, partial.Attempted,
+		strings.Join(partial.FailedSubscriptionIDs(), ", "), partial.Succeeded)
+	return nil
+}
+
 // fetchAndConvert is a convenience for the AWS ambient path.
 func (s *Scheduler) fetchAndConvert(ctx context.Context, prov provider.Provider, providerName string, accountID *string, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, error) {
 	recClient, err := prov.GetRecommendationsClient(ctx)
@@ -883,6 +932,7 @@ func (s *Scheduler) fetchAndConvert(ctx context.Context, prov provider.Provider,
 		return nil, fmt.Errorf("failed to get %s recommendations client: %w", providerName, err)
 	}
 	recs, err := recClient.GetAllRecommendations(ctx)
+	err = tolerateIncompleteSweep(providerName, err)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get %s recommendations: %w", providerName, err)
 	}
@@ -898,6 +948,7 @@ func (s *Scheduler) fetchAndConvert(ctx context.Context, prov provider.Provider,
 		}
 		var recErr error
 		recs, recErr = recClient.GetRecommendations(ctx, &params)
+		recErr = tolerateIncompleteSweep(providerName, recErr)
 		if recErr != nil {
 			// Fail loud: a misconfigured DefaultPayment/DefaultTerm or a CE
 			// failure on this fallback must surface to the operator instead

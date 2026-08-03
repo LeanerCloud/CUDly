@@ -14,6 +14,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/purchase"
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
+	azureprovider "github.com/LeanerCloud/CUDly/providers/azure"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/stretchr/testify/assert"
@@ -701,6 +702,105 @@ func TestSchedulerWithPurchaseManager(t *testing.T) {
 	assert.NotNil(t, scheduler.config)
 	assert.NotNil(t, scheduler.purchase)
 	assert.NotNil(t, scheduler.email)
+}
+
+// TestScheduler_FetchAndConvert_KeepsPartialSweepData is the regression guard
+// for the second-order effect of returning a typed partial-failure error:
+// every recommendation-fetch site in the scheduler has the shape
+// `recs, err := ...; if err != nil { return nil, ... }`, which DISCARDS the
+// results. Without tolerateIncompleteSweep, one flaky subscription out of
+// fifty would turn a partial sweep into a total collection outage -- strictly
+// worse than the silent under-collection the typed error exists to prevent.
+//
+// The successful subscriptions' recommendations must survive, and the call
+// must not fail.
+func TestScheduler_FetchAndConvert_KeepsPartialSweepData(t *testing.T) {
+	ctx := context.Background()
+
+	// Term/PaymentOption must be present and canonical: convertRecommendations
+	// deliberately drops rows with an unparseable term rather than defaulting
+	// one, so an under-specified fixture would pass this test for the wrong
+	// reason (empty in, empty out).
+	collected := []common.Recommendation{
+		{
+			Provider:      common.ProviderAzure,
+			Service:       common.ServiceCompute,
+			Account:       "sub-2",
+			ResourceType:  "Standard_D2s_v3",
+			Region:        "westeurope",
+			Term:          "1yr",
+			PaymentOption: "upfront",
+			Count:         3,
+		},
+	}
+	partial := &azureprovider.PartialSubscriptionFailureError{
+		Attempted: 3,
+		Succeeded: 2,
+		Failed: []azureprovider.SubscriptionFailure{
+			{SubscriptionID: "sub-1", Err: errors.New("throttled")},
+		},
+	}
+
+	recClient := new(MockRecommendationsClient)
+	recClient.On("GetAllRecommendations", mock.Anything).Return(collected, partial)
+	t.Cleanup(func() { recClient.AssertExpectations(t) })
+
+	prov := new(MockProvider)
+	prov.On("GetRecommendationsClient", mock.Anything).Return(recClient, nil)
+	t.Cleanup(func() { prov.AssertExpectations(t) })
+
+	s := &Scheduler{config: new(MockConfigStore)}
+
+	// globalCfg nil so the zero-results fallback branch stays out of the way;
+	// collected is non-empty anyway.
+	recs, err := s.fetchAndConvert(ctx, prov, "azure", nil, nil)
+
+	require.NoError(t, err,
+		"a partial multi-subscription sweep must not fail the whole collection")
+	require.Len(t, recs, 1,
+		"the subscriptions that succeeded must still be persisted, not discarded")
+	assert.Equal(t, 3, recs[0].Count, "the surviving subscription's recommendation must be intact")
+}
+
+// The tolerance must be narrow: any error that is NOT a partial-subscription
+// failure keeps the existing fail-loud behavior.
+func TestScheduler_FetchAndConvert_RealErrorStillFailsLoud(t *testing.T) {
+	ctx := context.Background()
+
+	recClient := new(MockRecommendationsClient)
+	recClient.On("GetAllRecommendations", mock.Anything).Return(nil, errors.New("credentials expired"))
+	t.Cleanup(func() { recClient.AssertExpectations(t) })
+
+	prov := new(MockProvider)
+	prov.On("GetRecommendationsClient", mock.Anything).Return(recClient, nil)
+	t.Cleanup(func() { prov.AssertExpectations(t) })
+
+	s := &Scheduler{config: new(MockConfigStore)}
+
+	recs, err := s.fetchAndConvert(ctx, prov, "azure", nil, nil)
+
+	require.Error(t, err, "a genuine error must still fail the collection")
+	assert.Contains(t, err.Error(), "credentials expired")
+	assert.Nil(t, recs)
+}
+
+func TestTolerateIncompleteSweep(t *testing.T) {
+	t.Run("partial failure is swallowed so the caller keeps its data", func(t *testing.T) {
+		partial := &azureprovider.PartialSubscriptionFailureError{
+			Attempted: 2, Succeeded: 1,
+			Failed: []azureprovider.SubscriptionFailure{{SubscriptionID: "sub-1", Err: errors.New("boom")}},
+		}
+		assert.NoError(t, tolerateIncompleteSweep("azure", partial))
+	})
+
+	t.Run("other errors pass through unchanged", func(t *testing.T) {
+		boom := errors.New("boom")
+		assert.Same(t, boom, tolerateIncompleteSweep("azure", boom))
+	})
+
+	t.Run("nil stays nil", func(t *testing.T) {
+		assert.NoError(t, tolerateIncompleteSweep("azure", nil))
+	})
 }
 
 // MockProvider is a mock implementation of provider.Provider.
@@ -1645,6 +1745,36 @@ func TestScheduler_CollectAzureRecommendations_AllAccountsFailLoud(t *testing.T)
 	assert.Nil(t, recs)
 	assert.Empty(t, succeeded,
 		"the failed account must not land in SucceededAccountIDs (stale-row eviction guard)")
+}
+
+// An Azure cloud_accounts row with no azure_subscription_id must be rejected
+// before a provider is built.
+//
+// collectAzureForAccount tags every recommendation it returns with THIS
+// account's UUID, so the provider has to be pinned to this account's
+// subscription. Leaving AzureSubscriptionID empty leaves the provider
+// unpinned, and an unpinned provider fans out across every subscription the
+// credential can see -- filing other subscriptions' recommendations under
+// this account, where anyone authorized for it can read them. The row is
+// misconfigured; fail loud and name the missing field rather than collecting
+// data that will be attributed to the wrong account.
+func TestScheduler_CollectAzureForAccount_MissingSubscriptionIDFailsLoud(t *testing.T) {
+	ctx := context.Background()
+	scheduler := &Scheduler{config: new(MockConfigStore)}
+
+	recs, err := scheduler.collectAzureForAccount(ctx, config.CloudAccount{
+		ID:            "az-no-sub",
+		Provider:      "azure",
+		AzureAuthMode: "managed_identity",
+		Enabled:       true,
+		// AzureSubscriptionID deliberately empty.
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, recs)
+	assert.Contains(t, err.Error(), "no azure_subscription_id configured",
+		"an unpinned Azure account must be rejected by name, not fall through to an unscoped org-wide collection")
+	assert.Contains(t, err.Error(), "az-no-sub", "the error must identify the misconfigured account")
 }
 
 // Test GCP recommendations with no accounts — should skip gracefully.

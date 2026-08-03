@@ -3,6 +3,10 @@ package azure
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -615,6 +619,13 @@ func TestAzureProvider_GetAccounts(t *testing.T) {
 }
 
 func TestAzureProvider_GetRegions(t *testing.T) {
+	// These subtests resolve through resolveSubscriptionIDFromCtx, which now
+	// validates a configured subscription against the fixture's (single)
+	// subscription list -- so an AZURE_SUBSCRIPTION_ID exported on the
+	// developer's machine or CI runner would fail them for a reason unrelated
+	// to the region listing they guard.
+	clearAzureSubscriptionEnv(t)
+
 	t.Run("success with locations", func(t *testing.T) {
 		subID := "test-subscription"
 		subName := "Test Sub"
@@ -857,7 +868,7 @@ func TestAzureProvider_SetterMethods(t *testing.T) {
 		p := &AzureProvider{}
 		mockProvider := &mockCredentialProvider{}
 		p.SetCredentialProvider(mockProvider)
-		assert.NotNil(t, p.credProvider)
+		assert.NotNil(t, p.credentialProvider())
 	})
 
 	t.Run("SetCredential", func(t *testing.T) {
@@ -869,6 +880,11 @@ func TestAzureProvider_SetterMethods(t *testing.T) {
 }
 
 func TestAzureProvider_GetServiceClient_WithSubscriptionLookup(t *testing.T) {
+	// Same reason as TestAzureProvider_GetRegions: these subtests leave
+	// subscriptionID unset and so resolve through resolveSubscriptionIDFromCtx,
+	// which now validates a configured subscription against the fixture list.
+	clearAzureSubscriptionEnv(t)
+
 	t.Run("fetches subscription when subscriptionID not set", func(t *testing.T) {
 		subID := "fetched-subscription"
 		subName := "Fetched Sub"
@@ -1240,4 +1256,719 @@ func TestAzureProvider_GetRecommendationsClientForAccount(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "azure provider is not configured")
 	})
+}
+
+// countingSubscriptionsClient wraps mockSubscriptionsClient and counts how
+// many times NewListPager is invoked, so cache-hit tests can assert the
+// underlying ARM API is only called once.
+type countingSubscriptionsClient struct {
+	*mockSubscriptionsClient
+	calls atomic.Int64
+}
+
+func (c *countingSubscriptionsClient) NewListPager(options *armsubscriptions.ClientListOptions) SubscriptionsPager {
+	c.calls.Add(1)
+	return c.mockSubscriptionsClient.NewListPager(options)
+}
+
+// twoSubscriptionPages returns a mockSubscriptionsClient listing the same
+// two fixed subscriptions ("sub-1"/"sub-2") every test in this file needs;
+// none of the cache/fan-out tests care about the actual subscription
+// identifiers, so a fixed pair keeps call sites short.
+func twoSubscriptionPages() *mockSubscriptionsClient {
+	sub1ID, sub1Name := "sub-1", "Subscription 1"
+	sub2ID, sub2Name := "sub-2", "Subscription 2"
+	return &mockSubscriptionsClient{
+		listPagerFunc: func(options *armsubscriptions.ClientListOptions) SubscriptionsPager {
+			return &mockSubscriptionsPager{
+				pages: []armsubscriptions.ClientListResponse{
+					{
+						SubscriptionListResult: armsubscriptions.SubscriptionListResult{
+							Value: []*armsubscriptions.Subscription{
+								{SubscriptionID: &sub1ID, DisplayName: &sub1Name},
+								{SubscriptionID: &sub2ID, DisplayName: &sub2Name},
+							},
+						},
+					},
+				},
+			}
+		},
+	}
+}
+
+// clearAzureSubscriptionEnv neutralizes AZURE_SUBSCRIPTION_ID for the calling
+// test. resolveDefaultSubscription reads it via os.Getenv, so a developer or
+// CI runner with it exported would otherwise flip IsDefault on one of the
+// fixture subscriptions and change what the cache/fan-out tests observe --
+// failing them for a reason unrelated to the behavior they guard.
+func clearAzureSubscriptionEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("AZURE_SUBSCRIPTION_ID", "")
+}
+
+func TestAzureProvider_GetAccounts_CacheHit(t *testing.T) {
+	clearAzureSubscriptionEnv(t)
+	counting := &countingSubscriptionsClient{mockSubscriptionsClient: twoSubscriptionPages()}
+
+	p := &AzureProvider{cred: &mockTokenCredential{}}
+	p.SetSubscriptionsClient(counting)
+
+	first, err := p.GetAccounts(context.Background())
+	require.NoError(t, err)
+	require.Len(t, first, 2)
+	assert.Equal(t, int64(1), counting.calls.Load(), "first GetAccounts call should hit the API once")
+
+	second, err := p.GetAccounts(context.Background())
+	require.NoError(t, err)
+	require.Len(t, second, 2)
+	assert.Equal(t, int64(1), counting.calls.Load(), "second GetAccounts call should be served from cache, not the API")
+	assert.Equal(t, first, second)
+}
+
+func TestAzureProvider_GetAccounts_CacheHit_ReturnsIndependentCopies(t *testing.T) {
+	clearAzureSubscriptionEnv(t)
+	p := &AzureProvider{cred: &mockTokenCredential{}}
+	p.SetSubscriptionsClient(twoSubscriptionPages())
+
+	first, err := p.GetAccounts(context.Background())
+	require.NoError(t, err)
+	first[0].IsDefault = true // mutate the caller's copy
+
+	second, err := p.GetAccounts(context.Background())
+	require.NoError(t, err)
+	assert.False(t, second[0].IsDefault, "mutating a returned slice must not corrupt the cache")
+}
+
+func TestAzureProvider_InvalidateAccountsCache(t *testing.T) {
+	clearAzureSubscriptionEnv(t)
+	counting := &countingSubscriptionsClient{mockSubscriptionsClient: twoSubscriptionPages()}
+
+	p := &AzureProvider{cred: &mockTokenCredential{}}
+	p.SetSubscriptionsClient(counting)
+
+	_, err := p.GetAccounts(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), counting.calls.Load())
+
+	p.InvalidateAccountsCache()
+
+	_, err = p.GetAccounts(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), counting.calls.Load(), "GetAccounts after InvalidateAccountsCache should re-hit the API")
+}
+
+// gatedCountingSubscriptionsClient counts ARM list calls and holds the first
+// one open until released, so a test can guarantee the single in-flight fetch
+// is genuinely in progress while additional cold-cache callers pile up behind
+// it. This is what makes the single-flight assertion deterministic for both a
+// correct impl (exactly one call) and a naive per-caller fetch (several calls).
+type gatedCountingSubscriptionsClient struct {
+	inner         *mockSubscriptionsClient
+	calls         atomic.Int64
+	firstOnce     sync.Once
+	firstInFlight chan struct{} // closed when the first fetch has entered
+	release       chan struct{} // closed by the test to let held fetches proceed
+}
+
+func (c *gatedCountingSubscriptionsClient) NewListPager(options *armsubscriptions.ClientListOptions) SubscriptionsPager {
+	c.calls.Add(1)
+	c.firstOnce.Do(func() { close(c.firstInFlight) })
+	<-c.release
+	return c.inner.NewListPager(options)
+}
+
+func (c *gatedCountingSubscriptionsClient) NewListLocationsPager(subscriptionID string, options *armsubscriptions.ClientListLocationsOptions) LocationsPager {
+	return c.inner.NewListLocationsPager(subscriptionID, options)
+}
+
+// TestAzureProvider_GetAccounts_ConcurrentColdCache_SingleARMCall guards the
+// single-flight cold-cache contract: many goroutines hitting an empty cache at
+// once must collapse into exactly one ARM subscriptions.List call, not one per
+// caller.
+//
+// The staged launch makes this deterministic: the leader's fetch is held
+// in-flight (blocked on release) before the followers start, so the followers
+// hit a cold cache while the single fetch is open. A correct impl collapses
+// them via single-flight (and the closure's cache re-check), yielding exactly
+// one call regardless of scheduling; a naive "fetch outside the lock without
+// single-flight" fix lets the followers each issue their own ARM call, which
+// this test detects via the atomic counter. Run under -race to also catch any
+// unguarded shared-state access on the cold-cache path.
+func TestAzureProvider_GetAccounts_ConcurrentColdCache_SingleARMCall(t *testing.T) {
+	clearAzureSubscriptionEnv(t)
+	gated := &gatedCountingSubscriptionsClient{
+		inner:         twoSubscriptionPages(),
+		firstInFlight: make(chan struct{}),
+		release:       make(chan struct{}),
+	}
+
+	p := &AzureProvider{cred: &mockTokenCredential{}}
+	p.SetSubscriptionsClient(gated)
+
+	const n = 10
+	var wg sync.WaitGroup
+	// followersReady counts down once per follower that has entered
+	// GetAccounts. Waiting on it before releasing the held fetch is what makes
+	// the assertion deterministic: with only a runtime.Gosched() nudge, a
+	// follower that had not yet reached the cold-cache path when the leader
+	// finished would find a warm cache and never issue its own ARM call --
+	// so a genuinely broken (no single-flight) implementation could still
+	// report exactly one call and pass.
+	var followersReady sync.WaitGroup
+	errs := make(chan error, n)
+	results := make(chan []common.Account, n)
+	worker := func(signalReady bool) {
+		defer wg.Done()
+		if signalReady {
+			followersReady.Done()
+		}
+		accts, err := p.GetAccounts(context.Background())
+		errs <- err
+		results <- accts
+	}
+
+	// Launch the leader and wait until its ARM fetch is actually in-flight
+	// before launching the followers, so they observe a cold cache.
+	wg.Add(1)
+	go worker(false)
+	<-gated.firstInFlight
+
+	followersReady.Add(n - 1)
+	for i := 1; i < n; i++ {
+		wg.Add(1)
+		go worker(true)
+	}
+	// Wait until every follower goroutine is running and about to call
+	// GetAccounts, then give the scheduler a chance to drive them into the
+	// single-flight path before releasing the held fetch.
+	followersReady.Wait()
+	for i := 0; i < n; i++ {
+		runtime.Gosched()
+	}
+	close(gated.release)
+
+	wg.Wait()
+	close(errs)
+	close(results)
+
+	// require.* only from the test goroutine, never the workers.
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	for accts := range results {
+		require.Len(t, accts, 2)
+	}
+	assert.Equal(t, int64(1), gated.calls.Load(),
+		"concurrent cold-cache GetAccounts must issue exactly one ARM list call (single-flight)")
+}
+
+// TestAzureProvider_ConcurrentCredentialSwapAndFetch_NoDataRace guards the
+// publication of the two swappable fields.
+//
+// SetCredential / SetSubscriptionsClient used to write p.cred and
+// p.subscriptionsClient as plain assignments and only THEN take accountsMu to
+// invalidate, while fetchAccounts read both from a goroutine running on behalf
+// of every caller that joined the single-flight. That is an unsynchronized
+// read/write pair, and the window it opens can hand the fetch a new credential
+// paired with the old subscriptions client.
+//
+// The hammer below is deliberately free of happens-before edges between the
+// swapping goroutines and the fetching ones -- an ordered handshake (e.g.
+// waiting on firstInFlight before swapping) would establish exactly the
+// ordering that makes the race invisible to -race. Value assertions are
+// intentionally absent: this test's assertion IS the race detector, so it must
+// run under `go test -race` to be meaningful.
+func TestAzureProvider_ConcurrentCredentialSwapAndFetch_NoDataRace(t *testing.T) {
+	clearAzureSubscriptionEnv(t)
+
+	p := &AzureProvider{cred: &mockTokenCredential{}}
+	p.SetSubscriptionsClient(twoSubscriptionPages())
+
+	const (
+		readers = 8
+		rounds  = 25
+	)
+
+	stop := make(chan struct{})
+	var swappers sync.WaitGroup
+	swappers.Add(2)
+	go func() {
+		defer swappers.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			p.SetCredential(&mockTokenCredential{})
+		}
+	}()
+	go func() {
+		defer swappers.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			p.SetSubscriptionsClient(twoSubscriptionPages())
+		}
+	}()
+
+	var wg sync.WaitGroup
+	errs := make(chan error, readers*rounds)
+	for i := 0; i < readers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for r := 0; r < rounds; r++ {
+				// Both readers of the swapped fields: GetAccounts reaches
+				// fetchAccounts, GetServiceClientForAccount builds a client
+				// straight from the credential.
+				if _, err := p.GetAccounts(context.Background()); err != nil {
+					errs <- err
+					return
+				}
+				if _, err := p.GetServiceClientForAccount(context.Background(), common.ServiceCompute, "eastus", "sub-1"); err != nil {
+					errs <- err
+					return
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(stop)
+	swappers.Wait()
+	close(errs)
+
+	// require.* only from the test goroutine, never the workers.
+	for err := range errs {
+		require.NoError(t, err)
+	}
+}
+
+// Swapping the credential or the subscriptions client must drop the cached
+// subscription list. The cache records what the PREVIOUS credential/client
+// could see; serving it afterwards would report subscriptions the new
+// principal may have no access to, and GetRecommendationsClient would then
+// fan out across them.
+func TestAzureProvider_CacheDroppedOnCredentialOrClientSwap(t *testing.T) {
+	clearAzureSubscriptionEnv(t)
+
+	t.Run("SetCredential invalidates", func(t *testing.T) {
+		counting := &countingSubscriptionsClient{mockSubscriptionsClient: twoSubscriptionPages()}
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(counting)
+
+		_, err := p.GetAccounts(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, int64(1), counting.calls.Load())
+
+		p.SetCredential(&mockTokenCredential{})
+
+		_, err = p.GetAccounts(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, int64(2), counting.calls.Load(),
+			"a credential swap must re-resolve the subscription list, not reuse the old credential's")
+	})
+
+	t.Run("SetSubscriptionsClient invalidates", func(t *testing.T) {
+		first := &countingSubscriptionsClient{mockSubscriptionsClient: twoSubscriptionPages()}
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(first)
+
+		_, err := p.GetAccounts(context.Background())
+		require.NoError(t, err)
+
+		soloID, soloName := "sub-solo", "Solo Subscription"
+		p.SetSubscriptionsClient(&mockSubscriptionsClient{
+			listPagerFunc: func(_ *armsubscriptions.ClientListOptions) SubscriptionsPager {
+				return &mockSubscriptionsPager{
+					pages: []armsubscriptions.ClientListResponse{
+						{SubscriptionListResult: armsubscriptions.SubscriptionListResult{
+							Value: []*armsubscriptions.Subscription{{SubscriptionID: &soloID, DisplayName: &soloName}},
+						}},
+					},
+				}
+			},
+		})
+
+		accts, err := p.GetAccounts(context.Background())
+		require.NoError(t, err)
+		require.Len(t, accts, 1, "the swapped-in client's subscriptions must be returned, not the cached ones")
+		assert.Equal(t, soloID, accts[0].ID)
+	})
+}
+
+// gatedGenerationSubscriptionsClient holds its first ARM list call open (like
+// gatedCountingSubscriptionsClient) but serves a DIFFERENT subscription on
+// each call, so a test can tell a re-fetched result apart from a resurrected
+// pre-invalidation snapshot.
+type gatedGenerationSubscriptionsClient struct {
+	calls         atomic.Int64
+	firstOnce     sync.Once
+	firstInFlight chan struct{}
+	release       chan struct{}
+}
+
+func (c *gatedGenerationSubscriptionsClient) NewListPager(_ *armsubscriptions.ClientListOptions) SubscriptionsPager {
+	n := c.calls.Add(1)
+	c.firstOnce.Do(func() {
+		close(c.firstInFlight)
+		<-c.release
+	})
+	id := fmt.Sprintf("sub-gen-%d", n)
+	name := fmt.Sprintf("Subscription generation %d", n)
+	return &mockSubscriptionsPager{
+		pages: []armsubscriptions.ClientListResponse{
+			{SubscriptionListResult: armsubscriptions.SubscriptionListResult{
+				Value: []*armsubscriptions.Subscription{{SubscriptionID: &id, DisplayName: &name}},
+			}},
+		},
+	}
+}
+
+func (c *gatedGenerationSubscriptionsClient) NewListLocationsPager(_ string, _ *armsubscriptions.ClientListLocationsOptions) LocationsPager {
+	return nil
+}
+
+// TestAzureProvider_InvalidateAccountsCache_DuringInFlightFetch guards the
+// cache-generation check.
+//
+// Interleaving: a fetch is in flight (holding the pre-invalidation snapshot)
+// when InvalidateAccountsCache lands. Without the generation gate the
+// in-flight fetch publishes its now-stale snapshot after the invalidation, so
+// the next read is served from cache and the caller is handed back exactly
+// the data it asked to discard -- silently, with no second ARM call.
+func TestAzureProvider_InvalidateAccountsCache_DuringInFlightFetch(t *testing.T) {
+	clearAzureSubscriptionEnv(t)
+	gated := &gatedGenerationSubscriptionsClient{
+		firstInFlight: make(chan struct{}),
+		release:       make(chan struct{}),
+	}
+
+	p := &AzureProvider{cred: &mockTokenCredential{}}
+	p.SetSubscriptionsClient(gated)
+
+	type fetchResult struct {
+		accounts []common.Account
+		err      error
+	}
+	done := make(chan fetchResult, 1)
+	go func() {
+		accts, err := p.GetAccounts(context.Background())
+		done <- fetchResult{accounts: accts, err: err}
+	}()
+
+	// The first fetch is now blocked inside the ARM call, holding generation-1
+	// data. Invalidate while it is still in flight.
+	<-gated.firstInFlight
+	p.InvalidateAccountsCache()
+	close(gated.release)
+
+	first := <-done
+	require.NoError(t, first.err)
+	require.Len(t, first.accounts, 1)
+	assert.Equal(t, "sub-gen-1", first.accounts[0].ID)
+
+	// The invalidated snapshot must not have been published: this read has to
+	// re-hit ARM and observe the current subscription list.
+	second, err := p.GetAccounts(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), gated.calls.Load(),
+		"a fetch that started before InvalidateAccountsCache must not populate the cache")
+	require.Len(t, second, 1)
+	assert.Equal(t, "sub-gen-2", second[0].ID,
+		"read after invalidation must see fresh data, not the resurrected pre-invalidation snapshot")
+}
+
+func TestAzureProvider_GetRecommendationsClient_MultiSubscriptionFanOut(t *testing.T) {
+	clearAzureSubscriptionEnv(t)
+
+	// Regression guard for the scoping rule: fan-out must be the fallback for
+	// an ambiguous principal, never an upgrade applied to a caller that
+	// already named its subscription. A principal that can see sub-1 and
+	// sub-2 but pinned sub-2 via AZURE_SUBSCRIPTION_ID must keep getting
+	// sub-2 only; returning the fan-out client here would hand that caller
+	// sub-1's recommendations too.
+	t.Run("AZURE_SUBSCRIPTION_ID still scopes to one subscription", func(t *testing.T) {
+		t.Setenv("AZURE_SUBSCRIPTION_ID", "sub-2")
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(twoSubscriptionPages())
+
+		client, err := p.GetRecommendationsClient(context.Background())
+		require.NoError(t, err)
+		require.IsType(t, &RecommendationsClientAdapter{}, client,
+			"an env-pinned subscription must not be widened to an org-wide fan-out")
+		assert.Equal(t, "sub-2", client.(*RecommendationsClientAdapter).subscriptionID)
+	})
+
+	// A configured AZURE_SUBSCRIPTION_ID that names a subscription this
+	// principal cannot see is a misconfiguration. Answering it with an
+	// org-wide fan-out would hand the caller every OTHER subscription's data
+	// in response to a request that named one, so this must stay the hard
+	// error it was before fan-out existed.
+	t.Run("AZURE_SUBSCRIPTION_ID naming an invisible subscription errors", func(t *testing.T) {
+		t.Setenv("AZURE_SUBSCRIPTION_ID", "sub-not-visible")
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(twoSubscriptionPages())
+
+		client, err := p.GetRecommendationsClient(context.Background())
+		require.Error(t, err, "an unresolvable explicit subscription must not silently widen to org-wide fan-out")
+		assert.Nil(t, client)
+		assert.Contains(t, err.Error(), "sub-not-visible")
+		assert.Contains(t, err.Error(), "not among the 2 subscriptions visible")
+	})
+
+	// The single-visible-subscription case is the dangerous one, and the
+	// reason the target has to be validated BEFORE getDefaultSubscriptionID:
+	// resolveDefaultSubscription's rule 3 marks a lone subscription as the
+	// default even when a target was configured and did not match it. Reading
+	// that default first would resolve an invisible target to whichever one
+	// subscription happens to be visible and collect against it silently.
+	t.Run("AZURE_SUBSCRIPTION_ID invisible with one visible subscription errors", func(t *testing.T) {
+		t.Setenv("AZURE_SUBSCRIPTION_ID", "sub-not-visible")
+		soloID, soloName := "sub-solo", "Solo Subscription"
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(&mockSubscriptionsClient{
+			listPagerFunc: func(_ *armsubscriptions.ClientListOptions) SubscriptionsPager {
+				return &mockSubscriptionsPager{
+					pages: []armsubscriptions.ClientListResponse{
+						{SubscriptionListResult: armsubscriptions.SubscriptionListResult{
+							Value: []*armsubscriptions.Subscription{{SubscriptionID: &soloID, DisplayName: &soloName}},
+						}},
+					},
+				}
+			},
+		})
+
+		client, err := p.GetRecommendationsClient(context.Background())
+		require.Error(t, err,
+			"an invisible configured subscription must not silently resolve to the one visible subscription")
+		assert.Nil(t, client)
+		assert.Contains(t, err.Error(), "sub-not-visible")
+		assert.Contains(t, err.Error(), "not among the 1 subscriptions visible")
+	})
+
+	// The happy path for the same branch: a target the principal CAN see is
+	// honoured, and scopes the client to exactly that subscription.
+	t.Run("AZURE_SUBSCRIPTION_ID matching a visible subscription is honoured", func(t *testing.T) {
+		t.Setenv("AZURE_SUBSCRIPTION_ID", "sub-1")
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(twoSubscriptionPages())
+
+		client, err := p.GetRecommendationsClient(context.Background())
+		require.NoError(t, err)
+		require.IsType(t, &RecommendationsClientAdapter{}, client)
+		assert.Equal(t, "sub-1", client.(*RecommendationsClientAdapter).subscriptionID)
+	})
+
+	t.Run("multi-subscription returns MultiSubscriptionRecommendationsClient", func(t *testing.T) {
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(twoSubscriptionPages())
+
+		client, err := p.GetRecommendationsClient(context.Background())
+		require.NoError(t, err)
+		require.IsType(t, &MultiSubscriptionRecommendationsClient{}, client)
+		assert.Len(t, client.(*MultiSubscriptionRecommendationsClient).subscriptions, 2)
+	})
+
+	t.Run("single discovered subscription returns RecommendationsClientAdapter", func(t *testing.T) {
+		subID, subName := "sub-solo", "Solo Subscription"
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(&mockSubscriptionsClient{
+			listPagerFunc: func(options *armsubscriptions.ClientListOptions) SubscriptionsPager {
+				return &mockSubscriptionsPager{
+					pages: []armsubscriptions.ClientListResponse{
+						{SubscriptionListResult: armsubscriptions.SubscriptionListResult{
+							Value: []*armsubscriptions.Subscription{{SubscriptionID: &subID, DisplayName: &subName}},
+						}},
+					},
+				}
+			},
+		})
+
+		client, err := p.GetRecommendationsClient(context.Background())
+		require.NoError(t, err)
+		require.IsType(t, &RecommendationsClientAdapter{}, client)
+		assert.Equal(t, subID, client.(*RecommendationsClientAdapter).subscriptionID)
+	})
+
+	t.Run("pinned subscription always returns single adapter regardless of discovered count", func(t *testing.T) {
+		p := &AzureProvider{cred: &mockTokenCredential{}, subscriptionID: "pinned-sub"}
+		// Deliberately do not set a subscriptions client: a pinned subscription
+		// must never trigger subscription discovery.
+		client, err := p.GetRecommendationsClient(context.Background())
+		require.NoError(t, err)
+		require.IsType(t, &RecommendationsClientAdapter{}, client)
+		assert.Equal(t, "pinned-sub", client.(*RecommendationsClientAdapter).subscriptionID)
+	})
+
+	// The zero-subscription "no Azure subscriptions found" case is already
+	// covered by TestAzureProvider_GetRecommendationsClient_WithSubscriptionLookup.
+
+	t.Run("subscription discovery failure is propagated", func(t *testing.T) {
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(&mockSubscriptionsClient{
+			listPagerFunc: func(options *armsubscriptions.ClientListOptions) SubscriptionsPager {
+				return &mockSubscriptionsPager{nextErr: errors.New("boom")}
+			},
+		})
+
+		_, err := p.GetRecommendationsClient(context.Background())
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to resolve Azure subscriptions")
+	})
+}
+
+// resolveSubscriptionIDFromCtx feeds GetRegions and GetServiceClient. Like
+// GetRecommendationsClient it must validate an explicitly configured target
+// against the discovered subscriptions BEFORE consulting the resolved default.
+//
+// Exactly one visible subscription is the case that hides the bug, and the
+// only case this test is worth writing for: resolveDefaultSubscription's rule
+// 3 marks a LONE visible subscription as the default even when a configured
+// target did not match it, so reading the default first silently retargets the
+// operator's request to whichever subscription happens to be visible. With two
+// or more visible subscriptions getDefaultSubscriptionID returns "" and the
+// pre-existing "multiple Azure subscriptions" error fires either way, so such
+// a test would pass with or without the guard and prove nothing.
+func TestAzureProvider_ResolveSubscription_InvisibleConfiguredTargetErrors(t *testing.T) {
+	soloID, soloName := "sub-solo", "Solo Subscription"
+	soloClient := func() *mockSubscriptionsClient {
+		return &mockSubscriptionsClient{
+			listPagerFunc: func(_ *armsubscriptions.ClientListOptions) SubscriptionsPager {
+				return &mockSubscriptionsPager{
+					pages: []armsubscriptions.ClientListResponse{
+						{SubscriptionListResult: armsubscriptions.SubscriptionListResult{
+							Value: []*armsubscriptions.Subscription{{SubscriptionID: &soloID, DisplayName: &soloName}},
+						}},
+					},
+				}
+			},
+			listLocationsPagerFunc: func(_ string, _ *armsubscriptions.ClientListLocationsOptions) LocationsPager {
+				return &mockLocationsPager{}
+			},
+		}
+	}
+
+	t.Run("GetRegions errors on an env target the principal cannot see", func(t *testing.T) {
+		t.Setenv("AZURE_SUBSCRIPTION_ID", "sub-not-visible")
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(soloClient())
+
+		regions, err := p.GetRegions(context.Background())
+		require.Error(t, err,
+			"an invisible configured subscription must not silently retarget to the one visible subscription")
+		assert.Nil(t, regions)
+		assert.Contains(t, err.Error(), "sub-not-visible")
+		assert.Contains(t, err.Error(), "not among the 1 subscriptions visible")
+	})
+
+	// GetServiceClient drives the resource enumeration recommendations are
+	// computed from, so a silent retarget here reports subscription B's
+	// resources to an operator who asked for subscription A.
+	t.Run("GetServiceClient errors on an env target the principal cannot see", func(t *testing.T) {
+		t.Setenv("AZURE_SUBSCRIPTION_ID", "sub-not-visible")
+		p := &AzureProvider{cred: &mockTokenCredential{}} // subscriptionID unset -> resolves via accounts
+		p.SetSubscriptionsClient(soloClient())
+
+		client, err := p.GetServiceClient(context.Background(), common.ServiceCompute, "eastus")
+		require.Error(t, err)
+		assert.Nil(t, client)
+		assert.Contains(t, err.Error(), "sub-not-visible")
+		assert.Contains(t, err.Error(), "not among the 1 subscriptions visible")
+	})
+
+	// The same guard has to cover the ProviderConfig axis, not just the
+	// environment variable: resolveDefaultSubscription's rule 1 reads
+	// p.subscriptionID and falls through to rule 3 identically when it misses.
+	t.Run("GetRegions errors on a config target the principal cannot see", func(t *testing.T) {
+		clearAzureSubscriptionEnv(t)
+		p := &AzureProvider{cred: &mockTokenCredential{}, subscriptionID: "sub-not-visible"}
+		p.SetSubscriptionsClient(soloClient())
+
+		regions, err := p.GetRegions(context.Background())
+		require.Error(t, err)
+		assert.Nil(t, regions)
+		assert.Contains(t, err.Error(), "sub-not-visible")
+		assert.Contains(t, err.Error(), "not among the 1 subscriptions visible")
+	})
+
+	// The guard must reject only targets that are genuinely invisible; a
+	// visible one still resolves, and resolves to itself.
+	t.Run("a visible configured target is still honoured", func(t *testing.T) {
+		t.Setenv("AZURE_SUBSCRIPTION_ID", soloID)
+		var gotSubscriptionID string
+		client := soloClient()
+		client.listLocationsPagerFunc = func(subscriptionID string, _ *armsubscriptions.ClientListLocationsOptions) LocationsPager {
+			gotSubscriptionID = subscriptionID
+			return &mockLocationsPager{}
+		}
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(client)
+
+		_, err := p.GetRegions(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, soloID, gotSubscriptionID)
+	})
+}
+
+// SetCredentialProvider publishes credProvider, which IsConfigured reads on its
+// lazy ambient-credential path. Both must go through accountsMu -- the lock
+// every other swappable field on the provider is published under -- or the
+// write is an unsynchronized data race with that read.
+//
+// credOnce means each provider instance reads credProvider at most once, so
+// the race window is one-shot per instance. Looping over fresh providers is
+// what makes the detector's chances additive instead of resting on a single
+// interleaving.
+func TestAzureProvider_ConcurrentCredentialProviderSwapAndIsConfigured_NoDataRace(t *testing.T) {
+	const (
+		instances = 50
+		readers   = 4
+		swaps     = 4
+	)
+
+	for i := 0; i < instances; i++ {
+		// No credential installed, so IsConfigured takes the credOnce path
+		// that reads credProvider.
+		p := &AzureProvider{}
+		// Install one up front so every IsConfigured resolves deterministically
+		// through the mock rather than depending on ambient Azure credentials
+		// being present on the machine running the test.
+		p.SetCredentialProvider(&mockCredentialProvider{cred: &mockTokenCredential{}})
+
+		start := make(chan struct{})
+		results := make(chan bool, readers)
+		var wg sync.WaitGroup
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for s := 0; s < swaps; s++ {
+				p.SetCredentialProvider(&mockCredentialProvider{cred: &mockTokenCredential{}})
+			}
+		}()
+
+		for r := 0; r < readers; r++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				results <- p.IsConfigured()
+			}()
+		}
+
+		close(start)
+		wg.Wait()
+		close(results)
+
+		// require.* only from the test goroutine, never the workers.
+		for ok := range results {
+			require.True(t, ok, "IsConfigured must resolve the injected credential provider")
+		}
+	}
 }
