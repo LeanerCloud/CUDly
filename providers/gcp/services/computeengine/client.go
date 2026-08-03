@@ -56,6 +56,145 @@ func termPlan(term string) (string, error) {
 	}
 }
 
+// machineFamilyCommitmentType maps a GCP machine series (the segment of a
+// machine type before the first "-") onto the computepb.Commitment_Type enum
+// member whose discount actually applies to that series.
+//
+// The mapping is not cosmetic: computepb.Commitment.Type selects which machine
+// series the CUD discounts, and the SDK's own enum doc states that
+// "Type GENERAL_PURPOSE specifies a commitment that applies only to eligible
+// resources of general purpose N1 machine series". An N1 commitment therefore
+// buys nothing for an N2/C3/M3 fleet.
+//
+// This map is restricted to families whose commitment is fully expressible with
+// the VCPU + MEMORY resources buildInsertRequest sends. Families whose
+// commitment additionally requires ACCELERATOR or LOCAL_SSD resources live in
+// familyRequiredResource and are refused, not mapped.
+//
+// Deliberately absent (they fall through to the fail-loud path in
+// commitmentTypeForMachineType):
+//   - m4 and x4, whose commitment types are split into size-specific buckets
+//     (MEMORY_OPTIMIZED_M4 vs MEMORY_OPTIMIZED_M4_6TB;
+//     MEMORY_OPTIMIZED_X4_480_6T, _X4_960_12T, _X4_1440_24T, ...). The bucket
+//     is not derivable from the machine-type name alone, and guessing one
+//     reintroduces the exact mis-purchase this mapping exists to prevent.
+//   - f1 and g1 (f1-micro, g1-small), N1's shared-core members. GCP sells no
+//     commitment product for shared-core machine types at all; see
+//     familyNoCommitmentAvailable.
+//   - t2a and any series GCP has not published a Commitment_Type for.
+var machineFamilyCommitmentType = map[string]computepb.Commitment_Type{
+	// General purpose. GENERAL_PURPOSE is the N1-only member.
+	"n1": computepb.Commitment_GENERAL_PURPOSE,
+	// Legacy custom machine types are named "custom-<vCPUs>-<MB>" with no family
+	// segment and are N1; every other family prefixes its own custom types
+	// ("n2-custom-...", "e2-custom-..."), which the family lookup already
+	// handles. Without this entry a valid N1-custom recommendation would be
+	// refused rather than committed under the type that actually discounts it.
+	"custom": computepb.Commitment_GENERAL_PURPOSE,
+
+	"n2":  computepb.Commitment_GENERAL_PURPOSE_N2,
+	"n2d": computepb.Commitment_GENERAL_PURPOSE_N2D,
+	"n4":  computepb.Commitment_GENERAL_PURPOSE_N4,
+	"n4d": computepb.Commitment_GENERAL_PURPOSE_N4D,
+	"e2":  computepb.Commitment_GENERAL_PURPOSE_E2,
+	"t2d": computepb.Commitment_GENERAL_PURPOSE_T2D,
+	"c4":  computepb.Commitment_GENERAL_PURPOSE_C4,
+	"c4a": computepb.Commitment_GENERAL_PURPOSE_C4A,
+	"c4d": computepb.Commitment_GENERAL_PURPOSE_C4D,
+
+	// Compute optimized. COMPUTE_OPTIMIZED is the C2-only member.
+	"c2":  computepb.Commitment_COMPUTE_OPTIMIZED,
+	"c2d": computepb.Commitment_COMPUTE_OPTIMIZED_C2D,
+	"c3":  computepb.Commitment_COMPUTE_OPTIMIZED_C3,
+	"c3d": computepb.Commitment_COMPUTE_OPTIMIZED_C3D,
+	"h3":  computepb.Commitment_COMPUTE_OPTIMIZED_H3,
+	"h4d": computepb.Commitment_COMPUTE_OPTIMIZED_H4D,
+
+	// Memory optimized. Per the SDK enum doc, MEMORY_OPTIMIZED covers the M1
+	// and M2 series; M3 has its own member.
+	"m1": computepb.Commitment_MEMORY_OPTIMIZED,
+	"m2": computepb.Commitment_MEMORY_OPTIMIZED,
+	"m3": computepb.Commitment_MEMORY_OPTIMIZED_M3,
+
+	// NOTE: the accelerator- (a2/a3/a4), graphics- (g2/g4) and storage-optimized
+	// (z3) families are deliberately NOT here; see familyRequiredResource.
+}
+
+// familyRequiredResource lists machine families whose commitment type exists in
+// the SDK but whose commitment is not expressible with the VCPU + MEMORY
+// resources buildInsertRequest currently sends: GCP requires an ACCELERATOR
+// resource in an ACCELERATOR_OPTIMIZED*/GRAPHICS_OPTIMIZED* commitment and a
+// LOCAL_SSD resource in STORAGE_OPTIMIZED_Z3.
+//
+// Declaring one of those types with only vCPU and RAM is worse than the bug
+// this file fixes. The best case is that GCP rejects commitments.insert; the
+// worst case is a commitment that covers the cheap vCPU/RAM and none of the
+// GPUs or local SSDs, which are where the spend actually is. Until the extra
+// resource amounts are threaded through the recommendation, these families take
+// the same "not derivable, do not guess" refusal as m4/x4.
+var familyRequiredResource = map[string]computepb.ResourceCommitment_Type{
+	"a2": computepb.ResourceCommitment_ACCELERATOR,
+	"a3": computepb.ResourceCommitment_ACCELERATOR,
+	"a4": computepb.ResourceCommitment_ACCELERATOR,
+	"g2": computepb.ResourceCommitment_ACCELERATOR,
+	"g4": computepb.ResourceCommitment_ACCELERATOR,
+	"z3": computepb.ResourceCommitment_LOCAL_SSD,
+}
+
+// familyNoCommitmentAvailable lists machine families GCP sells no commitment
+// product for at all, so no Commitment_Type mapping -- correct or otherwise --
+// exists to guess. Per the Compute Engine CUD documentation, shared-core
+// machine types are excluded from committed use discounts entirely:
+// https://docs.cloud.google.com/compute/docs/instances/committed-use-discounts-overview
+// f1-micro and g1-small are N1's shared-core members and fall under that
+// exclusion, so they take this dedicated refusal rather than being folded
+// into machineFamilyCommitmentType under GENERAL_PURPOSE: that mapping would
+// buy a real N1 commitment that discounts nothing, since GCP has nothing to
+// apply it to for these families -- the exact issue #1538 failure shape
+// reintroduced by this file's own mapping.
+var familyNoCommitmentAvailable = map[string]bool{
+	"f1": true,
+	"g1": true,
+}
+
+// commitmentTypeForMachineType derives the commitment Type from the recommended
+// machine type (e.g. "n2-highmem-8" -> GENERAL_PURPOSE_N2).
+//
+// An unmappable family returns an error rather than defaulting: a commitment
+// bought under the wrong Type does not discount the recommended instances at
+// all, so the customer pays the full 1- or 3-year commitment on top of undimmed
+// on-demand charges while the purchase is reported as realized savings (issue
+// #1538). Refusing the purchase is the strictly cheaper failure.
+func commitmentTypeForMachineType(machineType string) (computepb.Commitment_Type, error) {
+	normalized := strings.ToLower(strings.TrimSpace(machineType))
+	if normalized == "" {
+		return computepb.Commitment_UNDEFINED_TYPE, errors.New(
+			"commitmentTypeForMachineType: no machine type on the recommendation (no operation resource path contained \"/machineTypes/\"); cannot derive which machine series the commitment would discount, so the purchase is refused (issue #1538)")
+	}
+
+	family := strings.Split(normalized, "-")[0]
+
+	if familyNoCommitmentAvailable[family] {
+		return computepb.Commitment_UNDEFINED_TYPE, fmt.Errorf(
+			"commitmentTypeForMachineType: GCP sells no commitment product for shared-core machine family %q (machine type %q); shared-core machine types are excluded from committed use discounts entirely, so there is no Commitment_Type to purchase under (issue #1538)", family, machineType)
+	}
+
+	if required, ok := familyRequiredResource[family]; ok {
+		return computepb.Commitment_UNDEFINED_TYPE, fmt.Errorf(
+			"commitmentTypeForMachineType: machine family %q (machine type %q) commits under a type that also requires a %s resource, which this client does not send (it sends only %s and %s); refusing rather than buying a commitment that would cover the vCPU and RAM but none of the %s capacity that dominates its cost (issue #1538)",
+			family, machineType, required.String(),
+			computepb.ResourceCommitment_VCPU.String(), computepb.ResourceCommitment_MEMORY.String(),
+			required.String())
+	}
+
+	commitType, ok := machineFamilyCommitmentType[family]
+	if !ok {
+		return computepb.Commitment_UNDEFINED_TYPE, fmt.Errorf(
+			"commitmentTypeForMachineType: no GCP commitment type is known for machine family %q (machine type %q); refusing to purchase rather than defaulting to GENERAL_PURPOSE, which only discounts the N1 series (issue #1538)", family, machineType)
+	}
+	return commitType, nil
+}
+
 // termYearsFromTerm returns the commitment length in years for a term label,
 // defaulting to 1 for any 1-year or unrecognized value and 3 for 3-year labels.
 func termYearsFromTerm(term string) int {
@@ -453,10 +592,12 @@ func GroupCommitments(recs []common.Recommendation) []CommitmentRequest {
 			Plan:   a.plan,
 			Region: k.region,
 			Resources: []ResourceCommitment{
-				{Type: "VCPU", Amount: a.vcpus},
-				// "MEMORY" is the GCP ResourceCommitment.Type enum member; the
-				// Amount is in MB (see buildInsertRequest, issue #1022).
-				{Type: "MEMORY", Amount: a.memoryMB},
+				{Type: computepb.ResourceCommitment_VCPU.String(), Amount: a.vcpus},
+				// MEMORY is the GCP ResourceCommitment.Type enum member; the
+				// Amount is in MB (see buildInsertRequest, issue #1022). Sourced
+				// from the SDK enum so a future caller of GroupCommitments cannot
+				// reintroduce the "MEMORY_MB" spelling GCP rejects.
+				{Type: computepb.ResourceCommitment_MEMORY.String(), Amount: a.memoryMB},
 			},
 		})
 		counter++
@@ -624,6 +765,16 @@ func (c *ComputeEngineClient) buildInsertRequest(rec common.Recommendation, opts
 		return nil, "", fmt.Errorf("buildInsertRequest: %w", err)
 	}
 
+	// The commitment Type selects which machine series the CUD discounts. It was
+	// pinned to GENERAL_PURPOSE (N1-only) while the recommended machine type was
+	// read into Description alone, so an N2/C3/M3/... recommendation bought a
+	// commitment that applied to none of its instances: full commitment spend
+	// plus undimmed on-demand charges, booked as realized savings (issue #1538).
+	commitType, err := commitmentTypeForMachineType(rec.ResourceType)
+	if err != nil {
+		return nil, "", fmt.Errorf("buildInsertRequest: %w", err)
+	}
+
 	// GCP's computepb.Commitment has no Labels field, and the RegionCommitments
 	// client exposes no SetLabels call -- CUDs cannot be tagged or labeled via
 	// the API. Encode the source into Description so customers can still filter
@@ -651,19 +802,20 @@ func (c *ComputeEngineClient) buildInsertRequest(rec common.Recommendation, opts
 	commitment := &computepb.Commitment{
 		Name:        stringPtr(commitmentName),
 		Plan:        stringPtr(plan),
-		Type:        stringPtr("GENERAL_PURPOSE"),
+		Type:        stringPtr(commitType.String()),
 		Description: stringPtr(description),
 		Resources: []*computepb.ResourceCommitment{
 			{
-				Type:   stringPtr("VCPU"),
+				Type:   stringPtr(computepb.ResourceCommitment_VCPU.String()),
 				Amount: int64Ptr(int64(rec.Count)),
 			},
 			{
 				// GCP's ResourceCommitment.Type enum is VCPU/MEMORY/LOCAL_SSD/
 				// ACCELERATOR; the memory member is "MEMORY" (the Amount is still in
 				// MB). Sending "MEMORY_MB" is an invalid enum value and GCP rejects
-				// the commitments.insert, failing the purchase (issue #1022).
-				Type:   stringPtr("MEMORY"),
+				// the commitments.insert, failing the purchase (issue #1022). Taking
+				// the wire value from the SDK enum keeps that compiler-checked.
+				Type:   stringPtr(computepb.ResourceCommitment_MEMORY.String()),
 				Amount: int64Ptr(memMB),
 			},
 		},
@@ -959,7 +1111,17 @@ func (c *ComputeEngineClient) convertGCPRecommendation(ctx context.Context, gcpR
 		PaymentOption:  paymentOption,
 	}
 
-	extractResourceTypeFromRecommendation(gcpRec, rec)
+	// ResourceType is left EMPTY (not guessed, and not filled from some other
+	// operation's last path segment) when no machine-type operation is present.
+	// Everything downstream reads it as a machine type, and the purchase path
+	// refuses an empty one, so the recommendation stays visible while being
+	// unpurchasable rather than silently buying a commitment derived from a
+	// commitment name (issue #1538).
+	if err := extractResourceTypeFromRecommendation(gcpRec, rec); err != nil {
+		log.Printf("computeengine: recommendation %q has no machine type and cannot be purchased: %v",
+			gcpRec.GetName(), err)
+	}
+
 	extractCostImpactFromRecommendation(gcpRec, rec)
 	extractVCPUCountFromRecommendation(gcpRec, rec)
 	extractMemoryMBFromRecommendation(gcpRec, rec)
@@ -1013,32 +1175,66 @@ func (c *ComputeEngineClient) enrichRecWithPricing(ctx context.Context, rec *com
 	}
 }
 
-// extractResourceTypeFromRecommendation extracts the resource type from a GCP recommendation
-func extractResourceTypeFromRecommendation(gcpRec *recommenderpb.Recommendation, rec *common.Recommendation) {
-	if gcpRec.Content == nil || gcpRec.Content.OperationGroups == nil {
-		return
-	}
+// machineTypePathSegment precedes the machine type in a GCP resource path, e.g.
+// "projects/p/zones/us-central1-a/machineTypes/n2-standard-16".
+const machineTypePathSegment = "/machineTypes/"
 
-	for _, opGroup := range gcpRec.Content.OperationGroups {
-		if resourceType := extractResourceTypeFromOperations(opGroup.Operations); resourceType != "" {
-			rec.ResourceType = resourceType
-			return
-		}
-	}
-}
+// maxReportedResourcePaths caps how many operation resource paths are quoted
+// back in the "no machine type" error so a large operation group cannot produce
+// an unbounded log line.
+const maxReportedResourcePaths = 5
 
-// extractResourceTypeFromOperations extracts resource type from operation list
-func extractResourceTypeFromOperations(operations []*recommenderpb.Operation) string {
-	for _, op := range operations {
-		if op.Resource != "" {
-			// Extract machine type from resource path
-			parts := strings.Split(op.Resource, "/")
-			if len(parts) > 0 {
-				return parts[len(parts)-1]
+// extractResourceTypeFromRecommendation sets rec.ResourceType to the machine
+// type named by the recommendation's operations.
+//
+// It returns an error rather than leaving rec.ResourceType empty or guessing,
+// because this value is what commitmentTypeForMachineType derives the purchased
+// commitment Type from. A commitment recommendation's operations also reference
+// the commitment resource itself ("//compute.googleapis.com/projects/p/regions/
+// r/commitments/cud-001"); taking the last path segment of whichever operation
+// came first would yield the commitment NAME ("cud-001") and then be read as a
+// machine family, so the machine-type operation is selected explicitly.
+func extractResourceTypeFromRecommendation(gcpRec *recommenderpb.Recommendation, rec *common.Recommendation) error {
+	var seen []string
+	for _, opGroup := range gcpRec.GetContent().GetOperationGroups() {
+		for _, op := range opGroup.GetOperations() {
+			resource := op.GetResource()
+			if resource == "" {
+				continue
+			}
+			if machineType, ok := machineTypeFromResourcePath(resource); ok {
+				rec.ResourceType = machineType
+				return nil
+			}
+			if len(seen) < maxReportedResourcePaths {
+				seen = append(seen, resource)
 			}
 		}
 	}
-	return ""
+
+	found := "none"
+	if len(seen) > 0 {
+		found = strings.Join(seen, ", ")
+	}
+	return fmt.Errorf(
+		"extractResourceTypeFromRecommendation: no machine type in recommendation operations (no operation resource path contains %q); resource paths found: %s; refusing to read a non-machine-type path segment as a machine family (issue #1538)",
+		machineTypePathSegment, found)
+}
+
+// machineTypeFromResourcePath returns the machine type named by a GCP resource
+// path, and whether the path names one at all. Only a "/machineTypes/<name>"
+// path qualifies; anything else (notably a "/commitments/<name>" path) is
+// rejected so its last segment cannot be mistaken for a machine type.
+func machineTypeFromResourcePath(resource string) (string, bool) {
+	idx := strings.LastIndex(resource, machineTypePathSegment)
+	if idx < 0 {
+		return "", false
+	}
+	machineType := strings.Trim(resource[idx+len(machineTypePathSegment):], "/")
+	if machineType == "" || strings.Contains(machineType, "/") {
+		return "", false
+	}
+	return machineType, true
 }
 
 // extractCostImpactFromRecommendation extracts the cost impact from a GCP recommendation
