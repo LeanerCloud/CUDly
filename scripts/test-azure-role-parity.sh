@@ -93,7 +93,26 @@ run_case "management-group schema ARM exits 1" 1 \
 TMP_TF_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_TF_DIR"' EXIT
 cp "${FIXTURES}/matching-tf.tf.fixture" "${TMP_TF_DIR}/main.tf"
-printf '\n# assignable_scopes uses include_capacity_provider_scope\n' >> "${TMP_TF_DIR}/main.tf"
+# A GENUINE HCL reference, not a comment mentioning the name. An earlier
+# revision appended only `# assignable_scopes uses include_capacity_provider_scope`,
+# which made this case prove nothing about a real reference: it passed solely
+# because the checker's trigger is a plain `grep -q` that also matches comment
+# text. The block below mirrors how the real module wires the flag
+# (terraform/modules/iam/azure/cudly-reservation-role/main.tf:68-71).
+#
+# Deliberately a `locals` block rather than a second azurerm_role_definition:
+# that resource requires a `permissions { ... }` block, whose actions would be
+# picked up by extract_tf_list and red the actions axis, making this case fail
+# for an unrelated reason instead of the missing variables.tf.
+cat >> "${TMP_TF_DIR}/main.tf" <<'HCL'
+
+locals {
+  capacity_assignable_scopes = compact([
+    "/subscriptions/00000000-0000-0000-0000-000000000001",
+    var.include_capacity_provider_scope ? "/providers/Microsoft.Capacity" : "",
+  ])
+}
+HCL
 run_case "TF flag without variables.tf exits 1" 1 \
   --tf-file  "${TMP_TF_DIR}/main.tf" \
   --arm-file "${FIXTURES}/matching-arm.json"
