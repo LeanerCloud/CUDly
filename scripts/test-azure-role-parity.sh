@@ -298,6 +298,59 @@ run_case "case-varied allowed roleDefinitionId exits 0" 0 \
   --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
   --arm-file "${FIXTURES}/uppercase-allowed-roledefinitionid-arm.json"
 
+# --- round-5: adversarial-review key-collision bypass -----------------------
+# Round 4's key-casing normalization (`with_entries(.key |= ascii_downcase)`)
+# closed the single-miscased-key bypass, but `from_entries` (which
+# `with_entries` is built on) keeps the LAST entry when two entries produce
+# the same key. An object that already carries BOTH case-variant spellings of
+# a property in the same object -- not just one miscased key, but two keys --
+# collapses to whichever is spelled last, and the discarded value is deleted
+# before any selector runs: not unmatched, gone. A template with the hostile
+# value first and a benign, canonical-looking value second was invisible.
+#
+# Cases 30-33 are one collision shape each, all evil-first (the hostile value
+# spelled first, discarded on normalization), all against the fix added in
+# this round; each must now be refused by name, not incidentally. Case 34 is
+# the benign-first control: the same collision with the two keys reversed, so
+# the hostile value survives normalization instead and the PRE-EXISTING
+# tenant-scope check already caught it -- proving the bypass really is
+# order-dependent (only evil-first was silently admitted) and that the new
+# refusal does not regress an already-caught shape.
+
+# Case 30: AssignableScopes (evil, tenant-wide) then assignableScopes (benign,
+# canonical) on the same roleDefinitions.properties object -- issue #1545
+# itself, reached via key collision instead of a single miscased key.
+run_case "key-collision AssignableScopes/assignableScopes exits 1" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/collision-assignablescopes-evil-first-arm.json"
+
+# Case 31: RoleDefinitionId (evil, built-in Owner) then roleDefinitionId
+# (benign, allowed Reader) on the same roleAssignment.properties object.
+run_case "key-collision RoleDefinitionId/roleDefinitionId exits 1" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/collision-roledefinitionid-evil-first-arm.json"
+
+# Case 32: Properties (evil, wraps Owner) then properties (benign, wraps
+# allowed Reader) as two TOP-LEVEL keys on the same roleAssignment resource.
+run_case "key-collision Properties/properties exits 1" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/collision-properties-evil-first-arm.json"
+
+# Case 33: Type (evil, Microsoft.Resources/deployments) then type (benign,
+# Microsoft.Authorization/roleAssignments) as two TOP-LEVEL keys. If the
+# collision drops the "Type"/deployments evidence, the resource looks like an
+# ordinary, fully-compliant roleAssignments grant -- invisible not just to
+# REFUSED_TYPES but to every other check too, which is why this fixture
+# carries an otherwise-allowed roleDefinitionId and no scope override.
+run_case "key-collision Type/type (evades REFUSED_TYPES too) exits 1" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/collision-type-evil-first-arm.json"
+
+# Case 34: benign-first control -- same collision as case 30, keys reversed.
+run_case "key-collision benign-first control still exits 1" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/collision-assignablescopes-benign-first-arm.json"
+
 echo ""
 echo "Results: ${pass} passed, ${fail} failed."
 [[ "$fail" -eq 0 ]]

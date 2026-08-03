@@ -61,6 +61,68 @@ if ! command -v jq &>/dev/null; then
   exit 2
 fi
 
+# --- refuse ambiguous same-object key collisions, before normalization -------
+# The normalization step just below folds every object key to lowercase with
+# `with_entries(.key |= ascii_downcase)`. jq's `from_entries` (which
+# `with_entries` is built on) keeps the LAST entry for a given key when two
+# entries produce the same key, so an object that already carries two
+# case-variant spellings of the same property in the SAME object -- e.g. both
+# "AssignableScopes" (ARM's tenant-wide grant) and "assignableScopes" (the
+# canonical one) -- collapses to whichever one is spelled LAST in the file.
+# Every selector below runs against the normalized copy, so the discarded
+# value is invisible to the entire rest of this script: not merely unmatched
+# by a case-sensitive selector (that failure mode is what the normalization
+# step above exists to close), but deleted before any selector runs. A
+# template carrying the hostile value first and a correctly-spelled,
+# canonical-looking value second passes clean.
+#
+# This is checked BEFORE $ARM_FILE is normalized, against the raw file: by
+# the time normalization has run, the collision has already been resolved and
+# there is nothing left to detect.
+#
+# Refuse rather than pick a winner. Which of two case-variant keys ARM itself
+# honors for a duplicate property in the same JSON object is not verified
+# here (doing so would require deploying a miscased template to a live
+# tenant) and is not something this script can determine from the file
+# alone -- unlike the single-miscased-key case above, where ARM's documented
+# case-insensitive deserialization justifies treating the miscased spelling
+# as equivalent to the correct one. If ARM takes the first entry, a hostile
+# value ahead of a benign one is a live escalation this script would
+# otherwise report as clean. If ARM takes the last entry the same way jq
+# does, this script's current behavior is coincidentally right, not
+# correctly reasoned about -- and either way, a template that is ambiguous
+# about its own grants must not be the thing that decides whether CI is
+# green.
+COLLISION_DETAIL=$(jq -r '
+  [.resources // [] | .. | objects
+     | . as $obj
+     | ($obj | keys_unsorted) as $keys
+     | ($keys | group_by(ascii_downcase) | map(select(length > 1))) as $collisions
+     | select($collisions | length > 0)
+     | { type: ($obj.type // $obj.Type // "<no type field>"),
+         name: ($obj.name // $obj.Name // "<no name field>"),
+         colliding_key_groups: ($collisions | map(join(" / "))) }
+  ]
+  | .[]
+  | "  resource type=" + .type + " name=" + .name + ": " + (.colliding_key_groups | join(", "))
+' "$ARM_FILE")
+
+if [[ -n "$COLLISION_DETAIL" ]]; then
+  echo "ERROR: ARM template contains an object with two case-variant spellings of" >&2
+  echo "       the same property key. Which one ARM itself honors is not something" >&2
+  echo "       this script can determine, and this is exactly the shape of issue" >&2
+  echo "       #1545: a hostile value spelled first and a benign, canonical-looking" >&2
+  echo "       value spelled second in the same object is deleted by this script's" >&2
+  echo "       own key-casing normalization before any check below ever sees it." >&2
+  echo "" >&2
+  echo "  ARM source: $ARM_FILE" >&2
+  echo "" >&2
+  echo "$COLLISION_DETAIL" >&2
+  echo "" >&2
+  echo "Remove the duplicate spelling and keep exactly one key per property." >&2
+  exit 1
+fi
+
 # --- normalize ARM property-key casing ---------------------------------------
 # Azure Resource Manager's resource-provider JSON deserializers are documented
 # as case-insensitive by default, so a resource typed correctly but with a

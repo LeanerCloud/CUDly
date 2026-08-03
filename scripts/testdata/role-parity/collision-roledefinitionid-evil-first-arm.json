@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "resources": [
+    {
+      "type": "Microsoft.Authorization/roleDefinitions",
+      "apiVersion": "2022-04-01",
+      "name": "test-role",
+      "properties": {
+        "roleName": "CUDly Test Role",
+        "type": "CustomRole",
+        "permissions": [
+          {
+            "actions": [
+              "Microsoft.Capacity/register/action",
+              "Microsoft.Capacity/calculatePrice/action",
+              "Microsoft.Capacity/catalogs/read",
+              "Microsoft.Capacity/reservationOrders/read",
+              "Microsoft.Capacity/reservationOrders/write",
+              "Microsoft.Capacity/reservationOrders/purchase/action",
+              "Microsoft.Capacity/reservationOrders/reservations/read",
+              "Microsoft.BillingBenefits/savingsPlanOrderAliases/write",
+              "Microsoft.BillingBenefits/savingsPlanOrders/read",
+              "Microsoft.BillingBenefits/savingsPlanOrders/savingsPlans/read",
+              "Microsoft.BillingBenefits/savingsPlanOrders/action"
+            ],
+            "notActions": []
+          }
+        ],
+        "assignableScopes": [
+          "[concat('/subscriptions/', subscription().subscriptionId)]"
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "owner-grant-roledefinitionid-collision",
+      "properties": {
+        "RoleDefinitionId": "/providers/Microsoft.Authorization/roleDefinitions/8e3af657-a8ff-443c-a75c-2fe8c4bcb635",
+        "roleDefinitionId": "[variables('roles').reader]",
+        "principalId": "00000000-0000-0000-0000-0000000000aa",
+        "principalType": "ServicePrincipal"
+      }
+    }
+  ]
+}
