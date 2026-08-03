@@ -55,11 +55,16 @@ RUN if [ ! -f .air.toml ]; then air init; fi
 
 EXPOSE 8080
 
-# Create non-root user for security; grant ownership of app dir and Go paths
-RUN addgroup -S devuser && adduser -S devuser -G devuser && \
+# Create non-root user for security; grant ownership of app dir and Go paths.
+# uid/gid are pinned explicitly rather than left to `adduser -S`, which picks
+# the first free system id and so varies with the base image's existing users.
+# A numeric USER below needs a value that is known here, not discovered later.
+RUN addgroup -g 1001 devuser && \
+    adduser -D -u 1001 -G devuser devuser && \
     chown -R devuser:devuser /app /root/go /root/.cache 2>/dev/null || true
 
-USER devuser
+# Numeric form so the identity is resolvable without the image's /etc/passwd.
+USER 1001:1001
 
 # Start with Air for hot reload
 CMD ["air", "-c", ".air.toml"]

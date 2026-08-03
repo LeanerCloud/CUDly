@@ -18,7 +18,9 @@ WORKDIR /e2e
 
 COPY --chown=e2e:e2e tests/e2e/ ./
 
-USER e2e
+# Numeric form so the identity is resolvable without the image's /etc/passwd.
+# 10001 is exactly the uid created above, so this is a rename only.
+USER 10001
 
 # Pre-compile the test binary so `docker compose up` failures are runtime
 # failures, not compile errors discovered after the stack is already up.
