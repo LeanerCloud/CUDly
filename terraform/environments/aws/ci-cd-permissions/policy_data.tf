@@ -205,8 +205,8 @@ resource "aws_iam_policy" "data" {
         # deploy SA from deleting or modifying unrelated RDS resources in the
         # same account.
         #
-        # rds:DescribeDBInstances deliberately does NOT live here; see
-        # RDSDescribeAccountWide below.
+        # NO rds:Describe* action lives here; they are all in
+        # RDSDescribeAccountWide below. See that statement for why.
         #
         # KNOWN DEAD SCOPES: the proxy actions below (DeleteDBProxy,
         # ModifyDBProxy, RegisterDBProxyTargets, DeregisterDBProxyTargets)
@@ -232,7 +232,6 @@ resource "aws_iam_policy" "data" {
           "rds:CreateDBSubnetGroup",
           "rds:DeleteDBInstance",
           "rds:DeleteDBSubnetGroup",
-          "rds:DescribeDBSubnetGroups",
           "rds:ListTagsForResource",
           "rds:DeleteDBProxy",
           "rds:DeregisterDBProxyTargets",
@@ -272,12 +271,34 @@ resource "aws_iam_policy" "data" {
         # provider's retry with the plain identifier only fires on NotFound,
         # and AccessDenied is not NotFound, so the plan hard-fails.
         #
+        # rds:DescribeDBSubnetGroups is here for the same reason as
+        # DescribeDBInstances, and it is worth being explicit about why,
+        # because the tempting simplification is wrong in both directions.
+        # Neither action lacks a resource type: per AWS's Service
+        # Authorization Reference both DO support one (`db` and `subgrp`
+        # respectively), and the real names DO match the patterns
+        # (cudly-<env>-<hex>-postgres against db:cudly-*,
+        # cudly-<env>-<hex>-db-subnet against subgrp:cudly-*). So this is not
+        # "ARN-scoped Describes are always dead" and it is not a name-prefix
+        # bug; the scoped grants were syntactically valid. What differs is the
+        # request shape: a resource-scoped grant authorizes only the form that
+        # targets one named resource, while the enumerate form (no identifier
+        # in the request) is authorized against the wildcard ARN. The
+        # production 403 on DescribeDBInstances is the empirical proof that
+        # the scoped form did not suffice, and DescribeDBSubnetGroups sits in
+        # exactly the same position: aws_db_subnet_group.main
+        # (terraform/modules/database/aws/main.tf) is created in every
+        # environment, so leaving it scoped just primes the next 403.
+        #
         # The DB proxy reads are here for a third reason: their resource ARNs
         # use the `db-proxy:`/`target-group:` segments with server-assigned
         # opaque ids (see the RDSResourceScoped note above), so no name-based
-        # ARN scope can ever match them.
+        # ARN scope can ever match them. Those are belt-and-braces rather than
+        # load-bearing: enable_rds_proxy is a literal `false` at
+        # terraform/environments/aws/database.tf:28, not a variable, so no
+        # tfvars can turn the proxy resources on.
         #
-        # All five are read-only and expose only resource metadata; every
+        # All six are read-only and expose only resource metadata; every
         # mutating RDS action stays ARN-scoped above.
         Sid    = "RDSDescribeAccountWide"
         Effect = "Allow"
@@ -287,6 +308,7 @@ resource "aws_iam_policy" "data" {
           "rds:DescribeDBProxies",
           "rds:DescribeDBProxyTargetGroups",
           "rds:DescribeDBProxyTargets",
+          "rds:DescribeDBSubnetGroups",
         ]
         Resource = "*"
       },
