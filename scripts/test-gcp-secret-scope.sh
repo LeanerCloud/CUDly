@@ -11,6 +11,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CHECK="${SCRIPT_DIR}/check-gcp-secret-scope.sh"
 FIXTURES="${SCRIPT_DIR}/testdata/gcp-secret-scope"
 
@@ -43,7 +44,15 @@ run_case "per-secret binding and non-secret project grant exit 0" 0 \
 run_case "project-scope secretAccessor exits 1" 1 \
   "${FIXTURES}/project-scope.tf.fixture"
 
-run_case "folder/org scope and _binding variant exit 1" 1 \
+run_case "project-scope _binding variant exits 1" 1 \
+  "${FIXTURES}/project-binding.tf.fixture"
+
+# Folder and organization scope are asserted separately. They used to share one
+# fixture, which meant a guard that caught only one of them still passed.
+run_case "folder-scope _member variant exits 1" 1 \
+  "${FIXTURES}/folder-scope.tf.fixture"
+
+run_case "organization-scope _binding variant exits 1" 1 \
   "${FIXTURES}/org-scope.tf.fixture"
 
 # A violation must still be found when mixed in with clean files.
@@ -57,8 +66,28 @@ run_case "missing file exits 2" 2 \
 
 run_case "unknown flag exits 2" 2 --bogus-flag
 
-# The real tree must be clean: this is the regression half of issue #1614.
-run_case "repository terraform/ tree is clean" 0
+# The JSON encoding is not parseable by this scanner, so it must be rejected
+# rather than reported clean. Exit 2 (cannot check) rather than 0 (checked and
+# clean) is the whole point.
+run_case "tf.json is rejected rather than silently passed" 2 \
+  "${FIXTURES}/json-encoding.tf.json"
+
+# The regression half of issue #1614: the module that carried the over-broad
+# grant must stay free of one. This is a claim the guard can actually check.
+run_case "cleanup-function module has no scope-wide Secret Manager grant" 0 \
+  "${REPO_ROOT}/terraform/modules/compute/gcp/cleanup-function/main.tf"
+
+# The default scan roots (terraform/ + iac/) must hold no violation of the shape
+# this guard detects.
+#
+# Deliberately NOT phrased as "the tree is clean". It is not:
+# terraform/environments/gcp/ci-cd-permissions/service_account.tf grants
+# project-scope roles/secretmanager.admin through `locals` + `for_each`, which
+# this guard structurally cannot see (issue #1686). That grant is believed
+# legitimate, but the distinction matters: this case asserts what the guard
+# verifies, not a broader property it never inspects. An earlier version of this
+# suite claimed the tree was clean, which was false as written.
+run_case "default scan roots hold no directly expressed scope-wide grant" 0
 
 echo ""
 echo "Results: ${pass} passed, ${fail} failed."
