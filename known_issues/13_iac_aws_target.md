@@ -43,7 +43,7 @@ Terraform prompt for the value interactively or hard-error under
 property holds; the operator is still misled by the "Optional" label first.
 **Status:** ✔️ Resolved
 
-**Resolved by:** #TODO_PR_NUMBER (closes #1640) — `aws-wif-cli.sh.tmpl` drops the subject-less else
+**Resolved by:** #1691 (closes #1640) — `aws-wif-cli.sh.tmpl` drops the subject-less else
 branch entirely and validates `OIDC_SUBJECT_CLAIM` (non-empty, no whitespace/
 `$`/`*`) before making any AWS call; `federationIaCData` gains an
 `OIDCSubjectClaim` field threaded through `shellEscapeData`, `buildCFParamsJSON`,
