@@ -54,14 +54,43 @@ Redeploying alone is not sufficient.
 Remediation, in this order:
 
 ```bash
-# 1. Check what the pre-fix template actually left behind, tenant-wide.
-#    Any row scoped at or under /providers/Microsoft.Capacity is over-broad.
-#    Project the assignment id: it is what step 2 deletes by.
+# 1. Check what the pre-fix template actually left behind. This takes TWO
+#    queries, because neither one alone can see both shapes described above.
+#    Project the assignment id in each: it is what step 2 deletes by.
+#
+# 1a. The tenant-level provider path. `--all` cannot reach this: the CLI
+#     documents it as "show all assignments under the current subscription",
+#     and /providers/Microsoft.Capacity sits outside any subscription, so a
+#     surviving tenant-wide grant would not appear in 1b at all. Nor is it a
+#     parent scope of the subscription, so --include-inherited does not
+#     surface it either. Query the scope directly. Anything returned here is
+#     over-broad by definition, so there is no filter to get wrong.
+#     Reading at this scope needs tenant-level rights (User Access
+#     Administrator at tenant root, or Global Administrator with elevated
+#     access); an authorization error here is NOT an all-clear -- re-run it
+#     with a principal that can read the scope.
+az role assignment list \
+  --assignee <SP-object-id> \
+  --scope "/providers/Microsoft.Capacity" \
+  --query "[].{id:id, scope:scope, role:roleDefinitionName}" \
+  -o table
+
+# 1b. The subscription and below, which is where the malformed
+#     doubled-providers target shown above would land. Run once per onboarded
+#     subscription (`az account set --subscription <subId>` between runs).
+#     Filtered with `grep -i`, not a JMESPath `--query "[?contains(...)]"`:
+#     JMESPath's contains() is case-sensitive, while ARM provider namespaces
+#     are not, so a row stored as /providers/microsoft.capacity satisfies the
+#     grant and silently fails the filter. Do not reintroduce a
+#     case-sensitive path match here.
+#     Projected as a JMESPath list, not a hash, so the tsv column order is
+#     fixed by the query rather than by key ordering: id, scope, role. Step 2
+#     deletes by the FIRST column.
 az role assignment list \
   --assignee <SP-object-id> \
   --all \
-  --query "[?contains(scope, 'Microsoft.Capacity')].{id:id, scope:scope, role:roleDefinitionName}" \
-  -o table
+  --query "[].[id, scope, roleDefinitionName]" \
+  -o tsv | grep -i 'microsoft\.capacity'
 
 # 2. Revoke anything step 1 listed, FIRST, before redeploying.
 #    Delete by --ids, not by --scope: the pre-fix template could produce the
@@ -79,8 +108,10 @@ az deployment sub create \
   --no-prompt
 ```
 
-Step 1 returning nothing is a good outcome, and the expected one if the
-malformed target described above simply failed to apply. Step 3 is still
+Both step-1 queries returning nothing is a good outcome, and the expected one
+if the malformed target described above simply failed to apply. Only 1a and 1b
+together are a clean result: 1b alone cannot see a tenant-level grant, and 1a
+alone cannot see the malformed subscription-relative one. Step 3 is still
 required either way: it is what removes the tenant entry from
 `assignableScopes`.
 
