@@ -126,5 +126,76 @@ for temporary AWS credentials via `sts:AssumeRoleWithWebIdentity`, and injects `
 
 ### Trust policy conditions
 
-The trust policy allows only workflows from `repo:LeanerCloud/CUDly:*`. If you fork CUDly or use a
-different repo, set `github_repo` in `terraform.tfvars` to the new `owner/repo` value and re-apply.
+The trust policy does **not** allow all workflows from the repo: `repo:LeanerCloud/CUDly:*` would
+let any branch, including an unprotected feature branch, mint valid deploy credentials. Instead the
+OIDC `sub` claim is checked against an explicit, enumerated allowlist (`role.tf`'s
+`token.actions.githubusercontent.com:sub` condition):
+
+- `repo:LeanerCloud/CUDly:ref:refs/heads/main`, for workflows dispatched on `main` with no
+  `environment:` binding.
+- `repo:LeanerCloud/CUDly:environment:<name>`, one entry per exact environment name a job that
+  assumes this role binds to. A job's `environment:` **replaces** the ref-based subject with an
+  environment-scoped one (never both), so every such value must be listed explicitly or that job
+  cannot authenticate. See the comment above the `sub` list in `role.tf` for the full derivation:
+  which workflow/job each entry covers, and what was deliberately left out and why (`pull_request`
+  jobs, and an unreachable `workflow_call` input path), kept in one place so it cannot drift out of
+  sync with the policy itself.
+
+If you fork CUDly or use a different repo, set `github_repo` in `terraform.tfvars` to the new
+`owner/repo` value and re-apply; the prefix changes, the enumerated suffixes do not. If you add a
+new workflow job that assumes this role and binds to a not-yet-listed `environment:`, add its exact
+subject to `role.tf` and re-apply *before* that job runs, or `configure-aws-credentials` fails with
+`AssumeRoleWithWebIdentity`/`Not authorized`.
+
+### This allowlist alone does not restrict deploys to `main`
+
+The owner constraint on this repo is: only `main` may deploy. Three **different** GitHub-side
+controls keep getting conflated across this repo's issues, and this module (and this allowlist)
+implements only the first of them:
+
+1. **Allowlist membership** (`role.tf`'s `sub` list, this module): can the job authenticate to AWS
+   at all? Nothing below matters if this says no.
+2. **Deployment branch policy** (a GitHub environment setting, not configured by this module): which
+   *branch* may trigger a deploy to that environment. This is what "only `main` may deploy" actually
+   requires, and nothing in this module sets it.
+3. **Required reviewers / protection rules** (a GitHub environment setting, not configured by this
+   module): *who* must approve before a job bound to that environment proceeds. The subject of
+   #1591/#1674/#1660, not this module.
+
+`ref:refs/heads/main` in the allowlist enforces (2) on its own for a job with no `environment:`
+binding: no environment, no policy needed, the ref check *is* the restriction. `environment:<name>`
+subjects enforce **neither (2) nor (3)** on their own, because the OIDC `sub` for those is
+`repo:<repo>:environment:<name>`, which is ref-agnostic: it says which environment the job bound to,
+nothing about which branch triggered the run. A `workflow_dispatch` fired from any branch against an
+environment-bound job presents the exact same subject a `main` run would, so this allowlist admits
+it. The only control that reattaches the branch requirement is a deployment branch policy
+(`custom_branch_policies` restricted to `main`) on that environment, configured on the GitHub side.
+
+**Live state, checked against the GitHub API directly** (`gh api repos/LeanerCloud/CUDly/environments`),
+not assumed from an earlier issue's snapshot:
+
+| Environment | Exists today? | Protection rules | Deployment branch policy |
+| --- | --- | --- | --- |
+| `dev` | Yes | none | none |
+| `staging` | **No** | n/a | n/a |
+| `prod` | **No** | n/a | n/a |
+| `aws-fargate-dev` | Yes | none | none |
+| `aws-fargate-staging` | Yes | none | none |
+| `aws-fargate-prod` | **No** | n/a | n/a |
+| `aws-db-dev` / `aws-db-staging` / `aws-db-prod` | **No** (all three) | n/a | n/a |
+| `aws-lambda-{dev,staging,prod}-rollback` | **No** (all three) | n/a | n/a |
+| `aws-fargate-{dev,staging,prod}-rollback` | **No** (all three) | n/a | n/a |
+
+Only 3 of the 15 environments this allowlist names exist yet, and none of the 3, including `dev`
+which multiple deploy jobs already use in production, has a branch policy or protection rules of any
+kind. Every environment above needs (2) configured (and the 12 that don't exist yet also need to be
+created) before this allowlist actually delivers "only `main` deploys" rather than "only these
+environments deploy, from any branch". This module has no GitHub provider configured (no
+`provider "github"` or `github_repository_*` resource anywhere under `terraform/` or `iac/`), so
+none of this, creation, branch policy, or reviewers, can be done declaratively today; it is a
+manual, per-environment step in **Settings -> Environments** on the repo. Adding a GitHub Terraform
+provider so this becomes code is #1660's scope, not this module's.
+
+Related: #1648 (this allowlist gap, control 1), #1660 (controls 2 and 3: environments need creating,
+a branch policy, and protection rules), #1674 (binds the destroy workflows' jobs to environments
+covered by this list).
