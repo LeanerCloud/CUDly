@@ -145,8 +145,11 @@ COPY --from=frontend-builder --chown=cudly:cudly /frontend/dist /app/static
 COPY --chown=cudly:cudly scripts/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Switch to non-root user
-USER cudly
+# Switch to non-root user. Numeric form so the identity is resolvable without
+# the image's /etc/passwd: Kubernetes `runAsNonRoot` and similar admission
+# checks cannot verify a name-form USER and will refuse to start the pod.
+# 1000:1000 is exactly the uid:gid created above, so this is a rename only.
+USER 1000:1000
 
 # Environment defaults
 ENV DB_MIGRATIONS_PATH=/app/migrations \
@@ -162,8 +165,14 @@ ENV DB_MIGRATIONS_PATH=/app/migrations \
 EXPOSE 8080
 
 # Health check (works for HTTP mode, ignored in Lambda mode)
+#
+# JSON (exec) form, but invoking /bin/sh explicitly: the `||` is a shell
+# operator, so a bare exec-form list would hand `||` and `exit` to curl as
+# literal arguments and the healthcheck would never report unhealthy correctly.
+# This is the same process tree the shell form produced, written so the
+# dependency on a shell is declared rather than implied.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD ["/bin/sh", "-c", "curl -f http://localhost:8080/health || exit 1"]
 
 # Unified entrypoint handles both Lambda and HTTP modes
 ENTRYPOINT ["/entrypoint.sh"]
