@@ -271,14 +271,21 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 // Empty provider ("") is treated as AWS (pre-multi-cloud legacy rows).
 // An execution with no recommendations returns false so it falls through to the
 // safe-fail path (nothing to re-drive anyway).
+//
+// The empty-recommendations condition lives here rather than in
+// RedriveRefusalReason because it is not a statement about provider duplicate
+// risk: a re-drive that purchases nothing cannot double-buy. It is this sweep's
+// own "nothing to do, hand it to a human" condition, and the safe-fail path it
+// selects is benign (the row is marked failed and surfaces in History). Folding
+// it into the shared predicate would export it to the retry endpoint, where the
+// consequence is the opposite of benign: a permanent refusal (issue #1668 CR).
 func allRecsSafeToRedrive(exec *config.PurchaseExecution) bool {
-	return RedriveRefusalReason(exec) == ""
+	return len(exec.Recommendations) > 0 && RedriveRefusalReason(exec) == ""
 }
 
 // RedriveRefusalReason returns a short operator-facing reason why exec must not
-// be re-driven, or "" when every recommendation on it is safe to re-drive. It
-// is the bool form above expressed as an explanation, so the two can never
-// disagree.
+// be re-driven, or "" when every recommendation on it carries a provider-side
+// guarantee that a second attempt collapses onto the first.
 //
 // This is the single source of truth for re-drive safety. Both the reaper's
 // automatic in-place re-drive (via allRecsSafeToRedrive) and the user-facing
@@ -288,12 +295,15 @@ func allRecsSafeToRedrive(exec *config.PurchaseExecution) bool {
 // landed Azure savings-plans row bought a second savings plan, which cannot be
 // canceled.
 //
+// It answers exactly one question: could re-driving these recommendations buy
+// something twice. An execution with no recommendations buys nothing, so it has
+// no duplicate risk and gets no refusal here. Callers that need "there is
+// nothing worth re-driving" must say so themselves, as allRecsSafeToRedrive
+// does above.
+//
 // The reason is rendered verbatim to the operator, so it explains the refusal
 // in product terms rather than naming internals.
 func RedriveRefusalReason(exec *config.PurchaseExecution) string {
-	if len(exec.Recommendations) == 0 {
-		return "this execution carries no recommendations, so what it did or did not purchase cannot be established"
-	}
 	for i := range exec.Recommendations {
 		if reason := recRedriveRefusalReason(exec.Recommendations[i]); reason != "" {
 			return reason

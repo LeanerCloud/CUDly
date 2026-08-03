@@ -1330,10 +1330,12 @@ function wireRowActionHandlers(container: HTMLElement): void {
       } catch (retryError) {
         console.error('Failed to retry purchase:', retryError);
         // Surface structured retry hints from the backend (issue #47):
+        //   * redrive_unsafe: permanent, this purchase can never be retried
         //   * ops_hint — operator-actionable reason; takes priority
         //   * retry_attempt_n + threshold — soft-block message
         //   * else — fall back to the raw error message
         const err = retryError as Error & { details?: Record<string, unknown> };
+        const redriveUnsafe = err.details?.['redrive_unsafe'] === true;
         const opsHint = typeof err.details?.['ops_hint'] === 'string' ? err.details['ops_hint'] : '';
         const retryAttemptN = typeof err.details?.['retry_attempt_n'] === 'number' ? err.details['retry_attempt_n'] : undefined;
         const threshold = typeof err.details?.['threshold'] === 'number' ? err.details['threshold'] : undefined;
@@ -1344,6 +1346,35 @@ function wireRowActionHandlers(container: HTMLElement): void {
           detailMessage = `already retried ${retryAttemptN} times (threshold ${threshold}) — confirm the override prompt to force`;
         }
         const finalMessage = detailMessage || err.message || 'unknown error';
+        // redrive_unsafe (issue #1668) is terminal, not a failed attempt: the
+        // provider offers no way to tell a re-drive apart from a fresh
+        // purchase, so clicking Retry again would buy a second commitment.
+        // Every other branch here describes something the user or an operator
+        // can act on and then retry, so leaving the button live is right for
+        // them and wrong for this one. Replace the button with the same
+        // ops-hint badge renderActionCell shows on rows that are not
+        // retryable, and do NOT re-enable; the whole point of the gate is
+        // that re-clicking must not be on offer.
+        //
+        // This covers the row in place. A later loadHistory() re-render brings
+        // the button back, because the History row projection does not yet
+        // carry the re-drive verdict (only the retry response does), so
+        // renderActionCell has nothing to gate on. Issue #1714 tracks moving
+        // the verdict onto the row so the button is never offered at all. The
+        // backend refuses either way; this is about not inviting the click.
+        if (redriveUnsafe) {
+          showToast({ message: `Cannot retry: ${finalMessage}`, kind: 'error', timeout: 8_000 });
+          // Built as a DOM node rather than an HTML string: the reason is
+          // server-generated and interpolates the row's provider, so it is
+          // untrusted input. textContent removes the injection sink entirely
+          // instead of relying on an escape helper being applied correctly.
+          const badge = document.createElement('span');
+          badge.className = 'history-ops-hint';
+          badge.title = 'This purchase cannot be retried - retrying could buy a second commitment';
+          badge.textContent = `⚠ ${finalMessage}`;
+          btn.replaceWith(badge);
+          return;
+        }
         showToast({ message: `Failed to retry: ${finalMessage}`, kind: 'error' });
         btn.disabled = false;
         return;

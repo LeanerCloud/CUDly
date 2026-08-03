@@ -42,6 +42,8 @@ const (
 	redriveUnknownExecID    = "22222222-3333-4444-5555-666666666604"
 	redriveForceExecID      = "22222222-3333-4444-5555-666666666605"
 	redriveMixedExecID      = "22222222-3333-4444-5555-666666666606"
+	redriveNoRecsExecID     = "22222222-3333-4444-5555-666666666607"
+	redriveNoRecsPlanID     = "33333333-4444-5555-6666-777777777701"
 
 	redriveLineageKey = "lineage-1668"
 )
@@ -232,6 +234,46 @@ func TestRetryOfLandedAzureSavingsPlanIsNotForceOverridable(t *testing.T) {
 	assert.Empty(t, tokens,
 		"?force=true must not buy a second Azure savings plan; force overrides the attempt threshold, not provider safety")
 	assertRedriveRefused(t, err, "second savings plan")
+}
+
+// TestRetryOfFailedRecommendationlessExecutionIsAllowed is the guard for the
+// far side of the gate: it must fire only where the duplicate hazard is real,
+// because a refusal here is permanent.
+//
+// createPurchaseExecutionsTx (handler_plans.go) and getOrCreateExecution
+// (purchase/notifications.go) both create executions with NO recommendations,
+// and a failed approval email marks those "failed". They buy nothing, so they
+// cannot double-buy, and retrying is the only recovery an operator has. An
+// earlier revision of this gate refused them along with the genuinely unsafe
+// rows, which would have stranded the whole class permanently.
+//
+// Empty here always means empty as created, never "we could not load them":
+// GetExecutionByID propagates a recommendations unmarshal failure as an error,
+// which the handler turns into a 500 long before this gate runs.
+func TestRetryOfFailedRecommendationlessExecutionIsAllowed(t *testing.T) {
+	creator := retryCallerID
+	failed := &config.PurchaseExecution{
+		ExecutionID: redriveNoRecsExecID,
+		PlanID:      redriveNoRecsPlanID,
+		StepNumber:  1,
+		Status:      "failed",
+		// A transient send failure, deliberately not one of the
+		// persistent-failure hints, so the ops-hint gate stays out of the way.
+		Error:           "failed to send approval email: SES throttle exceeded",
+		CreatedByUserID: &creator,
+		Source:          common.PurchaseSourceWeb,
+		// Recommendations deliberately nil: this is how both creation paths
+		// above persist the row.
+	}
+	session := &Session{UserID: retryCallerID, Email: "operator@example.com"}
+
+	successor, updated := runSessionRetryAllowed(t, failed, session, false, true, sessionRetryReq())
+
+	assert.Empty(t, successor.Recommendations,
+		"the successor carries the predecessor's (empty) recommendations, so it buys nothing; that is precisely why refusing it bought no safety")
+	assert.Equal(t, 1, successor.RetryAttemptN, "the retry chain still advances")
+	require.NotNil(t, updated.RetryExecutionID, "the original must be linked to its successor")
+	assert.Equal(t, successor.ExecutionID, *updated.RetryExecutionID)
 }
 
 // TestRetryOfMixedExecutionWithOneAzureSavingsPlanIsRefused guards the whole

@@ -465,6 +465,88 @@ describe('History inline Retry button (issue #47)', () => {
     expect(btn?.disabled).toBe(false);
   });
 
+  // Issue #1668: a 409 carrying redrive_unsafe means the purchase can NEVER
+  // be retried, because the provider cannot tell a re-drive apart from a fresh
+  // purchase and a second attempt would buy a second commitment. Every other
+  // error branch describes something that can be fixed and retried, so those
+  // correctly leave the button live. Rendering this one the same way is what
+  // the p0 exists to prevent: the user reads "failed, try again", clicks
+  // again, and buys the duplicate the backend gate just refused.
+  test('redrive_unsafe refusal renders as terminal: no retry affordance left on the row (issue #1668)', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+    (confirmDialog as jest.Mock).mockResolvedValue(true);
+    const reason = 'Azure savings plans have no provider-side duplicate guard, so re-driving this purchase would buy a second savings plan that cannot be canceled';
+    const refusal = Object.assign(new Error('this purchase cannot be retried safely: ' + reason), {
+      status: 409,
+      details: { ops_hint: reason, redrive_unsafe: true },
+    });
+    (api.retryPurchase as jest.Mock).mockRejectedValue(refusal);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [makeRow({ purchase_id: 'r-1', created_by_user_id: ADMIN_USER.id })],
+    });
+    console.error = jest.fn();
+
+    await loadHistory();
+    const btn = document.querySelector<HTMLButtonElement>('.history-retry-btn');
+    btn?.click();
+    await new Promise((r) => setTimeout(r, 10));
+
+    // The affordance is gone from the document, not merely disabled: a
+    // disabled button still reads as "temporarily unavailable".
+    expect(document.querySelector('.history-retry-btn')).toBeNull();
+
+    // Replaced by the same badge renderActionCell uses for rows that cannot
+    // be retried, carrying the provider's reason.
+    const badge = document.querySelector('.history-ops-hint');
+    expect(badge).not.toBeNull();
+    expect(badge?.textContent).toContain('second savings plan');
+
+    // The badge is built with textContent, so an untrusted reason cannot
+    // inject markup.
+    expect(badge?.querySelector('*')).toBeNull();
+
+    // And the toast says cannot, not failed.
+    expect(showToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'error',
+        message: expect.stringContaining('Cannot retry:'),
+      }),
+    );
+  });
+
+  // The complement of the test above: an ordinary refusal must keep behaving
+  // as it did. ops_hint alone (operator-fixable) is not terminal -- the
+  // operator fixes the configuration and retries the same row.
+  test('ops_hint refusal without redrive_unsafe still leaves the Retry button in place', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+    (confirmDialog as jest.Mock).mockResolvedValue(true);
+    const refusal = Object.assign(new Error('this failure is operator-fixable'), {
+      status: 409,
+      details: { ops_hint: 'Set FROM_EMAIL tfvar then retry' },
+    });
+    (api.retryPurchase as jest.Mock).mockRejectedValue(refusal);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [makeRow({ purchase_id: 'r-1', created_by_user_id: ADMIN_USER.id })],
+    });
+    console.error = jest.fn();
+
+    await loadHistory();
+    const btn = document.querySelector<HTMLButtonElement>('.history-retry-btn');
+    btn?.click();
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(document.querySelector('.history-retry-btn')).not.toBeNull();
+    expect(btn?.disabled).toBe(false);
+    expect(showToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'error',
+        message: expect.stringContaining('Failed to retry:'),
+      }),
+    );
+  });
+
   test('admin WITHOUT Purchaser membership does not see Retry on rows they did not create (CR #924 F5)', async () => {
     // Issue #923 + CR #924 F5: retry-any:purchases is carved out of
     // admin:*. canRetryFailedRow must gate on

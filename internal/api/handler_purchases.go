@@ -1741,6 +1741,19 @@ func checkRetryEligibilityGates(failedExec *config.PurchaseExecution, req *event
 	// the operator clicking Retry is asking for. An operator who genuinely
 	// wants a second commitment can submit a fresh purchase, which is an
 	// explicit buy rather than a retry of one that may already exist.
+	//
+	// A refusal here is permanent: nothing about the row can change to make
+	// it retryable. So the gate must fire only where the duplicate hazard is
+	// real. An execution carrying no recommendations buys nothing and cannot
+	// double-buy, and rec-less executions are legitimately created by
+	// createPurchaseExecutionsTx (handler_plans.go) and getOrCreateExecution
+	// (purchase/notifications.go); a failed approval email marks those
+	// "failed", and retrying is the only recovery. Refusing them would strand
+	// that whole class forever, so RedriveRefusalReason stays silent on the
+	// empty case. Empty here always means empty as created, never "we could
+	// not load them": GetExecutionByID propagates a recommendations unmarshal
+	// failure as an error (config/store_postgres.go), which this handler has
+	// already turned into a 500 well before this gate.
 	if reason := purchase.RedriveRefusalReason(failedExec); reason != "" {
 		return NewClientErrorWithDetails(409,
 			"this purchase cannot be retried safely: "+reason,
