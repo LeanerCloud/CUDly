@@ -98,6 +98,38 @@ resource "aws_iam_policy" "compute_b" {
         }
       },
       {
+        # ecr:PutImageScanningConfiguration is the writer for
+        # aws_ecr_repository's image_scanning_configuration block. Its sibling
+        # ecr:PutImageTagMutability is granted in policy_compute.tf's
+        # ECRRepositoryScoped but this one was not, so any change to
+        # scan_on_push (or importing a repository whose setting differs from
+        # the config) fails the apply. Same repository ARN scope as the
+        # statement it belongs with; it lives here only because
+        # policy_compute.tf is at the 6144-char ceiling.
+        Sid      = "ECRImageScanningConfig"
+        Effect   = "Allow"
+        Action   = ["ecr:PutImageScanningConfiguration"]
+        Resource = "arn:aws:ecr:*:*:repository/cudly-*"
+      },
+      {
+        # The ELB update path that policy_compute.tf's ELBFargate misses.
+        # ELBFargate grants Create/Delete plus the Modify* family, but changing
+        # a load balancer's subnets or security groups (which is what bumping
+        # az_count does) goes through the Set* family instead, and
+        # ModifyListenerAttributes is the writer whose reader
+        # (DescribeListenerAttributes) is already granted. Resource = "*"
+        # matches ELBFargate, whose ARNs are not name-scopeable.
+        Sid    = "ELBFargateSetAttributes"
+        Effect = "Allow"
+        Action = [
+          "elasticloadbalancing:ModifyListenerAttributes",
+          "elasticloadbalancing:SetIpAddressType",
+          "elasticloadbalancing:SetSecurityGroups",
+          "elasticloadbalancing:SetSubnets",
+        ]
+        Resource = "*"
+      },
+      {
         Sid    = "KMSAliasMutate"
         Effect = "Allow"
         Action = [

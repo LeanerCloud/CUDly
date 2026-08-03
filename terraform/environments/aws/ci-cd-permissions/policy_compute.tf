@@ -152,6 +152,19 @@ resource "aws_iam_policy" "compute" {
         # Function mutations live in policy_compute_b.tf — the function
         # resource type does not support aws:ResourceTag per the AWS
         # Service Authorization Reference, so it needs ARN scoping.
+        #
+        # StringEqualsIgnoreCase for the same reason as KMSMutateTaggedOnly
+        # below (see PR #1496): the distribution's Project tag comes from
+        # local.common_tags (terraform/environments/aws/main.tf), which sets
+        # Project = var.project_name, and project_name is the lowercase
+        # "cudly". That resource-level tag overrides the provider's
+        # default_tags value of "CUDly" for this distribution, so a
+        # case-sensitive match against "CUDly" never matched and every action
+        # in this statement was silently denied. This is the same defect
+        # #1496 fixed on the KMS statements; it was left unfixed here because
+        # enable_cdn is false in every tfvars, so nothing exercised it. Note
+        # it would also have killed the destroy path: deleting a distribution
+        # requires UpdateDistribution to disable it first.
         Sid    = "CloudFrontMutateTaggedOnly"
         Effect = "Allow"
         Action = [
@@ -162,7 +175,7 @@ resource "aws_iam_policy" "compute" {
         ]
         Resource = "*"
         Condition = {
-          StringEquals = {
+          StringEqualsIgnoreCase = {
             "aws:ResourceTag/Project" = "CUDly"
           }
         }
