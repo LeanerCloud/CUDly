@@ -9,6 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -20,6 +23,48 @@ import (
 func getMigrationsPath() string {
 	_, filename, _, _ := runtime.Caller(0)
 	return filepath.Dir(filename)
+}
+
+// migrationVersionsDesc returns every migration version present on disk, newest
+// first, read from the `.up.sql` filenames.
+func migrationVersionsDesc(t *testing.T) []uint {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(getMigrationsPath(), "*.up.sql"))
+	require.NoError(t, err, "globbing migration files must succeed")
+	require.NotEmpty(t, paths, "no migration files found")
+
+	versions := make([]uint, 0, len(paths))
+	for _, p := range paths {
+		base := filepath.Base(p)
+		idx := strings.IndexByte(base, '_')
+		require.Positive(t, idx, "migration filename %q must be <version>_<name>.up.sql", base)
+		n, err := strconv.ParseUint(base[:idx], 10, 64)
+		require.NoError(t, err, "migration filename %q must start with a numeric version", base)
+		versions = append(versions, uint(n))
+	}
+	sort.Slice(versions, func(i, j int) bool { return versions[i] > versions[j] })
+	return versions
+}
+
+// previousMigrationVersion returns the highest migration version strictly below
+// version.
+//
+// Migration numbers in this repository are NOT contiguous -- renumbering to
+// dodge collisions with in-flight PRs leaves gaps (60->63, 67->70, 81->83,
+// 83->86, 93->95). So `version - 1` is not necessarily a real migration, and a
+// test that rolls back one step lands on the next version that actually EXISTS.
+// Deriving it from the files on disk keeps such tests correct no matter where
+// the gaps fall -- including the case that motivated this helper, a gap
+// immediately below head.
+func previousMigrationVersion(t *testing.T, version uint) uint {
+	t.Helper()
+	for _, v := range migrationVersionsDesc(t) {
+		if v < version {
+			return v
+		}
+	}
+	t.Fatalf("no migration version below %d", version)
+	return 0
 }
 
 // captureStdout redirects os.Stdout to a pipe and returns a function that
