@@ -93,8 +93,19 @@ fi
 # correctly reasoned about -- and either way, a template that is ambiguous
 # about its own grants must not be the thing that decides whether CI is
 # green.
+#
+# Scanned objects are the root document itself, plus everything under
+# `.resources`, not `.resources` alone: the normalization step below is
+# `walk(...)` from the true root, so a root-level collision -- e.g. both
+# "resources" and "Resources", or both "$schema" and "$Schema" -- is folded
+# by the SAME last-entry-wins rule and is just as invisible to every
+# selector below once normalized. A hostile "Resources" array spelled ahead
+# of a benign "resources" array at the top of the file is this same bypass
+# one level higher in the document tree, and was unreachable by a scan
+# rooted at `.resources` because that scan never treats the root object
+# itself as one of the objects being inspected for collisions.
 COLLISION_DETAIL=$(jq -r '
-  [.resources // [] | .. | objects
+  [., (.resources // [] | ..) | objects
      | . as $obj
      | ($obj | keys_unsorted) as $keys
      | ($keys | group_by(ascii_downcase) | map(select(length > 1))) as $collisions
@@ -408,11 +419,17 @@ fi
 #   match, so the roleDefinitionId allowlist above is bypassed simply by
 #   changing the resource type.
 #
-#   storageAccounts/providers/roleAssignments -- the legacy ARM spelling for
-#   a role assignment as a child resource (a full `.../providers/...` type
-#   path) rather than a separate top-level roleAssignments resource with a
-#   `scope` property. Same grant, invisible to the same selectors for the
-#   same reason.
+#   */providers/roleAssignments -- the legacy ARM spelling for a role
+#   assignment as a child resource (a full `.../providers/...` type path)
+#   rather than a separate top-level roleAssignments resource with a `scope`
+#   property. Same grant, invisible to the same selectors for the same
+#   reason, under ANY parent resource type -- storageAccounts is only the
+#   example issue #1545 happened to use. Matched by suffix rather than
+#   enumerated per parent type, the same way ESCAPE_TOKENS above matches
+#   `managementGroups` independently of its provider spelling: an allowlist
+#   naming one parent (e.g. only microsoft.storage/storageaccounts) leaves
+#   every other parent's `.../providers/roleAssignments` child free to grant
+#   silently, and there is no fixed set of parent types to enumerate here.
 #
 # Rooted at `.resources`, same reasoning as extract_arm_list above: a
 # decorative object elsewhere in the template (variables, outputs) is never
@@ -422,12 +439,13 @@ REFUSED_TYPES='["microsoft.resources/deployments",
   "microsoft.resources/deploymentscripts",
   "microsoft.resources/deploymentstacks",
   "microsoft.authorization/roleeligibilityschedulerequests",
-  "microsoft.authorization/roleassignmentschedulerequests",
-  "microsoft.storage/storageaccounts/providers/roleassignments"]'
+  "microsoft.authorization/roleassignmentschedulerequests"]'
 REFUSED_TYPE_COUNT=$(
   jq --argjson types "$REFUSED_TYPES" '
     [.resources // [] | .. | objects | select(has("type")) | select((.type|type) == "string")
-       | select((.type|ascii_downcase) as $t | $types | index($t) != null)]
+       | select((.type|ascii_downcase) as $t
+                | ($types | index($t) != null)
+                or ($t | endswith("/providers/roleassignments")))]
     | length
   ' "$ARM_FILE_NORM"
 )

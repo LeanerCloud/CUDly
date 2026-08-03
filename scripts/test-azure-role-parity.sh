@@ -351,6 +351,34 @@ run_case "key-collision benign-first control still exits 1" 1 \
   --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
   --arm-file "${FIXTURES}/collision-assignablescopes-benign-first-arm.json"
 
+# --- round-6: adversarial-review, root scope and refusal-list gaps ----------
+# Two gaps CodeRabbit found in round 5's own fixes: the key-collision scan
+# only looked inside `.resources`, and the legacy-child-roleAssignment
+# refusal only named one parent resource type.
+
+# Case 35: a root-level case-variant key collision -- "Resources" (evil,
+# carries the tenant-wide grant from issue #1545) spelled first, "resources"
+# (benign, canonical) spelled last. The round-5 collision scan was rooted at
+# `.resources`, so it never treated the root document object itself as one of
+# the objects being inspected; normalization then folds the two root keys the
+# same last-entry-wins way as any other collision, silently keeping only the
+# benign array and discarding the evil one before any downstream check runs.
+run_case "root-level key-collision Resources/resources exits 1" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/collision-root-resources-evil-first-arm.json"
+
+# Case 36 (Fix B follow-up): the same legacy child-scoped roleAssignment shape
+# as case 27, under Microsoft.KeyVault/vaults instead of
+# Microsoft.Storage/storageAccounts. REFUSED_TYPES named only the storage
+# parent by exact string, so any other parent's
+# "*/providers/roleAssignments" child -- granting the same way, invisible to
+# the same roleAssignments-only type match -- passed silently. Matched by
+# suffix now, the same way ESCAPE_TOKENS matches managementGroups independently
+# of its provider spelling.
+run_case "legacy child-type roleAssignments under non-storage parent exits 1" 1 \
+  --tf-file  "${FIXTURES}/matching-tf.tf.fixture" \
+  --arm-file "${FIXTURES}/legacy-child-keyvault-roleassignment-owner-arm.json"
+
 echo ""
 echo "Results: ${pass} passed, ${fail} failed."
 [[ "$fail" -eq 0 ]]
