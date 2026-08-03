@@ -1758,9 +1758,16 @@ func checkRetryEligibilityGates(failedExec *config.PurchaseExecution, req *event
 		return NewClientErrorWithDetails(409,
 			"this purchase cannot be retried safely: "+reason,
 			// ops_hint reuses the key the History UI already renders in
-			// place of the Retry button; redrive_unsafe distinguishes this
-			// permanent refusal from the operator-fixable hints below, which
-			// do clear once the configuration is fixed.
+			// place of the Retry button, so the reason reaches the operator
+			// today. redrive_unsafe distinguishes this PERMANENT refusal from
+			// the operator-fixable hints below, which clear once the
+			// configuration is fixed.
+			//
+			// No frontend reads redrive_unsafe yet, so it looks unused: issue
+			// #1714 is its intended consumer, where History will render a
+			// terminal badge instead of offering a Retry button that always
+			// 409s. That is presentation only. This refusal is enforced here,
+			// server-side, and does not depend on any client honoring it.
 			map[string]any{"ops_hint": reason, "redrive_unsafe": true})
 	}
 

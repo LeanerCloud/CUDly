@@ -913,12 +913,8 @@ export interface ApiError extends Error {
   status?: number;
   // Structured detail fields the backend attaches to a 4xx response
   // alongside the human `error` message (e.g. `ops_hint`,
-  // `retry_attempt_n`, `threshold`, `retry_execution_id`,
-  // `redrive_unsafe`). Callers can branch on these without
-  // substring-matching the message. `redrive_unsafe: true` (issue #1668)
-  // marks a refusal as PERMANENT: unlike `ops_hint`, nothing an operator
-  // does makes the purchase retryable, so callers must not leave a retry
-  // affordance on screen.
+  // `retry_attempt_n`, `threshold`, `retry_execution_id`). Callers
+  // can branch on these without substring-matching the message.
   // See internal/api/handler.go for the flattening — keys are
   // promoted to the top level of the JSON body.
   details?: Record<string, unknown>;

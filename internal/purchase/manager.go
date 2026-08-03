@@ -247,38 +247,23 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 	return execErr
 }
 
-// allRecsSafeToRedrive reports whether every recommendation in the execution
-// can be safely re-driven without risking a double-purchase. A re-drive is safe
-// when the underlying provider purchase API is idempotent under the
-// DeriveIdempotencyToken(idempotencyLineageKey(exec), i) scheme used by
-// execution.go. An in-place re-drive (this path) keeps the same row, so the
-// lineage key is unchanged and the token is reproduced exactly.
+// allRecsSafeToRedrive reports whether this sweep's automatic in-place re-drive
+// may run for exec. Two conditions: every recommendation must be safe to
+// re-drive, which RedriveRefusalReason below owns and documents, AND the
+// execution must carry at least one recommendation.
 //
-// Safe providers / services (issue #639):
-//   - AWS (all services): tag-guard or ClientToken deduplication (#636/#638).
-//   - Azure reservations (compute, relational-db, cache, nosql, memorydb,
-//     search, data-warehouse): DoIdempotentPurchaseTwoStep performs a
-//     tag-based lookup before purchasing (#729 / #721).
-//   - GCP compute (CUDs): server-side RequestId + deterministic name from
-//     the token (#654).
+// The empty-recommendations condition is this sweep's own, deliberately not part
+// of the shared safety policy. It is not a duplicate-risk statement: a re-drive
+// that purchases nothing cannot double-buy. It means "nothing here worth
+// re-driving, hand it to a human", and the safe-fail path it selects is benign
+// (the row is marked failed and surfaces in History, where a human can retry
+// it). Folding it into the shared predicate would export it to the user-facing
+// retry endpoint, where the consequence is the opposite of benign: a permanent
+// refusal of a row that cannot double-buy, with no recovery path (issue #1668).
 //
-// NOT safe - safe-fail path preserved:
-//   - Azure savings-plans: the OrderAlias API uses time.Now().UnixNano() as
-//     the alias name; there is no server-side idempotency key and no
-//     tag-based lookup implemented yet. Re-driving would create a duplicate
-//     savings plan.
-//
-// Empty provider ("") is treated as AWS (pre-multi-cloud legacy rows).
-// An execution with no recommendations returns false so it falls through to the
-// safe-fail path (nothing to re-drive anyway).
-//
-// The empty-recommendations condition lives here rather than in
-// RedriveRefusalReason because it is not a statement about provider duplicate
-// risk: a re-drive that purchases nothing cannot double-buy. It is this sweep's
-// own "nothing to do, hand it to a human" condition, and the safe-fail path it
-// selects is benign (the row is marked failed and surfaces in History). Folding
-// it into the shared predicate would export it to the retry endpoint, where the
-// consequence is the opposite of benign: a permanent refusal (issue #1668 CR).
+// An in-place re-drive keeps the same row, so the lineage key is unchanged and
+// DeriveIdempotencyToken(idempotencyLineageKey(exec), i) reproduces the original
+// token exactly. That is what lets the provider-side dedupe engage at all.
 func allRecsSafeToRedrive(exec *config.PurchaseExecution) bool {
 	return len(exec.Recommendations) > 0 && RedriveRefusalReason(exec) == ""
 }
@@ -294,6 +279,24 @@ func allRecsSafeToRedrive(exec *config.PurchaseExecution) bool {
 // Before issue #1668 only the reaper consulted it, and clicking Retry on a
 // landed Azure savings-plans row bought a second savings plan, which cannot be
 // canceled.
+//
+// Safe providers / services (issue #639):
+//   - AWS (all services): tag-guard or ClientToken deduplication (#636/#638).
+//   - Azure reservations (compute, relational-db, cache, nosql, memorydb,
+//     search, data-warehouse): DoIdempotentPurchaseTwoStep performs a
+//     tag-based lookup before purchasing (#729 / #721).
+//   - GCP compute (CUDs): server-side RequestId + deterministic name from
+//     the token (#654).
+//
+// NOT safe:
+//   - Azure savings-plans: the OrderAlias API uses time.Now().UnixNano() as
+//     the alias name; there is no server-side idempotency key and no
+//     tag-based lookup implemented yet. Re-driving would create a duplicate
+//     savings plan.
+//   - Any provider this function does not recognize, rather than assuming a
+//     guard exists.
+//
+// Empty provider ("") is treated as AWS (pre-multi-cloud legacy rows).
 //
 // It answers exactly one question: could re-driving these recommendations buy
 // something twice. An execution with no recommendations buys nothing, so it has
