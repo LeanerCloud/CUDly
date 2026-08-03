@@ -22,6 +22,17 @@ resource "aws_iam_policy" "networking" {
           "ec2:CreateEgressOnlyInternetGateway",
           "ec2:CreateInternetGateway",
           "ec2:CreateLaunchTemplate",
+          # The fck-nat launch template sources its AMI from a
+          # most_recent = true data.aws_ami lookup, so every upstream AMI
+          # republish takes the launch template's UPDATE path rather than
+          # create: the provider calls CreateLaunchTemplateVersion for the new
+          # image_id and ModifyLaunchTemplate to move the default version
+          # (resourceLaunchTemplateUpdate). Only Create/DeleteLaunchTemplate
+          # were granted, so the first AMI rotation after the ASG exists would
+          # have failed the apply.
+          "ec2:CreateLaunchTemplateVersion",
+          "ec2:DeleteLaunchTemplateVersions",
+          "ec2:ModifyLaunchTemplate",
           "ec2:CreateRoute",
           "ec2:CreateRouteTable",
           "ec2:CreateSecurityGroup",
@@ -39,6 +50,12 @@ resource "aws_iam_policy" "networking" {
           "ec2:DeleteRouteTable",
           "ec2:DeleteSecurityGroup",
           "ec2:DeleteSubnet",
+          # ec2:DeleteTags is the other half of ec2:CreateTags: the provider's
+          # tag update path removes dropped keys with DeleteTags before adding
+          # new ones with CreateTags, so dropping any key from common_tags /
+          # default_tags on an existing VPC, subnet, route table, gateway,
+          # security group or launch template fails the apply without it.
+          "ec2:DeleteTags",
           "ec2:DeleteVpc",
           "ec2:DeleteVpcEndpoints",
           "ec2:DescribeAccountAttributes",
@@ -66,6 +83,11 @@ resource "aws_iam_policy" "networking" {
           "ec2:ModifyVpcAttribute",
           "ec2:ModifyVpcEndpoint",
           "ec2:ReplaceRoute",
+          # aws_route_table_association's update path calls
+          # ReplaceRouteTableAssociation rather than
+          # Disassociate + Associate, so moving a subnet between route tables
+          # needs it even though both halves of that pair are granted.
+          "ec2:ReplaceRouteTableAssociation",
           "ec2:RevokeSecurityGroupEgress",
           "ec2:RevokeSecurityGroupIngress",
         ]
@@ -73,16 +95,28 @@ resource "aws_iam_policy" "networking" {
       },
       {
         # ec2:RunInstances is needed for the fck-nat AutoScaling group
-        # (one t4g.nano per AZ). Scoping to the fck-nat launch template
-        # and restricting allowed instance types prevents the deploy SA
-        # from launching arbitrary large instances and attaching CUDly IAM
-        # roles to exfiltrate credentials or run compute at account cost.
+        # (one t4g.nano per AZ). Restricting allowed instance types prevents
+        # the deploy SA from launching arbitrary large instances and attaching
+        # CUDly IAM roles to exfiltrate credentials or run compute at account
+        # cost.
+        #
+        # The operator MUST be StringEqualsIfExists, not StringEquals. AWS
+        # authorizes a single RunInstances call against every resource type it
+        # touches (instance, volume, network-interface, security-group,
+        # subnet, image, key-pair, launch-template), and ec2:InstanceType is
+        # only in the request context for the INSTANCE leg. With a plain
+        # StringEquals the key is absent on every other leg, the condition
+        # evaluates false there, and the call is denied as a whole even though
+        # the instance type is correct. StringEqualsIfExists keeps the t4g.nano
+        # restriction exactly where the key exists and lets the supporting legs
+        # through, which is the pattern the IAM condition-operators reference
+        # documents for precisely this call.
         Sid      = "EC2RunInstancesFckNAT"
         Effect   = "Allow"
         Action   = ["ec2:RunInstances"]
         Resource = "*"
         Condition = {
-          StringEquals = {
+          StringEqualsIfExists = {
             "ec2:InstanceType" = ["t4g.nano"]
           }
         }

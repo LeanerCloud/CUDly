@@ -168,18 +168,33 @@ resource "aws_iam_policy" "data" {
         Resource = "*"
       },
       {
+        # Service-linked roles are created lazily by AWS on the FIRST use of a
+        # service in an account/region, and the caller needs
+        # iam:CreateServiceLinkedRole for it. That makes these gaps invisible
+        # in an account that already has the role and a hard failure in a
+        # fresh region, which is exactly the kind of latent break this audit
+        # was meant to surface. autoscaling (fck-nat ASG, on every deploy
+        # path), elasticloadbalancing and ecs (Fargate ALB and cluster) were
+        # all missing; note that ecs.application-autoscaling is a different
+        # principal from plain ecs and does not cover it.
         Sid    = "IAMServiceLinkedRole"
         Effect = "Allow"
         Action = ["iam:CreateServiceLinkedRole"]
         Resource = [
           "arn:aws:iam::*:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS",
           "arn:aws:iam::*:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService",
+          "arn:aws:iam::*:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling",
+          "arn:aws:iam::*:role/aws-service-role/elasticloadbalancing.amazonaws.com/AWSServiceRoleForElasticLoadBalancing",
+          "arn:aws:iam::*:role/aws-service-role/ecs.amazonaws.com/AWSServiceRoleForECS",
         ]
         Condition = {
           StringLike = {
             "iam:AWSServiceName" = [
               "rds.amazonaws.com",
               "ecs.application-autoscaling.amazonaws.com",
+              "autoscaling.amazonaws.com",
+              "elasticloadbalancing.amazonaws.com",
+              "ecs.amazonaws.com",
             ]
           }
         }
