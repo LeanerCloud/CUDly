@@ -1,7 +1,9 @@
 package iac
 
 import (
+	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -116,6 +118,95 @@ func TestGCPTargetUpgradeOrderingIsPinned(t *testing.T) {
 	}
 	if !strings.Contains(grant, "create_before_destroy = true") {
 		t.Errorf("%s: cudly_wif must set create_before_destroy so the narrow member exists before the pool-wide one is removed", gcpTargetMainTF)
+	}
+}
+
+// setupScript is the shell onboarding path. It is the second way a customer can
+// configure the same pool and provider; both paths default to pool 'cudly-pool'
+// and provider 'cudly-provider', so a customer who uses one and then the other
+// lands on the same provider rather than on two independent ones.
+const setupScript = "../arm/CUDly-CrossSubscription/setup-gcp-wif.sh"
+
+// awsMappingBlock captures the body of the AWS branch of attribute_mapping in
+// main.tf, i.e. everything between the ternary's opening brace and the OIDC
+// alternative.
+var awsMappingBlock = regexp.MustCompile(`(?s)attribute_mapping = var\.provider_type == "aws" \? \{(.*?)\n\s*\} : var\.oidc_attribute_mapping`)
+
+// hclMappingPair matches one `"key" = "value"` entry inside that block.
+var hclMappingPair = regexp.MustCompile(`(?m)^\s*"([^"]+)"\s*=\s*"(.*)"\s*$`)
+
+// scriptMappingLiteral captures the quoted, comma-delimited mapping dict the
+// script hands to gcloud's --attribute-mapping. It is anchored on the
+// attribute.aws_role key so it selects the AWS dict and not the OIDC one.
+var scriptMappingLiteral = regexp.MustCompile(`"([^"]*attribute\.aws_role=[^"]*)"`)
+
+// tfAWSMapping returns main.tf's AWS attribute_mapping as sorted "key=value"
+// entries, the form both sides are compared in.
+func tfAWSMapping(t *testing.T) []string {
+	t.Helper()
+
+	block := awsMappingBlock.FindStringSubmatch(readMainTF(t))
+	if block == nil {
+		t.Fatalf("%s: AWS branch of attribute_mapping not found", gcpTargetMainTF)
+	}
+	pairs := hclMappingPair.FindAllStringSubmatch(block[1], -1)
+	if len(pairs) == 0 {
+		t.Fatalf("%s: AWS attribute_mapping has no entries", gcpTargetMainTF)
+	}
+
+	got := make([]string, 0, len(pairs))
+	for _, p := range pairs {
+		got = append(got, p[1]+"="+p[2])
+	}
+	slices.Sort(got)
+	return got
+}
+
+// scriptAWSMapping returns the script's AWS attribute mapping as sorted
+// "key=value" entries. Every literal carrying the mapping must agree, so the
+// script cannot create a provider with one mapping and reconcile against
+// another.
+func scriptAWSMapping(t *testing.T) []string {
+	t.Helper()
+
+	raw, err := os.ReadFile(setupScript)
+	if err != nil {
+		t.Fatalf("read %s: %v", setupScript, err)
+	}
+	literals := scriptMappingLiteral.FindAllStringSubmatch(string(raw), -1)
+	if len(literals) == 0 {
+		t.Fatalf("%s: no --attribute-mapping dict containing attribute.aws_role found", setupScript)
+	}
+	for _, l := range literals[1:] {
+		if l[1] != literals[0][1] {
+			t.Fatalf("%s: AWS attribute mapping is spelled two different ways:\n%s\n%s", setupScript, literals[0][1], l[1])
+		}
+	}
+
+	got := strings.Split(literals[0][1], ",")
+	slices.Sort(got)
+	return got
+}
+
+// TestGCPTargetMappingMatchesSetupScript pins the two onboarding paths to the
+// same attribute mapping.
+//
+// The script refuses to reuse a provider whose configuration differs from the
+// one it would have written, so a mapping this module writes but the script
+// does not expect is not a cosmetic divergence: a customer onboarded via the
+// Terraform bundle who later runs the script against the same project is told
+// to delete the provider and start over, which detaches every live federated
+// session and which the next terraform apply then fights. An extra key does
+// that even when nothing reads its value, so the whole set is compared here,
+// not just the keys the attribute_condition and the impersonation grant consume.
+func TestGCPTargetMappingMatchesSetupScript(t *testing.T) {
+	tfMapping := tfAWSMapping(t)
+	scriptMapping := scriptAWSMapping(t)
+
+	if !slices.Equal(tfMapping, scriptMapping) {
+		t.Errorf("AWS attribute mapping differs between the two onboarding paths; a provider created by one is unusable by the other.\n%s:\n  %s\n%s:\n  %s",
+			gcpTargetMainTF, strings.Join(tfMapping, "\n  "),
+			setupScript, strings.Join(scriptMapping, "\n  "))
 	}
 }
 

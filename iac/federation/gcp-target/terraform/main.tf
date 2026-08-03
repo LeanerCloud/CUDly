@@ -123,17 +123,24 @@ resource "google_iam_workload_identity_pool_provider" "cudly" {
   # refused. STS drops the path from assumed-role ARNs, so the same trick does
   # not work through an IAM role.
   #
-  # This expression, the attribute_condition below, and the impersonation grant's
-  # member are byte-identical to their counterparts in
-  # arm/CUDly-CrossSubscription/setup-gcp-wif.sh, so the two customer-facing
-  # onboarding paths pin the same identity and the script's condition check
-  # accepts a provider this module created. (The script does not map
-  # attribute.account, which is mapped here and unused by the condition; it
-  # compares conditions, not mappings, so the extra attribute is inert there.)
+  # This expression, the attribute_condition below, the impersonation grant's
+  # member, and the set of keys mapped here are byte-identical to their
+  # counterparts in arm/CUDly-CrossSubscription/setup-gcp-wif.sh, so the two
+  # customer-facing onboarding paths pin the same identity and configure the
+  # same provider. The two paths do converge on one provider rather than staying
+  # independent: both default to pool 'cudly-pool' and provider
+  # 'cudly-provider', so a customer who applies this module and then runs the
+  # script lands on the provider this resource created.
+  #
+  # Do not map an attribute here without mapping it in the script too. The
+  # script refuses to reuse a provider whose configuration differs from the one
+  # it would have written, and the only remedy it offers is deleting the
+  # provider, which detaches every live federated session. An extra key on one
+  # side alone is enough to trigger that, even when nothing reads its value.
+  # TestGCPTargetMappingMatchesSetupScript guards the parity.
   attribute_mapping = var.provider_type == "aws" ? {
     "google.subject"     = "assertion.arn"
     "attribute.aws_role" = "assertion.arn.contains('assumed-role') ? assertion.arn.extract('{account_arn}assumed-role/') + 'assumed-role/' + assertion.arn.extract('assumed-role/{role_name}/') : assertion.arn"
-    "attribute.account"  = "assertion.account"
   } : var.oidc_attribute_mapping
 
   # Both branches are non-null: aws_role_name and oidc_subject are validated
