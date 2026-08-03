@@ -407,6 +407,18 @@ export interface APIKeyInfo {
   created_at: string;
   last_used_at?: string;
   permissions?: api.Permission[];
+  // Usage counters (issue #340/#344 deferred sub-task). Optional so
+  // older mock data / cached responses without the columns don't blow
+  // up the renderer -- the backend always sends them as of migration
+  // 000094. request_count_window is a FIXED/TUMBLING window count, not
+  // a true rolling 24h total -- request_count_window_start says exactly
+  // which period it covers, and both come back as 0 / absent once that
+  // window has closed.
+  // null when the key predates migration 000094, i.e. the lifetime volume is
+  // unknown rather than zero.
+  request_count_total?: number | null;
+  request_count_window?: number;
+  request_count_window_start?: string;
 }
 
 export interface CreateAPIKeyResponse {

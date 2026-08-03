@@ -106,7 +106,7 @@ func TestRouterAuthUser_UserAPIKeyPrincipalAvoidsSecondValidation(t *testing.T) 
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 	user := &auth.User{ID: "api-key-user", Email: "user@example.com"}
-	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "user-key").Return(nil, user, nil).Once()
+	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "user-key").Return(&auth.UserAPIKey{ID: "key-1"}, user, nil).Once()
 	mockAuth.On("GetUserPermissionsAPI", mock.Anything, "api-key-user").Return([]auth.APIPermission{}, nil).Once()
 	h := &Handler{auth: mockAuth}
 	r := NewRouter(h)
@@ -162,7 +162,7 @@ func TestHandleRequest_UserAPIKeyPrincipalValidatedOnce(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 	user := &auth.User{ID: "api-key-user", Email: "user@example.com"}
-	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "user-key").Return(nil, user, nil).Once()
+	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "user-key").Return(&auth.UserAPIKey{ID: "key-1"}, user, nil).Once()
 	mockAuth.On("GetUserPermissionsAPI", mock.Anything, "api-key-user").Return([]auth.APIPermission{}, nil).Once()
 	h := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
@@ -185,7 +185,7 @@ func TestHandleRequest_MixedCredentialsSessionOnlyHandlerUsesSession(t *testing.
 	mockAuth := new(MockAuthService)
 	apiUser := &auth.User{ID: "api-key-user", Email: "key@example.com"}
 	session := &Session{UserID: "session-user", Email: "session@example.com"}
-	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "user-key").Return(nil, apiUser, nil).Once()
+	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "user-key").Return(&auth.UserAPIKey{ID: "key-1"}, apiUser, nil).Once()
 	mockAuth.On("ValidateSession", ctx, "session-token").Return(session, nil).Once()
 	mockAuth.On("GetUser", mock.Anything, "session-user").Return(&User{ID: "session-user", Email: "session@example.com"}, nil).Once()
 	h := &Handler{auth: mockAuth}
@@ -210,7 +210,7 @@ func TestHandleRequest_MixedCredentialsAuthAdminRetainsAPIKeyRestrictions(t *tes
 	mockAuth := new(MockAuthService)
 	apiUser := &auth.User{ID: "api-key-user", Email: "key@example.com"}
 	session := &Session{UserID: "admin-session-user", Email: "admin@example.com"}
-	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "user-key").Return(nil, apiUser, nil).Once()
+	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "user-key").Return(&auth.UserAPIKey{ID: "key-1"}, apiUser, nil).Once()
 	mockAuth.On("ValidateSession", ctx, "admin-session-token").Return(session, nil).Once()
 	mockAuth.On("HasPermissionAPI", mock.Anything, "admin-session-user", auth.ActionAdmin, auth.ResourceAll).Return(true, nil).Once()
 	mockAuth.On("HasAPIKeyPermissionAPI", mock.Anything, "user-key", auth.ActionView, auth.ResourceUsers).
@@ -307,7 +307,7 @@ func TestRequireAuth_UserAPIKey(t *testing.T) {
 
 	userRec := &auth.User{ID: "uid-123", Email: "alice@example.com"}
 	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "valid-user-key").
-		Return(nil, userRec, nil)
+		Return(&auth.UserAPIKey{ID: "key-1"}, userRec, nil)
 
 	h := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{

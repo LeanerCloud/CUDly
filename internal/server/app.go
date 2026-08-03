@@ -1178,6 +1178,10 @@ func (a *authServiceAdapter) ListUserAPIKeysAPI(ctx context.Context, userID stri
 	return a.service.ListUserAPIKeysAPI(ctx, userID)
 }
 
+func (a *authServiceAdapter) GetAPIKeysUsageStatsAPI(ctx context.Context, userID string) (any, error) {
+	return a.service.GetAPIKeysUsageStatsAPI(ctx, userID)
+}
+
 func (a *authServiceAdapter) DeleteAPIKeyAPI(ctx context.Context, userID, keyID string) error {
 	return a.service.DeleteAPIKeyAPI(ctx, userID, keyID)
 }
@@ -1188,6 +1192,10 @@ func (a *authServiceAdapter) RevokeAPIKeyAPI(ctx context.Context, userID, keyID 
 
 func (a *authServiceAdapter) ValidateUserAPIKeyAPI(ctx context.Context, apiKey string) (any, any, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	return a.service.ValidateUserAPIKeyAPI(ctx, apiKey)
+}
+
+func (a *authServiceAdapter) RecordAPIKeyUsageAsync(keyID string) {
+	a.service.RecordUsageAsync(keyID)
 }
 
 func (a *authServiceAdapter) HasAPIKeyPermissionAPI(ctx context.Context, apiKey, action, resource string) (userID, keyID string, allowed bool, err error) {

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/mail"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/pkg/logging"
@@ -43,9 +45,16 @@ const (
 
 // Service handles authentication and authorization.
 type Service struct {
-	store              StoreInterface
-	emailSender        EmailSenderInterface
-	lastUsedSFG        singleflight.Group
+	store       StoreInterface
+	emailSender EmailSenderInterface
+	lastUsedSFG singleflight.Group
+	// pendingUsage accumulates per-API-key request counts that have not yet
+	// been flushed to the store, keyed by API key ID. pendingUsageMu guards
+	// the map itself; the counters are incremented and drained atomically
+	// without it. See Service.RecordUsageAsync for why the count is buffered
+	// instead of incremented once per flush.
+	pendingUsage       map[string]*atomic.Int64
+	pendingUsageMu     sync.Mutex
 	onPasswordChange   func(ctx context.Context, userID, newPassword string)
 	dashboardURL       string
 	csrfKey            []byte

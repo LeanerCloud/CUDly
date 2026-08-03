@@ -575,6 +575,43 @@ export interface APIKeyInfo {
   created_at: string;
   last_used_at?: string;
   permissions?: Permission[];
+  // Usage counters (issue #340/#344 deferred sub-task).
+  // Optional in the type so older mock data / cached responses without
+  // the columns don't blow up the renderer -- but the backend always
+  // sends them as of migration 000094. request_count_window is a
+  // FIXED/TUMBLING window count, not a true rolling 24h total --
+  // request_count_window_start says exactly which period it covers, and
+  // both come back as 0 / absent once that window has closed, so a key
+  // that went idle reads as no current activity rather than replaying a
+  // count from an old window.
+  // null when the key was already in use before migration 000094 added the
+  // counters, so its true lifetime volume is unrecoverable. Render it as
+  // "no data", never as 0.
+  request_count_total?: number | null;
+  request_count_window?: number;
+  request_count_window_start?: string;
+}
+
+export interface APIKeysUsageStatsTopKey {
+  id: string;
+  name: string;
+  key_prefix: string;
+  request_count_window: number;
+}
+
+export interface APIKeysUsageStats {
+  // Keys that are neither revoked nor expired, i.e. the ones the API will
+  // actually accept.
+  total_active: number;
+  // Sum of each key's fixed-window counter across still-open windows --
+  // not a true rolling 24h total, and the windows are not aligned.
+  total_requests_window: number;
+  // Sums only the keys whose lifetime count is known. When lifetime_partial
+  // is true at least one key predates the counters, so this is a lower bound
+  // and must not be presented as an exact figure.
+  total_requests_lifetime: number;
+  lifetime_partial?: boolean;
+  top_keys: APIKeysUsageStatsTopKey[];
 }
 
 export interface CreateAPIKeyRequest {

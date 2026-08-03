@@ -6,8 +6,6 @@ package auth
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"testing"
 	"time"
 
@@ -217,58 +215,40 @@ func TestCSRFToken_CrossSessionRejected(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// #1027 — ValidateUserAPIKey uses singleflight (no panic under concurrency)
+// #1027 — RecordUsageAsync uses singleflight (no panic under concurrency)
 // ---------------------------------------------------------------------------
 
-// TestValidateUserAPIKey_LastUsedSingleflight verifies that ValidateUserAPIKey
-// does not panic when called, and that the background last-used update
-// completes without errors. The singleflight fix ensures concurrent requests
-// for the same key do not spawn unbounded goroutines.
-func TestValidateUserAPIKey_LastUsedSingleflight(t *testing.T) {
-	ctx := context.Background()
+// TestRecordUsageAsync_Singleflight verifies that a usage booking does not
+// panic, and that the background counter write completes without errors. The
+// singleflight fix ensures concurrent requests for the same key do not spawn
+// unbounded goroutines.
+//
+// Booking used to hang off ValidateUserAPIKey, which is why this test was
+// originally written against it; usage is now booked once per request by the
+// API layer, so the goroutine is exercised through RecordUsageAsync directly.
+func TestRecordUsageAsync_Singleflight(t *testing.T) {
 	mockStore := new(MockStore)
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	service := createTestService(mockStore, new(MockEmailSender))
 
-	rawKey := "test-api-key-singleflight"
-	h := sha256.Sum256([]byte(rawKey))
-	keyHash := base64.RawURLEncoding.EncodeToString(h[:])
 	keyID := "sfg-key-id"
 
-	user := &User{
-		ID:     "sfg-user",
-		Email:  "sfg@example.com",
-		Active: true,
-	}
-	apiKey := &UserAPIKey{
-		ID:        keyID,
-		UserID:    user.ID,
-		IsActive:  true,
-		KeyHash:   keyHash,
-		KeyPrefix: rawKey[:8],
-	}
-
-	// done is closed by the mock's Run callback when UpdateAPIKeyLastUsed is
+	// done is closed by the mock's Run callback when RecordAPIKeyUsage is
 	// invoked, confirming the background goroutine ran to completion without
 	// relying on time.Sleep.
 	done := make(chan struct{})
-	mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(apiKey, nil).Maybe()
-	mockStore.On("GetUserByID", ctx, user.ID).Return(user, nil).Maybe()
-	mockStore.On("UpdateAPIKeyLastUsed", mock.Anything, keyID).
+	mockStore.On("RecordAPIKeyUsage", mock.Anything, keyID, mock.Anything).
 		Run(func(args mock.Arguments) { close(done) }).
 		Return(nil).Once()
 
-	gotKey, gotUser, err := service.ValidateUserAPIKey(ctx, rawKey)
-	require.NoError(t, err)
-	assert.Equal(t, keyID, gotKey.ID)
-	assert.Equal(t, user.ID, gotUser.ID)
+	service.RecordUsageAsync(keyID)
 
-	// Wait for the background goroutine to invoke UpdateAPIKeyLastUsed.
+	// Wait for the background goroutine to invoke RecordAPIKeyUsage.
 	select {
 	case <-done:
 		// background update completed
 	case <-time.After(5 * time.Second):
-		t.Fatal("background UpdateAPIKeyLastUsed did not complete within 5s")
+		t.Fatal("background RecordAPIKeyUsage did not complete within 5s")
 	}
 }
 

@@ -631,6 +631,10 @@ func TestHandler_revokeAPIKey_PermissionDenied(t *testing.T) {
 	mockAuth.AssertNotCalled(t, "RevokeAPIKeyAPI", mock.Anything, mock.Anything, mock.Anything)
 }
 
+// listAPIKeysUsageStats handler tests moved to handler_apikeys_usage_test.go
+// alongside the handler (CodeRabbit finding on PR #1523 -- keep the usage-
+// stats bounded context in its own file pair).
+
 func TestFormatTimePtr(t *testing.T) {
 	t.Run("nil pointer returns empty string", func(t *testing.T) {
 		result := formatTimePtr(nil)

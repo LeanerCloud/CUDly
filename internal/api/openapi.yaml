@@ -1385,6 +1385,29 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
 
+  /api/api-keys/usage-stats:
+    get:
+      operationId: getAPIKeysUsageStats
+      tags: [APIKeys]
+      summary: Section-level usage summary for the caller's API keys
+      description: |
+        Aggregates per-key counters into a single summary card: number of
+        usable keys, total requests (current window + lifetime), and the
+        top-3 keys by current-window request count. Scoped to the calling
+        user's own keys. Counts from windows that have already closed are
+        reported as zero, not as current activity.
+      responses:
+        '200':
+          description: API keys usage stats
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIKeysUsageStats'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
   /api/api-keys/{id}/revoke:
     parameters:
       - $ref: '#/components/parameters/ResourceID'
@@ -2259,6 +2282,89 @@ components:
           format: date-time
         is_active:
           type: boolean
+        request_count_total:
+          type: integer
+          format: int64
+          nullable: true
+          description: |
+            Lifetime request count since the key was created. Null when the
+            count is unknown: keys already in use before migration 000094
+            introduced the counter have no recoverable lifetime figure, and
+            reporting 0 for them would assert a volume nobody measured. A key
+            that has genuinely never been used reports 0, not null.
+        request_count_window:
+          type: integer
+          format: int64
+          description: |
+            Request count since request_count_window_start. This is a
+            FIXED/TUMBLING window, not a true trailing-24h rolling count:
+            once the window is older than 24h, the next request restarts
+            both this count and request_count_window_start, discarding
+            whatever count the previous window had even if some of those
+            requests happened within the preceding 24h.
+
+            Reported as 0 once the window is older than 24h, even though
+            the underlying row still holds the closed window's count until
+            the key is used again: a key that went idle has no current
+            activity. Use request_count_window_start to see exactly which
+            period this count covers.
+        request_count_window_start:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            Timestamp the current request_count_window began at. Null when
+            the key has never recorded a request, and also null once the
+            window has closed, since there is then no current period for
+            the count to refer to.
+
+    APIKeysUsageStats:
+      type: object
+      properties:
+        total_active:
+          type: integer
+          description: |
+            Number of the caller's API keys that are currently usable, i.e.
+            neither revoked nor past their expiry. Matches the keys the
+            authentication path will accept.
+        total_requests_window:
+          type: integer
+          format: int64
+          description: |
+            Sum of request_count_window across the caller's keys, counting
+            only windows that are still open. Each summand is a fixed-window
+            count (see APIKeyInfo.request_count_window), not a true rolling
+            24h total, and the windows are not aligned with each other.
+        total_requests_lifetime:
+          type: integer
+          format: int64
+          description: |
+            Sum of request_count_total across the caller's keys, counting only
+            the keys whose lifetime count is known. See lifetime_partial.
+        lifetime_partial:
+          type: boolean
+          description: |
+            True when at least one key was excluded from total_requests_lifetime
+            because its usage predates the counters, making that total a lower
+            bound rather than an exact figure.
+        top_keys:
+          type: array
+          description: |
+            Top keys by request_count_window (lifetime count as
+            tiebreaker). At most 3 entries; keys with zero window
+            activity are omitted.
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+              key_prefix:
+                type: string
+              request_count_window:
+                type: integer
+                format: int64
 
     # -- Configuration ------------------------------------------------------
     ConfigResponse:

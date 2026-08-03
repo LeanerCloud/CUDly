@@ -3,13 +3,28 @@
  */
 
 import { apiRequest } from './client';
-import type { GetAPIKeysResponse, CreateAPIKeyRequest, CreateAPIKeyResponse } from './types';
+import type {
+  GetAPIKeysResponse,
+  CreateAPIKeyRequest,
+  CreateAPIKeyResponse,
+  APIKeysUsageStats,
+} from './types';
 
 /**
  * Get all API keys
  */
 export async function getApiKeys(): Promise<GetAPIKeysResponse> {
   return apiRequest<GetAPIKeysResponse>('/api-keys');
+}
+
+/**
+ * Get section-level API keys usage stats (issue #340/#344 deferred
+ * sub-task). Returns the per-section summary card -- totals + top keys
+ * ranked by request_count_window, which is a FIXED/TUMBLING window count
+ * rather than a rolling 24h total. Scoped to the calling user's own keys.
+ */
+export async function getApiKeysUsageStats(): Promise<APIKeysUsageStats> {
+  return apiRequest<APIKeysUsageStats>('/api-keys/usage-stats');
 }
 
 /**
