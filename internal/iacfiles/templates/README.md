@@ -49,8 +49,25 @@ from this directory via the `//go:embed` directive in `internal/iacfiles/embed.g
 
 ### Locally from the cloned repo
 
-Use `scripts/generate-federation-iac.go` — a self-contained Go script with no
-external dependencies:
+Use `scripts/generate-federation-iac.go`, a self-contained Go script with no
+external dependencies.
+
+Every AWS target with a non-AWS source requires `--oidc-subject-claim`: it is
+the workload subject the generated AWS trust policy pins to, and there is no
+working default (see #1640). Pass the calling workload's subject claim, which is
+a GCP service account's numeric unique ID or an Azure managed identity's object
+ID. On the other combinations the flag feeds nothing, so passing it is an error
+rather than a silent no-op.
+
+That is not the same as saying those bundles need no pinning. Each GCP target
+combination emits its own **required** pin for you to fill in before
+`terraform apply`, none of which `--oidc-subject-claim` populates:
+
+| `--source` | file | variable to fill in |
+|---|---|---|
+| `aws` | `<slug>-gcp-wif.tfvars` | `aws_role_name` (blank) |
+| `azure` | `<slug>-gcp-wif.tfvars` | `oidc_subject` (blank) |
+| `gcp` | `<slug>-gcp-sa-impersonation.tfvars` | `source_service_account` (placeholder) |
 
 ```bash
 # Run from the repository root
@@ -59,14 +76,16 @@ external dependencies:
 go run scripts/generate-federation-iac.go \
   --target aws --source azure \
   --account-name "prod-aws" --account-id "123456789012" \
-  --tenant-id "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+  --tenant-id "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" \
+  --oidc-subject-claim "11111111-2222-3333-4444-555555555555"
 
 # AWS target, GCP source
 go run scripts/generate-federation-iac.go \
   --target aws --source gcp \
-  --account-name "prod-aws" --account-id "123456789012"
+  --account-name "prod-aws" --account-id "123456789012" \
+  --oidc-subject-claim "123456789012345678901"
 
-# AWS target, AWS source (cross-account role, no WIF)
+# AWS target, AWS source (cross-account role, no WIF, no subject claim)
 go run scripts/generate-federation-iac.go \
   --target aws --source aws \
   --account-name "target-aws" --account-id "999888777666"
@@ -75,7 +94,8 @@ go run scripts/generate-federation-iac.go \
 go run scripts/generate-federation-iac.go \
   --target aws --source azure --format cf-params \
   --account-name "prod-aws" --account-id "123456789012" \
-  --tenant-id "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+  --tenant-id "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" \
+  --oidc-subject-claim "11111111-2222-3333-4444-555555555555"
 
 # Azure target
 go run scripts/generate-federation-iac.go \
@@ -98,6 +118,7 @@ go run scripts/generate-federation-iac.go \
   --target aws --source azure \
   --account-name "prod" --account-id "123456789012" \
   --tenant-id "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" \
+  --oidc-subject-claim "11111111-2222-3333-4444-555555555555" \
   --output -
 ```
 

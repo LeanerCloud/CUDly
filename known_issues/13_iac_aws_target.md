@@ -1,8 +1,8 @@
 # Known Issues: IaC AWS Target Federation
 
-> **Audit status (2026-07-29):** `1 still valid · 9 resolved · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-08-03):** `1 still valid · 10 resolved · 0 partially fixed · 0 moved · 0 needs triage`
 
-## CRITICAL: federation bundle generator never emits `OIDCSubjectClaim`
+## ~~CRITICAL: federation bundle generator never emits `OIDCSubjectClaim`~~ — RESOLVED
 
 **File**:
 
@@ -41,9 +41,43 @@ it fail-closed is the **absent default** on the variable, which makes
 Terraform prompt for the value interactively or hard-error under
 `-input=false`. The validations only apply once a value exists. The security
 property holds; the operator is still misled by the "Optional" label first.
-**Status:** ⚠️ Still valid — tracked as a follow-up to #1543 in #1640, and not
-fixed in that PR because `internal/` was owned by concurrent in-flight
-branches.
+**Status:** ✔️ Resolved
+
+**Resolved by:** #1691 (closes #1640) — `aws-wif-cli.sh.tmpl` drops the subject-less else
+branch entirely and validates `OIDC_SUBJECT_CLAIM` (non-empty, no whitespace/
+`$`/`*`) before making any AWS call; `federationIaCData` gains an
+`OIDCSubjectClaim` field threaded through `shellEscapeData`, `buildCFParamsJSON`,
+`aws-wif-cf-params.json.tmpl`, `aws-cfn-deploy.sh.tmpl`'s `--parameter-overrides`,
+and `aws-wif.tfvars.tmpl` (uncommented, "Optional" label removed); the standalone
+`scripts/generate-federation-iac.go` mirror gains the same field plus an
+`--oidc-subject-claim` flag. CUDly's server still has no generic way to know
+the calling workload's real subject (unlike `OIDCIssuerURL`/`OIDCAudience`,
+which are derivable from target/source alone), so the value remains
+operator-supplied — every artifact now requires it explicitly instead of
+defaulting to a working-but-insecure empty value.
+
+## LOW: `aws-wif-cli.sh.tmpl` hardcodes an unoverridable OIDC-provider thumbprint placeholder
+
+**File**: `internal/iacfiles/templates/aws-wif-cli.sh.tmpl` — the
+`--thumbprint-list` argument to `aws iam create-open-id-connect-provider`
+(line number shifts as the file changes; grep for `thumbprint-list`), and the
+provider-exists branch a few lines above it that skips re-checking it.
+**Description**: The script hardcodes the all-zeros placeholder thumbprint
+with no way for the operator to override it, and the `if` that creates the
+OIDC provider only runs when one does not already exist — an existing
+provider created with the placeholder is never corrected by re-running the
+script. This is the CLI-bundle sibling of #1615, which #1678 fixed for the
+CloudFormation and Terraform bundles but deliberately left this file alone
+(noted on #1640 by the #1678 author, since `internal/iacfiles/` was this
+issue's scope).
+**Impact**: Not an authentication bypass — AWS only consults the configured
+thumbprint on a fallback path (its JWKS certificate does not chain to a
+trusted root, AWS cannot retrieve it, or the endpoint requires TLS 1.3), and
+all-zeros is not the SHA-1 of any certificate, so it matches nothing on that
+path and role assumption fails outright. The failure mode is availability and
+misleading configuration, not takeover. `aws iam update-open-id-connect-provider-thumbprint`
+is the out-of-band remedy for an already-created provider.
+**Status:** ⚠️ Still valid — filed as #1689.
 
 ## ~~HIGH: `OIDCThumbprint` defaults to the all-zeros placeholder for any issuer~~ — RESOLVED
 

@@ -30,6 +30,15 @@ type federationIaCData struct {
 	OIDCIssuerURL  string
 	OIDCIssuerHost string // issuer URL without https:// prefix (used as IAM condition key)
 	OIDCAudience   string
+	// OIDCSubjectClaim restricts the AWS trust policy to a single workload
+	// subject. Deliberately left empty by every generic-bundle builder below —
+	// CUDly's server has no generic way to know the calling workload's real
+	// subject claim (it is not derivable from target/source alone the way
+	// OIDCIssuerURL/OIDCAudience are). Every AWS-WIF template still emits this
+	// field as a required, uncommented value so the operator must fill it in
+	// before the bundle deploys/applies/runs, rather than the bundle silently
+	// working with no :sub condition (see #1543, #1602, #1640).
+	OIDCSubjectClaim string
 	// Azure-specific
 	SubscriptionID string
 	TenantID       string
@@ -282,6 +291,7 @@ func shellEscapeData(data federationIaCData) federationIaCData {
 	d.OIDCIssuerURL = shellEscape(data.OIDCIssuerURL)
 	d.OIDCIssuerHost = shellEscape(data.OIDCIssuerHost)
 	d.OIDCAudience = shellEscape(data.OIDCAudience)
+	d.OIDCSubjectClaim = shellEscape(data.OIDCSubjectClaim)
 	d.SubscriptionID = shellEscape(data.SubscriptionID)
 	d.TenantID = shellEscape(data.TenantID)
 	d.ProjectID = shellEscape(data.ProjectID)
@@ -769,6 +779,7 @@ func buildCFParamsJSON(data federationIaCData, source string) (string, error) {
 			{ParameterKey: "OIDCIssuerURL", ParameterValue: data.OIDCIssuerURL},
 			{ParameterKey: "OIDCIssuerHost", ParameterValue: strings.TrimPrefix(data.OIDCIssuerURL, "https://")},
 			{ParameterKey: "OIDCAudience", ParameterValue: data.OIDCAudience},
+			{ParameterKey: "OIDCSubjectClaim", ParameterValue: data.OIDCSubjectClaim},
 			{ParameterKey: "RoleName", ParameterValue: "CUDly-" + data.AccountSlug},
 		}
 	}

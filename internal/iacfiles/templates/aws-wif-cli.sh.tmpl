@@ -12,9 +12,33 @@ set -euo pipefail
 ROLE_NAME="${ROLE_NAME:-CUDly-{{.AccountSlug}}}"
 OIDC_ISSUER_URL="${OIDC_ISSUER_URL:-{{.OIDCIssuerURL}}}"
 OIDC_AUDIENCE="${OIDC_AUDIENCE:-{{.OIDCAudience}}}"
-# Optional: restrict which OIDC subject can assume the role.
-# Useful for multi-tenant issuers. Matches TF variable oidc_subject_claim.
-OIDC_SUBJECT_CLAIM="${OIDC_SUBJECT_CLAIM:-}"
+# REQUIRED: restricts which OIDC subject can assume the role. Without a :sub
+# condition the trust policy accepts every identity the issuer can mint — the
+# same hole #1543/#1602 closed in the CloudFormation template — so this is
+# validated below rather than left to build a subject-less policy silently.
+# Matches the required TF variable oidc_subject_claim and the required
+# CloudFormation OIDCSubjectClaim parameter.
+OIDC_SUBJECT_CLAIM="${OIDC_SUBJECT_CLAIM:-{{.OIDCSubjectClaim}}}"
+if [[ -z "${OIDC_SUBJECT_CLAIM}" ]]; then
+  echo "Error: OIDC_SUBJECT_CLAIM is required. Without it the trust policy has no" >&2
+  echo "       :sub condition and every identity ${OIDC_ISSUER_URL} can mint is able" >&2
+  echo "       to assume this role. Set it to the calling workload's subject claim:" >&2
+  echo "         GCP service account : its numeric unique ID (not the email)" >&2
+  echo "         Azure managed identity: the object ID of the managed identity" >&2
+  echo "       e.g. OIDC_SUBJECT_CLAIM=123456789012345678901 bash $0" >&2
+  exit 1
+fi
+case "${OIDC_SUBJECT_CLAIM}" in
+  *[[:space:]]*|*'$'*|*'*'*)
+    echo "Error: OIDC_SUBJECT_CLAIM must not contain whitespace, '\$' or '*'." >&2
+    echo "       IAM expands \${...} policy variables inside Condition values, so a" >&2
+    echo "       value such as \${accounts.google.com:sub} would expand to the token's" >&2
+    echo "       own sub claim and match every identity the issuer can mint. '*' is" >&2
+    echo "       compared literally by StringEquals and would silently produce a role" >&2
+    echo "       nobody can assume." >&2
+    exit 1
+    ;;
+esac
 PROFILE_ARG=""
 if [[ -n "${AWS_PROFILE:-}" ]]; then PROFILE_ARG="--profile ${AWS_PROFILE}"; fi
 
@@ -37,9 +61,9 @@ PROVIDER_ARN=$(aws iam list-open-id-connect-providers $PROFILE_ARG \
   --query "OpenIDConnectProviderList[?contains(Arn, '${OIDC_HOST}')].Arn | [0]" \
   --output text)
 
-# Build trust policy — add subject claim restriction when OIDC_SUBJECT_CLAIM is set.
-if [[ -n "${OIDC_SUBJECT_CLAIM}" ]]; then
-  TRUST_POLICY=$(cat <<JSON
+# Build trust policy. OIDC_SUBJECT_CLAIM is validated non-empty above, so the
+# :sub condition below is always present — there is no branch that omits it.
+TRUST_POLICY=$(cat <<JSON
 {
   "Version": "2012-10-17",
   "Statement": [{
@@ -54,20 +78,6 @@ if [[ -n "${OIDC_SUBJECT_CLAIM}" ]]; then
 }
 JSON
 )
-else
-  TRUST_POLICY=$(cat <<JSON
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Principal": {"Federated": "${PROVIDER_ARN}"},
-    "Action": "sts:AssumeRoleWithWebIdentity",
-    "Condition": {"StringEquals": {"${OIDC_HOST}:aud": "${OIDC_AUDIENCE}"}}
-  }]
-}
-JSON
-)
-fi
 
 PERMISSIONS_POLICY=$(cat <<'JSON'
 {

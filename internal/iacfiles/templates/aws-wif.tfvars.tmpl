@@ -11,8 +11,14 @@ oidc_issuer_url = "{{.OIDCIssuerURL}}"
 oidc_audience   = "{{.OIDCAudience}}"
 role_name       = "CUDly-{{.AccountSlug}}"
 
-# Optional: restrict trust to a specific workload subject claim
-# oidc_subject_claim = ""
+# REQUIRED: restrict trust to a specific workload subject claim. The module's
+# oidc_subject_claim variable has no default and rejects an empty value —
+# terraform apply fails until this is filled in with the calling workload's
+# real subject (GCP service account numeric unique ID, Azure managed identity
+# object ID, etc.). Leaving it empty is intentionally not a working default:
+# without a :sub condition the trust policy accepts every identity the issuer
+# can mint.
+oidc_subject_claim = "{{.OIDCSubjectClaim}}"
 
 # --- CUDly auto-registration (optional) ---
 cudly_api_url = "{{.CUDlyAPIURL}}"

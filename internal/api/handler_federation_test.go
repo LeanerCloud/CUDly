@@ -387,6 +387,111 @@ func TestGetFederationIaC_CFNZip_ParamsValidJSON(t *testing.T) {
 	assert.GreaterOrEqual(t, len(params), 3, "should have at least 3 parameters")
 }
 
+// TestGetFederationIaC_AWSWIF_SubjectClaimThreaded is the regression test for
+// #1640: the CFN params JSON and deploy script, and the Terraform tfvars,
+// used to omit OIDCSubjectClaim / oidc_subject_claim entirely (CFN) or emit it
+// commented-out and mislabeled "Optional" (tfvars), even though the
+// CloudFormation template (#1602) and Terraform module both require it with
+// no default. Every AWS-WIF artifact must now emit the parameter/variable
+// explicitly so the deploy fails with a specific, actionable error instead of
+// either "must have values" (CFN) or a misleading "Optional" comment (tfvars).
+func TestGetFederationIaC_AWSWIF_SubjectClaimThreaded(t *testing.T) {
+	h := federationHandler()
+	ctx := context.Background()
+
+	t.Run("cfn params JSON", func(t *testing.T) {
+		res, err := h.getFederationIaC(ctx, federationReq(map[string]string{
+			"target": "aws", "source": "gcp", "format": "cfn",
+		}))
+		require.NoError(t, err)
+		zipBytes, err := base64.StdEncoding.DecodeString(res.Content)
+		require.NoError(t, err)
+		zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+		require.NoError(t, err)
+
+		var paramsFile *zip.File
+		for _, f := range zr.File {
+			if strings.HasSuffix(f.Name, "-cf-params.json") {
+				paramsFile = f
+				break
+			}
+		}
+		require.NotNil(t, paramsFile)
+		rc, err := paramsFile.Open()
+		require.NoError(t, err)
+		defer rc.Close()
+		var buf bytes.Buffer
+		_, err = buf.ReadFrom(rc)
+		require.NoError(t, err)
+
+		var params []map[string]string
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &params))
+		var found bool
+		for _, p := range params {
+			if p["ParameterKey"] == "OIDCSubjectClaim" {
+				found = true
+			}
+		}
+		assert.True(t, found, "cf-params.json must include an OIDCSubjectClaim entry")
+	})
+
+	t.Run("cfn deploy script", func(t *testing.T) {
+		res, err := h.getFederationIaC(ctx, federationReq(map[string]string{
+			"target": "aws", "source": "gcp", "format": "cfn",
+		}))
+		require.NoError(t, err)
+		zipBytes, err := base64.StdEncoding.DecodeString(res.Content)
+		require.NoError(t, err)
+		zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+		require.NoError(t, err)
+
+		var deployScript string
+		for _, f := range zr.File {
+			if f.Name == "cloudformation/deploy-cfn.sh" {
+				rc, err := f.Open()
+				require.NoError(t, err)
+				var buf bytes.Buffer
+				_, _ = buf.ReadFrom(rc)
+				rc.Close()
+				deployScript = buf.String()
+			}
+		}
+		require.NotEmpty(t, deployScript)
+		assert.Contains(t, deployScript, `"OIDCSubjectClaim=`,
+			"deploy script must pass OIDCSubjectClaim in --parameter-overrides")
+	})
+
+	t.Run("tfvars", func(t *testing.T) {
+		res, err := h.getFederationIaC(ctx, federationReq(map[string]string{
+			"target": "aws", "source": "gcp", "format": "bundle",
+		}))
+		require.NoError(t, err)
+		zipBytes, err := base64.StdEncoding.DecodeString(res.Content)
+		require.NoError(t, err)
+		zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+		require.NoError(t, err)
+
+		var tfvars string
+		for _, f := range zr.File {
+			if strings.HasSuffix(f.Name, ".auto.tfvars") {
+				rc, err := f.Open()
+				require.NoError(t, err)
+				var buf bytes.Buffer
+				_, _ = buf.ReadFrom(rc)
+				rc.Close()
+				tfvars = buf.String()
+			}
+		}
+		require.NotEmpty(t, tfvars)
+		assert.Contains(t, tfvars, "\noidc_subject_claim = \"",
+			"tfvars must emit oidc_subject_claim uncommented, at the start of a line")
+		assert.NotContains(t, tfvars, `# oidc_subject_claim = `,
+			"oidc_subject_claim must not be commented out as a variable assignment")
+		assert.NotContains(t, tfvars, "Optional: restrict trust to a specific workload subject claim",
+			"oidc_subject_claim is required, not optional — the module has no default and rejects empty")
+	})
+}
+
 func TestSingleFileSpec_CLI_AllScenarios(t *testing.T) {
 	cases := []struct{ target, source, wantContains string }{
 		{"aws", "aws", "aws-cross-account-cli.sh"},
