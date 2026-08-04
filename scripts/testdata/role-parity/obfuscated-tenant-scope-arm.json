@@ -27,7 +27,7 @@
           }
         ],
         "assignableScopes": [
-          "[concat('/subscriptions/', subscription().subscriptionId)]"
+          "[if(equals(parameters('tenantWide'), 'yes'), '/providers/Microsoft.Capacity', concat('/subscriptions/', subscription().subscriptionId))]"
         ]
       }
     }

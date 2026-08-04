@@ -30,6 +30,17 @@
           "[concat('/subscriptions/', subscription().subscriptionId)]"
         ]
       }
+    },
+    {
+      "Type": "Microsoft.Resources/deployments",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "roleassignment-type-collision",
+      "properties": {
+        "roleDefinitionId": "[variables('roles').reader]",
+        "principalId": "00000000-0000-0000-0000-0000000000aa",
+        "principalType": "ServicePrincipal"
+      }
     }
   ]
 }

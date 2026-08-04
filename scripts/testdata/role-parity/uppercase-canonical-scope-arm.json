@@ -27,7 +27,7 @@
           }
         ],
         "assignableScopes": [
-          "[concat('/subscriptions/', subscription().subscriptionId)]"
+          "[CONCAT('/subscriptions/', SUBSCRIPTION().SUBSCRIPTIONID)]"
         ]
       }
     }

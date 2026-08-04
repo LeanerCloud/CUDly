@@ -3,7 +3,8 @@
   "contentVersion": "1.0.0.0",
 
   "metadata": {
-    "description": "CUDly Cross-Subscription Role Assignments — deploy this in every target Azure subscription that CUDly should manage. It grants the CUDly service principal the permissions needed to query reservation recommendations and purchase Azure Reservations and Savings Plans."
+    "description": "CUDly Cross-Subscription Role Assignments — deploy this in every target Azure subscription that CUDly should manage. It grants the CUDly service principal the permissions needed to query reservation recommendations and purchase Azure Reservations and Savings Plans.",
+    "consentSurface": "Every grant in this template is confined to the single subscription targeted by 'az deployment sub create'. The scope is derived from subscription().subscriptionId, the deployment target itself, so there is no scope parameter a caller can widen, and deploying to one subscription can never grant access to another. The tenant-wide '/providers/Microsoft.Capacity' scope is deliberately NOT used: an assignment there covers every reservation order in the Azure AD tenant, including subscriptions the customer never onboarded. Purchases authorise against the subscription named in the request body's billingScopeId, so subscription scope is sufficient; this matches terraform/modules/iam/azure/cudly-reservation-role, whose include_capacity_provider_scope flag defaults to false for the same reason. See known-issues.md if a tenant-wide grant is ever genuinely required: it is a separate, manual, explicitly consented step, never a default."
   },
 
   "parameters": {
@@ -62,8 +63,7 @@
           }
         ],
         "assignableScopes": [
-          "[concat('/subscriptions/', subscription().subscriptionId)]",
-          "/providers/Microsoft.Capacity"
+          "[concat('/subscriptions/', subscription().subscriptionId)]"
         ]
       }
     },
@@ -80,22 +80,6 @@
         "principalId": "[parameters('servicePrincipalObjectId')]",
         "principalType": "ServicePrincipal",
         "description": "CUDly — subscription-scope assignment of custom role; grants calculatePrice + purchase/action required by the two-step reservation purchase flow"
-      }
-    },
-
-    {
-      "type": "Microsoft.Authorization/roleAssignments",
-      "apiVersion": "2022-04-01",
-      "scope": "/providers/Microsoft.Capacity",
-      "name": "[guid(parameters('servicePrincipalObjectId'), 'cudlyCustomRoleCapacity')]",
-      "dependsOn": [
-        "[variables('customRoleDefinitionId')]"
-      ],
-      "properties": {
-        "roleDefinitionId": "[variables('customRoleDefinitionId')]",
-        "principalId": "[parameters('servicePrincipalObjectId')]",
-        "principalType": "ServicePrincipal",
-        "description": "CUDly — tenant-capacity-scope assignment of custom role; required for reservationOrders/purchase/action at /providers/Microsoft.Capacity scope"
       }
     },
 

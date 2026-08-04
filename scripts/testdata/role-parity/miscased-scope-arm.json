@@ -30,6 +30,15 @@
           "[concat('/subscriptions/', subscription().subscriptionId)]"
         ]
       }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "Scope": "/providers/Microsoft.Capacity",
+      "name": "tenant-wide-miscased-scope-key",
+      "properties": {
+        "principalId": "00000000-0000-0000-0000-0000000000aa"
+      }
     }
   ]
 }

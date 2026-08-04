@@ -30,6 +30,16 @@
           "[concat('/subscriptions/', subscription().subscriptionId)]"
         ]
       }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "reader-grant-uppercase-expr",
+      "properties": {
+        "roleDefinitionId": "[Variables('Roles').Reader]",
+        "principalId": "00000000-0000-0000-0000-0000000000aa",
+        "principalType": "ServicePrincipal"
+      }
     }
   ]
 }

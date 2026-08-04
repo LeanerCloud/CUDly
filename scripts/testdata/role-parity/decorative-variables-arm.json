@@ -1,5 +1,22 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "variables": {
+    "decorativeDocOnly": {
+      "type": "Microsoft.Authorization/roleDefinitions",
+      "properties": {
+        "permissions": [
+          {
+            "actions": [
+              "*"
+            ]
+          }
+        ],
+        "assignableScopes": [
+          "/providers/Microsoft.Capacity"
+        ]
+      }
+    }
+  },
   "resources": [
     {
       "type": "Microsoft.Authorization/roleDefinitions",

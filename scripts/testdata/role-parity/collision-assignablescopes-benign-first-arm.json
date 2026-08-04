@@ -28,6 +28,9 @@
         ],
         "assignableScopes": [
           "[concat('/subscriptions/', subscription().subscriptionId)]"
+        ],
+        "AssignableScopes": [
+          "/providers/Microsoft.Capacity"
         ]
       }
     }

@@ -26,6 +26,9 @@
             "notActions": []
           }
         ],
+        "AssignableScopes": [
+          "/providers/Microsoft.Capacity"
+        ],
         "assignableScopes": [
           "[concat('/subscriptions/', subscription().subscriptionId)]"
         ]

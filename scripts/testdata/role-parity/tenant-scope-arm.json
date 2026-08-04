@@ -27,8 +27,18 @@
           }
         ],
         "assignableScopes": [
-          "[concat('/subscriptions/', subscription().subscriptionId)]"
+          "/subscriptions/00000000-0000-0000-0000-000000000001",
+          "/providers/Microsoft.Capacity"
         ]
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "/providers/Microsoft.Capacity",
+      "name": "tenant-wide",
+      "properties": {
+        "principalId": "00000000-0000-0000-0000-0000000000aa"
       }
     }
   ]

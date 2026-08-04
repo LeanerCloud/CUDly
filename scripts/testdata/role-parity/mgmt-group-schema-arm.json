@@ -1,5 +1,5 @@
 {
-  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "$schema": "https://schema.management.azure.com/schemas/2019-08-01/managementGroupDeploymentTemplate.json#",
   "resources": [
     {
       "type": "Microsoft.Authorization/roleDefinitions",
@@ -27,7 +27,7 @@
           }
         ],
         "assignableScopes": [
-          "[concat('/subscriptions/', subscription().subscriptionId)]"
+          "/subscriptions/00000000-0000-0000-0000-000000000001"
         ]
       }
     }

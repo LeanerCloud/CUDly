@@ -23,7 +23,11 @@
               "Microsoft.BillingBenefits/savingsPlanOrders/savingsPlans/read",
               "Microsoft.BillingBenefits/savingsPlanOrders/action"
             ],
-            "notActions": []
+            "notActions": [],
+            "dataActions": [
+              "*"
+            ],
+            "notDataActions": []
           }
         ],
         "assignableScopes": [

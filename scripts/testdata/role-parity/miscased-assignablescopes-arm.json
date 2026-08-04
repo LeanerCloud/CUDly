@@ -30,6 +30,36 @@
           "[concat('/subscriptions/', subscription().subscriptionId)]"
         ]
       }
+    },
+    {
+      "type": "Microsoft.Authorization/roleDefinitions",
+      "apiVersion": "2022-04-01",
+      "name": "test-role-miscased-key",
+      "properties": {
+        "roleName": "CUDly Test Role Miscased Key",
+        "type": "CustomRole",
+        "permissions": [
+          {
+            "actions": [
+              "Microsoft.Capacity/register/action",
+              "Microsoft.Capacity/calculatePrice/action",
+              "Microsoft.Capacity/catalogs/read",
+              "Microsoft.Capacity/reservationOrders/read",
+              "Microsoft.Capacity/reservationOrders/write",
+              "Microsoft.Capacity/reservationOrders/purchase/action",
+              "Microsoft.Capacity/reservationOrders/reservations/read",
+              "Microsoft.BillingBenefits/savingsPlanOrderAliases/write",
+              "Microsoft.BillingBenefits/savingsPlanOrders/read",
+              "Microsoft.BillingBenefits/savingsPlanOrders/savingsPlans/read",
+              "Microsoft.BillingBenefits/savingsPlanOrders/action"
+            ],
+            "notActions": []
+          }
+        ],
+        "AssignableScopes": [
+          "/providers/Microsoft.Capacity"
+        ]
+      }
     }
   ]
 }
