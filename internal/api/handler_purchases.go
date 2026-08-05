@@ -1593,6 +1593,9 @@ func resolveOpsHint(failureReason string) string {
 //
 // State gate:
 //   - failedExec.Status must be "failed" → 409 otherwise.
+//   - every rec must be safe to re-drive per purchase.RedriveRefusalReason
+//     → 409 with ops_hint + redrive_unsafe when any is not, NOT
+//     overridable by ?force=true (issue #1668).
 //   - failedExec.Error must NOT match the persistent-failure map →
 //     409 with ops_hint when it does (Q3).
 //   - failedExec.RetryAttemptN < retryThreshold OR ?force=true → soft
@@ -1708,19 +1711,66 @@ func (h *Handler) loadAndValidateRetryRequest(ctx context.Context, req *events.L
 			map[string]any{"retry_execution_id": *failedExec.RetryExecutionID})
 	}
 
-	if err := checkRetryRateGates(failedExec, req); err != nil {
+	if err := checkRetryEligibilityGates(failedExec, req); err != nil {
 		return nil, nil, err
 	}
 
 	return failedExec, session, nil
 }
 
-// checkRetryRateGates runs the persistent-failure (Q3) and
-// retry-attempt-threshold (Q2) gates and returns the appropriate
-// 409 ClientError when either fires. Extracted from
-// loadAndValidateRetryRequest to keep that function under the
-// cyclomatic-complexity ceiling without flattening the gate sequence.
-func checkRetryRateGates(failedExec *config.PurchaseExecution, req *events.LambdaFunctionURLRequest) error {
+// checkRetryEligibilityGates runs the provider re-drive-safety (issue
+// #1668), persistent-failure (Q3) and retry-attempt-threshold (Q2)
+// gates and returns the appropriate 409 ClientError when any fires.
+// Extracted from loadAndValidateRetryRequest to keep that function
+// under the cyclomatic-complexity ceiling without flattening the gate
+// sequence.
+func checkRetryEligibilityGates(failedExec *config.PurchaseExecution, req *events.LambdaFunctionURLRequest) error {
+	// Provider re-drive safety (issue #1668). A "failed" row may in fact
+	// have landed its commitment at the provider (a timeout, a lost
+	// response, a post-purchase write that failed), so every retry is
+	// potentially a re-drive. purchase.RedriveRefusalReason is the same
+	// predicate the reaper's automatic re-drive gates on: it returns a
+	// reason exactly when the provider offers nothing that would collapse
+	// the second attempt onto the first, which today means Azure
+	// savings-plans (no server-side idempotency key, timestamp-derived
+	// order alias) plus any provider the predicate does not recognize.
+	//
+	// This gate runs FIRST and, unlike the threshold below, ?force=true
+	// does NOT override it: a savings plan cannot be canceled, so there
+	// is no recovery from getting this wrong, and a duplicate is not what
+	// the operator clicking Retry is asking for. An operator who genuinely
+	// wants a second commitment can submit a fresh purchase, which is an
+	// explicit buy rather than a retry of one that may already exist.
+	//
+	// A refusal here is permanent: nothing about the row can change to make
+	// it retryable. So the gate must fire only where the duplicate hazard is
+	// real. An execution carrying no recommendations buys nothing and cannot
+	// double-buy, and rec-less executions are legitimately created by
+	// createPurchaseExecutionsTx (handler_plans.go) and getOrCreateExecution
+	// (purchase/notifications.go); a failed approval email marks those
+	// "failed", and retrying is the only recovery. Refusing them would strand
+	// that whole class forever, so RedriveRefusalReason stays silent on the
+	// empty case. Empty here always means empty as created, never "we could
+	// not load them": GetExecutionByID propagates a recommendations unmarshal
+	// failure as an error (config/store_postgres.go), which this handler has
+	// already turned into a 500 well before this gate.
+	if reason := purchase.RedriveRefusalReason(failedExec); reason != "" {
+		return NewClientErrorWithDetails(409,
+			"this purchase cannot be retried safely: "+reason,
+			// ops_hint reuses the key the History UI already renders in
+			// place of the Retry button, so the reason reaches the operator
+			// today. redrive_unsafe distinguishes this PERMANENT refusal from
+			// the operator-fixable hints below, which clear once the
+			// configuration is fixed.
+			//
+			// No frontend reads redrive_unsafe yet, so it looks unused: issue
+			// #1714 is its intended consumer, where History will render a
+			// terminal badge instead of offering a Retry button that always
+			// 409s. That is presentation only. This refusal is enforced here,
+			// server-side, and does not depend on any client honoring it.
+			map[string]any{"ops_hint": reason, "redrive_unsafe": true})
+	}
+
 	// Persistent-failure block (Q3). Surfaces the ops_hint via the
 	// API for stale-cache callers; the History UI already shows it
 	// inline in place of the Retry button.
@@ -1823,10 +1873,11 @@ func (h *Handler) persistRetryExecution(ctx context.Context, failedExec *config.
 	// services), Azure reservations and GCP CUDs reproduce the token and
 	// dedupe, but Azure savings-plans has no server-side idempotency key and
 	// names its order alias from time.Now().UnixNano(), so a re-drive of a
-	// landed Azure SP order still duplicates it. purchase.recIsSafeToRedrive
-	// encodes exactly that exclusion, but it currently gates only the reaper's
-	// re-drive, not this user-facing retry (issue #1668). Scope propagation is
+	// landed Azure SP order still duplicates it. Scope propagation is therefore
 	// necessary for dedupe everywhere and sufficient everywhere except Azure SP.
+	// purchase.RedriveRefusalReason encodes exactly that exclusion and now gates
+	// this handler too (checkRetryEligibilityGates, issue #1668), so an Azure SP
+	// row never reaches this function in the first place.
 	//
 	// Copied by value rather than by pointer so the successor and the
 	// historical failed row never share a *string, matching the defensive
