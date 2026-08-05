@@ -53,6 +53,15 @@ resource "random_id" "suffix" {
 
 locals {
   stack_name = "${var.project_name}-${var.environment}-${random_id.suffix.hex}"
+
+  # ARN of the permissions boundary that every IAM role created by this
+  # environment's modules must carry. cudly-terraform-deploy's IAM grants
+  # are conditioned on iam:PermissionsBoundary, so a role created without
+  # this boundary cannot have its inline policies or managed-policy
+  # attachments written and the apply fails with AccessDenied. See
+  # terraform/environments/aws/ci-cd-permissions/policy_boundary.tf.
+  permissions_boundary_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:policy/cudly-deploy-boundary"
+
   # Dashboard URL for CORS and email links.
   #
   # Priority (matches outputs.tf's frontend_url chain, modulo the Lambda

@@ -11,8 +11,30 @@ CI/CD pipeline uses to deploy infrastructure on AWS. It optionally sets up keyle
 | `aws_iam_role.cudly_deploy` | The deploy role; assumed by GitHub Actions or a human operator |
 | `aws_iam_policy.networking` | VPC, subnets, security groups, ALB, ECS cluster |
 | `aws_iam_policy.compute` | ECS services/tasks, ECR, CloudWatch Logs, SSM |
+| `aws_iam_policy.compute_b` | Overflow for `aws_iam_policy.compute`, which is close to the 6144-character managed-policy limit |
 | `aws_iam_policy.data` | RDS, ElastiCache, S3 (state bucket), Secrets Manager |
+| `aws_iam_policy.iam` | IAM role creation and policy attachment, gated on the permissions boundary below (#1705) |
+| `aws_iam_policy.workload_boundary` | `cudly-deploy-boundary`: the permissions ceiling every role the deploy role creates must carry |
 | `aws_iam_openid_connect_provider.github` | GitHub Actions OIDC provider (conditional on `github_repo`) |
+
+## Apply this root BEFORE merging changes that touch the boundary
+
+This root is applied by hand, by a privileged human, and never by a deploy workflow. That
+makes the ordering between it and `terraform/environments/aws` load-bearing whenever the
+permissions boundary is involved:
+
+- **Apply here first, then merge.** `deploy-aws-lambda.yml` triggers on pushes to `main`
+  under `terraform/environments/aws/**` and the AWS compute/database/secrets/networking
+  modules. A merge that adds or changes `permissions_boundary` on a module role makes the
+  next deploy call `iam:PutRolePermissionsBoundary`, and that grant lives in
+  `aws_iam_policy.iam` here. Merging before applying this root turns every AWS deploy red
+  with `AccessDenied` until the apply happens. It is recoverable, not destructive, but it
+  is avoidable.
+- **Rolling back past the boundary change needs care.** `rollback.yml` applies the
+  environment root from the dispatched ref's checkout. A ref that predates the boundary has
+  no `permissions_boundary` in config while the live roles have one, so the provider issues
+  `iam:DeleteRolePermissionsBoundary`, which `IAMDenyStripRoleBoundary` in `policy_iam.tf`
+  denies. Roll back to a ref at or after the boundary change.
 
 ## Prerequisites
 

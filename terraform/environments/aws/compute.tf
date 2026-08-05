@@ -29,9 +29,10 @@ module "compute_lambda" {
   source = "../../modules/compute/aws/lambda"
   count  = var.compute_platform == "lambda" ? 1 : 0
 
-  stack_name  = local.stack_name
-  environment = var.environment
-  region      = var.region
+  stack_name               = local.stack_name
+  environment              = var.environment
+  region                   = var.region
+  permissions_boundary_arn = local.permissions_boundary_arn
 
   # Container image (from build module or var.image_uri)
   image_uri    = var.enable_docker_build ? module.build[0].image_uri : var.image_uri
@@ -134,9 +135,10 @@ module "compute_fargate" {
   source = "../../modules/compute/aws/fargate"
   count  = var.compute_platform == "fargate" ? 1 : 0
 
-  stack_name  = local.stack_name
-  environment = var.environment
-  region      = var.region
+  stack_name               = local.stack_name
+  environment              = var.environment
+  region                   = var.region
+  permissions_boundary_arn = local.permissions_boundary_arn
 
   # Container image (from build module or var.image_uri)
   image_uri        = var.enable_docker_build ? module.build[0].image_uri : var.image_uri

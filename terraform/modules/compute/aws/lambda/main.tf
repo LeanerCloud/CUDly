@@ -196,7 +196,8 @@ resource "aws_security_group" "lambda" {
 # ==============================================
 
 resource "aws_iam_role" "lambda" {
-  name_prefix = "${var.stack_name}-lambda-"
+  name_prefix          = "${var.stack_name}-lambda-"
+  permissions_boundary = var.permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"

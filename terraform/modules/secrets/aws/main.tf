@@ -303,7 +303,8 @@ resource "aws_lambda_function" "rotation" {
 resource "aws_iam_role" "rotation" {
   count = var.enable_secret_rotation ? 1 : 0
 
-  name_prefix = "${var.stack_name}-rotation-"
+  name_prefix          = "${var.stack_name}-rotation-"
+  permissions_boundary = var.permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"

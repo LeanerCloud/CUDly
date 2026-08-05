@@ -5,8 +5,9 @@
 module "networking" {
   source = "../../modules/networking/aws"
 
-  stack_name = local.stack_name
-  region     = var.region
+  stack_name               = local.stack_name
+  region                   = var.region
+  permissions_boundary_arn = local.permissions_boundary_arn
 
   vpc_cidr                  = var.vpc_cidr
   az_count                  = var.az_count

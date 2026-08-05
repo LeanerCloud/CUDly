@@ -260,7 +260,8 @@ resource "aws_security_group" "rds_proxy" {
 resource "aws_iam_role" "rds_proxy" {
   count = var.enable_rds_proxy ? 1 : 0
 
-  name_prefix = "${var.stack_name}-rds-proxy-"
+  name_prefix          = "${var.stack_name}-rds-proxy-"
+  permissions_boundary = var.permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"

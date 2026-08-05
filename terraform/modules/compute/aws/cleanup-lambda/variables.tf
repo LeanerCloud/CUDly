@@ -3,6 +3,18 @@ variable "stack_name" {
   type        = string
 }
 
+variable "permissions_boundary_arn" {
+  description = <<-EOT
+    ARN of the permissions boundary that every IAM role in this module must
+    carry. Required, not optional: cudly-terraform-deploy's IAM grants are
+    conditioned on iam:PermissionsBoundary, so a role created without this
+    boundary cannot have its inline policies or managed-policy attachments
+    written and the apply fails with AccessDenied. See
+    terraform/environments/aws/ci-cd-permissions/policy_boundary.tf.
+  EOT
+  type        = string
+}
+
 variable "image_uri" {
   description = "Docker image URI containing the cleanup Lambda handler"
   type        = string

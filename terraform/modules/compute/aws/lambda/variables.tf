@@ -3,6 +3,18 @@ variable "stack_name" {
   type        = string
 }
 
+variable "permissions_boundary_arn" {
+  description = <<-EOT
+    ARN of the permissions boundary that every IAM role in this module must
+    carry. Required, not optional: cudly-terraform-deploy's IAM grants are
+    conditioned on iam:PermissionsBoundary, so a role created without this
+    boundary cannot have its inline policies or managed-policy attachments
+    written and the apply fails with AccessDenied. See
+    terraform/environments/aws/ci-cd-permissions/policy_boundary.tf.
+  EOT
+  type        = string
+}
+
 variable "enable_migration_alarm" {
   description = "Create the migration-failure CloudWatch metric filter + alarm. Defaults to false because the metric filter requires logs:PutMetricFilter on the deploy SA, which is granted via the ci-cd-permissions bootstrap (root CLAUDE.md CI/CD IAM split). Leaving it false keeps deploys unblocked when that permission is absent; set true only after re-applying the bootstrap so the deploy role can manage the filter."
   type        = bool

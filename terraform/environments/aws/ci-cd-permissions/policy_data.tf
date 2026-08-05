@@ -8,13 +8,20 @@ resource "aws_iam_policy" "data" {
       {
         Sid    = "IAMRolesAndPolicies"
         Effect = "Allow"
+        # iam:AttachRolePolicy, iam:CreateRole and iam:PutRolePolicy USED TO BE
+        # in this list. They moved to IAMRoleMutationRequiresBoundary in
+        # policy_iam.tf, which re-grants them only when the target role carries
+        # the cudly-deploy-boundary permissions boundary (#1705). They must not
+        # come back here: an unconditioned Allow authorizes the request on its
+        # own, so restoring any of the three silently reopens the escalation and
+        # makes the conditioned statement decorative. Anything added below is
+        # granted with no ceiling at all, so check first whether it belongs in
+        # policy_iam.tf instead.
         Action = [
           "iam:AddRoleToInstanceProfile",
-          "iam:AttachRolePolicy",
           "iam:CreateInstanceProfile",
           "iam:CreatePolicy",
           "iam:CreatePolicyVersion",
-          "iam:CreateRole",
           "iam:DeleteInstanceProfile",
           "iam:DeletePolicy",
           "iam:DeletePolicyVersion",
@@ -31,7 +38,6 @@ resource "aws_iam_policy" "data" {
           "iam:ListPolicyVersions",
           "iam:ListRolePolicies",
           "iam:ListRoleTags",
-          "iam:PutRolePolicy",
           "iam:RemoveRoleFromInstanceProfile",
           "iam:TagInstanceProfile",
           "iam:TagPolicy",
