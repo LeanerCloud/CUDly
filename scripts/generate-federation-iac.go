@@ -474,18 +474,31 @@ func validateOIDCSubjectClaim(claim string, mode subjectClaimMode) error {
 // validFederationTargets in internal/api/handler_federation.go.
 var validTargets = map[string]bool{"aws": true, "azure": true, "gcp": true}
 
+// sourceAccountIDRE matches an AWS account ID: exactly 12 ASCII digits, no
+// whitespace padding, leading sign, or Unicode digit look-alikes. AWS account
+// IDs are always 12 digits; anything else could not be a real one and would
+// otherwise flow untouched into the generated tfvars (#1710 CR).
+var sourceAccountIDRE = regexp.MustCompile(`^[0-9]{12}$`)
+
 // requireSourceAccountID fills data.SourceAccountID from sourceAccountID when
-// source is aws, or reports errMsg if it was not supplied. It is a no-op for
-// any other source. Both the aws-target and gcp-target arms of populateData
-// need this same aws-source gate (the aws-cross-account and gcp-wif-from-aws
-// paths respectively), so it is factored out rather than duplicated to keep
-// populateData's branching within the pre-commit gocyclo budget.
+// source is aws, or reports errMsg if it was not supplied. A non-empty value
+// is also checked against sourceAccountIDRE before being written to data: a
+// malformed ID must fail loud here rather than reach the rendered tfvars,
+// where the problem would surface far from its cause as a confusing
+// Terraform or AWS error. It is a no-op for any other source. Both the
+// aws-target and gcp-target arms of populateData need this same aws-source
+// gate (the aws-cross-account and gcp-wif-from-aws paths respectively), so it
+// is factored out rather than duplicated to keep populateData's branching
+// within the pre-commit gocyclo budget.
 func requireSourceAccountID(data *iacData, source, sourceAccountID, errMsg string) error {
 	if source != "aws" {
 		return nil
 	}
 	if sourceAccountID == "" {
 		return errors.New(errMsg)
+	}
+	if !sourceAccountIDRE.MatchString(sourceAccountID) {
+		return fmt.Errorf("--source-account-id %q is not a valid AWS account ID: it must be exactly 12 digits", sourceAccountID)
 	}
 	data.SourceAccountID = sourceAccountID
 	return nil

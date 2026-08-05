@@ -215,3 +215,51 @@ func TestGenerateFederationIaC_RequiresSourceAccountID(t *testing.T) {
 		})
 	}
 }
+
+// TestGenerateFederationIaC_RejectsMalformedSourceAccountID guards the CR
+// finding on #1710: a non-empty --source-account-id is not necessarily a
+// valid one. Before this check, a malformed value flowed straight into
+// data.SourceAccountID and out into the rendered tfvars, where the problem
+// would only surface later as a confusing Terraform or AWS error far from
+// its actual cause. Covers both consumers of SourceAccountID: --target aws
+// --source aws (aws-cross-account) and --target gcp --source aws (WIF pool).
+func TestGenerateFederationIaC_RejectsMalformedSourceAccountID(t *testing.T) {
+	tests := []struct {
+		name            string
+		target          string
+		sourceAccountID string
+	}{
+		{name: "aws target, too short", target: "aws", sourceAccountID: "12345"},
+		{name: "aws target, non-digit characters", target: "aws", sourceAccountID: "1111222233aa"},
+		{name: "aws target, leading plus sign", target: "aws", sourceAccountID: "+11122223333"},
+		{name: "aws target, whitespace padded", target: "aws", sourceAccountID: " 111122223333"},
+		{name: "gcp target, too short", target: "gcp", sourceAccountID: "12345"},
+		{name: "gcp target, non-digit characters", target: "gcp", sourceAccountID: "1111222233aa"},
+		{name: "gcp target, leading plus sign", target: "gcp", sourceAccountID: "+11122223333"},
+		{name: "gcp target, whitespace padded", target: "gcp", sourceAccountID: " 111122223333"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			accountID := "999888777666"
+			if tt.target == "gcp" {
+				accountID = "my-project"
+			}
+			out, err := runViaGoRun(t,
+				"--target", tt.target, "--source", "aws",
+				"--account-name", "Acme", "--account-id", accountID,
+				"--source-account-id", tt.sourceAccountID,
+				"--output", "-",
+			)
+			if err == nil {
+				t.Fatalf("expected failure for malformed --source-account-id %q, got success:\n%s", tt.sourceAccountID, out)
+			}
+			if !strings.Contains(out, "is not a valid AWS account ID") {
+				t.Errorf("expected error naming the invalid --source-account-id, got:\n%s", out)
+			}
+			if !strings.Contains(out, tt.sourceAccountID) {
+				t.Errorf("expected error to name the rejected value %q, got:\n%s", tt.sourceAccountID, out)
+			}
+		})
+	}
+}
