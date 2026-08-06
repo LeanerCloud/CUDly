@@ -170,7 +170,8 @@ resource "aws_security_group" "fck_nat" {
 resource "aws_iam_role" "fck_nat" {
   count = var.enable_nat_gateway ? 1 : 0
 
-  name_prefix = "${var.stack_name}-fck-nat-"
+  name_prefix          = "${var.stack_name}-fck-nat-"
+  permissions_boundary = var.permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -650,7 +651,8 @@ resource "aws_cloudwatch_log_group" "flow_logs" {
 resource "aws_iam_role" "flow_logs" {
   count = var.enable_flow_logs ? 1 : 0
 
-  name_prefix = "${var.stack_name}-flow-logs-"
+  name_prefix          = "${var.stack_name}-flow-logs-"
+  permissions_boundary = var.permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"

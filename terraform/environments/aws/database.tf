@@ -5,7 +5,8 @@
 module "database" {
   source = "../../modules/database/aws"
 
-  stack_name = local.stack_name
+  stack_name               = local.stack_name
+  permissions_boundary_arn = local.permissions_boundary_arn
 
   # Database configuration
   engine_version             = var.database_engine_version

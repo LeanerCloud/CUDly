@@ -5,9 +5,10 @@
 module "secrets" {
   source = "../../modules/secrets/aws"
 
-  stack_name  = local.stack_name
-  environment = var.environment
-  region      = var.region
+  stack_name               = local.stack_name
+  environment              = var.environment
+  region                   = var.region
+  permissions_boundary_arn = local.permissions_boundary_arn
 
   # Generate random password for dev (in prod, you'd provide this via tfvars)
   database_password = null # Will be auto-generated

@@ -1,6 +1,7 @@
 # IAM role for cleanup Lambda
 resource "aws_iam_role" "cleanup" {
-  name = "${var.stack_name}-cleanup-lambda"
+  name                 = "${var.stack_name}-cleanup-lambda"
+  permissions_boundary = var.permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"

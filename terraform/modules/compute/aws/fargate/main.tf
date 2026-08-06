@@ -67,7 +67,8 @@ resource "aws_ecs_cluster_capacity_providers" "main" {
 
 # Task Execution Role (for ECS to pull images, write logs)
 resource "aws_iam_role" "task_execution" {
-  name = "${local.name_prefix}-task-execution"
+  name                 = "${local.name_prefix}-task-execution"
+  permissions_boundary = var.permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -116,7 +117,8 @@ resource "aws_iam_role_policy" "task_execution_secrets" {
 
 # Task Role (for application to access AWS services)
 resource "aws_iam_role" "task" {
-  name = "${local.name_prefix}-task"
+  name                 = "${local.name_prefix}-task"
+  permissions_boundary = var.permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -859,7 +861,8 @@ resource "aws_cloudwatch_event_target" "recommendations" {
 resource "aws_iam_role" "eventbridge" {
   count = var.enable_scheduled_tasks ? 1 : 0
 
-  name = "${local.name_prefix}-eventbridge"
+  name                 = "${local.name_prefix}-eventbridge"
+  permissions_boundary = var.permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -959,7 +962,8 @@ resource "aws_cloudwatch_event_target" "ri_exchange" {
 resource "aws_iam_role" "eventbridge_ri_exchange" {
   count = var.enable_ri_exchange_schedule ? 1 : 0
 
-  name = "${local.name_prefix}-eb-ri-exchange"
+  name                 = "${local.name_prefix}-eb-ri-exchange"
+  permissions_boundary = var.permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -1064,7 +1068,8 @@ resource "aws_cloudwatch_event_target" "ladder_run" {
 resource "aws_iam_role" "eventbridge_ladder_run" {
   count = var.enable_ladder_run_schedule ? 1 : 0
 
-  name = "${local.name_prefix}-eb-ladder-run"
+  name                 = "${local.name_prefix}-eb-ladder-run"
+  permissions_boundary = var.permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -1173,7 +1178,8 @@ resource "aws_cloudwatch_event_target" "fire_scheduled_purchases" {
 resource "aws_iam_role" "eventbridge_fire_scheduled_purchases" {
   count = var.enable_fire_scheduled_purchases_schedule ? 1 : 0
 
-  name = "${local.name_prefix}-eb-fire-sched-purchases"
+  name                 = "${local.name_prefix}-eb-fire-sched-purchases"
+  permissions_boundary = var.permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
