@@ -98,9 +98,12 @@ resource "aws_iam_policy" "workload_boundary" {
         Resource = "*"
       },
       {
-        # organizations and sts are the two services that are NOT safe at
-        # `service:*` granularity, because at that width each of them is a
-        # complete escape from this boundary rather than a widening within it:
+        # organizations and sts are the two services narrowed in THIS change,
+        # because at `service:*` granularity each of them is a complete escape
+        # from this boundary rather than a widening within it: the criterion is
+        # "does this let a boundaried role keep running as a DIFFERENT
+        # principal, with no iam:PassRole involved" (PassRoleCeiling below is
+        # what scopes PassRole itself, so it does not help here).
         #
         #   - organizations:* includes CreateAccount (mints a fresh account that
         #     trusts this one), AttachPolicy/DetachPolicy (rewrites SCPs) and
@@ -113,10 +116,23 @@ resource "aws_iam_policy" "workload_boundary" {
         #     account trusts the management account root) and the ceiling is
         #     simply gone.
         #
-        # Both are therefore pinned to exactly what the modules grant.
-        # organizations is action-scoped rather than resource-scoped because the
-        # Organizations API supports no resource-level restrictions (see the
-        # org_discovery policy in modules/compute/aws/{lambda,fargate}/main.tf).
+        # THIS IS NOT THE COMPLETE SET, and the statement below should not be
+        # read as a finished escape analysis. At least three more services meet
+        # the same criterion and are left at full service width in
+        # WorkloadServiceCeiling above: lambda:* (UpdateFunctionCode on any
+        # function, then invoke, runs as that function's execution role),
+        # ssm:* (SendCommand / StartSession to any SSM-managed instance, runs
+        # as its instance profile) and ecs:* (UpdateService onto an existing
+        # task definition revision, or ExecuteCommand into a running task).
+        # None of those three needs iam:PassRole, so PassRoleCeiling's
+        # cudly-*-only scoping does not constrain them either. Narrowing them
+        # is out of scope for this change and tracked in #1723.
+        #
+        # organizations and sts are therefore pinned to exactly what the
+        # modules grant. organizations is action-scoped rather than
+        # resource-scoped because the Organizations API supports no
+        # resource-level restrictions (see the org_discovery policy in
+        # modules/compute/aws/{lambda,fargate}/main.tf).
         Sid    = "OrganizationsDiscoveryCeiling"
         Effect = "Allow"
         Action = [

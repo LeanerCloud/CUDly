@@ -12,14 +12,17 @@
 # the role at five of the ten managed policies AWS permits.
 #
 # WHAT REMAINS OPEN, DELIBERATELY. The deploy role keeps iam:CreatePolicy and
-# iam:CreatePolicyVersion on cudly-* policies, neither of which supports any
-# condition key at all (verified against the AWS Service Authorization
-# Reference), so a compromised deploy role can still mint a managed policy whose
-# document is `*` on `*`. That policy is inert: attaching it to any role is
-# denied by IAMDenyAttachUnapprovedManagedPolicy below, and its own document
-# cannot be reached from a workload role because those are capped by the
-# boundary. Denying policy creation instead would break every apply that manages
-# the module-level managed policy in modules/secrets/aws.
+# iam:CreatePolicyVersion on cudly-* policies. iam:CreatePolicy supports
+# aws:RequestTag/${TagKey} and aws:TagKeys (it accepts an optional Tags
+# parameter), and iam:CreatePolicyVersion supports no condition key at all
+# (verified against the AWS Service Authorization Reference). Neither
+# constrains the policy DOCUMENT, which is the point here, so a compromised
+# deploy role can still mint a managed policy whose document is `*` on `*`.
+# That policy is inert: attaching it to any role is denied by
+# IAMDenyAttachUnapprovedManagedPolicy below, and its own document cannot be
+# reached from a workload role because those are capped by the boundary.
+# Denying policy creation instead would break every apply that manages the
+# module-level managed policy in modules/secrets/aws.
 resource "aws_iam_policy" "iam" {
   name        = "cudly-deploy-iam"
   description = "CUDly Terraform deploy: IAM role mutation gated on the cudly-deploy-boundary permissions boundary"
