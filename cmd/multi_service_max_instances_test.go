@@ -23,22 +23,21 @@ var (
 // countPerFixtureRec is the instance count each (service, region) pair returns.
 const countPerFixtureRec = 8
 
-// newMaxInstancesMockClient returns a recommendations client that answers one
-// recommendation per (service, region) pair, with distinct savings percentages
-// so the scorer's ordering is deterministic.
-func newMaxInstancesMockClient() *MockRecommendationsClient {
+// newMaxInstancesMockClientWith returns a recommendations client that answers
+// one recommendation per (service, region) pair. savingsFor maps the fan-out
+// position (service index, region index) to a savings percentage, which lets a
+// test decide whether the best recommendations are fetched first or last.
+func newMaxInstancesMockClientWith(count int, savingsFor func(serviceIdx, regionIdx int) float64) *MockRecommendationsClient {
 	mockClient := &MockRecommendationsClient{}
 	for i, svc := range maxInstancesFixtureServices {
 		for j, region := range maxInstancesFixtureRegions {
 			svc, region := svc, region
-			// Descending in fan-out order: 50, 45, 40, ... so the scorer's
-			// savings-first ordering is unambiguous.
-			savings := 50.0 - 5*float64(i*len(maxInstancesFixtureRegions)+j)
+			savings := savingsFor(i, j)
 			rec := common.Recommendation{
 				Service:           svc,
 				Region:            region,
 				ResourceType:      "db.t3.small",
-				Count:             countPerFixtureRec,
+				Count:             count,
 				EstimatedSavings:  savings * 10,
 				SavingsPercentage: savings,
 			}
@@ -50,6 +49,14 @@ func newMaxInstancesMockClient() *MockRecommendationsClient {
 		}
 	}
 	return mockClient
+}
+
+// newMaxInstancesMockClient answers with savings descending in fan-out order
+// (50, 45, 40, ...), so the best recommendations are also the first fetched.
+func newMaxInstancesMockClient() *MockRecommendationsClient {
+	return newMaxInstancesMockClientWith(countPerFixtureRec, func(i, j int) float64 {
+		return 50.0 - 5*float64(i*len(maxInstancesFixtureRegions)+j)
+	})
 }
 
 // TestMaxInstancesCapsWholeRunAcrossServicesAndRegions is the regression test
@@ -117,6 +124,82 @@ func TestMaxInstancesCapsWholeRunAcrossServicesAndRegions(t *testing.T) {
 	// No silent clamping: the four fully-dropped recommendations are counted
 	// into the end-of-run summary.
 	assert.Contains(t, drops.FormatOneLine(), common.DropMaxInstances+"=4")
+}
+
+// TestMaxInstancesKeepsHighestSavingsNotFirstFetched pins the *selection*
+// property of the cap, which TestMaxInstancesCapsWholeRunAcrossServicesAndRegions
+// cannot see.
+//
+// ApplyInstanceLimit consumes its input in slice order and drops the tail, so
+// whatever ordering it is handed decides which commitments are bought. Capping
+// the merged set before scoring and capping the scorer's savings-sorted output
+// both satisfy "total <= cap", so the total-focused test passes either way.
+// Only this fixture distinguishes them: the first-fetched service and region
+// carry the *worst* recommendations, so a cap that consumes in fetch order
+// spends the entire budget on them and leaves the best ones unbought.
+//
+// RDS is fetched first (index 0 of maxInstancesFixtureServices) with 10-12%
+// savings; ElastiCache is fetched second with 40-50%. The cap admits 10 of the
+// 36 available instances, and every one of them must come from ElastiCache.
+func TestMaxInstancesKeepsHighestSavingsNotFirstFetched(t *testing.T) {
+	const (
+		maxInstances = 10
+		countPerRec  = 6
+	)
+
+	ctx := context.Background()
+	awsCfg := aws.Config{Region: "us-east-1"}
+
+	origCfg := toolCfg
+	t.Cleanup(func() { toolCfg = origCfg })
+
+	toolCfg.Coverage = 100.0
+	toolCfg.PaymentOption = "partial-upfront"
+	toolCfg.TermYears = 1
+	toolCfg.Regions = maxInstancesFixtureRegions
+	toolCfg.MaxInstances = maxInstances
+	toolCfg.MinSavingsPct = 0 // the low-savings recs must reach the cap, not be scored out
+
+	// Worst-first: the first-fetched service gets 10/11/12%, the second gets
+	// 40/45/50%. Best-value selection and fetch-order selection now disagree.
+	mockClient := newMaxInstancesMockClientWith(countPerRec, func(i, j int) float64 {
+		if i == 0 {
+			return 10.0 + float64(j)
+		}
+		return 40.0 + 5*float64(j)
+	})
+	t.Cleanup(func() { mockClient.AssertExpectations(t) })
+
+	accountCache := NewAccountAliasCache(awsCfg)
+	allRecs, drops := fetchAllRecs(ctx, awsCfg, mockClient, accountCache,
+		maxInstancesFixtureServices, engineVersionData{}, toolCfg, nil)
+	require.Len(t, allRecs, len(maxInstancesFixtureServices)*len(maxInstancesFixtureRegions))
+
+	scored := scoreLimitAndDisplay(allRecs, toolCfg, drops)
+
+	// The total is respected under either placement, so it proves nothing on
+	// its own here. It is asserted only to keep the fixture honest.
+	require.Equal(t, maxInstances, CalculateTotalInstances(scored.Passed))
+
+	// The property under test: every purchased instance comes from the
+	// highest-savings recommendations run-wide, not from the ones fetched
+	// first. A pre-scoring cap spends the whole budget on the 10-11% RDS recs.
+	for i := range scored.Passed {
+		rec := scored.Passed[i]
+		assert.Equal(t, common.ServiceElastiCache, rec.Service,
+			"the cap must consume the scorer's savings-sorted order, not fetch order; "+
+				"%s %s at %.0f%% savings was bought while better recommendations were dropped",
+			rec.Service, rec.Region, rec.SavingsPercentage)
+		assert.GreaterOrEqual(t, rec.SavingsPercentage, 40.0)
+	}
+
+	// Exact survivors: the 50% rec keeps all 6 instances, the 45% rec is
+	// reduced to the remaining 4, and everything at or below 40% is dropped.
+	require.Len(t, scored.Passed, 2)
+	assert.InDelta(t, 50.0, scored.Passed[0].SavingsPercentage, 0.001)
+	assert.Equal(t, countPerRec, scored.Passed[0].Count)
+	assert.InDelta(t, 45.0, scored.Passed[1].SavingsPercentage, 0.001)
+	assert.Equal(t, maxInstances-countPerRec, scored.Passed[1].Count)
 }
 
 // TestMaxInstancesNotAppliedWhenUnset guards the other direction: with the flag
