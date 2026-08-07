@@ -85,18 +85,19 @@ func (m *MockConfigStore) record(method string, args ...interface{}) {
 	m.callLog.record(method, args...)
 }
 
-func markHelper(t mock.TestingT) {
-	if h, ok := t.(interface{ Helper() }); ok {
-		h.Helper()
-	}
-}
-
 // AssertCalled asserts that method was invoked with arguments satisfying the
 // given matchers. It shadows the promoted testify method so it reads the
 // complete call log rather than mock.Mock.Calls; pass no arguments to assert
 // the method was called at all.
+//
+// mock.TestingT has no Helper method, so the assertion helpers type-assert for
+// it inline. t.Helper() marks its own caller, so delegating that to a shared
+// function would report every failure at that function's line instead of the
+// assertion's call site.
 func (m *MockConfigStore) AssertCalled(t mock.TestingT, method string, arguments ...interface{}) bool {
-	markHelper(t)
+	if h, ok := t.(interface{ Helper() }); ok {
+		h.Helper()
+	}
 	if m.callLog.matching(method, arguments) > 0 {
 		return true
 	}
@@ -110,7 +111,9 @@ func (m *MockConfigStore) AssertCalled(t mock.TestingT, method string, arguments
 // reads the complete call log rather than mock.Mock.Calls; pass no arguments to
 // assert the method was not called at all.
 func (m *MockConfigStore) AssertNotCalled(t mock.TestingT, method string, arguments ...interface{}) bool {
-	markHelper(t)
+	if h, ok := t.(interface{ Helper() }); ok {
+		h.Helper()
+	}
 	if n := m.callLog.matching(method, arguments); n > 0 {
 		t.Errorf("mock: %s was called %d time(s) matching %v, expected none. Recorded calls:%s",
 			method, n, arguments, m.callLog.summary(method))
@@ -123,7 +126,9 @@ func (m *MockConfigStore) AssertNotCalled(t mock.TestingT, method string, argume
 // arguments. It shadows the promoted testify method so it reads the complete
 // call log rather than mock.Mock.Calls.
 func (m *MockConfigStore) AssertNumberOfCalls(t mock.TestingT, method string, expectedCalls int) bool {
-	markHelper(t)
+	if h, ok := t.(interface{ Helper() }); ok {
+		h.Helper()
+	}
 	if actual := m.callLog.matching(method, nil); actual != expectedCalls {
 		t.Errorf("mock: expected %d call(s) to %s, got %d. Recorded calls:%s",
 			expectedCalls, method, actual, m.callLog.summary(method))
