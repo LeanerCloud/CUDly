@@ -23,8 +23,12 @@
 
 name: Database Migration
 
+# Least privilege by default: only the jobs that actually authenticate to a
+# cloud provider get `id-token: write`, and every one of those jobs is bound to
+# a deployment environment (`aws-db-<env>`, `gcp-db-<env>`, `azure-db-<env>`).
+# `validate` and `summary` never authenticate, so they stay on the `contents:
+# read` floor below.
 permissions:
-  id-token: write
   contents: read
 
 on:
@@ -77,6 +81,8 @@ jobs:
   validate:
     name: Validate Migration Request
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       is_safe: ${{ steps.check.outputs.is_safe }}
 
@@ -89,16 +95,60 @@ jobs:
       - name: Safety checks
         id: check
         env:
+          CLOUD: ${{ inputs.cloud }}
           ENVIRONMENT: ${{ inputs.environment }}
           DIRECTION: ${{ inputs.direction }}
           STEPS: ${{ inputs.steps }}
           CONFIRM: ${{ inputs.confirm }}
         run: |
+          set -uo pipefail
           IS_SAFE=true
 
+          # `workflow_call` never declares a `steps` input, so on that path this
+          # renders empty. Treat that the same as the explicit default of "0"
+          # (apply/rollback everything) rather than rejecting it outright.
+          STEPS="${STEPS:-0}"
+
+          # workflow_dispatch's cloud/environment/direction are `type: choice`,
+          # enforced server-side before the run starts. workflow_call's are plain
+          # `type: string` with no such enforcement, so re-validate them here
+          # against the same allowlist regardless of which trigger fired.
+          case "$CLOUD" in
+            aws|gcp|azure|all) ;;
+            *)
+              echo "❌ Invalid cloud provider: '$CLOUD' (expected aws, gcp, azure, or all)"
+              IS_SAFE=false
+              ;;
+          esac
+
+          case "$ENVIRONMENT" in
+            dev|staging|prod) ;;
+            *)
+              echo "❌ Invalid environment: '$ENVIRONMENT' (expected dev, staging, or prod)"
+              IS_SAFE=false
+              ;;
+          esac
+
+          case "$DIRECTION" in
+            up|down) ;;
+            *)
+              echo "❌ Invalid direction: '$DIRECTION' (expected up or down)"
+              IS_SAFE=false
+              ;;
+          esac
+
           # Check if migrations directory exists
-          if [ ! -d "${{ env.MIGRATIONS_PATH }}" ]; then
-            echo "❌ Migrations directory not found: ${{ env.MIGRATIONS_PATH }}"
+          if [ ! -d "$MIGRATIONS_PATH" ]; then
+            echo "❌ Migrations directory not found: $MIGRATIONS_PATH"
+            IS_SAFE=false
+          fi
+
+          # `steps` must be a non-negative integer regardless of direction: 0
+          # means "everything" for direction=up, and direction=down requires an
+          # explicit positive value (checked separately below). Reject anything
+          # else before it can reach a migrate invocation in either direction.
+          if ! [[ "$STEPS" =~ ^(0|[1-9][0-9]*)$ ]]; then
+            echo "❌ 'steps' must be a non-negative integer (got '$STEPS')."
             IS_SAFE=false
           fi
 
@@ -107,7 +157,7 @@ jobs:
           # entire schema, so it is rejected here for direction=down.
           if [[ "$DIRECTION" == "down" ]]; then
             if ! [[ "$STEPS" =~ ^[1-9][0-9]*$ ]]; then
-              echo "❌ direction=down requires an explicit positive 'steps' value (got '${STEPS:-<empty>}')."
+              echo "❌ direction=down requires an explicit positive 'steps' value (got '$STEPS')."
               echo "Rolling back ALL migrations at once is not supported by this workflow."
               IS_SAFE=false
             fi
@@ -124,21 +174,21 @@ jobs:
           fi
 
           # Check migration files
-          if [ -d "${{ env.MIGRATIONS_PATH }}" ]; then
-            UP_COUNT=$(ls -1 ${{ env.MIGRATIONS_PATH }}/*.up.sql 2>/dev/null | wc -l)
-            DOWN_COUNT=$(ls -1 ${{ env.MIGRATIONS_PATH }}/*.down.sql 2>/dev/null | wc -l)
+          if [ -d "$MIGRATIONS_PATH" ]; then
+            UP_COUNT=$(ls -1 "$MIGRATIONS_PATH"/*.up.sql 2>/dev/null | wc -l)
+            DOWN_COUNT=$(ls -1 "$MIGRATIONS_PATH"/*.down.sql 2>/dev/null | wc -l)
 
             echo "Migration files found:"
             echo "  Up migrations: $UP_COUNT"
             echo "  Down migrations: $DOWN_COUNT"
 
-            if [ $UP_COUNT -eq 0 ]; then
+            if [ "$UP_COUNT" -eq 0 ]; then
               echo "❌ No migration files found"
               IS_SAFE=false
             fi
           fi
 
-          echo "is_safe=$IS_SAFE" >> $GITHUB_OUTPUT
+          echo "is_safe=$IS_SAFE" >> "$GITHUB_OUTPUT"
 
           if [[ "$IS_SAFE" != "true" ]]; then
             echo "Validation failed; refusing to run migrations."
@@ -146,18 +196,26 @@ jobs:
           fi
 
       - name: Display migration plan
+        env:
+          CLOUD: ${{ inputs.cloud }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          DIRECTION: ${{ inputs.direction }}
+          STEPS: ${{ inputs.steps || 'all' }}
         run: |
-          echo "## Database Migration Plan" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Cloud:** ${{ inputs.cloud }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Direction:** ${{ inputs.direction }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Steps:** ${{ inputs.steps || 'all' }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          set -uo pipefail
+          {
+            echo "## Database Migration Plan"
+            echo ""
+            echo "**Cloud:** $CLOUD"
+            echo "**Environment:** $ENVIRONMENT"
+            echo "**Direction:** $DIRECTION"
+            echo "**Steps:** $STEPS"
+            echo ""
 
-          if [[ "${{ inputs.environment }}" == "prod" ]] && [[ "${{ inputs.direction }}" == "down" ]]; then
-            echo "⚠️ **WARNING:** This will rollback migrations on PRODUCTION!" >> $GITHUB_STEP_SUMMARY
-          fi
+            if [[ "$ENVIRONMENT" == "prod" ]] && [[ "$DIRECTION" == "down" ]]; then
+              echo "⚠️ **WARNING:** This will rollback migrations on PRODUCTION!"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Run AWS migrations
   migrate-aws:
@@ -167,6 +225,9 @@ jobs:
     if: |
       needs.validate.outputs.is_safe == 'true' &&
       (inputs.cloud == 'aws' || inputs.cloud == 'all')
+    permissions:
+      id-token: write
+      contents: read
     environment:
       name: aws-db-${{ inputs.environment }}
 
@@ -205,35 +266,50 @@ jobs:
       - name: Run migrations
         env:
           DB_PASSWORD: ${{ secrets.DB_PASSWORD_AWS }}
+          DB_ENDPOINT: ${{ steps.get-endpoint.outputs.endpoint }}
+          DIRECTION: ${{ inputs.direction }}
+          STEPS: ${{ inputs.steps }}
         run: |
-          DB_URL="postgresql://cudly:${DB_PASSWORD}@${{ steps.get-endpoint.outputs.endpoint }}:5432/cudly?sslmode=require"
+          set -uo pipefail
+          DB_URL="postgresql://cudly:${DB_PASSWORD}@${DB_ENDPOINT}:5432/cudly?sslmode=require"
 
-          if [[ "${{ inputs.direction }}" == "up" ]]; then
-            if [[ "${{ inputs.steps }}" == "0" ]]; then
+          # `validate` already rejects a malformed `steps`/`direction` before this
+          # job is ever reached, but this job sits behind an environment gate and
+          # is the thing that actually runs `migrate`, so the checks are repeated
+          # here against the re-parsed shell variable as defense in depth.
+          STEPS="${STEPS:-0}"
+
+          if [[ "$DIRECTION" == "up" ]]; then
+            if ! [[ "$STEPS" =~ ^(0|[1-9][0-9]*)$ ]]; then
+              echo "❌ 'steps' must be a non-negative integer (got '$STEPS')."
+              exit 1
+            fi
+            if [[ "$STEPS" == "0" ]]; then
               echo "Applying all pending migrations..."
-              migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" up
+              migrate -path "$MIGRATIONS_PATH" -database "$DB_URL" up
             else
-              echo "Applying ${{ inputs.steps }} migration(s)..."
-              migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" up ${{ inputs.steps }}
+              echo "Applying $STEPS migration(s)..."
+              migrate -path "$MIGRATIONS_PATH" -database "$DB_URL" up "$STEPS"
             fi
           else
-            # Defense in depth: validate already rejects this, but never run 'down -all'.
-            if ! [[ "${{ inputs.steps }}" =~ ^[1-9][0-9]*$ ]]; then
+            if ! [[ "$STEPS" =~ ^[1-9][0-9]*$ ]]; then
               echo "❌ Refusing to roll back without an explicit positive 'steps' value."
               exit 1
             fi
-            echo "Rolling back ${{ inputs.steps }} migration(s)..."
-            migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" down ${{ inputs.steps }}
+            echo "Rolling back $STEPS migration(s)..."
+            migrate -path "$MIGRATIONS_PATH" -database "$DB_URL" down "$STEPS"
           fi
 
       - name: Get migration version
         env:
           DB_PASSWORD: ${{ secrets.DB_PASSWORD_AWS }}
+          DB_ENDPOINT: ${{ steps.get-endpoint.outputs.endpoint }}
         run: |
-          DB_URL="postgresql://cudly:${DB_PASSWORD}@${{ steps.get-endpoint.outputs.endpoint }}:5432/cudly?sslmode=require"
-          VERSION=$(migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" version 2>&1 || echo "unknown")
+          set -uo pipefail
+          DB_URL="postgresql://cudly:${DB_PASSWORD}@${DB_ENDPOINT}:5432/cudly?sslmode=require"
+          VERSION=$(migrate -path "$MIGRATIONS_PATH" -database "$DB_URL" version 2>&1 || echo "unknown")
           echo "Current migration version: $VERSION"
-          echo "MIGRATION_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "MIGRATION_VERSION=$VERSION" >> "$GITHUB_ENV"
 
   # Run GCP migrations
   migrate-gcp:
@@ -243,6 +319,9 @@ jobs:
     if: |
       needs.validate.outputs.is_safe == 'true' &&
       (inputs.cloud == 'gcp' || inputs.cloud == 'all')
+    permissions:
+      id-token: write
+      contents: read
     environment:
       name: gcp-db-${{ inputs.environment }}
 
@@ -284,22 +363,31 @@ jobs:
       - name: Run migrations
         env:
           DB_PASSWORD: ${{ secrets.DB_PASSWORD_GCP }}
+          DB_ENDPOINT: ${{ steps.get-endpoint.outputs.endpoint }}
+          DIRECTION: ${{ inputs.direction }}
+          STEPS: ${{ inputs.steps }}
         run: |
-          DB_URL="postgresql://cudly:${DB_PASSWORD}@${{ steps.get-endpoint.outputs.endpoint }}:5432/cudly?sslmode=require"
+          set -uo pipefail
+          DB_URL="postgresql://cudly:${DB_PASSWORD}@${DB_ENDPOINT}:5432/cudly?sslmode=require"
 
-          if [[ "${{ inputs.direction }}" == "up" ]]; then
-            if [[ "${{ inputs.steps }}" == "0" ]]; then
-              migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" up
+          STEPS="${STEPS:-0}"
+
+          if [[ "$DIRECTION" == "up" ]]; then
+            if ! [[ "$STEPS" =~ ^(0|[1-9][0-9]*)$ ]]; then
+              echo "❌ 'steps' must be a non-negative integer (got '$STEPS')."
+              exit 1
+            fi
+            if [[ "$STEPS" == "0" ]]; then
+              migrate -path "$MIGRATIONS_PATH" -database "$DB_URL" up
             else
-              migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" up ${{ inputs.steps }}
+              migrate -path "$MIGRATIONS_PATH" -database "$DB_URL" up "$STEPS"
             fi
           else
-            # Defense in depth: validate already rejects this, but never run 'down -all'.
-            if ! [[ "${{ inputs.steps }}" =~ ^[1-9][0-9]*$ ]]; then
+            if ! [[ "$STEPS" =~ ^[1-9][0-9]*$ ]]; then
               echo "❌ Refusing to roll back without an explicit positive 'steps' value."
               exit 1
             fi
-            migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" down ${{ inputs.steps }}
+            migrate -path "$MIGRATIONS_PATH" -database "$DB_URL" down "$STEPS"
           fi
 
   # Run Azure migrations
@@ -310,6 +398,9 @@ jobs:
     if: |
       needs.validate.outputs.is_safe == 'true' &&
       (inputs.cloud == 'azure' || inputs.cloud == 'all')
+    permissions:
+      id-token: write
+      contents: read
     environment:
       name: azure-db-${{ inputs.environment }}
 
@@ -349,51 +440,72 @@ jobs:
       - name: Run migrations
         env:
           DB_PASSWORD: ${{ secrets.DB_PASSWORD_AZURE }}
+          DB_ENDPOINT: ${{ steps.get-endpoint.outputs.endpoint }}
+          DIRECTION: ${{ inputs.direction }}
+          STEPS: ${{ inputs.steps }}
         run: |
-          DB_URL="postgresql://cudly:${DB_PASSWORD}@${{ steps.get-endpoint.outputs.endpoint }}:5432/cudly?sslmode=require"
+          set -uo pipefail
+          DB_URL="postgresql://cudly:${DB_PASSWORD}@${DB_ENDPOINT}:5432/cudly?sslmode=require"
 
-          if [[ "${{ inputs.direction }}" == "up" ]]; then
-            if [[ "${{ inputs.steps }}" == "0" ]]; then
-              migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" up
+          STEPS="${STEPS:-0}"
+
+          if [[ "$DIRECTION" == "up" ]]; then
+            if ! [[ "$STEPS" =~ ^(0|[1-9][0-9]*)$ ]]; then
+              echo "❌ 'steps' must be a non-negative integer (got '$STEPS')."
+              exit 1
+            fi
+            if [[ "$STEPS" == "0" ]]; then
+              migrate -path "$MIGRATIONS_PATH" -database "$DB_URL" up
             else
-              migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" up ${{ inputs.steps }}
+              migrate -path "$MIGRATIONS_PATH" -database "$DB_URL" up "$STEPS"
             fi
           else
-            # Defense in depth: validate already rejects this, but never run 'down -all'.
-            if ! [[ "${{ inputs.steps }}" =~ ^[1-9][0-9]*$ ]]; then
+            if ! [[ "$STEPS" =~ ^[1-9][0-9]*$ ]]; then
               echo "❌ Refusing to roll back without an explicit positive 'steps' value."
               exit 1
             fi
-            migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" down ${{ inputs.steps }}
+            migrate -path "$MIGRATIONS_PATH" -database "$DB_URL" down "$STEPS"
           fi
 
   # Summary
   summary:
     name: Migration Summary
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: [validate, migrate-aws, migrate-gcp, migrate-azure]
     if: always()
 
     steps:
       - name: Post summary
+        env:
+          CLOUD: ${{ inputs.cloud }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          DIRECTION: ${{ inputs.direction }}
+          RESULT_AWS: ${{ needs.migrate-aws.result }}
+          RESULT_GCP: ${{ needs.migrate-gcp.result }}
+          RESULT_AZURE: ${{ needs.migrate-azure.result }}
         run: |
-          echo "## Database Migration Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Cloud:** ${{ inputs.cloud }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Direction:** ${{ inputs.direction }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          set -uo pipefail
+          {
+            echo "## Database Migration Results"
+            echo ""
+            echo "**Cloud:** $CLOUD"
+            echo "**Environment:** $ENVIRONMENT"
+            echo "**Direction:** $DIRECTION"
+            echo ""
 
-          echo "### Results" >> $GITHUB_STEP_SUMMARY
+            echo "### Results"
 
-          if [[ "${{ inputs.cloud }}" == "aws" ]] || [[ "${{ inputs.cloud }}" == "all" ]]; then
-            echo "- AWS: ${{ needs.migrate-aws.result }}" >> $GITHUB_STEP_SUMMARY
-          fi
+            if [[ "$CLOUD" == "aws" ]] || [[ "$CLOUD" == "all" ]]; then
+              echo "- AWS: $RESULT_AWS"
+            fi
 
-          if [[ "${{ inputs.cloud }}" == "gcp" ]] || [[ "${{ inputs.cloud }}" == "all" ]]; then
-            echo "- GCP: ${{ needs.migrate-gcp.result }}" >> $GITHUB_STEP_SUMMARY
-          fi
+            if [[ "$CLOUD" == "gcp" ]] || [[ "$CLOUD" == "all" ]]; then
+              echo "- GCP: $RESULT_GCP"
+            fi
 
-          if [[ "${{ inputs.cloud }}" == "azure" ]] || [[ "${{ inputs.cloud }}" == "all" ]]; then
-            echo "- Azure: ${{ needs.migrate-azure.result }}" >> $GITHUB_STEP_SUMMARY
-          fi
+            if [[ "$CLOUD" == "azure" ]] || [[ "$CLOUD" == "all" ]]; then
+              echo "- Azure: $RESULT_AZURE"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
