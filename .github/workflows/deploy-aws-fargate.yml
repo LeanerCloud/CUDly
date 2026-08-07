@@ -73,14 +73,30 @@ jobs:
     steps:
       - name: Determine environment
         id: set-env
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_ENVIRONMENT: ${{ inputs.environment }}
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.event_name }}" == "workflow_call" ]]; then
-            echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
-          else
-            echo "environment=dev" >> $GITHUB_OUTPUT
-          fi
+          set -euo pipefail
+          INPUT_ENVIRONMENT="${INPUT_ENVIRONMENT:-}"
+
+          case "$EVENT_NAME" in
+            workflow_dispatch|workflow_call) ENVIRONMENT="$INPUT_ENVIRONMENT" ;;
+            *)                               ENVIRONMENT=dev ;;
+          esac
+
+          # workflow_dispatch constrains this to the declared `choice` options,
+          # but the workflow_call input is typed as a free-form string, so the
+          # allowlist is enforced here rather than assumed.
+          case "$ENVIRONMENT" in
+            dev|staging|prod) ;;
+            *)
+              echo "::error::Refusing unknown environment: $ENVIRONMENT"
+              exit 1
+              ;;
+          esac
+
+          echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
 
       - name: Set image tag
         id: set-tag
