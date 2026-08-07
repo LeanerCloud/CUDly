@@ -119,6 +119,9 @@ jobs:
     name: Deploy AWS Lambda
     needs: determine-deployment
     if: needs.determine-deployment.outputs.deploy-aws-lambda == 'true'
+    permissions:
+      id-token: write
+      contents: read
     uses: ./.github/workflows/deploy-aws-lambda.yml
     with:
       environment: ${{ needs.determine-deployment.outputs.environment }}
@@ -133,6 +136,9 @@ jobs:
     name: Deploy AWS Fargate
     needs: determine-deployment
     if: needs.determine-deployment.outputs.deploy-aws-fargate == 'true'
+    permissions:
+      id-token: write
+      contents: read
     uses: ./.github/workflows/deploy-aws-fargate.yml
     with:
       environment: ${{ needs.determine-deployment.outputs.environment }}
@@ -145,6 +151,9 @@ jobs:
     name: Deploy GCP Cloud Run
     needs: determine-deployment
     if: needs.determine-deployment.outputs.deploy-gcp == 'true'
+    permissions:
+      id-token: write
+      contents: read
     uses: ./.github/workflows/deploy-gcp.yml
     with:
       environment: ${{ needs.determine-deployment.outputs.environment }}
@@ -157,6 +166,9 @@ jobs:
     name: Deploy Azure Container Apps
     needs: determine-deployment
     if: needs.determine-deployment.outputs.deploy-azure == 'true'
+    permissions:
+      id-token: write
+      contents: read
     uses: ./.github/workflows/deploy-azure.yml
     with:
       environment: ${{ needs.determine-deployment.outputs.environment }}
