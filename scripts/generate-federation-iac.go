@@ -52,9 +52,11 @@
 //	  --oidc-subject-claim "11111111-2222-3333-4444-555555555555"
 //
 //	# AWS target, AWS source — cross-account IAM role tfvars
+//	# --source-account-id is CUDly's own AWS account, not --account-id (the target)
 //	go run scripts/generate-federation-iac.go \
 //	  --target aws --source aws \
-//	  --account-name "target-aws" --account-id "999888777666"
+//	  --account-name "target-aws" --account-id "999888777666" \
+//	  --source-account-id "111122223333"
 //
 //	# Azure target — WIF App Registration tfvars
 //	go run scripts/generate-federation-iac.go \
@@ -63,9 +65,11 @@
 //	  --tenant-id "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 //
 //	# GCP target, AWS source — WIF pool tfvars
+//	# --source-account-id is CUDly's own AWS account (required when --source aws)
 //	go run scripts/generate-federation-iac.go \
 //	  --target gcp --source aws \
-//	  --account-name "prod-gcp" --account-id "my-gcp-project"
+//	  --account-name "prod-gcp" --account-id "my-gcp-project" \
+//	  --source-account-id "111122223333"
 //
 //	# GCP target, GCP source — service account impersonation tfvars
 //	go run scripts/generate-federation-iac.go \
@@ -107,6 +111,12 @@ type iacData struct {
 	AccountExternalID string
 	AccountSlug       string
 	Source            string
+	// SourceAccountID is the AWS account ID where CUDly itself runs, used by
+	// aws-cross-account.tfvars.tmpl and gcp-wif.tfvars.tmpl (source=aws). The
+	// server resolves this via STS; the standalone script has no such context,
+	// so it comes from the --source-account-id flag. Not the same as
+	// AccountExternalID/--account-id, which is the target account.
+	SourceAccountID string
 	// AWS WIF / cross-account
 	OIDCIssuerURL string
 	OIDCAudience  string
@@ -121,6 +131,15 @@ type iacData struct {
 	ProjectID           string
 	ServiceAccountEmail string
 	OIDCIssuerURI       string
+	// CUDlyAPIURL and ContactEmail feed the optional auto-registration block
+	// in the tfvars/deploy-script templates. The server pre-fills them from
+	// the dashboard URL and the authenticated session; the standalone script
+	// has neither, so they come from --cudly-api-url / --contact-email and
+	// default to "" (which the Terraform modules treat as "skip
+	// registration" — see the cudly_api_url/contact_email variable
+	// descriptions in iac/federation/*/terraform/variables.tf).
+	CUDlyAPIURL  string
+	ContactEmail string
 }
 
 var slugRE = regexp.MustCompile(`[^a-z0-9]+`)
@@ -455,10 +474,44 @@ func validateOIDCSubjectClaim(claim string, mode subjectClaimMode) error {
 // validFederationTargets in internal/api/handler_federation.go.
 var validTargets = map[string]bool{"aws": true, "azure": true, "gcp": true}
 
+// sourceAccountIDRE matches an AWS account ID: exactly 12 ASCII digits, no
+// whitespace padding, leading sign, or Unicode digit look-alikes. AWS account
+// IDs are always 12 digits; anything else could not be a real one and would
+// otherwise flow untouched into the generated tfvars (#1710 CR).
+var sourceAccountIDRE = regexp.MustCompile(`^[0-9]{12}$`)
+
+// requireSourceAccountID fills data.SourceAccountID from sourceAccountID when
+// source is aws, or reports errMsg if it was not supplied. A non-empty value
+// is also checked against sourceAccountIDRE before being written to data: a
+// malformed ID must fail loud here rather than reach the rendered tfvars,
+// where the problem would surface far from its cause as a confusing
+// Terraform or AWS error. It is a no-op for any other source. Both the
+// aws-target and gcp-target arms of populateData need this same aws-source
+// gate (the aws-cross-account and gcp-wif-from-aws paths respectively), so it
+// is factored out rather than duplicated to keep populateData's branching
+// within the pre-commit gocyclo budget.
+func requireSourceAccountID(data *iacData, source, sourceAccountID, errMsg string) error {
+	if source != "aws" {
+		return nil
+	}
+	if sourceAccountID == "" {
+		return errors.New(errMsg)
+	}
+	if !sourceAccountIDRE.MatchString(sourceAccountID) {
+		return fmt.Errorf("--source-account-id %q is not a valid AWS account ID: it must be exactly 12 digits", sourceAccountID)
+	}
+	data.SourceAccountID = sourceAccountID
+	return nil
+}
+
 // populateData fills target-specific fields on data from CLI flags. It reports
 // an error rather than writing an invalid value into data, so a rejected flag
-// stops the run before any template is rendered.
-func populateData(data *iacData, target, source, tenantID, projectID, saEmail, oidcSubjectClaim string) error {
+// stops the run before any template is rendered. This covers two independent
+// gates: --oidc-subject-claim, required (and only meaningful) for an AWS
+// target with a non-AWS source; and --source-account-id, required whenever
+// the source is AWS itself (the aws-cross-account and gcp-wif-from-aws paths),
+// since CUDly's own account has no other way to reach this standalone script.
+func populateData(data *iacData, target, source, tenantID, projectID, saEmail, oidcSubjectClaim, sourceAccountID string) error {
 	// --target is checked first so that a typo there is reported as a bad
 	// --target rather than as an inapplicable --oidc-subject-claim, which would
 	// send the operator off to drop a flag that was never the problem.
@@ -475,6 +528,11 @@ func populateData(data *iacData, target, source, tenantID, projectID, saEmail, o
 		data.OIDCIssuerURL = awsOIDCIssuer(source, tenantID)
 		data.OIDCAudience = awsOIDCAudience(source)
 		data.OIDCSubjectClaim = oidcSubjectClaim
+		if err := requireSourceAccountID(data, source, sourceAccountID,
+			"--source-account-id is required for --target aws --source aws "+
+				"(the AWS account ID where CUDly itself runs; --account-id is the target account)"); err != nil {
+			return err
+		}
 	case "azure":
 		data.SubscriptionID = data.AccountExternalID
 		data.TenantID = tenantID
@@ -488,6 +546,11 @@ func populateData(data *iacData, target, source, tenantID, projectID, saEmail, o
 			data.ServiceAccountEmail = "cudly@" + data.ProjectID + ".iam.gserviceaccount.com"
 		}
 		data.OIDCIssuerURI = gcpOIDCIssuerURI(source, tenantID)
+		if err := requireSourceAccountID(data, source, sourceAccountID,
+			"--source-account-id is required for --target gcp --source aws "+
+				"(the AWS account ID where CUDly itself runs; --account-id is the target project)"); err != nil {
+			return err
+		}
 	default:
 		// Unreachable while validTargets and these arms agree; kept so that
 		// adding a target to the map without an arm here fails loudly instead of
@@ -508,6 +571,9 @@ func main() {
 	projectID := flag.String("project-id", "", "GCP project ID (defaults to --account-id when target is gcp)")
 	saEmail := flag.String("service-account-email", "", "GCP service account email (defaults to cudly@<project>.iam.gserviceaccount.com)")
 	oidcSubjectClaim := flag.String("oidc-subject-claim", "", "Subject (sub) claim restricting the AWS trust policy to one workload: a GCP service account's numeric unique ID or an Azure managed identity's object ID. Required when --target=aws and --source is not aws; there is no working default (see #1640). Letters, digits and . _ : / @ = + - only")
+	sourceAccountID := flag.String("source-account-id", "", "AWS account ID where CUDly itself runs (required for --target aws --source aws, and --target gcp --source aws; NOT the same as --account-id, which is the target account)")
+	contactEmail := flag.String("contact-email", "", "Contact email pre-filled for CUDly auto-registration (optional; empty skips auto-registration)")
+	cudlyAPIURL := flag.String("cudly-api-url", "", "CUDly API base URL pre-filled for auto-registration (optional; empty skips auto-registration)")
 	outFile := flag.String("output", "", "Output file path; use '-' to print to stdout (default: derived filename in current directory)")
 	templDir := flag.String("templates-dir", "internal/iacfiles/templates", "Path to templates directory (run from repo root)")
 	modulesDir := flag.String("modules-dir", "iac/federation", "Path to Terraform modules directory (used by --format bundle)")
@@ -527,8 +593,15 @@ func main() {
 		slug = slugify(*accountID)
 	}
 
-	data := iacData{AccountName: *accountName, AccountExternalID: *accountID, AccountSlug: slug, Source: *source}
-	if err := populateData(&data, *target, *source, *tenantID, *projectID, *saEmail, *oidcSubjectClaim); err != nil {
+	data := iacData{
+		AccountName:       *accountName,
+		AccountExternalID: *accountID,
+		AccountSlug:       slug,
+		Source:            *source,
+		ContactEmail:      *contactEmail,
+		CUDlyAPIURL:       *cudlyAPIURL,
+	}
+	if err := populateData(&data, *target, *source, *tenantID, *projectID, *saEmail, *oidcSubjectClaim, *sourceAccountID); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
