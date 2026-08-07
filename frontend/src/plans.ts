@@ -687,7 +687,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
   const isPending = purchase.status === 'pending';
   const canRun = isPending || isPaused;
   const termCell = purchase.term > 0
-    ? `${purchase.term}yr ${purchase.payment.replace('-', ' ')}`
+    ? `${purchase.term}yr ${escapeHtml((purchase.payment ?? '').replace('-', ' '))}`
     : '—';
   // Show an em-dash for upfront=0 unless the plan truly is all-upfront;
   // $0 upfront on "partial" or "no-upfront" is informative ($0 is real).

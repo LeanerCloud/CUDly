@@ -2951,7 +2951,7 @@ function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommen
     case 'term':
       return `<td>${formatTerm(rec.term)}</td>`;
     case 'payment':
-      return `<td>${formatPayment(rec.payment)}</td>`;
+      return `<td>${escapeHtml(formatPayment(rec.payment))}</td>`;
     case 'savings':
       // issue #319: savings display value scales with the active cost period.
       return `<td class="savings">${formatCostForPeriod(rec.savings, ctx.period)}</td>`;
