@@ -377,7 +377,8 @@ func TestService_CreateGroupAPI(t *testing.T) {
 			},
 		}
 
-		result, err := service.CreateGroupAPI(ctx, req)
+		// The admin API key holds {admin, *}, which covers view:recommendations.
+		result, err := service.CreateGroupAPI(ctx, AdminAPIKeyActorID, req)
 		require.NoError(t, err)
 		assert.NotNil(t, result)
 
@@ -395,7 +396,7 @@ func TestService_CreateGroupAPI(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		result, err := service.CreateGroupAPI(ctx, "invalid")
+		result, err := service.CreateGroupAPI(ctx, AdminAPIKeyActorID, "invalid")
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "invalid request type")
@@ -431,7 +432,7 @@ func TestService_UpdateGroupAPI(t *testing.T) {
 			},
 		}
 
-		result, err := service.UpdateGroupAPI(ctx, "group-123", req)
+		result, err := service.UpdateGroupAPI(ctx, AdminAPIKeyActorID, "group-123", req)
 		require.NoError(t, err)
 		assert.NotNil(t, result)
 
@@ -449,7 +450,7 @@ func TestService_UpdateGroupAPI(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		result, err := service.UpdateGroupAPI(ctx, "group-123", "invalid")
+		result, err := service.UpdateGroupAPI(ctx, AdminAPIKeyActorID, "group-123", "invalid")
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "invalid request type")
@@ -466,7 +467,7 @@ func TestService_UpdateGroupAPI(t *testing.T) {
 			Name: "New Name",
 		}
 
-		result, err := service.UpdateGroupAPI(ctx, "group-123", req)
+		result, err := service.UpdateGroupAPI(ctx, AdminAPIKeyActorID, "group-123", req)
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "group not found")

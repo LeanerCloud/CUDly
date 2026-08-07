@@ -1218,8 +1218,10 @@ func (m *mockAuthForExchange) UpdateUserAPI(_ context.Context, _, _ string, _ an
 func (m *mockAuthForExchange) DeleteUser(_ context.Context, _ string) error              { return nil }
 func (m *mockAuthForExchange) ListUsersAPI(_ context.Context) (any, error)               { return nil, nil }
 func (m *mockAuthForExchange) ChangePasswordAPI(_ context.Context, _, _, _ string) error { return nil }
-func (m *mockAuthForExchange) CreateGroupAPI(_ context.Context, _ any) (any, error)      { return nil, nil }
-func (m *mockAuthForExchange) UpdateGroupAPI(_ context.Context, _ string, _ any) (any, error) {
+func (m *mockAuthForExchange) CreateGroupAPI(_ context.Context, _ string, _ any) (any, error) {
+	return nil, nil
+}
+func (m *mockAuthForExchange) UpdateGroupAPI(_ context.Context, _, _ string, _ any) (any, error) {
 	return nil, nil
 }
 func (m *mockAuthForExchange) DeleteGroup(_ context.Context, _ string) error        { return nil }

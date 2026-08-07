@@ -246,6 +246,10 @@ func TestService_DeleteGroup(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
+		// DeleteGroup loads the group first so it can refuse to drop a
+		// system-managed one (issue #1629).
+		mockStore.On("GetGroup", ctx, "group-123").
+			Return(&Group{ID: "group-123", Name: "Test Team"}, nil).Once()
 		mockStore.On("DeleteGroup", ctx, "group-123").Return(nil).Once()
 
 		err := service.DeleteGroup(ctx, "group-123")

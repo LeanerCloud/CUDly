@@ -186,8 +186,13 @@ type AuthServiceInterface interface {
 	MFADisableAPI(ctx context.Context, userID, password, codeOrRecovery string) error
 	MFARegenerateRecoveryCodesAPI(ctx context.Context, userID, code string) (recoveryCodes []string, err error)
 	// Group management - uses auth.API* types
-	CreateGroupAPI(ctx context.Context, req any) (any, error)
-	UpdateGroupAPI(ctx context.Context, groupID string, req any) (any, error)
+	// CreateGroupAPI / UpdateGroupAPI take the acting principal so the
+	// service can enforce the grant ceiling: a caller may not write a
+	// permission onto a group that their own effective permissions do not
+	// hold, and the money verbs carved out of admin:* are not grantable at
+	// all (issues #1550, #1629).
+	CreateGroupAPI(ctx context.Context, actorUserID string, req any) (any, error)
+	UpdateGroupAPI(ctx context.Context, actorUserID, groupID string, req any) (any, error)
 	DeleteGroup(ctx context.Context, groupID string) error
 	GetGroupAPI(ctx context.Context, groupID string) (any, error)
 	ListGroupsAPI(ctx context.Context) (any, error)

@@ -268,15 +268,34 @@ func (s *Service) ChangePasswordAPI(ctx context.Context, userID, currentPassword
 	return s.ChangePassword(ctx, userID, req)
 }
 
-// CreateGroupAPI creates a new group via the API.
-func (s *Service) CreateGroupAPI(ctx context.Context, reqInterface any) (any, error) {
+// apiPermissionsToPermissions converts a request-side permission list. A nil
+// result for an empty input preserves the "not sent" signal APIUpdateGroupRequest
+// relies on.
+func apiPermissionsToPermissions(in []APIPermission) []Permission {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Permission, len(in))
+	for i, p := range in {
+		out[i] = apiPermissionToPermission(p)
+	}
+	return out
+}
+
+// CreateGroupAPI creates a new group via the API. actorUserID is the acting
+// principal (a user ID, or AdminAPIKeyActorID for the stateless admin API
+// key); the requested permissions are checked against that principal's own
+// effective set before anything is written (issue #1550).
+func (s *Service) CreateGroupAPI(ctx context.Context, actorUserID string, reqInterface any) (any, error) {
 	req, ok := reqInterface.(APICreateGroupRequest)
 	if !ok {
 		return nil, fmt.Errorf("invalid request type")
 	}
-	perms := make([]Permission, len(req.Permissions))
-	for i, p := range req.Permissions {
-		perms[i] = apiPermissionToPermission(p)
+	perms := apiPermissionsToPermissions(req.Permissions)
+	// A new group has no permissions yet, so nothing can be "carried over":
+	// pass a nil existing set, which makes every carved-out verb a grant.
+	if err := s.checkGrantCeiling(ctx, actorUserID, perms, nil); err != nil {
+		return nil, err
 	}
 	group := &Group{
 		Name:            req.Name,
@@ -284,15 +303,39 @@ func (s *Service) CreateGroupAPI(ctx context.Context, reqInterface any) (any, er
 		Permissions:     perms,
 		AllowedAccounts: req.AllowedAccounts,
 	}
-	// Use empty string for createdBy since we don't have user context here
+	// Use empty string for createdBy: the column is a UUID FK and
+	// actorUserID may be the non-UUID admin-API-key sentinel.
 	if err := s.CreateGroup(ctx, group, ""); err != nil {
 		return nil, err
 	}
 	return groupToAPIGroup(group), nil
 }
 
-// UpdateGroupAPI updates a group via the API.
-func (s *Service) UpdateGroupAPI(ctx context.Context, groupID string, reqInterface any) (any, error) {
+// applyUpdateGroupRequest applies the set fields of req to group. perms is the
+// already-converted permission list; empty means "not sent" and leaves the
+// group's permissions unchanged, which is APIUpdateGroupRequest's pre-existing
+// contract.
+func applyUpdateGroupRequest(group *Group, req APIUpdateGroupRequest, perms []Permission) {
+	if req.Name != "" {
+		group.Name = req.Name
+	}
+	if req.Description != "" {
+		group.Description = req.Description
+	}
+	if len(perms) > 0 {
+		group.Permissions = perms
+	}
+	if req.AllowedAccounts != nil {
+		group.AllowedAccounts = req.AllowedAccounts
+	}
+}
+
+// UpdateGroupAPI updates a group via the API. It refuses to touch a
+// system-managed group at all, and checks any requested permission list
+// against the acting principal's own effective permissions before writing
+// (issues #1550, #1629). actorUserID is a user ID, or AdminAPIKeyActorID for
+// the stateless admin API key.
+func (s *Service) UpdateGroupAPI(ctx context.Context, actorUserID, groupID string, reqInterface any) (any, error) {
 	req, ok := reqInterface.(APIUpdateGroupRequest)
 	if !ok {
 		return nil, fmt.Errorf("invalid request type")
@@ -304,23 +347,16 @@ func (s *Service) UpdateGroupAPI(ctx context.Context, groupID string, reqInterfa
 	if group == nil {
 		return nil, fmt.Errorf("group not found")
 	}
+	if group.SystemManaged {
+		return nil, fmt.Errorf("%w: %q is seeded and maintained by migrations", ErrSystemManagedGroup, group.Name)
+	}
 
-	if req.Name != "" {
-		group.Name = req.Name
+	perms := apiPermissionsToPermissions(req.Permissions)
+	if err := s.checkGrantCeiling(ctx, actorUserID, perms, group.Permissions); err != nil {
+		return nil, err
 	}
-	if req.Description != "" {
-		group.Description = req.Description
-	}
-	if len(req.Permissions) > 0 {
-		perms := make([]Permission, len(req.Permissions))
-		for i, p := range req.Permissions {
-			perms[i] = apiPermissionToPermission(p)
-		}
-		group.Permissions = perms
-	}
-	if req.AllowedAccounts != nil {
-		group.AllowedAccounts = req.AllowedAccounts
-	}
+
+	applyUpdateGroupRequest(group, req, perms)
 
 	group.UpdatedAt = time.Now()
 	if err := s.UpdateGroup(ctx, group); err != nil {

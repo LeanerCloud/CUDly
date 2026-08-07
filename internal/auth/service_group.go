@@ -32,7 +32,24 @@ func (s *Service) UpdateGroup(ctx context.Context, group *Group) error {
 }
 
 // DeleteGroup removes a permission group.
+//
+// Deleting a system-managed group is refused: it is the same defect class as
+// the #1629 permission wipe, reached through a different verb. Dropping the
+// seeded Purchaser group destroys the only holder of the money verbs carved
+// out of admin:*, which no admin can then re-grant (see checkGrantCeiling),
+// so the purchase path would be dead tenant-wide until someone re-ran the
+// migration by hand.
 func (s *Service) DeleteGroup(ctx context.Context, groupID string) error {
+	group, err := s.store.GetGroup(ctx, groupID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("failed to load group %s: %w", groupID, err)
+	}
+	if group == nil {
+		return fmt.Errorf("group not found: %s", groupID)
+	}
+	if group.SystemManaged {
+		return fmt.Errorf("%w: %q is seeded and maintained by migrations", ErrSystemManagedGroup, group.Name)
+	}
 	return s.store.DeleteGroup(ctx, groupID)
 }
 

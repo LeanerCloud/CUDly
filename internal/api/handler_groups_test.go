@@ -59,7 +59,7 @@ func TestHandler_createGroup_Success(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
-	mockAuth.On("CreateGroupAPI", ctx, mock.Anything).Return(createdGroup, nil)
+	mockAuth.On("CreateGroupAPI", ctx, adminSession.UserID, mock.Anything).Return(createdGroup, nil)
 
 	handler := &Handler{auth: mockAuth}
 
@@ -122,7 +122,7 @@ func TestHandler_updateGroup_Success(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
-	mockAuth.On("UpdateGroupAPI", ctx, "11111111-1111-1111-1111-111111111111", mock.Anything).Return(updatedGroup, nil)
+	mockAuth.On("UpdateGroupAPI", ctx, adminSession.UserID, "11111111-1111-1111-1111-111111111111", mock.Anything).Return(updatedGroup, nil)
 
 	handler := &Handler{auth: mockAuth}
 
