@@ -52,6 +52,7 @@ jest.mock('../confirmDialog', () => ({
 import * as api from '../api';
 import * as groupState from '../groups/state';
 import * as groupModals from '../groups/groupModals';
+import { ALL_ACTIONS, ALL_RESOURCES } from '../permissions';
 
 // The exact seeded Purchaser group permission set (PURCHASER_PERMS in
 // permissions.generated.ts), reproduced here as a fixture so the test
@@ -201,5 +202,85 @@ describe('regression: group edit no longer drops/widens unrepresentable permissi
     // sees something is off before ever opening the dropdown.
     expect(actionSelect.selectedOptions[0]?.textContent).toContain('not recognized');
     expect(resourceSelect.selectedOptions[0]?.textContent).toContain('not recognized');
+  });
+
+  // F2 (adversarial review of this PR): the escaping above is correct today
+  // but nothing was pinning it. buildActionOptions/buildResourceOptions in
+  // groupModals.ts interpolate the raw stored permission value into both an
+  // HTML attribute (`value="..."`) and a text label (`⚠ ... (not
+  // recognized...)`) for any value outside ALL_ACTIONS/ALL_RESOURCES --
+  // exactly the "API string reaching innerHTML" pattern #1727 fixed twice
+  // elsewhere in this codebase a few hours before this file was written.
+  // These five breakout payloads (from the reviewer) pin the strong
+  // properties rather than just "the string appears somewhere": no element
+  // was parsed out of the payload, the selected <option> gained no
+  // attributes beyond value/selected, its label has zero child elements,
+  // and the value is preserved byte-for-byte through the DOM and through
+  // an actual save.
+  describe('F2: unrecognised-value option escaping holds under XSS breakout payloads', () => {
+    const BREAKOUT_PAYLOADS: Array<[string, string]> = [
+      ['element injection', '"><img src=x onerror=alert(1)>'],
+      ['attribute injection onto the <option> tag', '" autofocus onfocus=alert(1) x="'],
+      ['raw script tag', '<script>alert(1)</script>'],
+      ['single-quote context breakout', "'><svg onload=alert(1)>"],
+      ['closing-tag option injection', '</option><option value="x" selected>evil</option>'],
+    ];
+
+    test.each(BREAKOUT_PAYLOADS)('%s does not inject markup and round-trips unchanged', async (_label, payload) => {
+      const group: api.APIGroup = {
+        id: 'breakout-group-id',
+        name: 'Breakout',
+        description: 'Old description',
+        permissions: [{ action: payload, resource: payload }],
+        created_at: '2024-01-01T00:00:00Z',
+      };
+
+      (api.getGroup as jest.Mock).mockResolvedValue(group);
+      await groupModals.openEditGroupModal(group.id);
+
+      const actionSelect = document.querySelector('.perm-action') as HTMLSelectElement;
+      const resourceSelect = document.querySelector('.perm-resource') as HTMLSelectElement;
+
+      // No breakout payload parsed as a live element anywhere in the modal.
+      expect(document.querySelectorAll('img, script, svg, iframe, style').length).toBe(0);
+
+      // No extra <option> was smuggled in via the closing-tag breakout: the
+      // action select is ALL_ACTIONS + the empty placeholder + the one
+      // fallback option for this unrecognised value; the resource select is
+      // ALL_RESOURCES + the one fallback (it has no placeholder).
+      expect(actionSelect.options.length).toBe(ALL_ACTIONS.length + 1 + 1);
+      expect(resourceSelect.options.length).toBe(ALL_RESOURCES.length + 1);
+
+      const selectedAction = actionSelect.selectedOptions[0];
+      const selectedResource = resourceSelect.selectedOptions[0];
+      expect(selectedAction).toBeDefined();
+      expect(selectedResource).toBeDefined();
+
+      // The attribute-injection payload gained no new attributes on the
+      // <option> element itself: exactly value + selected, nothing else
+      // (no autofocus/onfocus/etc smuggled in).
+      expect(Array.from(selectedAction!.attributes).map(a => a.name).sort()).toEqual(['selected', 'value']);
+      expect(Array.from(selectedResource!.attributes).map(a => a.name).sort()).toEqual(['selected', 'value']);
+
+      // The label rendered as text, not markup: zero child elements.
+      expect(selectedAction!.children.length).toBe(0);
+      expect(selectedResource!.children.length).toBe(0);
+
+      // The value round-trips byte-identically through the DOM.
+      expect(actionSelect.value).toBe(payload);
+      expect(resourceSelect.value).toBe(payload);
+
+      // ...and through an actual save: the exact payload reaches the API
+      // call, neither dropped nor mangled by an unrelated description edit.
+      (document.getElementById('group-description') as HTMLTextAreaElement).value = 'New description';
+      const event = { preventDefault: jest.fn() } as unknown as Event;
+      await groupModals.saveGroup(event);
+
+      expect(api.updateGroup).toHaveBeenCalledWith('breakout-group-id', {
+        name: 'Breakout',
+        description: 'New description',
+        permissions: [{ action: payload, resource: payload }],
+      });
+    });
   });
 });
