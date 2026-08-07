@@ -21,6 +21,18 @@ export const CURRENCY_DEFAULT_DIGITS = 0;
  * Purchase History summary cards and RI Exchange cost chips, pass `digits:
  * 2`. Having a single helper keeps "$0" / "$0.00" / "$0.00/hr" from
  * diverging across the app.
+ *
+ * The digit grouping is pinned to en-US rather than following the host
+ * locale (issue #1728), mirroring formatDate/formatDateTime below: the
+ * `currency` prefix is already a fixed symbol regardless of locale, so the
+ * number after it should be unambiguous too. Two admins viewing the same
+ * dollar figure on browsers set to different locales must see the same
+ * digits and separators -- support screenshots and numbers read aloud on a
+ * call need to match across machines, and CUDly's money model is USD-only
+ * end to end. Letting `toLocaleString` fall back to the host locale also
+ * made every consumer of this helper an accidental host-locale test, which
+ * is why 8 tests across 3 files failed only on developer machines whose
+ * locale uses `.` as the thousands separator while passing in CI.
  */
 export function formatCurrency(
   value: number | null | undefined,
@@ -32,7 +44,7 @@ export function formatCurrency(
   if (value === null || value === undefined || !Number.isFinite(value)) {
     return '--';
   }
-  return `${currency}${value.toLocaleString(undefined, {
+  return `${currency}${value.toLocaleString('en-US', {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits
   })}`;
