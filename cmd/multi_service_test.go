@@ -382,12 +382,22 @@ func TestProcessService_WithInstanceLimit(t *testing.T) {
 	mockClient.On("GetRecommendations", ctx, mock.AnythingOfType("*common.RecommendationParams")).Return(mockRecs, nil)
 
 	accountCache := NewAccountAliasCache(awsCfg)
-	recs, _ := processService(ctx, awsCfg, mockClient, accountCache, common.ServiceRDS, true, toolCfg, engineVersionData{})
+	recs, results := processService(ctx, awsCfg, mockClient, accountCache, common.ServiceRDS, true, toolCfg, engineVersionData{})
 
-	// The per-region path must hand back the full 20 instances, not 15: capping
-	// here would re-introduce the per-(service, region) multiplication.
 	assert.Len(t, recs, 2, "Should return recommendations")
-	assert.Equal(t, 20, CalculateTotalInstances(recs),
+
+	// Assert on the *results*, not on recs. processRegionRecommendations assigns
+	// result.recommendations before the cap block and did so pre-fix too, so a
+	// count taken from recs passes either way and would be a vacuous guard.
+	// The dry-run results carry the recommendations that were actually handed
+	// to processPurchaseLoop, which is what the cap used to shrink: pre-fix
+	// these totalled 15 (10 + 5 truncated), post-fix they total the full 20.
+	resultInstances := 0
+	for i := range results {
+		resultInstances += results[i].Recommendation.Count
+	}
+	assert.Len(t, results, 2)
+	assert.Equal(t, 20, resultInstances,
 		"the per-region path must not apply --max-instances; the cap is run-wide")
 
 	mockClient.AssertExpectations(t)

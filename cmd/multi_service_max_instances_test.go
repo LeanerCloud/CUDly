@@ -202,6 +202,110 @@ func TestMaxInstancesKeepsHighestSavingsNotFirstFetched(t *testing.T) {
 	assert.Equal(t, maxInstances-countPerRec, scored.Passed[1].Count)
 }
 
+// TestMaxInstancesNeverPurchasesBelowMinCount pins that the cap cannot deliver
+// a purchase smaller than the operator's --min-count floor.
+//
+// Moving the cap downstream of the scorer means truncation is no longer
+// re-filtered by the scorer's --min-count gate, so a survivor the cap trims to
+// fit the budget could land under a floor the operator explicitly set. Asking
+// for "at least 5" and being sold 2 is wrong regardless of which direction it
+// errs in, and a commitment below the minimum can be worse than none at all.
+//
+// Fixture: 6 recommendations of 6 instances each, cap 10, --min-count 5. The
+// budget leaves room for 6 + 4, and that 4 is below the floor, so the second
+// recommendation must be dropped rather than purchased short. The run buys 6.
+func TestMaxInstancesNeverPurchasesBelowMinCount(t *testing.T) {
+	const (
+		maxInstances = 10
+		minCount     = 5
+		countPerRec  = 6
+	)
+
+	ctx := context.Background()
+	awsCfg := aws.Config{Region: "us-east-1"}
+
+	origCfg := toolCfg
+	t.Cleanup(func() { toolCfg = origCfg })
+
+	toolCfg.Coverage = 100.0
+	toolCfg.PaymentOption = "partial-upfront"
+	toolCfg.TermYears = 1
+	toolCfg.Regions = maxInstancesFixtureRegions
+	toolCfg.MaxInstances = maxInstances
+	toolCfg.MinCount = minCount
+
+	mockClient := newMaxInstancesMockClientWith(countPerRec, func(i, j int) float64 {
+		return 50.0 - 5*float64(i*len(maxInstancesFixtureRegions)+j)
+	})
+	t.Cleanup(func() { mockClient.AssertExpectations(t) })
+
+	accountCache := NewAccountAliasCache(awsCfg)
+	allRecs, drops := fetchAllRecs(ctx, awsCfg, mockClient, accountCache,
+		maxInstancesFixtureServices, engineVersionData{}, toolCfg, nil)
+	require.Len(t, allRecs, len(maxInstancesFixtureServices)*len(maxInstancesFixtureRegions))
+
+	scored := scoreLimitAndDisplay(allRecs, toolCfg, drops)
+
+	// The property under test. Every purchased recommendation honors the
+	// floor; none is bought at a truncated count below it.
+	for i := range scored.Passed {
+		assert.GreaterOrEqual(t, scored.Passed[i].Count, minCount,
+			"--min-count %d was set, but %s %s would be purchased at count=%d",
+			minCount, scored.Passed[i].Service, scored.Passed[i].Region, scored.Passed[i].Count)
+	}
+
+	// The truncated second recommendation is dropped, not reduced to 4.
+	require.Len(t, scored.Passed, 1)
+	assert.Equal(t, countPerRec, scored.Passed[0].Count)
+	assert.Equal(t, countPerRec, CalculateTotalInstances(scored.Passed))
+
+	// Dropped for the min-count reason, not silently, and counted exactly
+	// once: 5 of the 6 scored recommendations are gone, 1 of them to the
+	// floor and 4 to the budget. Double-counting the floor drop under both
+	// reasons would report 6 drops for 5 recommendations.
+	summary := drops.FormatOneLine()
+	assert.Contains(t, summary, common.DropMinCountAfterCap+"=1")
+	assert.Contains(t, summary, common.DropMaxInstances+"=4")
+	assert.Equal(t, 5, drops.Total())
+}
+
+// TestDropTruncatedBelowMinCount covers the floor helper directly, including
+// the boundary (a truncated count exactly equal to the floor is kept) and the
+// disabled case.
+func TestDropTruncatedBelowMinCount(t *testing.T) {
+	tests := []struct {
+		name        string
+		counts      []int
+		minCount    int
+		wantKept    []int
+		wantRemoved int
+	}{
+		{name: "floor disabled keeps everything", counts: []int{5, 2}, minCount: 0, wantKept: []int{5, 2}},
+		{name: "truncated tail below floor is dropped", counts: []int{6, 4}, minCount: 5, wantKept: []int{6}, wantRemoved: 1},
+		{name: "truncated tail exactly at floor is kept", counts: []int{6, 5}, minCount: 5, wantKept: []int{6, 5}},
+		{name: "tail above floor is kept", counts: []int{6, 6}, minCount: 5, wantKept: []int{6, 6}},
+		{name: "every rec below floor leaves nothing", counts: []int{2}, minCount: 5, wantKept: []int{}, wantRemoved: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recs := make([]common.Recommendation, len(tt.counts))
+			for i, c := range tt.counts {
+				recs[i] = common.Recommendation{Service: common.ServiceRDS, Region: "us-east-1", Count: c}
+			}
+
+			kept, removed := dropTruncatedBelowMinCount(recs, tt.minCount)
+
+			gotCounts := make([]int, len(kept))
+			for i := range kept {
+				gotCounts[i] = kept[i].Count
+			}
+			assert.Equal(t, tt.wantKept, gotCounts)
+			assert.Len(t, removed, tt.wantRemoved)
+		})
+	}
+}
+
 // TestMaxInstancesNotAppliedWhenUnset guards the other direction: with the flag
 // unset the fan-out is purchased in full, so the cap cannot silently shrink a
 // run that never asked for one.
@@ -310,7 +414,7 @@ func TestReportInstanceLimitNamesEveryChange(t *testing.T) {
 
 	drops := common.NewDropSummary()
 	out := captureAppOutput(t, func() {
-		reportInstanceLimit(before, after, CalculateTotalInstances(before), 7, drops)
+		reportInstanceLimit(before, after, 0, CalculateTotalInstances(before), 7, drops)
 	})
 
 	assert.Contains(t, out, "--max-instances=7")
