@@ -136,8 +136,8 @@ func runToolMultiService(ctx context.Context, cfg Config) {
 	AppLogger.Printf("\n📥 Fetching recommendations from all services...\n")
 	allRecs, drops := fetchAllRecs(ctx, awsCfg, recClient, accountCache, servicesToProcess, engineData, cfg, coverageMap)
 
-	// Phase 2: score and display.
-	scoredResult := scoreAndDisplay(allRecs, cfg)
+	// Phase 2: score, enforce the run-wide instance cap, and display.
+	scoredResult := scoreLimitAndDisplay(allRecs, cfg, drops)
 	if len(scoredResult.Passed) == 0 {
 		printDropSummary(drops)
 		AppLogger.Printf("\nℹ️  No recommendations passed filters. Nothing to purchase.\n")
@@ -202,18 +202,86 @@ func loadAWSConfig(ctx context.Context, cfg Config) (aws.Config, error) {
 	return awsconfig.LoadDefaultConfig(ctx, opts...)
 }
 
-// scoreAndDisplay runs the scorer on recs and prints the scored table and summary.
-func scoreAndDisplay(recs []common.Recommendation, cfg Config) scorer.ScoredResult {
+// scoreLimitAndDisplay runs the scorer on recs, enforces the run-wide
+// --max-instances cap on the survivors, and prints the scored table and
+// summary.
+//
+// The cap runs between scoring and rendering so the table, the confirmation
+// prompt and the purchase loop all describe the same post-cap set, and so the
+// instances that survive are the highest-savings ones run-wide (scorer.Score
+// sorts Passed by savings percentage descending).
+func scoreLimitAndDisplay(recs []common.Recommendation, cfg Config, drops *common.DropSummary) scorer.ScoredResult {
 	scorerCfg := scorer.Config{
 		MinSavingsPct:      cfg.MinSavingsPct,
 		MaxBreakEvenMonths: cfg.MaxBreakEvenMonths,
 		MinCount:           cfg.MinCount,
 	}
 	result := scorer.Score(recs, scorerCfg)
+	result.Passed = applyGlobalInstanceLimit(result.Passed, cfg, drops)
 	fmt.Print(reporter.RenderTable(result))
 	fmt.Print(reporter.RenderExcluded(result))
 	fmt.Print(reporter.RenderSummary(result))
 	return result
+}
+
+// applyGlobalInstanceLimit enforces --max-instances once across the entire run.
+//
+// The flag is documented as a hard cap on the total number of instances
+// purchased across all recommendations, so it has to see every service and
+// every region together. Applying it inside the per-region fetch instead caps
+// each (service, region) pair independently and multiplies the operator's cap
+// by the number of pairs.
+//
+// passed must already be ordered best-first: ApplyInstanceLimit consumes the
+// slice in order and drops the tail, so the ordering decides which commitments
+// survive. scorer.Score guarantees that ordering.
+//
+// Nothing is truncated silently. Every reduced or dropped recommendation is
+// named on stdout, and the drops are counted into the end-of-run summary.
+func applyGlobalInstanceLimit(passed []common.Recommendation, cfg Config, drops *common.DropSummary) []common.Recommendation {
+	if cfg.MaxInstances <= 0 {
+		return passed
+	}
+	totalBefore := CalculateTotalInstances(passed)
+	if totalBefore <= int(cfg.MaxInstances) {
+		return passed
+	}
+
+	limited := ApplyInstanceLimit(passed, cfg.MaxInstances)
+	reportInstanceLimit(passed, limited, totalBefore, cfg.MaxInstances, drops)
+	return limited
+}
+
+// reportInstanceLimit prints what --max-instances removed from the run.
+// after must be the prefix of before produced by ApplyInstanceLimit, so
+// after[i] and before[i] describe the same recommendation.
+func reportInstanceLimit(before, after []common.Recommendation, totalBefore int, maxInstances int32, drops *common.DropSummary) {
+	AppLogger.Printf("\n🔒 --max-instances=%d caps the whole run: the %d recommendations that passed scoring total %d instances.\n",
+		maxInstances, len(before), totalBefore)
+	AppLogger.Printf("   Keeping the highest-savings recommendations first. The following are reduced or dropped:\n")
+
+	reduced, dropped := 0, 0
+	for i := range before {
+		rec := before[i]
+		kept := 0
+		if i < len(after) {
+			kept = after[i].Count
+		}
+		switch {
+		case kept == rec.Count:
+			continue
+		case kept > 0:
+			reduced++
+			AppLogger.Printf("   • reduced: %s %s %s %d → %d instances\n", rec.Service, rec.Region, rec.ResourceType, rec.Count, kept)
+		default:
+			dropped++
+			AppLogger.Printf("   • dropped: %s %s %s (%d instances)\n", rec.Service, rec.Region, rec.ResourceType, rec.Count)
+		}
+	}
+
+	drops.Add(common.DropMaxInstances, dropped)
+	AppLogger.Printf("   Proceeding with %d instances across %d recommendations (%d reduced, %d dropped).\n",
+		CalculateTotalInstances(after), len(after), reduced, dropped)
 }
 
 // sumPassedRecs returns total instance count and total estimated savings for passed recs.

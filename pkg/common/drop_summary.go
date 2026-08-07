@@ -17,6 +17,7 @@ const (
 	DropFamilyNoNUSignal      = "family-nu-no-nu-signal"
 	DropFamilySizedToZero     = "family-nu-sized-to-zero"
 	DropDuplicateDedup        = "duplicate-dedup"
+	DropMaxInstances          = "--max-instances"
 )
 
 // DropSummary accumulates the count of recommendations dropped per reason

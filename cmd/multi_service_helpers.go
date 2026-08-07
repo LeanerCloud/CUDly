@@ -407,8 +407,19 @@ func processRegionRecommendations(
 		return result
 	}
 
-	// Check for duplicate RIs and apply instance limit. Drop tracking skipped (nil).
-	adjustedRecs := checkDuplicatesAndApplyLimit(ctx, filteredRecs, serviceClient, cfg, nil)
+	// Check for duplicate RIs. Drop tracking skipped (nil).
+	adjustedRecs := checkDuplicates(ctx, filteredRecs, serviceClient, nil)
+
+	// --max-instances is a run-wide cap, and this legacy per-region entry point
+	// has no view of the other services and regions in the run, so it cannot
+	// evaluate the cap. Refuse to spend rather than purchase uncapped: an
+	// over-purchase of reserved capacity is not reversible. Dry runs continue
+	// so the recommendations are still reported.
+	if cfg.MaxInstances > 0 && !isDryRun {
+		log.Printf("❌ Refusing to purchase %s/%s: --max-instances is a run-wide cap and cannot be enforced on the per-region path. Use the multi-service pipeline (the default entry point).",
+			getServiceDisplayName(service), region)
+		return result
+	}
 
 	// Process purchases
 	regionResults := processPurchaseLoop(ctx, adjustedRecs, region, isDryRun, serviceClient, cfg)
@@ -548,13 +559,20 @@ func applyCoverageAndOverrides(recs []common.Recommendation, cfg Config, coverag
 	return filteredRecs
 }
 
-// checkDuplicatesAndApplyLimit checks for duplicate RIs and applies instance limits.
+// checkDuplicates adjusts recommendations against already-owned RIs so the run
+// does not double-purchase existing capacity.
+//
+// It deliberately does NOT apply --max-instances. This function runs once per
+// (service, region), and capping here caps each region independently, which
+// multiplies the operator's cap by the number of service/region pairs. The cap
+// is applied once run-wide instead, after every region has been fetched
+// (applyGlobalInstanceLimit in multi_service.go).
+//
 // drops accumulates per-reason drop counts for the end-of-run summary; pass nil to skip.
-func checkDuplicatesAndApplyLimit(
+func checkDuplicates(
 	ctx context.Context,
 	filteredRecs []common.Recommendation,
 	serviceClient provider.ServiceClient,
-	cfg Config,
 	drops *common.DropSummary,
 ) []common.Recommendation {
 	// Check for duplicate RIs to avoid double purchasing
@@ -572,15 +590,6 @@ func checkDuplicatesAndApplyLimit(
 		}
 		drops.Add(common.DropDuplicateDedup, len(dedupedOut))
 		filteredRecs = adjustedRecs
-	}
-
-	// Apply instance limit if specified
-	if cfg.MaxInstances > 0 {
-		beforeLimit := len(filteredRecs)
-		filteredRecs = ApplyInstanceLimit(filteredRecs, cfg.MaxInstances)
-		if len(filteredRecs) < beforeLimit {
-			AppLogger.Printf("  🔒 Applied instance limit: %d recommendations after limiting to %d instances\n", len(filteredRecs), cfg.MaxInstances)
-		}
 	}
 
 	return filteredRecs
@@ -643,8 +652,10 @@ func fetchAndFilterRegionRecs(
 	recs = applyCoverageAndOverrides(recs, cfg, coverageMap, expiringCommitments, drops)
 
 	// Deduplication: skip recs matching recently-purchased commitments.
+	// --max-instances is NOT applied here; it is enforced once run-wide by the
+	// caller so the cap covers every service and region together.
 	if serviceClient != nil {
-		recs = checkDuplicatesAndApplyLimit(ctx, recs, serviceClient, cfg, drops)
+		recs = checkDuplicates(ctx, recs, serviceClient, drops)
 	}
 
 	return recs

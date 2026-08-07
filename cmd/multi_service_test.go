@@ -351,10 +351,15 @@ func TestProcessService_SavingsPlansAccountLevel(t *testing.T) {
 }
 
 func TestProcessService_WithInstanceLimit(t *testing.T) {
-	// Note: This test verifies that processService runs without error when MaxInstances is set.
-	// The actual instance limiting logic is tested in TestApplyInstanceLimit.
-	// In processService, the limit is applied per-region after duplicate checking,
-	// so without a real service client, the behavior may differ from production.
+	// --max-instances is a run-wide cap, so the per-region path deliberately
+	// does NOT apply it (that was #1608: applying it here capped each
+	// service/region pair independently). This legacy entry point therefore
+	// returns the uncapped recommendations; the cap is enforced once by
+	// scoreLimitAndDisplay on the real pipeline, covered by
+	// TestMaxInstancesCapsWholeRunAcrossServicesAndRegions.
+	//
+	// This run is a dry run, so the fail-closed purchase guard does not fire;
+	// TestProcessService_InstanceLimitRefusesRealPurchase covers that.
 
 	ctx := context.Background()
 	awsCfg := aws.Config{Region: "us-east-1"}
@@ -379,13 +384,46 @@ func TestProcessService_WithInstanceLimit(t *testing.T) {
 	accountCache := NewAccountAliasCache(awsCfg)
 	recs, _ := processService(ctx, awsCfg, mockClient, accountCache, common.ServiceRDS, true, toolCfg, engineVersionData{})
 
-	// Verify the function runs without error and returns recommendations
-	assert.NotEmpty(t, recs, "Should return recommendations")
-
-	// Note: The actual instance limit enforcement happens inside the function
-	// but may not be reflected in the results due to missing service client for duplicate checking
+	// The per-region path must hand back the full 20 instances, not 15: capping
+	// here would re-introduce the per-(service, region) multiplication.
+	assert.Len(t, recs, 2, "Should return recommendations")
+	assert.Equal(t, 20, CalculateTotalInstances(recs),
+		"the per-region path must not apply --max-instances; the cap is run-wide")
 
 	mockClient.AssertExpectations(t)
+}
+
+// TestProcessService_InstanceLimitRefusesRealPurchase pins the fail-closed
+// contract on the legacy per-region entry point: it cannot see the other
+// services and regions in the run, so it cannot evaluate the run-wide
+// --max-instances cap. Rather than purchase uncapped it must make no purchases
+// at all. An uncapped over-purchase of reserved capacity is not reversible.
+func TestProcessService_InstanceLimitRefusesRealPurchase(t *testing.T) {
+	ctx := context.Background()
+	awsCfg := aws.Config{Region: "us-east-1"}
+
+	origCfg := toolCfg
+	t.Cleanup(func() { toolCfg = origCfg })
+
+	toolCfg.Coverage = 100.0
+	toolCfg.PaymentOption = "partial-upfront"
+	toolCfg.TermYears = 1
+	toolCfg.Regions = []string{"us-east-1"}
+	toolCfg.MaxInstances = 15
+
+	mockClient := &MockRecommendationsClient{}
+	mockRecs := []common.Recommendation{
+		{ResourceType: "db.t3.micro", Count: 10, Region: "us-east-1", EstimatedSavings: 100},
+		{ResourceType: "db.t3.small", Count: 10, Region: "us-east-1", EstimatedSavings: 200},
+	}
+	mockClient.On("GetRecommendations", ctx, mock.AnythingOfType("*common.RecommendationParams")).Return(mockRecs, nil)
+	t.Cleanup(func() { mockClient.AssertExpectations(t) })
+
+	accountCache := NewAccountAliasCache(awsCfg)
+	recs, results := processService(ctx, awsCfg, mockClient, accountCache, common.ServiceRDS, false, toolCfg, engineVersionData{})
+
+	assert.NotEmpty(t, recs, "recommendations are still reported")
+	assert.Empty(t, results, "no purchase may be attempted when the cap cannot be evaluated")
 }
 
 func TestProcessService_WithOverrideCount(t *testing.T) {

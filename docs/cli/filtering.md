@@ -175,6 +175,8 @@ cudly --services ec2 --max-break-even-months 18
 
 Cap the total number of instances purchased across all recommendations after coverage scaling. Applied as a final cut after all other filters. This is a safety net to prevent unexpectedly large batch purchases, not a primary sizing control.
 
+The cap covers the whole run: it is applied once to the combined set of recommendations from every service and every region, not once per service or per region. It is applied after scoring, so the instances that survive are the highest-savings ones run-wide. Recommendations that the cap reduces or drops are listed by name before the confirmation prompt and counted in the end-of-run drop summary, so a capped run never silently shrinks.
+
 ```bash
 # Never purchase more than 100 instances in a single run
 cudly --services rds --max-instances 100
