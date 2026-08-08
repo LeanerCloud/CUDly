@@ -497,7 +497,7 @@ func TestFindReservationOrderByIdempotencyToken_PaginatedFollowsNextLink(t *test
 // TestDoIdempotentPurchaseTwoStep_EmptyToken_NoLookup pins the CLI legacy path:
 // when no idempotency token is supplied the wrapper falls straight through to
 // the raw DoPurchaseTwoStep (no list call), preserving the pre-issue-721
-// behaviour for callers without an owning execution.
+// behavior for callers without an owning execution.
 func TestDoIdempotentPurchaseTwoStep_EmptyToken_NoLookup(t *testing.T) {
 	m := &mockHTTPClient{}
 	ctx := context.Background()
@@ -643,7 +643,7 @@ func TestDoIdempotentPurchaseTwoStep_DifferentTokens_DistinctReservations(t *tes
 // TestDoIdempotentPurchaseTwoStep_PreservesTwoStepFlow verifies the two-step
 // flow's session-timeout retry semantics from PR #680 still work under the
 // new wrapper -- the wrapper is purely additive for the lookup, and once it
-// falls through to DoPurchaseTwoStep the original retry behaviour applies.
+// falls through to DoPurchaseTwoStep the original retry behavior applies.
 func TestDoIdempotentPurchaseTwoStep_PreservesTwoStepFlow(t *testing.T) {
 	m := &mockHTTPClient{}
 	ctx := context.Background()
@@ -809,4 +809,199 @@ func TestBillingPlanForPaymentOption_UnrecognizedIsNotBlamedOnPartialUpfront(t *
 	_, paddedErr := BillingPlanForPaymentOption("  Partial-Upfront  ")
 	require.Error(t, paddedErr)
 	assert.Contains(t, paddedErr.Error(), "partial-upfront has no azure equivalent")
+}
+
+// truncatingBody yields the first n bytes of data and then fails, modeling a
+// response whose body is cut short mid-transfer.
+type truncatingBody struct {
+	data []byte
+	n    int
+	off  int
+}
+
+func (b *truncatingBody) Read(p []byte) (int, error) {
+	if b.off >= b.n {
+		return 0, errors.New("unexpected EOF reading response body")
+	}
+	k := copy(p, b.data[b.off:b.n])
+	b.off += k
+	return k, nil
+}
+
+func (b *truncatingBody) Close() error { return nil }
+
+// TestDoPurchase_UnreadableBodyDoesNotSilentlyLookPermanent is the regression
+// test for the retry-classification defect.
+//
+// doPurchase's error text is the ONLY input to IsSessionTimeout, and
+// DoPurchaseTwoStep retries only when that predicate matches. When the read
+// error was discarded, a 400 whose body was truncated before the
+// "Session timed out" fragment produced a bare `status 400: <partial>` error.
+// IsSessionTimeout then returned false and the purchase was abandoned on its
+// first attempt — the precise condition purchaseMaxAttempts exists to survive —
+// with no indication that anything had gone wrong reading the response.
+//
+// The fix must not classify retryability from a body that was never fully
+// received. Pre-fix this test fails: the error carries neither the read failure
+// nor the session-timeout fragment, so both assertions below are false.
+func TestDoPurchase_UnreadableBodyDoesNotSilentlyLookPermanent(t *testing.T) {
+	ctx := context.Background()
+	full := `{"error":{"code":"BadRequest","message":"Session timed out - Call CalculatePrice again"}}`
+
+	m := &mockHTTPClient{}
+	m.On("Do", mock.Anything).Return(&http.Response{
+		StatusCode: http.StatusBadRequest,
+		// Cut short well before the "Session timed out" fragment.
+		Body:   &truncatingBody{data: []byte(full), n: 12},
+		Header: make(http.Header),
+	}, nil).Once()
+
+	err := doPurchase(ctx, m, "https://example.invalid/purchase", []byte(testBody), "tok")
+	require.Error(t, err)
+
+	assert.ErrorContains(t, err, "did not read completely",
+		"a failed body read must be surfaced, not discarded")
+	assert.ErrorContains(t, err, "unexpected EOF reading response body",
+		"the underlying read error must be wrapped so the operator can see why retryability is unknown")
+
+	// Retryability is carried out of band, because it cannot be read off a body
+	// that never fully arrived. Asserting the sentinel rather than the message
+	// is the point: the message is not what the retry loop consults.
+	assert.ErrorIs(t, err, errRetryabilityUnknown,
+		"an unreadable body must mark retryability unknown rather than leave it inferred from text")
+
+	m.AssertExpectations(t)
+}
+
+// countingPurchaseClient answers calculatePrice with a fixed order ID and counts
+// purchase attempts, minting a NEW response per call because the truncating body
+// is stateful and cannot be replayed across attempts.
+type countingPurchaseClient struct {
+	purchases    int
+	purchaseResp func() *http.Response
+}
+
+func (c *countingPurchaseClient) Do(req *http.Request) (*http.Response, error) {
+	if req.URL.String() == PurchaseURL("order-1") {
+		c.purchases++
+		return c.purchaseResp(), nil
+	}
+	return fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":"order-1"}}`), nil
+}
+
+// TestDoPurchaseTwoStep_TruncatedSessionTimeoutStillRetries is the regression
+// test for the retry decision, and it is deliberately an ATTEMPT-COUNT
+// assertion rather than a message assertion.
+//
+// An earlier revision of this fix surfaced the read error in the message and
+// asserted on that text. That assertion passed while the purchase was still
+// abandoned on its first attempt, because retryability was still being inferred
+// from a truncated body: the message changed, the behavior did not. Only
+// counting attempts tells the two apart.
+//
+// The readable control is included so this measures the loop rather than a
+// constant. If the control ever stops reaching the cap, the second half is no
+// longer evidence about anything.
+func TestDoPurchaseTwoStep_TruncatedSessionTimeoutStillRetries(t *testing.T) {
+	ctx := context.Background()
+	full := `{"error":{"code":"BadRequest","message":"Session timed out - Call CalculatePrice again"}}`
+
+	control := &countingPurchaseClient{
+		purchaseResp: func() *http.Response { return fakeResp(http.StatusBadRequest, full) },
+	}
+	_, err := DoPurchaseTwoStep(ctx, control, calcURL, []byte(testBody), "tok")
+	require.Error(t, err)
+	require.Equal(t, purchaseMaxAttempts, control.purchases,
+		"control: a readable session-timeout 400 must retry to the cap, or this test measures nothing")
+
+	truncated := &countingPurchaseClient{
+		purchaseResp: func() *http.Response {
+			return &http.Response{
+				StatusCode: http.StatusBadRequest,
+				// Cut short well before the "Session timed out" fragment.
+				Body:   &truncatingBody{data: []byte(full), n: 12},
+				Header: make(http.Header),
+			}
+		},
+	}
+	_, err = DoPurchaseTwoStep(ctx, truncated, calcURL, []byte(testBody), "tok")
+	require.Error(t, err)
+	assert.Equal(t, purchaseMaxAttempts, truncated.purchases,
+		"a session timeout whose body did not read completely must still be retried; "+
+			"pre-fix this was 1 attempt because retryability was inferred from a truncated body")
+}
+
+// TestDoPurchase_UnreadableBodyOnSuccessStillSucceeds guards the opposite
+// direction: success is decided by the status code alone, so a body that fails
+// to read must not turn a completed purchase into a reported failure.
+func TestDoPurchase_UnreadableBodyOnSuccessStillSucceeds(t *testing.T) {
+	ctx := context.Background()
+	m := &mockHTTPClient{}
+	m.On("Do", mock.Anything).Return(&http.Response{
+		StatusCode: http.StatusOK,
+		Body:       &truncatingBody{data: []byte(`{"ok":true}`), n: 3},
+		Header:     make(http.Header),
+	}, nil).Once()
+
+	require.NoError(t, doPurchase(ctx, m, "https://example.invalid/purchase", []byte(testBody), "tok"))
+	m.AssertExpectations(t)
+}
+
+// TestDoPurchase_TruncatedNon400IsNotRetryable pins the deliberate narrowing of
+// errRetryabilityUnknown to 400.
+//
+// Without this the sentinel fires on ANY non-2xx whose body fails to read --
+// 409, 500, 502, 504 alike -- which is far broader than IsSessionTimeout, whose
+// existing scope is a 400 plus an Azure-authored message. Breadth matters here
+// because DoIdempotentPurchaseTwoStep performs its idempotency lookup exactly
+// once, BEFORE DoPurchaseTwoStep is entered: there is no recheck between
+// attempts, and each retry mints a fresh reservationOrderId. So an in-loop
+// retry after a status that might follow a committed purchase is a double-buy
+// risk that the guard does not cover (tracked separately as issue #1774).
+//
+// Issue #1766's defect is a 400 "Session timed out" with a truncated body, so
+// narrowing costs no coverage and removes the unverified commit-ambiguous
+// statuses from the retry surface entirely.
+func TestDoPurchase_TruncatedNon400IsNotRetryable(t *testing.T) {
+	ctx := context.Background()
+	for _, status := range []int{
+		http.StatusConflict,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusGatewayTimeout,
+	} {
+		m := &mockHTTPClient{}
+		m.On("Do", mock.Anything).Return(&http.Response{
+			StatusCode: status,
+			Body:       &truncatingBody{data: []byte(`{"error":"truncated"}`), n: 6},
+			Header:     make(http.Header),
+		}, nil).Once()
+
+		err := doPurchase(ctx, m, "https://example.invalid/purchase", []byte(testBody), "tok")
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, errRetryabilityUnknown,
+			"status %d with a truncated body must NOT be marked retryable: a retry there could "+
+				"re-purchase after a commit the idempotency guard does not re-check for (issue #1774)", status)
+		m.AssertExpectations(t)
+	}
+}
+
+// TestDoPurchaseTwoStep_TruncatedNon400DoesNotRetry is the behavioral half of
+// the narrowing: the sentinel scoping must actually keep the retry loop out of
+// the commit-ambiguous statuses, not merely leave the error untagged.
+func TestDoPurchaseTwoStep_TruncatedNon400DoesNotRetry(t *testing.T) {
+	c := &countingPurchaseClient{
+		purchaseResp: func() *http.Response {
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Body:       &truncatingBody{data: []byte(`{"error":"truncated"}`), n: 6},
+				Header:     make(http.Header),
+			}
+		},
+	}
+	_, err := DoPurchaseTwoStep(context.Background(), c, calcURL, []byte(testBody), "tok")
+	require.Error(t, err)
+	assert.Equal(t, 1, c.purchases,
+		"a truncated 500 must be attempted exactly once; retrying it risks re-purchasing after "+
+			"a commit that the once-only idempotency lookup cannot see (issue #1774)")
 }
