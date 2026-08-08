@@ -101,6 +101,8 @@ func (m *MockConfigStore) UpdateGlobalConfigAtomic(ctx context.Context, apply fu
 		}
 		return v, args.Error(1)
 	}
+	// This fallback routes through the mocked GetGlobalConfig and
+	// SaveGlobalConfig, which record themselves; see UpdatePurchasePlanTx.
 	existing, err := m.GetGlobalConfig(ctx)
 	if err != nil {
 		return nil, err
@@ -203,6 +205,9 @@ func (m *MockConfigStore) IncrementPlanCurrentStep(ctx context.Context, planID s
 func (m *MockConfigStore) UpdatePurchasePlanTx(ctx context.Context, tx pgx.Tx, plan *config.PurchasePlan) error {
 	m.record("UpdatePurchasePlanTx", ctx, tx, plan)
 	if !isExpected(&m.Mock, "UpdatePurchasePlanTx") {
+		// The delegate records itself too, so a single Tx call shows up in the
+		// call log under both names. Intended: assertions about the non-Tx
+		// method see the write the Tx variant performed on their behalf.
 		return m.UpdatePurchasePlan(ctx, plan)
 	}
 	args := m.Called(ctx, tx, plan)
@@ -1342,6 +1347,7 @@ func (m *MockConfigStore) ListActiveSuppressions(ctx context.Context) ([]config.
 func (m *MockConfigStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) ([]config.PurchaseExecution, error) {
 	m.record("GetPendingExecutionsTx", ctx, tx)
 	if !isExpected(&m.Mock, "GetPendingExecutionsTx") {
+		// Recorded under both names; see UpdatePurchasePlanTx.
 		return m.GetPendingExecutions(ctx)
 	}
 	args := m.Called(ctx, tx)
@@ -1358,6 +1364,7 @@ func (m *MockConfigStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx)
 func (m *MockConfigStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, execution *config.PurchaseExecution) error {
 	m.record("SavePurchaseExecutionTx", ctx, tx, execution)
 	if !isExpected(&m.Mock, "SavePurchaseExecutionTx") {
+		// Recorded under both names; see UpdatePurchasePlanTx.
 		return m.SavePurchaseExecution(ctx, execution)
 	}
 	args := m.Called(ctx, tx, execution)

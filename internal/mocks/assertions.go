@@ -35,6 +35,17 @@ func (l *callLog) record(method string, args ...interface{}) {
 	l.calls = append(l.calls, recordedCall{method: method, args: args})
 }
 
+// fatalf reports an error in how a test wrote its assertion, then stops that
+// test. mock.TestingT has no Fatalf, so this is Errorf plus FailNow. It marks
+// itself a helper inline for the same reason the assertion helpers below do.
+func fatalf(t mock.TestingT, format string, args ...interface{}) {
+	if h, ok := t.(interface{ Helper() }); ok {
+		h.Helper()
+	}
+	t.Errorf(format, args...)
+	t.FailNow()
+}
+
 // matching counts the recorded invocations of method whose arguments satisfy
 // expected. An empty expected matches every invocation of the method.
 //
@@ -43,7 +54,25 @@ func (l *callLog) record(method string, args ...interface{}) {
 // that takes parameters -- a second, independent way for an assertion to become
 // unfailable. Naming the method is the only way to express "not called at all",
 // so that is what it means here.
-func (l *callLog) matching(method string, expected []interface{}) int {
+//
+// A non-empty expected whose length differs from the method's real arity is a
+// third way, and it is a bug in the test rather than a legitimate intent:
+// Diff pads the shorter side with "(Missing)" and scores every padded position
+// as a difference, so diffs is unconditionally non-zero and the assertion can
+// never fire. There is no argument list such an expectation could be asking
+// about, so it fails loudly instead of silently matching nothing. The check
+// needs a recorded call to read the arity from, which is exactly the case
+// where the miscount would otherwise produce a false pass; with no call at
+// all, any matcher count yields the same correct verdict.
+//
+// The second result is false when the matcher count was wrong. A real
+// *testing.T never returns from the FailNow inside fatalf, but the callers
+// still surface it as a failed assertion so that a TestingT whose FailNow
+// returns cannot turn a miscounted assertion back into a silent pass.
+func (l *callLog) matching(t mock.TestingT, method string, expected []interface{}) (int, bool) {
+	if h, ok := t.(interface{ Helper() }); ok {
+		h.Helper()
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	n := 0
@@ -55,11 +84,19 @@ func (l *callLog) matching(method string, expected []interface{}) int {
 			n++
 			continue
 		}
+		if len(expected) != len(c.args) {
+			fatalf(t, "mock: %s takes %d argument(s) but the assertion passed %d matcher(s). "+
+				"A matcher count that differs from the real arity can never match, which would "+
+				"make this assertion unfailable. Pass %d matcher(s), or none to mean "+
+				"\"not called at all, whatever the arguments\".",
+				method, len(c.args), len(expected), len(c.args))
+			return 0, false
+		}
 		if _, diffs := mock.Arguments(expected).Diff(c.args); diffs == 0 {
 			n++
 		}
 	}
-	return n
+	return n, true
 }
 
 // summary renders the recorded invocations of method for failure messages.
@@ -98,7 +135,11 @@ func (m *MockConfigStore) AssertCalled(t mock.TestingT, method string, arguments
 	if h, ok := t.(interface{ Helper() }); ok {
 		h.Helper()
 	}
-	if m.callLog.matching(method, arguments) > 0 {
+	n, ok := m.callLog.matching(t, method, arguments)
+	if !ok {
+		return false
+	}
+	if n > 0 {
 		return true
 	}
 	t.Errorf("mock: %s was not called with the expected arguments %v. Recorded calls:%s",
@@ -114,7 +155,11 @@ func (m *MockConfigStore) AssertNotCalled(t mock.TestingT, method string, argume
 	if h, ok := t.(interface{ Helper() }); ok {
 		h.Helper()
 	}
-	if n := m.callLog.matching(method, arguments); n > 0 {
+	n, ok := m.callLog.matching(t, method, arguments)
+	if !ok {
+		return false
+	}
+	if n > 0 {
 		t.Errorf("mock: %s was called %d time(s) matching %v, expected none. Recorded calls:%s",
 			method, n, arguments, m.callLog.summary(method))
 		return false
@@ -129,7 +174,11 @@ func (m *MockConfigStore) AssertNumberOfCalls(t mock.TestingT, method string, ex
 	if h, ok := t.(interface{ Helper() }); ok {
 		h.Helper()
 	}
-	if actual := m.callLog.matching(method, nil); actual != expectedCalls {
+	actual, ok := m.callLog.matching(t, method, nil)
+	if !ok {
+		return false
+	}
+	if actual != expectedCalls {
 		t.Errorf("mock: expected %d call(s) to %s, got %d. Recorded calls:%s",
 			expectedCalls, method, actual, m.callLog.summary(method))
 		return false
