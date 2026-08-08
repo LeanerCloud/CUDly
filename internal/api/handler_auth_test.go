@@ -965,7 +965,7 @@ func TestHandler_updateProfile_RejectsInvalidEmail(t *testing.T) {
 	assert.Equal(t, 400, ce.code)
 	assert.Contains(t, ce.message, "email")
 	// Confirm UpdateUserProfile was never reached.
-	mockAuth.AssertNotCalled(t, "UpdateUserProfile")
+	mockAuth.AssertNotCalled(t, "UpdateUserProfile", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestHandler_updateProfile_AcceptsValidEmail verifies that a well-formed

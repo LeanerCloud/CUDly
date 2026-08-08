@@ -660,7 +660,7 @@ func TestExecuteForAccount_CredentialFailure_MarksFailed(t *testing.T) {
 			// The provider factory must NEVER be invoked when credentials
 			// fail to resolve. If this fires, something is attempting an
 			// ambient-credential fallback — exactly the bug 9531681a4 closed.
-			mockFactory.AssertNotCalled(t, "CreateAndValidateProvider")
+			mockFactory.AssertNotCalled(t, "CreateAndValidateProvider", mock.Anything, mock.Anything, mock.Anything)
 		})
 	}
 }
@@ -726,7 +726,7 @@ func TestExecuteForAccount_CredentialFailure_SaveErrorSurfaced(t *testing.T) {
 		"the original credential failure must not be masked by the save failure")
 
 	// No provider may ever be constructed when credentials fail to resolve.
-	mockFactory.AssertNotCalled(t, "CreateAndValidateProvider")
+	mockFactory.AssertNotCalled(t, "CreateAndValidateProvider", mock.Anything, mock.Anything, mock.Anything)
 	mockStore.AssertExpectations(t)
 }
 
@@ -1819,7 +1819,7 @@ func TestProcessPurchaseRecommendations_GlobalConfigError_FailsInsteadOfDefaulti
 
 	// PurchaseCommitment must NEVER be called: assert the factory was never
 	// invoked, which is the clearest proxy for "no cloud API call happened".
-	mockFactory.AssertNotCalled(t, "CreateAndValidateProvider")
+	mockFactory.AssertNotCalled(t, "CreateAndValidateProvider", mock.Anything, mock.Anything, mock.Anything)
 
 	mockStore.AssertExpectations(t)
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
