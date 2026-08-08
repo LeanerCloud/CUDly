@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -56,6 +57,17 @@ type assertSite struct {
 	assertFn string
 	method   string
 	matchers int
+	// unsupported is non-empty when the site was recognized as a mock
+	// assertion but has a shape this check cannot analyze. Such sites are
+	// reported, never dropped: silently ignoring a shape is the same defect
+	// the guard exists to catch.
+	unsupported string
+	// scopes is the chain of function bodies enclosing the site, innermost
+	// first. Resolution walks it outward like Go's own lexical scoping: a
+	// t.Cleanup closure that references a mock declared in the enclosing test
+	// still resolves, while two tests in one file that both declare mockStore
+	// no longer bleed into each other.
+	scopes []ast.Node
 }
 
 func TestNoUnfailableMockAssertions(t *testing.T) {
@@ -124,7 +136,7 @@ func TestNoUnfailableMockAssertions(t *testing.T) {
 		}
 		for _, f := range files {
 			for _, site := range collectAssertSites(fset, f) {
-				recvType, resolved := resolveRecvType(f, site)
+				recvType, resolved := resolveRecvType(site.scopes, site)
 				m, isMock := mocks[recvType]
 				if resolved && !isMock {
 					var reason string
@@ -263,52 +275,137 @@ func collectMocks(files []*ast.File) map[string]*mockType {
 
 func collectAssertSites(fset *token.FileSet, f *ast.File) []assertSite {
 	var out []assertSite
-	ast.Inspect(f, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
+	// Innermost enclosing function body for each site, so receiver resolution
+	// is scoped rather than file-wide.
+	var stack []ast.Node
+	var walk func(n ast.Node) bool
+	walk = func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.FuncDecl:
+			if v.Body != nil {
+				stack = append(stack, v.Body)
+				defer func() { stack = stack[:len(stack)-1] }()
+				ast.Inspect(v.Body, walk)
+				return false
+			}
+		case *ast.FuncLit:
+			if v.Body != nil {
+				stack = append(stack, v.Body)
+				defer func() { stack = stack[:len(stack)-1] }()
+				ast.Inspect(v.Body, walk)
+				return false
+			}
+		case *ast.CallExpr:
+			sel, ok := v.Fun.(*ast.SelectorExpr)
+			if !ok || (sel.Sel.Name != "AssertCalled" && sel.Sel.Name != "AssertNotCalled") {
+				return true
+			}
+			// Copy innermost-first; stack is mutated as the walk unwinds.
+			chain := make([]ast.Node, 0, len(stack))
+			for i := len(stack) - 1; i >= 0; i-- {
+				chain = append(chain, stack[i])
+			}
+			site := assertSite{pos: fset.Position(v.Pos()), assertFn: sel.Sel.Name, scopes: chain}
+
+			recv, ok := sel.X.(*ast.Ident)
+			if !ok {
+				site.recv = exprString(sel.X)
+				site.unsupported = "receiver is not a plain identifier (e.g. a field or nested selector)"
+				out = append(out, site)
+				return true
+			}
+			site.recv = recv.Name
+
+			if len(v.Args) < 2 {
+				site.unsupported = "fewer than two arguments; not a well-formed mock assertion"
+				out = append(out, site)
+				return true
+			}
+			lit, ok := v.Args[1].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				site.unsupported = "method name is not a string literal"
+				out = append(out, site)
+				return true
+			}
+			// strconv.Unquote rather than strings.Trim: Trim mishandles escapes
+			// and silently accepts a raw-string literal, which is also
+			// token.STRING but has different contents.
+			name, err := strconv.Unquote(lit.Value)
+			if err != nil {
+				site.unsupported = "method name literal could not be unquoted: " + err.Error()
+				out = append(out, site)
+				return true
+			}
+			site.method = name
+			if v.Ellipsis.IsValid() {
+				// AssertNotCalled(t, "M", args...) spreads a slice whose length
+				// is not knowable here. Counting the spread expression as one
+				// matcher would invent a mismatch.
+				site.unsupported = "matchers are passed as a variadic spread; the count is not statically known"
+				out = append(out, site)
+				return true
+			}
+			site.matchers = len(v.Args) - 2
+			out = append(out, site)
 			return true
 		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		if sel.Sel.Name != "AssertCalled" && sel.Sel.Name != "AssertNotCalled" {
-			return true
-		}
-		recv, ok := sel.X.(*ast.Ident)
-		if !ok || len(call.Args) < 2 {
-			return true
-		}
-		lit, ok := call.Args[1].(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
-			return true
-		}
-		if call.Ellipsis.IsValid() {
-			// AssertNotCalled(t, "M", args...) spreads a slice whose length is
-			// not knowable here. Counting the spread expression as one matcher
-			// would invent a mismatch, so the site is left alone.
-			return true
-		}
-		out = append(out, assertSite{
-			pos:      fset.Position(call.Pos()),
-			recv:     recv.Name,
-			assertFn: sel.Sel.Name,
-			method:   strings.Trim(lit.Value, `"`),
-			matchers: len(call.Args) - 2,
-		})
 		return true
-	})
+	}
+	ast.Inspect(f, walk)
 	return out
 }
 
-// resolveRecvType maps the assertion's receiver identifier back to the type it
-// was assigned from within the file: mockStore := &MockX{}, new(MockX), or
-// MockX{}. It reports the type name whether or not that type is a mock, so the
-// caller can tell "this is not a mock" (nothing to check) apart from "we could
-// not tell what this is" (an unreviewed blind spot).
-func resolveRecvType(f *ast.File, site assertSite) (string, bool) {
+// exprString renders a receiver expression for a report message.
+func exprString(e ast.Expr) string {
+	switch v := e.(type) {
+	case *ast.Ident:
+		return v.Name
+	case *ast.SelectorExpr:
+		return exprString(v.X) + "." + v.Sel.Name
+	case *ast.CallExpr:
+		return exprString(v.Fun) + "()"
+	case *ast.IndexExpr:
+		return exprString(v.X) + "[...]"
+	}
+	return "<expr>"
+}
+
+// resolveRecvType maps the assertion's receiver identifier to the type it was
+// assigned from, searching ONLY the innermost function body containing the site.
+// A file-wide search would keep the last matching assignment, so two tests in
+// one file that both name a variable mockStore would resolve every site to
+// whichever type happened to appear last -- comparing matcher counts against the
+// wrong arity and either inventing a finding or accepting a real one. This repo
+// reuses names like mockStore and mockFactory across many tests in a file, so
+// that is a live hazard, not a theoretical one.
+//
+// Conflicting bindings inside a single scope return unresolved rather than a
+// guess: the site then reaches the skipped report, which is the direction this
+// check degrades in everywhere else.
+func resolveRecvType(scopes []ast.Node, site assertSite) (string, bool) {
+	for _, scope := range scopes {
+		name, ok, conflict := bindingInScope(scope, site.recv)
+		if conflict {
+			return "", false
+		}
+		if ok {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+// bindingInScope looks for assignments of name directly within one function
+// body, without descending into nested function literals (those are their own
+// scopes and are searched separately). It reports the bound mock type, whether
+// one was found, and whether the scope binds the name to two different types.
+func bindingInScope(scope ast.Node, recv string) (string, bool, bool) {
 	var found string
-	ast.Inspect(f, func(n ast.Node) bool {
+	conflict := false
+	ast.Inspect(scope, func(n ast.Node) bool {
+		if fl, ok := n.(*ast.FuncLit); ok && fl.Body != scope {
+			return false
+		}
 		var lhs, rhs []ast.Expr
 		switch v := n.(type) {
 		case *ast.AssignStmt:
@@ -326,16 +423,21 @@ func resolveRecvType(f *ast.File, site assertSite) (string, bool) {
 		}
 		for i, l := range lhs {
 			id, ok := l.(*ast.Ident)
-			if !ok || id.Name != site.recv {
+			if !ok || id.Name != recv {
 				continue
 			}
-			if name := mockTypeOfExpr(rhs[i]); name != "" {
-				found = name
+			name := mockTypeOfExpr(rhs[i])
+			if name == "" {
+				continue
 			}
+			if found != "" && found != name {
+				conflict = true
+			}
+			found = name
 		}
 		return true
 	})
-	return found, found != ""
+	return found, found != "", conflict
 }
 
 // mockTypeOfExpr extracts T from &T{...}, T{...} and new(T).
@@ -479,7 +581,15 @@ func Test(t *testing.T) {
 	unknown.AssertNotCalled(t, "Two") // want: reported as unresolved
 
 	spread := &MockThing{}
-	spread.AssertNotCalled(t, "Two", anyArgs...) // want: ignored, count unknowable
+	spread.AssertNotCalled(t, "Two", anyArgs...) // want: unsupported, count unknowable
+
+	h.mockThing.AssertNotCalled(t, "Two") // want: unsupported, receiver is a selector
+	thing.AssertNotCalled(t, methodName)  // want: unsupported, method not a literal
+
+	// A second test in the same file binding the same name to another type: the
+	// site above must not resolve to this one.
+	other := &MockShadowed{}
+	other.AssertNotCalled(t, "Two")
 }
 `
 	fset := token.NewFileSet()
@@ -526,9 +636,13 @@ func Test(t *testing.T) {
 	}
 
 	var got []verdict
-	unresolved := 0
+	unresolved, unsupported := 0, 0
 	for _, site := range collectAssertSites(fset, f) {
-		recvType, resolved := resolveRecvType(f, site)
+		if site.unsupported != "" {
+			unsupported++
+			continue
+		}
+		recvType, resolved := resolveRecvType(site.scopes, site)
 		m, isMock := mocks[recvType]
 		if resolved && !isMock {
 			continue
@@ -544,6 +658,11 @@ func Test(t *testing.T) {
 			continue
 		}
 		got = append(got, verdict{site.method, site.matchers, site.matchers != arity})
+	}
+	// Three shapes the check cannot analyze must be REPORTED, not dropped:
+	// a variadic spread, a selector receiver, and a non-literal method name.
+	if unsupported != 3 {
+		t.Errorf("unsupported shapes reported = %d, want 3 (spread, selector receiver, non-literal method)", unsupported)
 	}
 
 	want := []verdict{
@@ -646,5 +765,66 @@ func TestResolveCrossPackage_UnknownMethodStillDisagrees(t *testing.T) {
 	global := map[string][]*mockType{"MockThing": {has, hasNot}}
 	if _, ok, reason := resolveCrossPackage(global, "MockThing", "Do"); ok {
 		t.Errorf("resolved across candidates that disagree about Do (reason %q)", reason)
+	}
+}
+
+// TestResolveRecvTypeScoping pins the scoping rules for receiver resolution.
+// Before this, the search covered the whole file and kept the LAST matching
+// assignment, so two tests in one file both naming a variable mockStore
+// resolved every site to whichever type appeared last — comparing the matcher
+// count against the wrong arity, which either invents a finding or accepts a
+// genuinely unfailable assertion. Wrong attribution is the failure direction
+// that gets a guard deleted rather than fixed.
+func TestResolveRecvTypeScoping(t *testing.T) {
+	const src = `package p
+
+func TestA(t *testing.T) {
+	mockStore := &MockAlpha{}
+	mockStore.AssertNotCalled(t, "Do")
+}
+
+func TestB(t *testing.T) {
+	mockStore := &MockBeta{}
+	mockStore.AssertNotCalled(t, "Do")
+}
+
+func TestClosure(t *testing.T) {
+	ses := &MockGamma{}
+	t.Cleanup(func() {
+		ses.AssertNotCalled(t, "Do")
+	})
+}
+
+func TestConflict(t *testing.T) {
+	dup := &MockAlpha{}
+	dup = &MockBeta{}
+	dup.AssertNotCalled(t, "Do")
+}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "scoping.go", src, 0)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	got := map[string]string{}
+	for _, site := range collectAssertSites(fset, f) {
+		typ, ok := resolveRecvType(site.scopes, site)
+		if !ok {
+			typ = "<unresolved>"
+		}
+		got[fmt.Sprintf("%s@%d", site.recv, site.pos.Line)] = typ
+	}
+
+	want := map[string]string{
+		"mockStore@5":  "MockAlpha",    // TestA's own binding, not TestB's
+		"mockStore@10": "MockBeta",     // TestB's own binding, not TestA's
+		"ses@16":       "MockGamma",    // closure resolves through the enclosing scope
+		"dup@23":       "<unresolved>", // one scope, two types: refuse to guess
+	}
+	for k, w := range want {
+		if got[k] != w {
+			t.Errorf("%s resolved to %q, want %q", k, got[k], w)
+		}
 	}
 }

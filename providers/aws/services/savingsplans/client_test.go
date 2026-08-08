@@ -1531,11 +1531,13 @@ func TestEC2InstanceSP_CEProvidedOfferingIDUsedDirectly(t *testing.T) {
 		},
 	}
 
-	// DescribeSavingsPlansOfferings must NOT be called when CE supplies the ID.
-	mockSP.AssertNotCalled(t, "DescribeSavingsPlansOfferings", mock.Anything, mock.Anything)
-
 	id, err := client.findOfferingID(context.Background(), rec, "test-exec")
 	require.NoError(t, err)
 	assert.Equal(t, "ce-provided-offering-id-abc123", id,
 		"CE-provided OfferingID must be used directly, skipping DescribeSavingsPlansOfferings")
+
+	// DescribeSavingsPlansOfferings must NOT be called when CE supplies the ID.
+	// Asserted after the call: before it, the mock has recorded nothing and this
+	// passes for any implementation, whatever the matcher count.
+	mockSP.AssertNotCalled(t, "DescribeSavingsPlansOfferings", mock.Anything, mock.Anything)
 }
