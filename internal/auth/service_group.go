@@ -178,7 +178,7 @@ func (s *Service) collectGroupsAndAccounts(ctx context.Context, authCtx *AuthCon
 // group was skipped. That targets exactly the widening. It deliberately does
 // NOT refuse on any unresolved group: that would reverse the intentional
 // "group was deleted; skip it rather than failing the entire request"
-// behaviour and lock out a user with one stale membership everywhere until an
+// behavior and lock out a user with one stale membership everywhere until an
 // admin cleaned up -- trading a conditional security hole for an
 // unconditional availability regression on a path this widely consumed.
 //

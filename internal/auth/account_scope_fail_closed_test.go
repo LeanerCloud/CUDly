@@ -222,7 +222,7 @@ func TestResolveAllowedAccounts_MultiGroupBaselineStaysRestricted(t *testing.T) 
 
 // Deleted-group tolerance is PRESERVED for a restricted principal: a
 // non-empty union cannot have been widened by the loss, so the skip is
-// absorbed rather than refused. This is the behaviour option 1 ("refuse on any
+// absorbed rather than refused. This is the behavior option 1 ("refuse on any
 // unresolved group") would have destroyed, locking out every user with one
 // stale membership.
 func TestResolveAllowedAccounts_SkippedGroupToleratedWhenUnionStaysRestricted(t *testing.T) {
