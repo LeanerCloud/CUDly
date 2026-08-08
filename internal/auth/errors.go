@@ -34,6 +34,35 @@ var (
 	// permission. Mapped to 403 (issue #907).
 	ErrSelfEscalation = errors.New("cannot escalate your own group membership")
 
+	// ErrPermissionCeiling is returned by a group write that would grant a
+	// permission the acting user does not themselves hold (or holds only at
+	// a narrower constraint scope), and by the fail-closed paths where the
+	// acting user's own permissions cannot be resolved at all. Mapped to 403
+	// (issue #1550).
+	ErrPermissionCeiling = errors.New("permission ceiling exceeded")
+
+	// ErrPermissionNotGrantable is returned by a group write that would ADD
+	// one of the money-spending verbs carved out of the admin:* wildcard
+	// (adminCarvedOuts). Those are reserved for separation of duties and are
+	// provisioned by migration, never through the API. Mapped to 403
+	// (issues #923, #1550).
+	ErrPermissionNotGrantable = errors.New("permission not grantable")
+
+	// ErrInvalidPermission is returned when a group write carries a
+	// permission entry with a blank action or resource. A blank resource is
+	// malformed input, NOT a request for the "*" wildcard: the group-edit
+	// form renders an empty stored resource as the selected "All (*)" option
+	// and saves it back as view:*, and the same widening is reachable
+	// directly through the API because nothing validated the list. Mapped to
+	// 400 (issues #1730, #1550).
+	ErrInvalidPermission = errors.New("invalid permission")
+
+	// ErrSystemManagedGroup is returned when a write targets one of the
+	// seeded, system-managed groups. Their contents are owned by migrations;
+	// an API edit that reshapes them can silently disable a whole capability
+	// tenant-wide. Mapped to 403 (issue #1629).
+	ErrSystemManagedGroup = errors.New("system-managed group cannot be modified")
+
 	// ErrCurrentPasswordIncorrect is returned by UpdateUserProfile when the
 	// caller-supplied current password does not match the stored hash. Mapped
 	// to 401 at the API layer (the acting user is verifying their own

@@ -1122,12 +1122,12 @@ func (a *authServiceAdapter) MFARegenerateRecoveryCodesAPI(ctx context.Context, 
 }
 
 // Group management methods - delegate to auth service API methods.
-func (a *authServiceAdapter) CreateGroupAPI(ctx context.Context, req any) (any, error) {
-	return a.service.CreateGroupAPI(ctx, req)
+func (a *authServiceAdapter) CreateGroupAPI(ctx context.Context, actorUserID string, req any) (any, error) {
+	return a.service.CreateGroupAPI(ctx, actorUserID, req)
 }
 
-func (a *authServiceAdapter) UpdateGroupAPI(ctx context.Context, groupID string, req any) (any, error) {
-	return a.service.UpdateGroupAPI(ctx, groupID, req)
+func (a *authServiceAdapter) UpdateGroupAPI(ctx context.Context, actorUserID, groupID string, req any) (any, error) {
+	return a.service.UpdateGroupAPI(ctx, actorUserID, groupID, req)
 }
 
 func (a *authServiceAdapter) DeleteGroup(ctx context.Context, groupID string) error {

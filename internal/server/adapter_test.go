@@ -210,6 +210,8 @@ func TestAuthServiceAdapter_DeleteGroup(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
 	ctx := context.Background()
 
+	// DeleteGroup loads the group first to refuse system-managed ones (#1629).
+	mockStore.On("GetGroup", ctx, "group-1").Return(&auth.Group{ID: "group-1", Name: "team"}, nil)
 	mockStore.On("DeleteGroup", ctx, "group-1").Return(nil)
 
 	err := adapter.DeleteGroup(ctx, "group-1")
@@ -347,7 +349,7 @@ func TestAuthServiceAdapter_CreateGroupAPI(t *testing.T) {
 
 	mockStore.On("CreateGroup", ctx, mock.AnythingOfType("*auth.Group")).Return(nil)
 
-	_, err := adapter.CreateGroupAPI(ctx, map[string]interface{}{
+	_, err := adapter.CreateGroupAPI(ctx, auth.AdminAPIKeyActorID, map[string]interface{}{
 		"name":        "test-group",
 		"permissions": []string{"read:config"},
 	})
@@ -364,7 +366,7 @@ func TestAuthServiceAdapter_UpdateGroupAPI(t *testing.T) {
 	}, nil)
 	mockStore.On("UpdateGroup", ctx, mock.AnythingOfType("*auth.Group")).Return(nil)
 
-	_, err := adapter.UpdateGroupAPI(ctx, "group-1", map[string]interface{}{
+	_, err := adapter.UpdateGroupAPI(ctx, auth.AdminAPIKeyActorID, "group-1", map[string]interface{}{
 		"name": "new-name",
 	})
 	_ = err

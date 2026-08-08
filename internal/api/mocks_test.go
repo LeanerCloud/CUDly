@@ -250,13 +250,13 @@ func (m *MockAuthService) MFARegenerateRecoveryCodesAPI(ctx context.Context, use
 }
 
 // Group management mock methods.
-func (m *MockAuthService) CreateGroupAPI(ctx context.Context, req interface{}) (interface{}, error) {
-	args := m.Called(ctx, req)
+func (m *MockAuthService) CreateGroupAPI(ctx context.Context, actorUserID string, req interface{}) (interface{}, error) {
+	args := m.Called(ctx, actorUserID, req)
 	return args.Get(0), args.Error(1)
 }
 
-func (m *MockAuthService) UpdateGroupAPI(ctx context.Context, groupID string, req interface{}) (interface{}, error) {
-	args := m.Called(ctx, groupID, req)
+func (m *MockAuthService) UpdateGroupAPI(ctx context.Context, actorUserID, groupID string, req interface{}) (interface{}, error) {
+	args := m.Called(ctx, actorUserID, groupID, req)
 	return args.Get(0), args.Error(1)
 }
 

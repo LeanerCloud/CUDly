@@ -222,7 +222,10 @@ func NewHandler(cfg HandlerConfig) *Handler {
 // that would otherwise resolve group-derived permissions for it must treat it
 // as full-access up front (the API key is an infrastructure credential, not a
 // user). See requirePermission / requireAdmin / getAllowedAccounts.
-const apiKeyAdminUserID = "admin-api-key"
+// It is also the actor identity threaded into the group-write grant ceiling,
+// which recognizes it and measures the key against a bare {admin, *} holding
+// (auth.AdminAPIKeyActorID) rather than failing the user lookup.
+const apiKeyAdminUserID = auth.AdminAPIKeyActorID
 
 // requirePermission validates authentication and checks if the user holds the
 // specified permission. The stateless admin API key bypasses the per-user

@@ -234,17 +234,25 @@ func TestUpdateUser_SelfEscalationDenied(t *testing.T) {
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	// Actor == target, currently only a viewer, attempts to add the
-	// Administrators group to themselves. UpdateUser fetches the target first
-	// (this object is mutated in place by applyUpdateUserRequest), then the
-	// self-escalation guard re-resolves the actor's *persisted* permissions
-	// via a fresh GetUserByID; return a distinct, unmutated viewer copy for
-	// that second read so it mirrors a real DB round-trip rather than aliasing
-	// the just-mutated object.
+	// Administrators group to themselves.
+	//
+	// The guard used to re-read the actor's row to resolve their permissions,
+	// which forced this test to hand back a distinct unmutated copy on the
+	// second GetUserByID so the read did not alias the object
+	// applyUpdateUserRequest had already mutated. It now resolves the PRIOR
+	// membership from the snapshot instead (guardSelfEscalation), so there is
+	// no second read and no aliasing hazard to work around: one target fetch,
+	// then the prior groups.
 	target := &User{ID: "self-1", GroupIDs: []string{viewerGroup().ID}, Active: true}
-	actor := &User{ID: "self-1", GroupIDs: []string{viewerGroup().ID}, Active: true}
 	mockStore.On("GetUserByID", ctx, "self-1").Return(target, nil).Once()
-	mockStore.On("GetUserByID", ctx, "self-1").Return(actor, nil).Once()
 	mockStore.On("GetGroup", ctx, viewerGroup().ID).Return(viewerGroup(), nil)
+	// Permissive write stub, deliberately: without it, removing the
+	// self-escalation guard kills this test by panicking on an unstubbed
+	// UpdateUser -- a kill that disappears the moment someone adds a stub
+	// while tidying fixtures. With it, the removal is caught by the
+	// AssertNotCalled below, which is the actual security property.
+	mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Maybe()
+	mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(adminGroup(), nil).Maybe()
 	// The change ADDS Administrators (does not remove it), so the last-admin
 	// branch is skipped; the self-escalation branch then evaluates
 	// HasPermission(update, users), which a viewer lacks.

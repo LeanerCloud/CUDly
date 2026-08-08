@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
@@ -49,12 +50,30 @@ func (h *Handler) createGroup(ctx context.Context, req *events.LambdaFunctionURL
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	group, err := h.auth.CreateGroupAPI(ctx, createReq)
+	group, err := h.auth.CreateGroupAPI(ctx, session.UserID, createReq)
 	if err != nil {
-		return nil, err
+		return nil, mapGroupAuthError(err)
 	}
 
 	return group, nil
+}
+
+// mapGroupAuthError maps the group-write sentinels to 403 ClientErrors so a
+// refused grant surfaces the specific permission that was refused instead of
+// a generic 500. Kept separate from mapAuthError (handler_users.go) because
+// that switch is already at the cyclomatic limit and the two sentinel sets
+// are disjoint. Unrecognized errors pass through for handleRequestError.
+func mapGroupAuthError(err error) error {
+	switch {
+	case errors.Is(err, auth.ErrInvalidPermission):
+		// Malformed input, not an authorization failure.
+		return NewClientError(400, err.Error())
+	case errors.Is(err, auth.ErrPermissionCeiling),
+		errors.Is(err, auth.ErrPermissionNotGrantable),
+		errors.Is(err, auth.ErrSystemManagedGroup):
+		return NewClientError(403, err.Error())
+	}
+	return err
 }
 
 // getGroup handles GET /api/groups/{id}.
@@ -83,18 +102,19 @@ func (h *Handler) updateGroup(ctx context.Context, req *events.LambdaFunctionURL
 		return nil, err
 	}
 
-	if _, err := h.requirePermission(ctx, req, "update", "groups"); err != nil {
+	session, err := h.requirePermission(ctx, req, "update", "groups")
+	if err != nil {
 		return nil, err
 	}
 
 	var updateReq auth.APIUpdateGroupRequest
-	if err := json.Unmarshal([]byte(req.Body), &updateReq); err != nil {
+	if unmarshalErr := json.Unmarshal([]byte(req.Body), &updateReq); unmarshalErr != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	group, err := h.auth.UpdateGroupAPI(ctx, groupID, updateReq)
+	group, err := h.auth.UpdateGroupAPI(ctx, session.UserID, groupID, updateReq)
 	if err != nil {
-		return nil, err
+		return nil, mapGroupAuthError(err)
 	}
 
 	return group, nil
@@ -112,7 +132,7 @@ func (h *Handler) deleteGroup(ctx context.Context, req *events.LambdaFunctionURL
 	}
 
 	if err := h.auth.DeleteGroup(ctx, groupID); err != nil {
-		return nil, err
+		return nil, mapGroupAuthError(err)
 	}
 
 	return map[string]string{"status": "group deleted"}, nil

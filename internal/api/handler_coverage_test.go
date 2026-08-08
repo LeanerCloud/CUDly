@@ -502,7 +502,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		mockAuth := new(MockAuthService)
 		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
 		mockAuth.grantAdmin()
-		mockAuth.On("CreateGroupAPI", ctx, mock.Anything).Return(map[string]string{"id": "new-group"}, nil)
+		mockAuth.On("CreateGroupAPI", ctx, "admin", mock.Anything).Return(map[string]string{"id": "new-group"}, nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)
@@ -540,7 +540,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		mockAuth := new(MockAuthService)
 		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
 		mockAuth.grantAdmin()
-		mockAuth.On("UpdateGroupAPI", ctx, "11111111-1111-1111-1111-111111111111", mock.Anything).Return(map[string]string{}, nil)
+		mockAuth.On("UpdateGroupAPI", ctx, "admin", "11111111-1111-1111-1111-111111111111", mock.Anything).Return(map[string]string{}, nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)

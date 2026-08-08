@@ -32,7 +32,24 @@ func (s *Service) UpdateGroup(ctx context.Context, group *Group) error {
 }
 
 // DeleteGroup removes a permission group.
+//
+// Deleting a system-managed group is refused: it is the same defect class as
+// the #1629 permission wipe, reached through a different verb. Dropping the
+// seeded Purchaser group destroys the only holder of the money verbs carved
+// out of admin:*, which no admin can then re-grant (see checkGrantCeiling),
+// so the purchase path would be dead tenant-wide until someone re-ran the
+// migration by hand.
 func (s *Service) DeleteGroup(ctx context.Context, groupID string) error {
+	group, err := s.store.GetGroup(ctx, groupID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("failed to load group %s: %w", groupID, err)
+	}
+	if group == nil {
+		return fmt.Errorf("group not found: %s", groupID)
+	}
+	if group.SystemManaged {
+		return fmt.Errorf("%w: %q is seeded and maintained by migrations", ErrSystemManagedGroup, group.Name)
+	}
 	return s.store.DeleteGroup(ctx, groupID)
 }
 
@@ -67,10 +84,24 @@ func (s *Service) GetUserPermissions(ctx context.Context, userID string) ([]Perm
 		return nil, fmt.Errorf("user not found")
 	}
 
+	// Permissions come exclusively from group memberships.
+	return s.permissionsForGroups(ctx, user.GroupIDs)
+}
+
+// permissionsForGroups returns the union of the permissions granted by the
+// given groups. Unlike GetUserPermissions it takes the membership list
+// directly, so a caller reasoning about a membership CHANGE can evaluate the
+// PRIOR membership without depending on the stored row not yet reflecting the
+// change (see guardSelfEscalation).
+//
+// Any transient store error is propagated immediately so callers fail closed
+// with an error rather than silently receiving a partial permission set. A
+// nil group (the store returns nil, nil for a deleted/missing group) is
+// skipped without error.
+func (s *Service) permissionsForGroups(ctx context.Context, groupIDs []string) ([]Permission, error) {
 	var permissions []Permission
 
-	// Permissions come exclusively from group memberships.
-	for _, groupID := range user.GroupIDs {
+	for _, groupID := range groupIDs {
 		group, err := s.store.GetGroup(ctx, groupID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
