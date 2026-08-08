@@ -35,6 +35,9 @@ import (
 // still cannot place is reported rather than skipped: a skip that says nothing
 // is the same shape of defect the guard exists to catch. It parses rather than
 // builds, so it costs milliseconds.
+//
+// Receiver resolution walks enclosing function bodies innermost-outward, which
+// approximates Go's lexical scoping rather than implementing it.
 
 // mockType is one testify mock in one package.
 type mockType struct {
@@ -136,65 +139,15 @@ func TestNoUnfailableMockAssertions(t *testing.T) {
 		}
 		for _, f := range files {
 			for _, site := range collectAssertSites(fset, f) {
-				recvType, resolved := resolveRecvType(site.scopes, site)
-				m, isMock := mocks[recvType]
-				if resolved && !isMock {
-					var reason string
-					m, isMock, reason = resolveCrossPackage(global, recvType, site.method)
-					if !isMock {
-						skipped = append(skipped, fmt.Sprintf(
-							"%s: %s.%s(t, %q) -- receiver resolves to %s, which this check "+
-								"could not analyze (%s). Review by hand.",
-							site.pos, site.recv, site.assertFn, site.method, recvType, reason))
-						continue
-					}
-				}
-				if !resolved {
-					// The receiver was not assigned from a mock literal in this
-					// file. Only report it when the method name belongs to some
-					// mock in the package and would be unfailable if it were one,
-					// so an unreviewed blind spot cannot hide behind a pass.
-					if unresolvedLooksRisky(site, mocks, global) {
-						skipped = append(skipped, fmt.Sprintf(
-							"%s: %s.%s(t, %q) -- receiver type could not be resolved; "+
-								"review this site by hand", site.pos, site.recv, site.assertFn, site.method))
-					}
-					continue
-				}
-				if m.shadowed[site.assertFn] {
-					// This type implements the helper being used, so it defines
-					// what the matchers mean. See MockConfigStore in assertions.go.
-					continue
-				}
-				arity, known := m.calledArity[site.method]
-				if !known {
-					// The method exists on a mock but never calls m.Called itself
-					// (it delegates to a sibling), so there is no arity to check
-					// against. Report it: "checked nothing" must never be silent,
-					// which is the same reason checked == 0 is fatal below.
-					skipped = append(skipped, fmt.Sprintf(
-						"%s: %s.%s(t, %q) -- %s does not call m.Called directly, so its "+
-							"argument count cannot be derived. Review by hand.",
-						site.pos, site.recv, site.assertFn, site.method, site.method))
-					continue
-				}
-				checked++
-				if arity == 0 {
-					continue
-				}
-				switch {
-				case site.matchers == 0:
-					findings = append(findings, fmt.Sprintf(
-						"%s: %s.%s(t, %q) passes no matchers, but %s hands %d argument(s) to m.Called. "+
-							"testify diffs the empty matcher list against those arguments and counts each as a "+
-							"difference, so this assertion can never fail. Pass %d matcher(s) (mock.Anything is fine).",
-						site.pos, site.recv, site.assertFn, site.method, site.method, arity, arity))
-				case site.matchers != arity:
-					findings = append(findings, fmt.Sprintf(
-						"%s: %s.%s(t, %q) passes %d matcher(s), but %s hands %d argument(s) to m.Called. "+
-							"A count that differs from the real arity can never match, so this assertion can "+
-							"never fail. Pass %d matcher(s).",
-						site.pos, site.recv, site.assertFn, site.method, site.matchers, site.method, arity, arity))
+				verdict, msg := classifySite(site, mocks, global)
+				switch verdict {
+				case verdictSkipped:
+					skipped = append(skipped, msg)
+				case verdictFinding:
+					checked++
+					findings = append(findings, msg)
+				case verdictChecked:
+					checked++
 				}
 			}
 		}
@@ -317,6 +270,9 @@ func collectAssertSites(fset *token.FileSet, f *ast.File) []assertSite {
 			site.recv = recv.Name
 
 			if len(v.Args) < 2 {
+				// Defensive only: testify's signature requires a method name, so
+				// this shape cannot appear in code that compiles. It is exercised
+				// from the parse-only synthetic fixture in the self-test.
 				site.unsupported = "fewer than two arguments; not a well-formed mock assertion"
 				out = append(out, site)
 				return true
@@ -355,6 +311,91 @@ func collectAssertSites(fset *token.FileSet, f *ast.File) []assertSite {
 	return out
 }
 
+// siteVerdict is what the guard has to say about a single assertion site.
+type siteVerdict int
+
+const (
+	verdictIgnore  siteVerdict = iota // nothing to say: not a mock, shadowed, or zero-arity
+	verdictChecked                    // analyzed and sound
+	verdictFinding                    // an assertion that cannot fail
+	verdictSkipped                    // could not be analyzed, and must be reported as such
+)
+
+// classifySite is the ONE dispatch for an assertion site. The repo-wide run and
+// the self-test both call it, so the self-test cannot pass against a code path
+// that exists only inside the test.
+//
+// That is not hypothetical: the unsupported-shape reporting below was once
+// written in five places and read in none that actually ran, because the
+// self-test re-implemented this dispatch with the branch the real loop lacked.
+// A test asserting on its own private copy of the logic is the same defect this
+// whole guard exists to catch, one level up.
+func classifySite(site assertSite, mocks map[string]*mockType, global map[string][]*mockType) (siteVerdict, string) {
+	if site.unsupported != "" {
+		return verdictSkipped, fmt.Sprintf(
+			"%s: %s.%s(t, %q) -- %s. Review by hand.",
+			site.pos, site.recv, site.assertFn, site.method, site.unsupported)
+	}
+
+	recvType, resolved := resolveRecvType(site.scopes, site)
+	m, isMock := mocks[recvType]
+	if resolved && !isMock {
+		var reason string
+		m, isMock, reason = resolveCrossPackage(global, recvType, site.method)
+		if !isMock {
+			return verdictSkipped, fmt.Sprintf(
+				"%s: %s.%s(t, %q) -- receiver resolves to %s, which this check "+
+					"could not analyze (%s). Review by hand.",
+				site.pos, site.recv, site.assertFn, site.method, recvType, reason)
+		}
+	}
+	if !resolved {
+		// Only report an unresolved receiver when the method name belongs to
+		// some mock and would be unfailable if it were one, so an unreviewed
+		// blind spot cannot hide behind a pass without drowning the report.
+		if unresolvedLooksRisky(site, mocks, global) {
+			return verdictSkipped, fmt.Sprintf(
+				"%s: %s.%s(t, %q) -- receiver type could not be resolved; "+
+					"review this site by hand", site.pos, site.recv, site.assertFn, site.method)
+		}
+		return verdictIgnore, ""
+	}
+	if m.shadowed[site.assertFn] {
+		// This type implements the helper being used, so it defines what the
+		// matchers mean. See MockConfigStore in assertions.go.
+		return verdictIgnore, ""
+	}
+	arity, known := m.calledArity[site.method]
+	if !known {
+		// The method exists on a mock but never calls m.Called itself (it
+		// delegates to a sibling), so there is no arity to check against.
+		// "Checked nothing" must never be silent -- the same reason checked == 0
+		// is fatal.
+		return verdictSkipped, fmt.Sprintf(
+			"%s: %s.%s(t, %q) -- %s does not call m.Called directly, so its "+
+				"argument count cannot be derived. Review by hand.",
+			site.pos, site.recv, site.assertFn, site.method, site.method)
+	}
+	if arity == 0 {
+		return verdictChecked, ""
+	}
+	switch {
+	case site.matchers == 0:
+		return verdictFinding, fmt.Sprintf(
+			"%s: %s.%s(t, %q) passes no matchers, but %s hands %d argument(s) to m.Called. "+
+				"testify diffs the empty matcher list against those arguments and counts each as a "+
+				"difference, so this assertion can never fail. Pass %d matcher(s) (mock.Anything is fine).",
+			site.pos, site.recv, site.assertFn, site.method, site.method, arity, arity)
+	case site.matchers != arity:
+		return verdictFinding, fmt.Sprintf(
+			"%s: %s.%s(t, %q) passes %d matcher(s), but %s hands %d argument(s) to m.Called. "+
+				"A count that differs from the real arity can never match, so this assertion can "+
+				"never fail. Pass %d matcher(s).",
+			site.pos, site.recv, site.assertFn, site.method, site.matchers, site.method, arity, arity)
+	}
+	return verdictChecked, ""
+}
+
 // exprString renders a receiver expression for a report message.
 func exprString(e ast.Expr) string {
 	switch v := e.(type) {
@@ -371,7 +412,11 @@ func exprString(e ast.Expr) string {
 }
 
 // resolveRecvType maps the assertion's receiver identifier to the type it was
-// assigned from, searching ONLY the innermost function body containing the site.
+// assigned from, searching the enclosing function bodies from the innermost
+// outward. This approximates Go's lexical scoping closely enough for the shapes
+// mock assertions are written in; it is not a full implementation of it. Only
+// function bodies are walked, so a package-level mock var is not resolved (see
+// the limitation noted in the PR description).
 // A file-wide search would keep the last matching assignment, so two tests in
 // one file that both name a variable mockStore would resolve every site to
 // whichever type happened to appear last -- comparing matcher counts against the
@@ -384,13 +429,18 @@ func exprString(e ast.Expr) string {
 // check degrades in everywhere else.
 func resolveRecvType(scopes []ast.Node, site assertSite) (string, bool) {
 	for _, scope := range scopes {
-		name, ok, conflict := bindingInScope(scope, site.recv)
-		if conflict {
+		name, binds, conflict := bindingInScope(scope, site.recv)
+		if !binds {
+			continue // not bound here; look outward
+		}
+		// The innermost scope that binds the name wins, exactly as it shadows
+		// an outer binding at run time. If its type cannot be determined, or it
+		// binds two types, report unresolved rather than adopting an outer type
+		// the code would never actually use.
+		if conflict || name == "" {
 			return "", false
 		}
-		if ok {
-			return name, true
-		}
+		return name, true
 	}
 	return "", false
 }
@@ -398,9 +448,15 @@ func resolveRecvType(scopes []ast.Node, site assertSite) (string, bool) {
 // bindingInScope looks for assignments of name directly within one function
 // body, without descending into nested function literals (those are their own
 // scopes and are searched separately). It reports the bound mock type, whether
-// one was found, and whether the scope binds the name to two different types.
+// the scope binds the name AT ALL, and whether it binds it to two different
+// types.
+//
+// "Binds it at all" is deliberately separate from "we could type it": a scope
+// that does `mockStore := newStore()` shadows any outer mockStore, so the walk
+// must stop there rather than continue outward and adopt an unrelated type.
 func bindingInScope(scope ast.Node, recv string) (string, bool, bool) {
 	var found string
+	binds := false
 	conflict := false
 	ast.Inspect(scope, func(n ast.Node) bool {
 		if fl, ok := n.(*ast.FuncLit); ok && fl.Body != scope {
@@ -426,6 +482,7 @@ func bindingInScope(scope ast.Node, recv string) (string, bool, bool) {
 			if !ok || id.Name != recv {
 				continue
 			}
+			binds = true
 			name := mockTypeOfExpr(rhs[i])
 			if name == "" {
 				continue
@@ -437,7 +494,7 @@ func bindingInScope(scope ast.Node, recv string) (string, bool, bool) {
 		}
 		return true
 	})
-	return found, found != "", conflict
+	return found, binds, conflict
 }
 
 // mockTypeOfExpr extracts T from &T{...}, T{...} and new(T).
@@ -585,6 +642,7 @@ func Test(t *testing.T) {
 
 	h.mockThing.AssertNotCalled(t, "Two") // want: unsupported, receiver is a selector
 	thing.AssertNotCalled(t, methodName)  // want: unsupported, method not a literal
+	thing.AssertNotCalled(t)              // want: unsupported, fewer than two arguments
 
 	// A second test in the same file binding the same name to another type: the
 	// site above must not resolve to this one.
@@ -623,64 +681,58 @@ func Test(t *testing.T) {
 			"or its name-only AssertCalled sites would be exempted while still unfailable")
 	}
 
-	type verdict struct {
-		method   string
-		matchers int
-		vacuous  bool
-	}
-	// The synthetic source is a single package, so the repo-wide index used by
-	// the real run is just this package's mocks.
+	// The synthetic source is a single package, so the repo-wide index the real
+	// run consults is just this package's mocks.
 	global := map[string][]*mockType{}
 	for name, m := range mocks {
 		global[name] = append(global[name], m)
 	}
 
-	var got []verdict
-	unresolved, unsupported := 0, 0
+	// Drive the REAL dispatch, not a copy of it. An earlier revision of this
+	// test re-implemented the main loop's branching, so it asserted on an
+	// unsupported-shape branch the production path did not have.
+	counts := map[siteVerdict]int{}
+	var findings, skips []string
 	for _, site := range collectAssertSites(fset, f) {
-		if site.unsupported != "" {
-			unsupported++
-			continue
+		v, msg := classifySite(site, mocks, global)
+		counts[v]++
+		switch v {
+		case verdictFinding:
+			findings = append(findings, msg)
+		case verdictSkipped:
+			skips = append(skips, msg)
 		}
-		recvType, resolved := resolveRecvType(site.scopes, site)
-		m, isMock := mocks[recvType]
-		if resolved && !isMock {
-			continue
-		}
-		if !resolved {
-			if unresolvedLooksRisky(site, mocks, global) {
-				unresolved++
-			}
-			continue
-		}
-		arity, known := m.calledArity[site.method]
-		if m.shadowed[site.assertFn] || !known || arity == 0 {
-			continue
-		}
-		got = append(got, verdict{site.method, site.matchers, site.matchers != arity})
-	}
-	// Three shapes the check cannot analyze must be REPORTED, not dropped:
-	// a variadic spread, a selector receiver, and a non-literal method name.
-	if unsupported != 3 {
-		t.Errorf("unsupported shapes reported = %d, want 3 (spread, selector receiver, non-literal method)", unsupported)
 	}
 
-	want := []verdict{
-		{"Two", 0, true},  // name-only
-		{"Two", 1, true},  // wrong count
-		{"Two", 2, false}, // correct
-		{"Two", 0, true},  // AssertCalled, name-only
+	// Three unfailable assertions: name-only Two, wrong-count Two, name-only
+	// AssertCalled on Two. The correct-count and zero-arity sites are sound.
+	if counts[verdictFinding] != 3 {
+		t.Errorf("findings = %d, want 3:\n%s", counts[verdictFinding], strings.Join(findings, "\n"))
 	}
-	if len(got) != len(want) {
-		t.Fatalf("checked %d site(s), want %d: %+v", len(got), len(want), got)
+
+	// Every shape the check cannot analyze must be REPORTED, never dropped:
+	// four unsupported syntactic shapes plus a receiver typed to something that
+	// is not a mock and a receiver that cannot be resolved at all.
+	if counts[verdictSkipped] != 6 {
+		t.Errorf("skipped = %d, want 6:\n%s", counts[verdictSkipped], strings.Join(skips, "\n"))
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("site %d = %+v, want %+v", i, got[i], want[i])
+	for _, want := range []string{
+		"variadic spread",
+		"not a plain identifier",
+		"not a string literal",
+		"fewer than two arguments",
+		"no mock of that name is declared",
+		"could not be resolved",
+	} {
+		found := false
+		for _, got := range skips {
+			if strings.Contains(got, want) {
+				found = true
+			}
 		}
-	}
-	if unresolved != 1 {
-		t.Errorf("unresolved risky sites = %d, want 1 (the `unknown` receiver)", unresolved)
+		if !found {
+			t.Errorf("no skipped entry mentions %q; got:\n%s", want, strings.Join(skips, "\n"))
+		}
 	}
 }
 
