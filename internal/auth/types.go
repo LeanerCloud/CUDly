@@ -107,10 +107,12 @@ type AuthContext struct { //nolint:revive // exported: doc comment style intenti
 	Permissions     []Permission // Computed from group memberships
 
 	// SkippedGroups counts memberships that could not be resolved (deleted or
-	// unreadable). It is NOT derivable by comparing len(Groups) to
-	// len(User.GroupIDs): GroupIDs may contain duplicates, so that comparison
-	// reports phantom skips and refuses legitimate principals. Counted at the
-	// point of skipping instead (issue #1748).
+	// unreadable), counted where the skip happens.
+	//
+	// len(User.GroupIDs) - len(Groups) would give the same answer, since Groups
+	// is appended once per ID with no dedup and duplicate IDs therefore produce
+	// duplicate entries. Counting explicitly states the intent rather than
+	// relying on two lengths staying aligned (issue #1748).
 	SkippedGroups int
 }
 

@@ -185,15 +185,27 @@ func (s *Service) collectGroupsAndAccounts(ctx context.Context, authCtx *AuthCon
 // A restricted principal keeps working through a skipped group, because a
 // non-empty union cannot have been widened by the loss.
 //
-// The skip count comes from collectGroupsAndAccounts, NOT from comparing
-// len(Groups) to len(User.GroupIDs) -- GroupIDs may contain duplicates, so
-// that comparison would report phantom skips and refuse real users.
+// The emptiness test is len(AllowedAccounts) == 0, deliberately NOT
+// IsUnrestrictedAccess. The latter is also true for a union containing "*",
+// and such a principal was ALREADY maximally wide at baseline -- no lost group
+// can widen them further, so refusing them buys nothing and costs
+// availability. All seven seeded groups ship allowed_accounts = ARRAY['*'], so
+// using IsUnrestrictedAccess here 500'd every account-scoped endpoint for any
+// member of a seeded group who also had one stale membership. Only an EMPTY
+// union can have been widened by a loss.
+//
+// The skip count comes from collectGroupsAndAccounts, counted where the skip
+// happens. len(User.GroupIDs) - len(Groups) would in fact give the same answer
+// -- Groups is appended once per ID with no dedup, so duplicate IDs produce
+// duplicate entries and the counts stay aligned -- but counting at the point
+// of skipping states the intent directly instead of inferring it from two
+// lengths that happen to line up.
 func (s *Service) ResolveAllowedAccounts(ctx context.Context, userID string) ([]string, error) {
 	authCtx, err := s.BuildAuthContext(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	if IsUnrestrictedAccess(authCtx.AllowedAccounts) && authCtx.SkippedGroups > 0 {
+	if len(authCtx.AllowedAccounts) == 0 && authCtx.SkippedGroups > 0 {
 		return nil, fmt.Errorf(
 			"account scope could not be established for user %s: %d group(s) could not be resolved "+
 				"and the remaining scope is unrestricted", userID, authCtx.SkippedGroups)

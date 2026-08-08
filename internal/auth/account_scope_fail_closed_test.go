@@ -242,10 +242,15 @@ func TestResolveAllowedAccounts_SkippedGroupToleratedWhenUnionStaysRestricted(t 
 	assert.False(t, IsUnrestrictedAccess(got))
 }
 
-// Duplicate GroupIDs must not be mistaken for skips. Detecting skips by
-// comparing len(Groups) to len(GroupIDs) would see 2 ids resolving to 1 group
-// and refuse this legitimate principal.
-func TestResolveAllowedAccounts_DuplicateGroupIDsAreNotSkips(t *testing.T) {
+// A duplicated membership resolving to an unrestricted group is allowed.
+//
+// This was named DuplicateGroupIDsAreNotSkips and claimed to exclude a
+// len(Groups) vs len(GroupIDs) skip count. It cannot: Groups is appended once
+// per ID with no dedup, so duplicates produce duplicate entries and the two
+// implementations agree on every shape -- swapping one for the other leaves
+// this test passing. Renamed to what it does guard, which is over-blocking:
+// a guard that refused any multi-entry membership would fail here.
+func TestResolveAllowedAccounts_DuplicateMembershipIsAllowed(t *testing.T) {
 	ctx := context.Background()
 	ms, svc := scopeStore(t)
 	t.Cleanup(func() { ms.AssertExpectations(t) })
@@ -256,6 +261,68 @@ func TestResolveAllowedAccounts_DuplicateGroupIDsAreNotSkips(t *testing.T) {
 
 	got, err := svc.ResolveAllowedAccounts(ctx, scopeUserID)
 
-	require.NoError(t, err, "duplicate memberships are not unresolved groups")
+	require.NoError(t, err, "a duplicated membership must not be refused")
 	assert.True(t, IsUnrestrictedAccess(got))
+}
+
+// A survivor carrying "*" was ALREADY maximally wide at baseline, so no lost
+// group can widen it. Refusing it is zero security benefit and pure
+// availability cost -- and it is the shape a default deployment produces,
+// because all seven seeded groups ship allowed_accounts = ARRAY['*'].
+//
+// This is why the guard tests len(AllowedAccounts) == 0 rather than
+// IsUnrestrictedAccess: the latter is true for "*" too, and using it 500'd
+// every account-scoped endpoint for any member of a seeded group who also had
+// one stale membership.
+func TestResolveAllowedAccounts_WildcardSurvivorToleratesSkippedGroup(t *testing.T) {
+	ctx := context.Background()
+	const seeded, scoped = "g-seeded", "g-scoped"
+
+	for _, tc := range []struct {
+		name      string
+		scopeResp func(*MockStore)
+	}{
+		{"stale membership missing (ErrNoRows)", func(ms *MockStore) {
+			ms.On("GetGroup", ctx, scoped).Return(nil, pgx.ErrNoRows)
+		}},
+		{"stale membership resolves to (nil, nil)", func(ms *MockStore) {
+			ms.On("GetGroup", ctx, scoped).Return(nil, nil)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ms, svc := scopeStore(t)
+			t.Cleanup(func() { ms.AssertExpectations(t) })
+			ms.On("GetUserByID", ctx, scopeUserID).
+				Return(&User{ID: scopeUserID, GroupIDs: []string{seeded, scoped}}, nil)
+			ms.On("GetGroup", ctx, seeded).Return(&Group{
+				ID: seeded, AllowedAccounts: []string{"*"},
+			}, nil)
+			tc.scopeResp(ms)
+
+			got, err := svc.ResolveAllowedAccounts(ctx, scopeUserID)
+
+			require.NoError(t, err,
+				"a principal already unrestricted at baseline must not be refused for a lost group")
+			assert.True(t, IsUnrestrictedAccess(got))
+		})
+	}
+}
+
+// The baseline control: the same principal, both groups resolving, is
+// unrestricted anyway -- which is what makes the refusal above pointless.
+func TestResolveAllowedAccounts_WildcardSurvivorBaselineIsAlreadyUnrestricted(t *testing.T) {
+	ctx := context.Background()
+	ms, svc := scopeStore(t)
+	t.Cleanup(func() { ms.AssertExpectations(t) })
+
+	ms.On("GetUserByID", ctx, scopeUserID).
+		Return(&User{ID: scopeUserID, GroupIDs: []string{"g-seeded", "g-scoped"}}, nil)
+	ms.On("GetGroup", ctx, "g-seeded").Return(&Group{ID: "g-seeded", AllowedAccounts: []string{"*"}}, nil)
+	ms.On("GetGroup", ctx, "g-scoped").Return(&Group{ID: "g-scoped", AllowedAccounts: []string{"acct-A"}}, nil)
+
+	got, err := svc.ResolveAllowedAccounts(ctx, scopeUserID)
+
+	require.NoError(t, err)
+	assert.True(t, IsUnrestrictedAccess(got),
+		"the wildcard makes this principal unrestricted before any group is lost")
 }
