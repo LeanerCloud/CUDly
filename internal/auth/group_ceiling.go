@@ -143,7 +143,7 @@ func validateRequestedPermissions(requested []Permission) error {
 // Fails closed on an unidentified actor or a resolution error.
 //
 // The stateless admin API key has no user row and is unrestricted everywhere
-// else (see getAllowedAccounts in internal/api), so it is unrestricted here.
+// else (see getAccountScope in internal/api), so it is unrestricted here.
 func (s *Service) grantCeilingAccounts(ctx context.Context, actorUserID string) ([]string, error) {
 	if actorUserID == "" {
 		return nil, fmt.Errorf("%w: the acting user could not be identified", ErrPermissionCeiling)

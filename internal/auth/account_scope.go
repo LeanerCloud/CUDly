@@ -40,12 +40,24 @@ func UnrestrictedScope() AccountScope {
 	return AccountScope{Unrestricted: true}
 }
 
-// ScopeForAccounts returns a scope limited to the given accounts.
+// ScopeForAccounts returns a scope limited to the given accounts, treating
+// every entry as a LITERAL account identifier.
 //
-// An empty list yields a scope that grants NOTHING, which is the opposite of
-// the legacy []string convention where empty meant "all accounts". Callers
-// converting a legacy list must decide which they mean rather than passing it
-// through; ScopeFromLegacyList exists for the one place that still has to.
+// Two asymmetries with the legacy []string convention, and both invert its
+// meaning rather than merely differing from it:
+//
+//   - An empty list grants NOTHING here; under the legacy convention empty
+//     meant "all accounts".
+//   - "*" is a literal identifier here, NOT a wildcard. ScopeForAccounts(["*"])
+//     matches an account whose ID or name is the single character "*" and
+//     denies everything else, where ScopeFromLegacyList(["*"]) is unrestricted.
+//
+// The second matters for the obvious future call. Passing a group's stored
+// list straight through -- ScopeForAccounts(group.AllowedAccounts) -- silently
+// produces a scope that DENIES EVERYTHING for any wildcard-carrying group, and
+// all seven seeded groups ship allowed_accounts = ARRAY['*']. Use
+// ScopeFromLegacyList for a value that came out of the resolver, and this
+// constructor only for a list you have already decided is literal.
 func ScopeForAccounts(accounts []string) AccountScope {
 	return AccountScope{Accounts: accounts}
 }

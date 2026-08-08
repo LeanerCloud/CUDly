@@ -9,7 +9,7 @@ import (
 )
 
 // requireAccountAccess fetches the account by ID, then verifies the session's
-// allowed_accounts list grants access via auth.MatchesAccount. Returns the
+// AccountScope allows it (AccountScope.Allows). Returns the
 // fetched account on success so callers can avoid a second GetCloudAccount
 // call.
 //
@@ -246,7 +246,8 @@ func (h *Handler) resolveSingleAccountFilterIDs(ctx context.Context, accountID s
 // VARCHAR). Without both keys, the name lookup always misses for one path.
 //
 // Returns an empty map on error; callers fall through to ID-only matching,
-// which is still safe (MatchesAccount falls back to ID comparison).
+// which is still safe (AccountScope.Allows falls back to ID comparison when
+// the name is empty).
 func (h *Handler) resolveAccountNamesByID(ctx context.Context) map[string]string {
 	accounts, err := h.config.ListCloudAccounts(ctx, config.CloudAccountFilter{})
 	if err != nil {

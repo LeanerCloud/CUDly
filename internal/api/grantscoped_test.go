@@ -19,7 +19,7 @@ import (
 // are green": the suite had no restriction to enforce.
 //
 // These pin the shared seam every scoped handler funnels through
-// (getAllowedAccounts -> requireAccountAccess / requirePlanAccess), so a
+// (getAccountScope -> requireAccountAccess / requirePlanAccess), so a
 // regression in the seam fails here rather than silently in production.
 
 const (

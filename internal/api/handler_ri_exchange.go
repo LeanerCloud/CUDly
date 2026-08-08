@@ -413,8 +413,8 @@ func azureScopeIndex(accounts []config.CloudAccount) map[string]config.CloudAcco
 }
 
 // filterReservationsByScopeIndex narrows reservations down to the rows whose
-// BillingScopeID resolves, via scopeToAccount, to a CloudAccount the allowed
-// list covers (auth.MatchesAccount). Fails closed: a reservation with no
+// BillingScopeID resolves, via scopeToAccount, to a CloudAccount the session
+// scope allows (AccountScope.Allows). Fails closed: a reservation with no
 // BillingScopeID, or one that resolves to no registered CloudAccount, is
 // dropped rather than kept.
 func filterReservationsByScopeIndex(reservations []azurecompute.ExchangeableReservation, scopeToAccount map[string]config.CloudAccount, allowed auth.AccountScope) []azurecompute.ExchangeableReservation {

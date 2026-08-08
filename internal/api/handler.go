@@ -221,7 +221,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 // API-key session. It has no backing user row in the auth store, so any code
 // that would otherwise resolve group-derived permissions for it must treat it
 // as full-access up front (the API key is an infrastructure credential, not a
-// user). See requirePermission / requireAdmin / getAllowedAccounts.
+// user). See requirePermission / requireAdmin / getAccountScope.
 // It is also the actor identity threaded into the group-write grant ceiling,
 // which recognizes it and measures the key against a bare {admin, *} holding
 // (auth.AdminAPIKeyActorID) rather than failing the user lookup.
@@ -523,10 +523,20 @@ func (h *Handler) requirePermissionConstraints(ctx context.Context, session *Ses
 	return nil
 }
 
-// getAllowedAccounts returns the list of account IDs the user is allowed to
-// access. Empty slice means all access (Administrators-group members carry the
-// "*" wildcard, which GetAllowedAccountsAPI surfaces as unrestricted). The
-// stateless admin API key has no user row, so it short-circuits to all access.
+// getAccountScope returns the auth.AccountScope describing which cloud
+// accounts the session may reach.
+//
+// The scope is a value, not a list, and its ZERO FORM DENIES: an
+// AccountScope{} grants no account at all. That is the inverse of the
+// []string it replaced, where an empty slice meant ALL access -- the
+// representation confusion behind issue #1748. Unrestricted access is carried
+// as an explicit flag and is only ever set positively, here for the stateless
+// admin API key (an infrastructure credential with no user row) and by
+// auth.ScopeFromLegacyList for a resolved list that is empty or carries "*".
+//
+// Fails closed: every path that cannot establish the scope returns an error
+// alongside a zero AccountScope, so a caller that ignores the error still
+// denies.
 func (h *Handler) getAccountScope(ctx context.Context, session *Session) (auth.AccountScope, error) {
 	if session.UserID == apiKeyAdminUserID {
 		// Positively unrestricted: the stateless admin API key is an
