@@ -142,10 +142,90 @@ func TestResolveAllowedAccounts_LegitimatePrincipalsStillResolve(t *testing.T) {
 	}
 }
 
-// A partially-resolvable membership keeps working and reports only what
-// resolved. Under-reporting scope makes access STRICTER, so it is safe; only
-// total failure had to be refused.
-func TestResolveAllowedAccounts_PartialResolutionIsAllowedAndNarrower(t *testing.T) {
+// THE MULTI-GROUP WIDENING (issue #1748, the case an earlier version of this
+// guard missed).
+//
+// This test replaces one that asserted the opposite -- that partial resolution
+// is "allowed and narrower". That invariant is FALSE and the old test passed
+// with the bug present, because its surviving group carried the restriction.
+// A test encoding a false invariant is worse than no test: it tells the next
+// reader the case is covered.
+//
+// The configuration needs TWO groups, which is why a six-case single-group
+// verification could not find it: one granting a permission with NO
+// allowed_accounts (unrestricted on its own), one carrying the restriction.
+// The union is restricted; lose the restricting group and it collapses to
+// empty, which reads as EVERY account. Dropping a group WIDENS.
+func TestResolveAllowedAccounts_PartialResolutionThatWidensIsRefused(t *testing.T) {
+	ctx := context.Background()
+	const permGroup, scopeGroup = "g-perm", "g-scope"
+
+	for _, tc := range []struct {
+		name      string
+		scopeResp func(*MockStore)
+	}{
+		{"restricting group missing (ErrNoRows)", func(ms *MockStore) {
+			ms.On("GetGroup", ctx, scopeGroup).Return(nil, pgx.ErrNoRows)
+		}},
+		{"restricting group resolves to (nil, nil)", func(ms *MockStore) {
+			ms.On("GetGroup", ctx, scopeGroup).Return(nil, nil)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ms, svc := scopeStore(t)
+			t.Cleanup(func() { ms.AssertExpectations(t) })
+			ms.On("GetUserByID", ctx, scopeUserID).
+				Return(&User{ID: scopeUserID, GroupIDs: []string{permGroup, scopeGroup}}, nil)
+			// Survives, and contributes NO accounts -- unrestricted alone.
+			ms.On("GetGroup", ctx, permGroup).Return(&Group{
+				ID:          permGroup,
+				Permissions: []Permission{{Action: ActionUpdate, Resource: ResourceGroups}},
+			}, nil)
+			tc.scopeResp(ms)
+
+			got, err := svc.ResolveAllowedAccounts(ctx, scopeUserID)
+
+			require.Error(t, err,
+				"losing the restricting group collapses the union to empty = ALL accounts; that must be refused")
+			assert.Nil(t, got)
+			assert.Contains(t, err.Error(), "could not be established")
+			assert.False(t, IsUnrestrictedAccess(got) && err == nil)
+		})
+	}
+}
+
+// The baseline control for the case above: with BOTH groups resolving, the
+// same actor is correctly restricted. Without this, a guard that refused the
+// two-group shape outright would pass the test above.
+func TestResolveAllowedAccounts_MultiGroupBaselineStaysRestricted(t *testing.T) {
+	ctx := context.Background()
+	const permGroup, scopeGroup = "g-perm", "g-scope"
+
+	ms, svc := scopeStore(t)
+	t.Cleanup(func() { ms.AssertExpectations(t) })
+	ms.On("GetUserByID", ctx, scopeUserID).
+		Return(&User{ID: scopeUserID, GroupIDs: []string{permGroup, scopeGroup}}, nil)
+	ms.On("GetGroup", ctx, permGroup).Return(&Group{
+		ID:          permGroup,
+		Permissions: []Permission{{Action: ActionUpdate, Resource: ResourceGroups}},
+	}, nil)
+	ms.On("GetGroup", ctx, scopeGroup).Return(&Group{
+		ID: scopeGroup, AllowedAccounts: []string{"acct-A"},
+	}, nil)
+
+	got, err := svc.ResolveAllowedAccounts(ctx, scopeUserID)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"acct-A"}, got)
+	assert.False(t, IsUnrestrictedAccess(got))
+}
+
+// Deleted-group tolerance is PRESERVED for a restricted principal: a
+// non-empty union cannot have been widened by the loss, so the skip is
+// absorbed rather than refused. This is the behaviour option 1 ("refuse on any
+// unresolved group") would have destroyed, locking out every user with one
+// stale membership.
+func TestResolveAllowedAccounts_SkippedGroupToleratedWhenUnionStaysRestricted(t *testing.T) {
 	ctx := context.Background()
 	ms, svc := scopeStore(t)
 	t.Cleanup(func() { ms.AssertExpectations(t) })
@@ -157,7 +237,25 @@ func TestResolveAllowedAccounts_PartialResolutionIsAllowedAndNarrower(t *testing
 
 	got, err := svc.ResolveAllowedAccounts(ctx, scopeUserID)
 
-	require.NoError(t, err)
+	require.NoError(t, err, "a stale membership must not lock out a restricted principal")
 	assert.Equal(t, []string{"acct-A"}, got)
-	assert.False(t, IsUnrestrictedAccess(got), "a partial resolution must not widen to all accounts")
+	assert.False(t, IsUnrestrictedAccess(got))
+}
+
+// Duplicate GroupIDs must not be mistaken for skips. Detecting skips by
+// comparing len(Groups) to len(GroupIDs) would see 2 ids resolving to 1 group
+// and refuse this legitimate principal.
+func TestResolveAllowedAccounts_DuplicateGroupIDsAreNotSkips(t *testing.T) {
+	ctx := context.Background()
+	ms, svc := scopeStore(t)
+	t.Cleanup(func() { ms.AssertExpectations(t) })
+
+	ms.On("GetUserByID", ctx, scopeUserID).
+		Return(&User{ID: scopeUserID, GroupIDs: []string{"g1", "g1"}}, nil)
+	ms.On("GetGroup", ctx, "g1").Return(&Group{ID: "g1"}, nil) // no allowed_accounts
+
+	got, err := svc.ResolveAllowedAccounts(ctx, scopeUserID)
+
+	require.NoError(t, err, "duplicate memberships are not unresolved groups")
+	assert.True(t, IsUnrestrictedAccess(got))
 }

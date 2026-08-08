@@ -126,13 +126,16 @@ func (s *Service) collectGroupsAndAccounts(ctx context.Context, authCtx *AuthCon
 		group, err := s.store.GetGroup(ctx, groupID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				// Group was deleted; skip it rather than failing the entire request.
+				// Group was deleted; skip it rather than failing the entire
+				// request. RECORD the skip: a caller reasoning about account
+				// scope must know the union is incomplete (issue #1748).
+				authCtx.SkippedGroups++
 				continue
 			}
 			return fmt.Errorf("fetching group %s: %w", groupID, err)
 		}
 		if group == nil {
-			// Group was deleted; skip it rather than failing the entire request.
+			authCtx.SkippedGroups++
 			continue
 		}
 
@@ -153,27 +156,52 @@ func (s *Service) collectGroupsAndAccounts(ctx context.Context, authCtx *AuthCon
 // ResolveAllowedAccounts returns the cloud accounts a user may access, and
 // FAILS CLOSED when that scope cannot be established (issue #1748).
 //
-// The subtlety this exists for: an empty result means UNRESTRICTED
-// (IsUnrestrictedAccess), a deliberate backward-compat default so a group with
-// no allowed_accounts configured grants full access. But
-// collectGroupsAndAccounts also skips a group it cannot load -- pgx.ErrNoRows,
-// or a store returning (nil, nil) -- so a user whose groups all fail to
-// resolve produced the SAME empty value. Absence and unrestricted shared a
-// representation, and every failure silently granted access to every account.
+// The subtlety: an empty result means UNRESTRICTED (IsUnrestrictedAccess), a
+// deliberate backward-compat default so a group with no allowed_accounts
+// configured grants full access. But collectGroupsAndAccounts skips a group it
+// cannot load, so a skipped group can leave an empty union that reads as
+// "every account".
 //
-// Requiring at least one group to have actually resolved separates the two
-// cleanly. Verified across all six cases: a group with allowed_accounts=["*"],
-// a group with none configured (the legacy default), and a scoped group all
-// resolve at least one group and keep working; a missing group, a (nil, nil)
-// group, and a user with no groups at all resolve none and are refused.
+// DROPPING A GROUP CAN WIDEN ACCESS. This is the part that is easy to get
+// wrong, and an earlier version of this guard did: the union of [] and
+// ["acct-A"] is RESTRICTED, so losing the group carrying ["acct-A"] collapses
+// it to [] -- unrestricted. Partial resolution is therefore NOT safely
+// "narrower"; it is only narrower when the surviving groups still contribute
+// entries. Reproduced by execution with a two-group actor (one granting
+// update:groups with no allowed_accounts, one carrying the restriction):
+// losing the restricting group turned a scope of [acct-A] into all accounts.
 //
-// A user with no groups holds no permissions either, so refusing them here
-// costs nothing and closes the same hole from the other side.
+// A single-group configuration cannot exhibit this, which is why a six-case
+// single-group verification found nothing.
+//
+// The guard is therefore: refuse when the union is empty AND at least one
+// group was skipped. That targets exactly the widening. It deliberately does
+// NOT refuse on any unresolved group: that would reverse the intentional
+// "group was deleted; skip it rather than failing the entire request"
+// behaviour and lock out a user with one stale membership everywhere until an
+// admin cleaned up -- trading a conditional security hole for an
+// unconditional availability regression on a path this widely consumed.
+//
+// A restricted principal keeps working through a skipped group, because a
+// non-empty union cannot have been widened by the loss.
+//
+// The skip count comes from collectGroupsAndAccounts, NOT from comparing
+// len(Groups) to len(User.GroupIDs) -- GroupIDs may contain duplicates, so
+// that comparison would report phantom skips and refuse real users.
 func (s *Service) ResolveAllowedAccounts(ctx context.Context, userID string) ([]string, error) {
 	authCtx, err := s.BuildAuthContext(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
+	if IsUnrestrictedAccess(authCtx.AllowedAccounts) && authCtx.SkippedGroups > 0 {
+		return nil, fmt.Errorf(
+			"account scope could not be established for user %s: %d group(s) could not be resolved "+
+				"and the remaining scope is unrestricted", userID, authCtx.SkippedGroups)
+	}
+	// A principal belonging to no group holds no permissions; treating that as
+	// unrestricted account access is indefensible for a scope check even
+	// though migration 000057's users_min_one_group CHECK makes it
+	// structurally unreachable today.
 	if len(authCtx.Groups) == 0 {
 		return nil, fmt.Errorf(
 			"account scope could not be established for user %s: no group resolved", userID)
