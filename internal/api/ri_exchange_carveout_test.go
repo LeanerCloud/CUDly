@@ -112,8 +112,11 @@ func TestRIExchangeCarveOut_AdminKeepsNonCarvedVerbs(t *testing.T) {
 //
 // The discriminating assertion is the error's IDENTITY, not its wording:
 // requirePermission's carve-out denial is a *clientError with code 403
-// (handler.go's requireSessionPermission), and executeExchange returns it
-// unwrapped (handler_ri_exchange.go:1713-1716). Asserting substrings of the
+// (handler.go's requireSessionPermission). IsClientError itself is
+// errors.As-based (handler_router.go), so it would unwrap through %w
+// wrapping regardless -- the 403 identity is what the assertion depends on,
+// not the fact that executeExchange happens to return the error unwrapped
+// (handler_ri_exchange.go:1713-1716). Asserting substrings of the
 // message ("execute", "ri-exchange") is fragile in the wrong direction: if
 // the carve-out is dropped, executeExchange proceeds into
 // exchange.ExecuteExchange, which builds its own AWS clients from ambient
@@ -133,14 +136,18 @@ func TestRIExchangeCarveOut_AdminKeepsNonCarvedVerbs(t *testing.T) {
 // this handler and does not discriminate the mutation. It stays in case a
 // future change routes this handler through the store.
 //
-// t.Setenv("AWS_EC2_METADATA_DISABLED", "true") bounds the AWS SDK client
-// construction inside exchange.ExecuteExchange, reached only if the
-// carve-out regresses (#1644), to fail fast against an unreachable
-// credential source instead of depending on what credentials happen to be
-// configured in whichever environment re-runs this test (tracked more
-// broadly as #1760: executeExchange builds AWS clients from ambient
-// credentials with no injected seam, unlike internal/server's
-// riExchangeClients).
+// t.Setenv("AWS_EC2_METADATA_DISABLED", "true") closes only the IMDS
+// credential source, not the AWS SDK's default chain as a whole: on a
+// machine with a populated ~/.aws/credentials (the common developer case),
+// the shared-credentials provider resolves before IMDS is ever consulted, so
+// this alone does not stop a mutated run from reaching real AWS. Re-running
+// this test under mutation safely requires an externally sandboxed
+// environment (credentials/config files pointed elsewhere, a nonexistent
+// profile, IMDS disabled). The setenv is kept because it is real, if
+// partial, containment and costs nothing -- it is not a substitute for
+// sandboxing. The actual fix is #1760: executeExchange builds AWS clients
+// from ambient credentials inside the handler, with no injected client seam
+// to stub in tests, unlike internal/server's riExchangeClients.
 func TestExecuteExchange_PlainAdminIsRefused(t *testing.T) {
 	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
 
