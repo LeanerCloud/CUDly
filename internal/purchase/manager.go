@@ -218,7 +218,12 @@ func isMultiAccountAckable(execErr error) bool {
 // claimAndExecute claims the root to "running" first (issue #1013), would strand
 // the root row in "running" until the reaper failed it.
 func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseExecution) error {
-	execErr := m.executePurchase(ctx, exec)
+	// Last line of defense before money moves (issue #1718). Every executor
+	// entry point funnels through here, so one check covers all of them.
+	execErr := armedRedriveRefusal(exec)
+	if execErr == nil {
+		execErr = m.executePurchase(ctx, exec)
+	}
 	m.finalizeExecution(exec, execErr)
 	if execErr != nil {
 		logging.Errorf("Failed to execute purchase %s: %v", exec.ExecutionID, execErr)
@@ -266,6 +271,51 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 // token exactly. That is what lets the provider-side dedupe engage at all.
 func allRecsSafeToRedrive(exec *config.PurchaseExecution) bool {
 	return len(exec.Recommendations) > 0 && RedriveRefusalReason(exec) == ""
+}
+
+// armedRedriveRefusal returns a non-nil error when exec must not be executed
+// because it is a RETRY of a purchase that may already have landed, on a
+// provider that offers no way to collapse the second attempt onto the first.
+//
+// Issue #1668 closed this at creation time: the user-facing Retry endpoint
+// refuses to build such a successor. A creation-time gate cannot reach
+// successors that a PRE-#1668 retry already created, which sit in
+// pending/notified/approved/scheduled and buy a second, non-cancelable
+// commitment the moment they are approved (issue #1718). This is the
+// executor-side backstop for exactly those rows.
+//
+// It is placed in executeAndFinalize rather than at the individual executors
+// because that function is the single funnel every executor reaches money
+// through: claimAndExecute (SQS + cron), ApproveAndExecute (token + session
+// approve), fireOneDue (the scheduled pre-fire delay sweep) and claimAndRedrive
+// (the reaper). One gate at the funnel cannot be missed by a future executor
+// the way three copies at three call sites can. executePurchase has exactly one
+// production caller, immediately below this check.
+//
+// The condition is a conjunction and BOTH halves are load-bearing:
+//
+//   - RetryAttemptN > 0 restricts it to retry successors. A fresh execution
+//     (n == 0) is a FIRST purchase with nothing to duplicate, and Azure savings
+//     plans must remain buyable, so re-drive safety alone here would block
+//     every legitimate first buy.
+//   - RedriveRefusalReason != "" restricts it to providers with no duplicate
+//     guard, reusing the predicate from #1668 rather than introducing a second
+//     notion of re-drive safety.
+//
+// Returning an error rather than skipping silently means finalizeExecution
+// stamps the row "failed" with this reason and executeAndFinalize persists it,
+// so an armed row is DEFUSED and visible in History instead of remaining armed
+// for the next sweep. Retrying it from the UI then hits the #1668 gate, which
+// refuses, so it cannot be re-armed either.
+func armedRedriveRefusal(exec *config.PurchaseExecution) error {
+	if exec.RetryAttemptN <= 0 {
+		return nil
+	}
+	reason := RedriveRefusalReason(exec)
+	if reason == "" {
+		return nil
+	}
+	return fmt.Errorf("refusing to execute retry attempt %d: %s", exec.RetryAttemptN, reason)
 }
 
 // RedriveRefusalReason returns a short operator-facing reason why exec must not
