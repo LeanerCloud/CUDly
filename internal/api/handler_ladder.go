@@ -73,9 +73,24 @@ func (h *Handler) filterLadderConfigsByAllowedAccounts(ctx context.Context, sess
 // the auth component is nil (returns an error, never a session), so the
 // handler fails closed; the exact status is a 500-class error in that case
 // rather than a 403, but no unauthenticated write ever reaches the store.
+//
+// update:config alone is NOT sufficient: the target account must also be
+// inside the session's allowed_accounts (issue #1539). Holding the verb said
+// nothing about WHICH account it could be exercised on, so a caller scoped to
+// one account could write the ladder config of any other -- including the
+// deployment's own account, whose config the ladder engine acts on, and whose
+// existing row this endpoint overwrites (the store upserts on the
+// UNIQUE(cloud_account_id, provider) pair). getLadderConfigs has filtered on
+// allowed_accounts since migration 000088 opened it to scoped users; the same
+// reasoning was never applied to the write, so the row was also invisible to
+// its author afterwards.
 func (h *Handler) upsertLadderConfig(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requirePermission(ctx, req, "update", "config"); err != nil {
-		return nil, err
+	// Named permErr rather than err: the body-parsing and validation steps
+	// below each bind their own `err` in an if-statement, which would shadow a
+	// function-scoped `err` and trip govet's shadow check.
+	session, permErr := h.requirePermission(ctx, req, "update", "config")
+	if permErr != nil {
+		return nil, permErr
 	}
 
 	// DisallowUnknownFields so a typo'd key is rejected loudly instead of
@@ -108,7 +123,7 @@ func (h *Handler) upsertLadderConfig(ctx context.Context, req *events.LambdaFunc
 		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
 	}
 
-	if err := h.validateLadderAccountProvider(ctx, &cfg); err != nil {
+	if err := h.requireLadderAccountAccess(ctx, session, &cfg); err != nil {
 		return nil, err
 	}
 
@@ -120,18 +135,23 @@ func (h *Handler) upsertLadderConfig(ctx context.Context, req *events.LambdaFunc
 	return result, nil
 }
 
-// validateLadderAccountProvider confirms the (cloud_account_id, provider) pair
-// refers to a real cloud account whose provider matches. This turns a
-// nonexistent-account FK violation into a clean 400 (rather than a raw 500 from
-// the store's FK constraint) and rejects a provider mismatch -- e.g. an inert
-// gcp config attached to an AWS account, which would confuse PR-2 scoping.
-func (h *Handler) validateLadderAccountProvider(ctx context.Context, cfg *config.LadderConfigDB) error {
-	account, err := h.config.GetCloudAccount(ctx, cfg.CloudAccountID)
+// requireLadderAccountAccess confirms the caller may write ladder config for
+// the (cloud_account_id, provider) pair in the request body: the account must
+// exist, be within the session's allowed_accounts, and carry the claimed
+// provider. It rejects a provider mismatch -- e.g. an inert gcp config attached
+// to an AWS account, which would confuse PR-2 scoping.
+//
+// The account lookup lives in requireAccountAccess, which already fetches the
+// account and nil-checks it, so this does not fetch it a second time.
+//
+// requireAccountAccess answers both "no such account" and "not yours" with the
+// same errNotFound (404), deliberately: distinguishing them would let a scoped
+// caller enumerate the account table by probing ids. That replaces the earlier
+// 400 "cloud account %q does not exist", which leaked exactly that distinction.
+func (h *Handler) requireLadderAccountAccess(ctx context.Context, session *Session, cfg *config.LadderConfigDB) error {
+	account, err := h.requireAccountAccess(ctx, session, cfg.CloudAccountID)
 	if err != nil {
-		return fmt.Errorf("failed to look up cloud account: %w", err)
-	}
-	if account == nil {
-		return NewClientError(400, fmt.Sprintf("cloud account %q does not exist", cfg.CloudAccountID))
+		return err
 	}
 	if account.Provider != cfg.Provider {
 		return NewClientError(400, fmt.Sprintf("provider %q does not match cloud account provider %q", cfg.Provider, account.Provider))
