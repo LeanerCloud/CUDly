@@ -5,6 +5,8 @@ package migrations_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/LeanerCloud/CUDly/internal/database/postgres/migrations"
@@ -116,8 +118,17 @@ func TestMigration_SeedRIExchangerGroup(t *testing.T) {
 		`, adminEmail, adminGroupIDForPurchaserTest, riExchangerGroupIDTest)
 		require.NoError(t, err)
 
-		// Re-running the seed must not duplicate the array entry.
-		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
+		// Re-running migrations.RunMigrations here would NOT exercise the
+		// idempotency guards below: m.Up() returns ErrNoChange once the
+		// database is already at the latest version, so the migration body
+		// never runs a second time and this subtest would pass unconditionally
+		// regardless of whether the DO block's guards work. Reading the up
+		// migration file and executing its SQL directly re-applies the DO
+		// block for real, the same way 000095's re-run test does.
+		upSQL, err := os.ReadFile(filepath.Join(migrationsPath, "000096_seed_ri_exchanger_group.up.sql"))
+		require.NoError(t, err, "the up migration file must be readable")
+		_, err = pool.Exec(ctx, string(upSQL))
+		require.NoError(t, err, "re-running 000096 on an already-seeded database must be a no-op, not an error")
 
 		after := queryGroupIDsByEmail(t, ctx, pool, adminEmail)
 		count := 0
