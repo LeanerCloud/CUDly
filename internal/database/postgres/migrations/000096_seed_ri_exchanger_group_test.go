@@ -140,3 +140,82 @@ func TestMigration_SeedRIExchangerGroup(t *testing.T) {
 		assert.Equal(t, 1, count, "RI Exchanger must appear exactly once in group_ids")
 	})
 }
+
+// TestMigration_SeedRIExchangerGroupDownRollback covers the down migration
+// (PR #1758 review, Finding 3). The UPDATE that detaches members and the
+// DELETE that drops the row must stay consistent: before this fix the UPDATE
+// ran unconditionally while the DELETE alone was guarded on
+// name = 'RI Exchanger', so if an operator had renamed the group onto this
+// id, the rollback detached every member from a group it then refused to
+// delete -- a half-rollback, worse than doing all of it or none of it.
+func TestMigration_SeedRIExchangerGroupDownRollback(t *testing.T) {
+	ctx := context.Background()
+	migrationsPath := getMigrationsPath()
+
+	t.Run("ordinary rollback: detaches members and drops the row together", func(t *testing.T) {
+		container, err := testhelpers.SetupPostgresContainer(ctx, t)
+		require.NoError(t, err)
+		defer container.Cleanup(ctx)
+		pool := container.DB.Pool()
+
+		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
+
+		const adminEmail = "admin-riexchanger-rollback@test.example"
+		_, err = pool.Exec(ctx, `
+			INSERT INTO users (id, email, password_hash, salt, active, group_ids, created_at, updated_at)
+			VALUES (gen_random_uuid(), $1, '', '', true, ARRAY[$2::uuid, $3::uuid], NOW(), NOW())
+		`, adminEmail, adminGroupIDForPurchaserTest, riExchangerGroupIDTest)
+		require.NoError(t, err)
+
+		require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 96)),
+			"rolling back 000096 must succeed")
+
+		after := queryGroupIDsByEmail(t, ctx, pool, adminEmail)
+		assert.NotContains(t, after, riExchangerGroupIDTest,
+			"the down migration must detach the member from the RI Exchanger group")
+		assert.Contains(t, after, adminGroupIDForPurchaserTest,
+			"the down migration must not touch unrelated group membership")
+
+		var exists bool
+		require.NoError(t, pool.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM groups WHERE id = $1)`, riExchangerGroupIDTest).Scan(&exists))
+		assert.False(t, exists, "the down migration must drop the seeded group row")
+	})
+
+	t.Run("renamed group: rollback touches neither membership nor the row", func(t *testing.T) {
+		container, err := testhelpers.SetupPostgresContainer(ctx, t)
+		require.NoError(t, err)
+		defer container.Cleanup(ctx)
+		pool := container.DB.Pool()
+
+		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
+
+		const adminEmail = "admin-riexchanger-renamed@test.example"
+		_, err = pool.Exec(ctx, `
+			INSERT INTO users (id, email, password_hash, salt, active, group_ids, created_at, updated_at)
+			VALUES (gen_random_uuid(), $1, '', '', true, ARRAY[$2::uuid, $3::uuid], NOW(), NOW())
+		`, adminEmail, adminGroupIDForPurchaserTest, riExchangerGroupIDTest)
+		require.NoError(t, err)
+
+		// An operator renamed the seeded row onto something else -- direct SQL
+		// is the only way this can happen, since the group is system_managed
+		// and the API refuses to edit it, but the down migration must not
+		// assume that never occurred.
+		_, err = pool.Exec(ctx, `UPDATE groups SET name = 'Renamed By Operator' WHERE id = $1`, riExchangerGroupIDTest)
+		require.NoError(t, err, "precondition: rename the seeded group")
+
+		require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 96)),
+			"rolling back 000096 must succeed even when its guard refuses to act")
+
+		after := queryGroupIDsByEmail(t, ctx, pool, adminEmail)
+		assert.Contains(t, after, riExchangerGroupIDTest,
+			"the down migration's guard refusing the DELETE must also refuse the UPDATE -- "+
+				"detaching members from a group it then declines to drop is a half-rollback")
+
+		var name string
+		require.NoError(t, pool.QueryRow(ctx,
+			`SELECT name FROM groups WHERE id = $1`, riExchangerGroupIDTest).Scan(&name),
+			"the renamed group must still exist -- the guard must refuse to drop it")
+		assert.Equal(t, "Renamed By Operator", name)
+	})
+}
