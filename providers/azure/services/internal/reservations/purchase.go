@@ -42,6 +42,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -209,6 +210,32 @@ type calculatePriceResponse struct {
 // phrasing changes in future API versions.
 const sessionTimeoutFragment = "Session timed out"
 
+// errRetryabilityUnknown marks a 400 purchase failure whose retryability could
+// not be determined because the response body did not read completely.
+//
+// IsSessionTimeout classifies by searching the error text for a fragment Azure
+// puts in the body, so a truncated read cannot be distinguished from a genuinely
+// permanent failure by inspecting the message. Carrying the state out of band
+// lets DoPurchaseTwoStep retry instead of silently abandoning a purchase that
+// the retry loop exists to recover.
+//
+// Deliberately scoped to 400, matching IsSessionTimeout's own status scope and
+// the only scenario issue #1766 reports. The wider non-2xx surface is excluded
+// on purpose: a truncated response is mechanistically different from a cleanly
+// read one, because the server may have finished processing and begun writing
+// when the connection died. Whether a 409 or 5xx can follow a purchase that
+// actually committed is unverified for this API, and a retry on an unverified
+// commit-ambiguous status is a double-buy risk that buys nothing -- every such
+// case keeps its pre-existing behavior, which nobody has reported as broken.
+//
+// Note what does NOT bound this: DoIdempotentPurchaseTwoStep performs its
+// idempotency lookup exactly once, before DoPurchaseTwoStep is entered, and
+// there is no recheck between attempts. Each retry mints a fresh
+// reservationOrderId via doCalculatePrice, so the guard covers a re-drive
+// ACROSS invocations, not the loop within one. The bound here is
+// purchaseMaxAttempts.
+var errRetryabilityUnknown = errors.New("purchase retryability unknown: response body did not read completely")
+
 // IsSessionTimeout reports whether err looks like the "Session timed out"
 // 400 error from the Azure Reservations purchase endpoint. It matches the
 // error message produced by DoPurchaseTwoStep so callers can distinguish
@@ -255,7 +282,10 @@ func DoPurchaseTwoStep(ctx context.Context, httpClient HTTPClient, calcURL strin
 			return orderID, nil
 		}
 
-		if IsSessionTimeout(purchaseErr) && attempt < purchaseMaxAttempts {
+		// An unreadable body is retried alongside a recognized session timeout:
+		// without this the truncated case was abandoned on its first attempt,
+		// because IsSessionTimeout can only classify what it can read.
+		if (IsSessionTimeout(purchaseErr) || errors.Is(purchaseErr, errRetryabilityUnknown)) && attempt < purchaseMaxAttempts {
 			log.Printf("reservation purchase session timed out (attempt %d/%d), re-running calculatePrice in %s",
 				attempt, purchaseMaxAttempts, purchaseRetryDelay)
 			select {
@@ -472,11 +502,24 @@ func doPurchase(ctx context.Context, httpClient HTTPClient, purchaseURL string, 
 	if err != nil {
 		return fmt.Errorf("failed to purchase reservation: %w", err)
 	}
-	body, _ := io.ReadAll(resp.Body)
+	body, readErr := io.ReadAll(resp.Body)
 	resp.Body.Close() // #nosec G104 -- body fully drained by io.ReadAll before Close; transport close error does not affect correctness
 
+	// Success is decided by the status code alone, so an unreadable body cannot
+	// turn a completed purchase into a failure.
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusAccepted {
 		return nil
+	}
+	// Scoped to 400: see errRetryabilityUnknown. Other statuses keep their
+	// pre-existing behavior rather than entering the retry loop on a body that
+	// could not be read.
+	if readErr != nil && resp.StatusCode == http.StatusBadRequest {
+		// A 400 whose body did not read completely: its text cannot be used to
+		// classify retryability, so surface the read failure AND tag the error
+		// with errRetryabilityUnknown so the retry loop treats it as retryable
+		// rather than abandoning the purchase on its first attempt.
+		return fmt.Errorf("reservation purchase failed with status %d (partial body: %q): %w: %w",
+			resp.StatusCode, string(body), errRetryabilityUnknown, readErr)
 	}
 	return fmt.Errorf("reservation purchase failed with status %d: %s", resp.StatusCode, string(body))
 }
