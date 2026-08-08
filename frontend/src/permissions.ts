@@ -154,6 +154,15 @@ export const ADMINISTRATORS_GROUP_ID = '00000000-0000-5000-8000-000000000001';
 export const PURCHASER_GROUP_ID = '00000000-0000-5000-8000-000000000007';
 
 /**
+ * Well-known group UUID for the RI Exchanger group seeded by migration
+ * 000096 (issue #1644). execute:ri-exchange is carved out of the admin:*
+ * wildcard and requires explicit membership in this group (or a custom
+ * group granting the same verb). Mirrors DefaultRIExchangerGroupID in
+ * internal/auth/types.go.
+ */
+export const RI_EXCHANGER_GROUP_ID = '00000000-0000-5000-8000-000000000008';
+
+/**
  * The set of (action, resource) pairs carved out of the admin:*
  * wildcard. Mirrors adminCarvedOuts in internal/auth/types.go.
  * Admin-group members must also be in the Purchaser group to pass
@@ -163,6 +172,11 @@ const ADMIN_CARVED_OUTS: ReadonlySet<string> = new Set([
   'execute:purchases',
   'approve-any:purchases',
   'retry-any:purchases',
+  // execute:ri-exchange is carved out by issue #1644 and granted by the
+  // seeded RI Exchanger group (migration 000096), not by admin:*. If this
+  // set drifts from adminCarvedOuts the UI offers an action the backend
+  // then refuses with a 403.
+  'execute:ri-exchange',
 ]);
 
 /**
