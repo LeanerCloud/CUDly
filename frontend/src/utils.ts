@@ -156,7 +156,10 @@ export interface DateParts {
 }
 
 /**
- * Get day and month from date
+ * Get day and month from date. The month abbreviation is pinned to en-US,
+ * same as formatDate/formatDateTime/formatCurrency above (issue #1728):
+ * 'default' asks toLocaleString for the host locale explicitly, which is
+ * exactly what this file's other helpers were fixed to stop doing.
  */
 export function getDateParts(date: string | Date | null | undefined): DateParts {
   if (!date) return { day: 0, month: '' };
@@ -164,7 +167,7 @@ export function getDateParts(date: string | Date | null | undefined): DateParts 
   if (isNaN(d.getTime())) return { day: 0, month: '' };
   return {
     day: d.getDate(),
-    month: d.toLocaleString('default', { month: 'short' })
+    month: d.toLocaleString('en-US', { month: 'short' })
   };
 }
 
