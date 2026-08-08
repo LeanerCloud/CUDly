@@ -396,6 +396,25 @@ func processRegionRecommendations(
 
 	result.recommendations = filteredRecs
 
+	// --max-instances is a run-wide cap, and this legacy per-region entry point
+	// has no view of the other services and regions in the run, so it cannot
+	// evaluate the cap. Refuse to spend rather than purchase uncapped: an
+	// over-purchase of reserved capacity is not reversible. Dry runs continue
+	// so the recommendations are still reported.
+	//
+	// This is deliberately the first thing after the recommendations are
+	// recorded, ahead of building the service client and of the duplicate
+	// check. The decision depends only on cfg.MaxInstances and isDryRun, both
+	// already known, so reaching it through a cloud API call would be work
+	// done to arrive at an answer that was already determined -- and it would
+	// make the refusal path fail differently depending on whether the describe
+	// call happened to succeed.
+	if cfg.MaxInstances > 0 && !isDryRun {
+		log.Printf("❌ Refusing to purchase %s/%s: --max-instances is a run-wide cap and cannot be enforced on the per-region path. Use the multi-service pipeline (the default entry point).",
+			getServiceDisplayName(service), region)
+		return result
+	}
+
 	// Get service client and process purchases
 	regionalCfg := awsCfg.Copy()
 	regionalCfg.Region = region
@@ -409,17 +428,6 @@ func processRegionRecommendations(
 
 	// Check for duplicate RIs. Drop tracking skipped (nil).
 	adjustedRecs := checkDuplicates(ctx, filteredRecs, serviceClient, nil)
-
-	// --max-instances is a run-wide cap, and this legacy per-region entry point
-	// has no view of the other services and regions in the run, so it cannot
-	// evaluate the cap. Refuse to spend rather than purchase uncapped: an
-	// over-purchase of reserved capacity is not reversible. Dry runs continue
-	// so the recommendations are still reported.
-	if cfg.MaxInstances > 0 && !isDryRun {
-		log.Printf("❌ Refusing to purchase %s/%s: --max-instances is a run-wide cap and cannot be enforced on the per-region path. Use the multi-service pipeline (the default entry point).",
-			getServiceDisplayName(service), region)
-		return result
-	}
 
 	// Process purchases
 	regionResults := processPurchaseLoop(ctx, adjustedRecs, region, isDryRun, serviceClient, cfg)

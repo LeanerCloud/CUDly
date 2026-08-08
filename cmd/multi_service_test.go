@@ -430,10 +430,24 @@ func TestProcessService_InstanceLimitRefusesRealPurchase(t *testing.T) {
 	t.Cleanup(func() { mockClient.AssertExpectations(t) })
 
 	accountCache := NewAccountAliasCache(awsCfg)
-	recs, results := processService(ctx, awsCfg, mockClient, accountCache, common.ServiceRDS, false, toolCfg, engineVersionData{})
+
+	var recs []common.Recommendation
+	var results []common.PurchaseResult
+	out := captureAppOutput(t, func() {
+		recs, results = processService(ctx, awsCfg, mockClient, accountCache, common.ServiceRDS, false, toolCfg, engineVersionData{})
+	})
 
 	assert.NotEmpty(t, recs, "recommendations are still reported")
 	assert.Empty(t, results, "no purchase may be attempted when the cap cannot be evaluated")
+
+	// The refusal must be reached without touching AWS. The duplicate check is
+	// the only cloud call on this path, and without credentials it logs this
+	// warning, so its absence is positive evidence that the guard returned
+	// before any client was built. Before the guard was hoisted above
+	// createServiceClient this assertion failed: the describe ran, 403'd, and
+	// emitted the warning on the way to a refusal that was already decided.
+	assert.NotContains(t, out, "Could not check for existing RIs",
+		"the refusal path must not reach a cloud API call")
 }
 
 func TestProcessService_WithOverrideCount(t *testing.T) {
