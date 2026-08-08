@@ -766,7 +766,7 @@ func TestService_Logout_EmptyToken(t *testing.T) {
 	assert.Contains(t, err.Error(), "token is required")
 
 	// DeleteSession must not be called
-	mockStore.AssertNotCalled(t, "DeleteSession")
+	mockStore.AssertNotCalled(t, "DeleteSession", mock.Anything, mock.Anything)
 }
 
 func TestService_Logout_NilStore(t *testing.T) {

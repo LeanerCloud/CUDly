@@ -387,7 +387,7 @@ func TestClient_findOfferingID_RejectsMismatchedPlanType(t *testing.T) {
 	assert.Contains(t, err.Error(), "does not match client scope")
 	// AWS API must not be called — the mismatch should be caught
 	// client-side before any DescribeSavingsPlansOfferings request.
-	mockSP.AssertNotCalled(t, "DescribeSavingsPlansOfferings")
+	mockSP.AssertNotCalled(t, "DescribeSavingsPlansOfferings", mock.Anything, mock.Anything)
 }
 
 func TestClient_GetValidResourceTypes(t *testing.T) {
@@ -973,7 +973,7 @@ func TestClient_FindOfferingID_AllPaymentOptions(t *testing.T) {
 			if tt.expectError {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "unsupported Savings Plans payment option")
-				mockSP.AssertNotCalled(t, "DescribeSavingsPlansOfferings")
+				mockSP.AssertNotCalled(t, "DescribeSavingsPlansOfferings", mock.Anything, mock.Anything)
 			} else {
 				assert.NoError(t, err)
 			}
@@ -1029,7 +1029,7 @@ func TestClient_FindOfferingID_TermVariations(t *testing.T) {
 			if tt.expectError {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "unsupported Savings Plans term")
-				mockSP.AssertNotCalled(t, "DescribeSavingsPlansOfferings")
+				mockSP.AssertNotCalled(t, "DescribeSavingsPlansOfferings", mock.Anything, mock.Anything)
 			} else {
 				assert.NoError(t, err)
 			}
@@ -1531,11 +1531,13 @@ func TestEC2InstanceSP_CEProvidedOfferingIDUsedDirectly(t *testing.T) {
 		},
 	}
 
-	// DescribeSavingsPlansOfferings must NOT be called when CE supplies the ID.
-	mockSP.AssertNotCalled(t, "DescribeSavingsPlansOfferings")
-
 	id, err := client.findOfferingID(context.Background(), rec, "test-exec")
 	require.NoError(t, err)
 	assert.Equal(t, "ce-provided-offering-id-abc123", id,
 		"CE-provided OfferingID must be used directly, skipping DescribeSavingsPlansOfferings")
+
+	// DescribeSavingsPlansOfferings must NOT be called when CE supplies the ID.
+	// Asserted after the call: before it, the mock has recorded nothing and this
+	// passes for any implementation, whatever the matcher count.
+	mockSP.AssertNotCalled(t, "DescribeSavingsPlansOfferings", mock.Anything, mock.Anything)
 }

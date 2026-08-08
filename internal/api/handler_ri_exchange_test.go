@@ -968,7 +968,7 @@ func TestListExchangeableAzureRIs_SubscriptionIDOutOfScope(t *testing.T) {
 	// AssertExpectations above passes whether it was called or not; assert it
 	// explicitly to prove the scope gate refuses the request before the
 	// tenant-wide listing is ever fetched.
-	opsClient.AssertNotCalled(t, "ListExchangeableReservations")
+	opsClient.AssertNotCalled(t, "ListExchangeableReservations", mock.Anything)
 }
 
 // TestListExchangeableAzureRIs_SubscriptionIDFiltersToOwnRows exercises

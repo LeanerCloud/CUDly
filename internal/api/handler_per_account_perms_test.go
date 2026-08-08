@@ -363,7 +363,7 @@ func TestPerAccountPerms_HistoryAnalytics_CrossAccountRejected(t *testing.T) {
 		"cross-account analytics must return 404; got: %v", err)
 
 	// The analytics backend must never be called — the scope check fires first.
-	mockClient.AssertNotCalled(t, "QueryHistory")
+	mockClient.AssertNotCalled(t, "QueryHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestPerAccountPerms_HistoryAnalytics_AllowedAccountSucceeds is the paired
@@ -463,7 +463,7 @@ func TestPerAccountPerms_HistoryBreakdown_CrossAccountRejected(t *testing.T) {
 	assert.True(t, IsNotFoundError(err),
 		"cross-account breakdown must return 404; got: %v", err)
 
-	mockClient.AssertNotCalled(t, "QueryBreakdown")
+	mockClient.AssertNotCalled(t, "QueryBreakdown", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // ─── 6. GET /dashboard/summary ───────────────────────────────────────────────

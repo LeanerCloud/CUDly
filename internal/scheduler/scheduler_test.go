@@ -627,7 +627,7 @@ func TestScheduler_CollectRecommendations_WithNotification(t *testing.T) {
 	assert.Equal(t, 0, result.Recommendations)
 
 	// Verify no email was sent
-	mockEmail.AssertNotCalled(t, "SendNewRecommendationsNotification")
+	mockEmail.AssertNotCalled(t, "SendNewRecommendationsNotification", mock.Anything, mock.Anything)
 }
 
 // Test that verifies the struct implements expected interface.

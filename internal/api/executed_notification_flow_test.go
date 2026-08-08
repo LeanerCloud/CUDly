@@ -10,6 +10,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/email"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -244,7 +245,7 @@ func TestExecutedNotification_SessionApprovePath(t *testing.T) {
 	// Admin approved, so the executor recorded in the body is the admin.
 	assertExecutedNotificationFingerprints(t, notifier, contact, adminEmail, "valid-token")
 	mockPurchase.AssertExpectations(t)
-	mockPurchase.AssertNotCalled(t, "ApproveExecution")
+	mockPurchase.AssertNotCalled(t, "ApproveExecution", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestExecutedNotification_DirectExecutePath is the regression test for the

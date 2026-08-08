@@ -153,7 +153,7 @@ func TestHandler_approvePurchase_RejectsMismatchedSession(t *testing.T) {
 	// asserts nothing by construction; a .On(...) entry above would create
 	// a false positive, so we pin the negative by confirming the error is
 	// the authz error, not an approval-manager error.
-	mockPurchase.AssertNotCalled(t, "ApproveExecution")
+	mockPurchase.AssertNotCalled(t, "ApproveExecution", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestHandler_approvePurchase_RejectsMissingContactEmail covers the
@@ -204,7 +204,7 @@ func TestHandler_approvePurchase_RejectsMissingContactEmail(t *testing.T) {
 	_, err := handler.approvePurchase(ctx, req, execID, "valid-token")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no per-account contact email")
-	mockPurchase.AssertNotCalled(t, "ApproveExecution")
+	mockPurchase.AssertNotCalled(t, "ApproveExecution", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestHandler_approvePurchase_RejectsMissingSession(t *testing.T) {
@@ -328,7 +328,7 @@ func TestHandler_approvePurchase_SessionApproveAnyChainsToExecute(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, "completed", result.(map[string]string)["status"])
 	mockPurchase.AssertExpectations(t)
-	mockPurchase.AssertNotCalled(t, "ApproveExecution")
+	mockPurchase.AssertNotCalled(t, "ApproveExecution", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestHandler_approvePurchase_SessionExecuteFailureSurfacesAs409 pins the
@@ -678,7 +678,7 @@ func TestHandler_approvePurchase_RejectsGlobalNotifyWhenContactSet(t *testing.T)
 	_, err := handler.approvePurchase(ctx, req, execID, "valid-token")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not the authorized approver")
-	mockPurchase.AssertNotCalled(t, "ApproveExecution")
+	mockPurchase.AssertNotCalled(t, "ApproveExecution", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestHandler_approvePurchase_RejectsCreatorWithoutApprovePermission is the
@@ -741,8 +741,8 @@ func TestHandler_approvePurchase_RejectsCreatorWithoutApprovePermission(t *testi
 	require.True(t, ok, "expected a ClientError, got %T: %v", err, err)
 	assert.Equal(t, 403, ce.code, "creator without approve permission must be denied 403")
 	// Purchase manager must never be reached.
-	mockPurchase.AssertNotCalled(t, "ApproveExecution")
-	mockPurchase.AssertNotCalled(t, "ApproveAndExecute")
+	mockPurchase.AssertNotCalled(t, "ApproveExecution", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockPurchase.AssertNotCalled(t, "ApproveAndExecute", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestRouter_approvePurchaseHandler_RateLimited is a regression test for issue #400.

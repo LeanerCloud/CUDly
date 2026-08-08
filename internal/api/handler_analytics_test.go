@@ -201,7 +201,7 @@ func TestHandler_getHistoryAnalytics_InvalidProvider(t *testing.T) {
 	_, err := handler.getHistoryAnalytics(ctx, req, map[string]string{"provider": "oracle"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid provider")
-	mockClient.AssertNotCalled(t, "QueryHistory")
+	mockClient.AssertNotCalled(t, "QueryHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestHandler_getHistoryAnalytics_InvalidDateRange(t *testing.T) {
@@ -256,7 +256,7 @@ func TestHandler_getHistoryAnalytics_ScopedUser_RequiresAccountID(t *testing.T) 
 	_, err := handler.getHistoryAnalytics(ctx, req, map[string]string{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "account_id is required")
-	mockClient.AssertNotCalled(t, "QueryHistory")
+	mockClient.AssertNotCalled(t, "QueryHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestHandler_getHistoryBreakdown_Success(t *testing.T) {
@@ -411,7 +411,7 @@ func TestHandler_triggerAnalyticsCollection_NonAdmin(t *testing.T) {
 	_, err := handler.triggerAnalyticsCollection(ctx, req, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "admin access required")
-	mockCollector.AssertNotCalled(t, "Collect")
+	mockCollector.AssertNotCalled(t, "Collect", mock.Anything)
 }
 
 func TestParseDateRange(t *testing.T) {
@@ -636,7 +636,7 @@ func TestHandler_getAnalyticsTrends_ScopedUser_RequiresAccountID(t *testing.T) {
 	_, err := handler.getAnalyticsTrends(ctx, req, map[string]string{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "account_id is required")
-	mockSnap.AssertNotCalled(t, "QueryMonthlyTotals")
+	mockSnap.AssertNotCalled(t, "QueryMonthlyTotals", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestHandler_getAnalyticsTrends_ScopedUser_OutsideScope returns not-found when
@@ -659,5 +659,5 @@ func TestHandler_getAnalyticsTrends_ScopedUser_OutsideScope(t *testing.T) {
 
 	_, err := handler.getAnalyticsTrends(ctx, req, map[string]string{"account_id": "other-acct"})
 	require.Error(t, err)
-	mockSnap.AssertNotCalled(t, "QueryMonthlyTotals")
+	mockSnap.AssertNotCalled(t, "QueryMonthlyTotals", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }

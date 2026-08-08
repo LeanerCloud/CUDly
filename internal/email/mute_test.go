@@ -57,7 +57,7 @@ func TestSendPurchaseApprovalRequest_MutedRecipient_NoSESCall(t *testing.T) {
 		Return(true, nil)
 	t.Cleanup(func() {
 		mc.AssertExpectations(t)
-		ses.AssertNotCalled(t, "SendEmail")
+		ses.AssertNotCalled(t, "SendEmail", mock.Anything, mock.Anything)
 	})
 
 	s := newSenderWithMute(ses, mc)
@@ -146,7 +146,7 @@ func TestSendRIExchangePendingApproval_MutedRecipient_NoSESCall(t *testing.T) {
 		Return(true, nil).Once()
 	t.Cleanup(func() {
 		mc.AssertExpectations(t)
-		ses.AssertNotCalled(t, "SendEmail")
+		ses.AssertNotCalled(t, "SendEmail", mock.Anything, mock.Anything)
 	})
 
 	s := newSenderWithMute(ses, mc)

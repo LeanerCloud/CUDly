@@ -78,7 +78,13 @@ func TestAssertNotCalled_NameOnlyFormMatchesCallWithArguments(t *testing.T) {
 	// testify's promoted implementation is the behavior being replaced: it
 	// still passes, because WithTx never reached mock.Called and because an
 	// empty expectation cannot match a two-argument call.
-	assert.True(t, m.Mock.AssertNotCalled(&recordingT{}, "WithTx"))
+	//
+	// Hoisted to a local rather than written as m.Mock.AssertNotCalled(...):
+	// TestNoUnfailableMockAssertions cannot resolve a selector receiver and
+	// correctly reports such a site for hand review, which this deliberate
+	// call into the broken implementation would otherwise trip forever.
+	promoted := &m.Mock
+	assert.True(t, promoted.AssertNotCalled(&recordingT{}, "WithTx"))
 }
 
 // TestAssertNotCalled_WrongMatcherCountFailsLoudly pins the third way these
