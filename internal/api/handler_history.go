@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/runtime"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
@@ -991,11 +990,11 @@ func appendMissing(dst []string, vals ...string) []string {
 // another user's multi-account in-flight row (including CreatedByUserEmail PII
 // and dollar amounts) is not visible to unrelated scoped users.
 func (h *Handler) filterPurchaseHistoryByAllowedAccounts(ctx context.Context, session *Session, purchases []config.PurchaseHistoryRecord) ([]config.PurchaseHistoryRecord, error) {
-	allowed, err := h.getAllowedAccounts(ctx, session)
+	allowed, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
-	if auth.IsUnrestrictedAccess(allowed) {
+	if allowed.AllowsAll() {
 		return purchases, nil
 	}
 	nameByID := h.resolveAccountNamesByID(ctx)
@@ -1013,7 +1012,7 @@ func (h *Handler) filterPurchaseHistoryByAllowedAccounts(ctx context.Context, se
 			}
 			continue
 		}
-		if auth.MatchesAccount(allowed, p.AccountID, nameByID[p.AccountID]) {
+		if allowed.Allows(p.AccountID, nameByID[p.AccountID]) {
 			filtered = append(filtered, p)
 		}
 	}

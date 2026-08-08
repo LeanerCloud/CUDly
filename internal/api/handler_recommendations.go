@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/aws/aws-lambda-go/events"
@@ -122,11 +121,11 @@ func (h *Handler) getRecommendations(ctx context.Context, req *events.LambdaFunc
 // those belonging to accounts the user is allowed to access. Returns the
 // unmodified slice when the user has unrestricted access (empty allowed list).
 func (h *Handler) filterRecommendationsByAllowedAccounts(ctx context.Context, session *Session, recs []config.RecommendationRecord) ([]config.RecommendationRecord, error) {
-	allowedAccounts, err := h.getAllowedAccounts(ctx, session)
+	allowedAccounts, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
-	if auth.IsUnrestrictedAccess(allowedAccounts) {
+	if allowedAccounts.AllowsAll() {
 		return recs, nil
 	}
 
@@ -150,7 +149,7 @@ func (h *Handler) filterRecommendationsByAllowedAccounts(ctx context.Context, se
 			continue
 		}
 		id := *rec.CloudAccountID
-		if auth.MatchesAccount(allowedAccounts, id, nameByID[id]) {
+		if allowedAccounts.Allows(id, nameByID[id]) {
 			filtered = append(filtered, rec)
 		}
 	}

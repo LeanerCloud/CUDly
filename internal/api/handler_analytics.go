@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/analytics"
-	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/aws/aws-lambda-go/events"
 )
 
@@ -232,18 +231,18 @@ func (h *Handler) getHistoryBreakdown(ctx context.Context, req *events.LambdaFun
 // without account_id or for an account outside their allowed_accounts list.
 // Admin/unrestricted sessions pass through (account_id may be empty).
 func (h *Handler) validateAnalyticsAccountScope(ctx context.Context, session *Session, accountID string) error {
-	allowed, err := h.getAllowedAccounts(ctx, session)
+	allowed, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
-	if auth.IsUnrestrictedAccess(allowed) {
+	if allowed.AllowsAll() {
 		return nil
 	}
 	if accountID == "" {
 		return NewClientError(400, "account_id is required for scoped users")
 	}
 	nameByID := h.resolveAccountNamesByID(ctx)
-	if !auth.MatchesAccount(allowed, accountID, nameByID[accountID]) {
+	if !allowed.Allows(accountID, nameByID[accountID]) {
 		return errNotFound
 	}
 	return nil

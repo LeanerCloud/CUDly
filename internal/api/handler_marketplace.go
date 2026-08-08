@@ -427,18 +427,16 @@ func (h *Handler) authorizeAllowedAccount(ctx context.Context, session *Session,
 			return nil
 		}
 	}
-	allowed, err := h.getAllowedAccounts(ctx, session)
+	scope, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return fmt.Errorf("failed to check allowed accounts: %w", err)
 	}
-	// Empty list means "no restriction" (the user has access to all accounts).
-	if len(allowed) == 0 {
+	// Was a hand-rolled `len(allowed) == 0` meaning "no restriction", which
+	// read an unestablishable scope as unrestricted independently of any
+	// producer (issue #1748). AccountScope makes unrestricted an explicit
+	// flag, so the zero value denies.
+	if scope.Allows(cloudAccountID, "") {
 		return nil
-	}
-	for _, id := range allowed {
-		if id == "*" || id == cloudAccountID {
-			return nil
-		}
 	}
 	return NewClientError(403, "permission denied: purchase is in a cloud account not covered by your session's allowed accounts")
 }
