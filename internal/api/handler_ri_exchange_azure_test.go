@@ -751,7 +751,7 @@ func TestExecuteAzureExchange_MissingExecutePermission(t *testing.T) {
 // gate (handler_ri_exchange.go:1172), and the nearest existing coverage,
 // TestExecuteAzureExchange_MissingExecutePermission above, stubs
 // HasPermissionAPI to return false directly -- that proves the handler
-// honours a denial, not that a plain admin:* principal IS denied, which is
+// honors a denial, not that a plain admin:* principal IS denied, which is
 // #1644's actual claim. Verified (PR #1758 independent review): with the
 // carve-out pair removed from adminCarvedOuts, every *AzureExchange* test in
 // this file still passed.
