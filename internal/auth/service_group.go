@@ -150,6 +150,37 @@ func (s *Service) collectGroupsAndAccounts(ctx context.Context, authCtx *AuthCon
 	return nil
 }
 
+// ResolveAllowedAccounts returns the cloud accounts a user may access, and
+// FAILS CLOSED when that scope cannot be established (issue #1748).
+//
+// The subtlety this exists for: an empty result means UNRESTRICTED
+// (IsUnrestrictedAccess), a deliberate backward-compat default so a group with
+// no allowed_accounts configured grants full access. But
+// collectGroupsAndAccounts also skips a group it cannot load -- pgx.ErrNoRows,
+// or a store returning (nil, nil) -- so a user whose groups all fail to
+// resolve produced the SAME empty value. Absence and unrestricted shared a
+// representation, and every failure silently granted access to every account.
+//
+// Requiring at least one group to have actually resolved separates the two
+// cleanly. Verified across all six cases: a group with allowed_accounts=["*"],
+// a group with none configured (the legacy default), and a scoped group all
+// resolve at least one group and keep working; a missing group, a (nil, nil)
+// group, and a user with no groups at all resolve none and are refused.
+//
+// A user with no groups holds no permissions either, so refusing them here
+// costs nothing and closes the same hole from the other side.
+func (s *Service) ResolveAllowedAccounts(ctx context.Context, userID string) ([]string, error) {
+	authCtx, err := s.BuildAuthContext(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if len(authCtx.Groups) == 0 {
+		return nil, fmt.Errorf(
+			"account scope could not be established for user %s: no group resolved", userID)
+	}
+	return authCtx.AllowedAccounts, nil
+}
+
 // GetAuthContext is an alias for BuildAuthContext for backward compatibility.
 func (s *Service) GetAuthContext(ctx context.Context, userID string) (*AuthContext, error) {
 	return s.BuildAuthContext(ctx, userID)

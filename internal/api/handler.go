@@ -529,7 +529,11 @@ func (h *Handler) getAllowedAccounts(ctx context.Context, session *Session) ([]s
 		return nil, nil // stateless admin API key = all access
 	}
 	if h.auth == nil {
-		return nil, nil
+		// Fail closed. Returning an empty list here meant "all accounts", so a
+		// handler running without an auth service granted every caller access
+		// to every cloud account (issue #1748). Auth components must fail
+		// closed when nil, never fall through.
+		return nil, fmt.Errorf("authentication service not configured: cannot establish account scope")
 	}
 	return h.auth.GetAllowedAccountsAPI(ctx, session.UserID)
 }

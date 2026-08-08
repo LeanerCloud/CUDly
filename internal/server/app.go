@@ -1157,11 +1157,10 @@ func (a *authServiceAdapter) GetUserPermissionsAPI(ctx context.Context, userID s
 
 // Account access.
 func (a *authServiceAdapter) GetAllowedAccountsAPI(ctx context.Context, userID string) ([]string, error) {
-	authCtx, err := a.service.BuildAuthContext(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	return authCtx.AllowedAccounts, nil
+	// ResolveAllowedAccounts rather than BuildAuthContext: it fails closed when
+	// the scope cannot be established, instead of returning the empty list that
+	// IsUnrestrictedAccess reads as "all accounts" (issue #1748).
+	return a.service.ResolveAllowedAccounts(ctx, userID)
 }
 
 // CSRF validation.
