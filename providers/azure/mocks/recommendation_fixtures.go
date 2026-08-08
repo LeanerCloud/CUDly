@@ -25,10 +25,13 @@ func BuildLegacyReservationRecommendation(opts ...LegacyOpt) *armconsumption.Leg
 	term := "P1Y"
 	qty := float64(1)
 
+	normQty := float32(qty)
+
 	props := &armconsumption.LegacyReservationRecommendationProperties{
-		Scope:               &scope,
-		Term:                &term,
-		RecommendedQuantity: &qty,
+		Scope:                         &scope,
+		Term:                          &term,
+		RecommendedQuantity:           &qty,
+		RecommendedQuantityNormalized: &normQty,
 	}
 	rec := &armconsumption.LegacyReservationRecommendation{
 		Location:   &location,
@@ -67,15 +70,45 @@ func WithTerm(term string) LegacyOpt {
 	}
 }
 
-// WithQuantity overrides RecommendedQuantity. Use float values (e.g. 0.5,
-// 2.7) to cover the float→int truncation contract.
+// WithQuantity overrides BOTH recommended quantities, modeling the common
+// case where the recommended SKU is already the family's base size so the
+// normalized and un-normalized counts agree. Use float values (e.g. 0.5, 2.7)
+// to cover the float→int truncation contract.
+//
+// Setting both matters because the converter pairs each resource-type source
+// with the quantity expressed in that source's units (issue #1540): a fixture
+// that set only RecommendedQuantity while naming a NormalizedSize would
+// describe a payload with no valid pairing. Use WithNormalizedQuantity to make
+// the two differ deliberately.
 func WithQuantity(qty float64) LegacyOpt {
 	return func(_ *armconsumption.LegacyReservationRecommendation, props *armconsumption.LegacyReservationRecommendationProperties) {
+		normQty := float32(qty)
 		props.RecommendedQuantity = &qty
+		props.RecommendedQuantityNormalized = &normQty
 	}
 }
 
-// WithNormalizedSize populates the preferred ResourceType source.
+// WithNormalizedQuantity overrides RecommendedQuantityNormalized alone, so a
+// test can express the real shape the normalization ratio produces: e.g.
+// 4 x Standard_D8s_v3 recommended, 16 x Standard_D2s_v3 normalized. Pass it
+// after WithQuantity, which sets both.
+func WithNormalizedQuantity(qty float32) LegacyOpt {
+	return func(_ *armconsumption.LegacyReservationRecommendation, props *armconsumption.LegacyReservationRecommendationProperties) {
+		props.RecommendedQuantityNormalized = &qty
+	}
+}
+
+// WithoutNormalizedQuantity clears RecommendedQuantityNormalized, modeling a
+// payload that names a NormalizedSize but gives no count in its units.
+func WithoutNormalizedQuantity() LegacyOpt {
+	return func(_ *armconsumption.LegacyReservationRecommendation, props *armconsumption.LegacyReservationRecommendationProperties) {
+		props.RecommendedQuantityNormalized = nil
+	}
+}
+
+// WithNormalizedSize populates NormalizedSize, the ResourceType source used
+// when no SKU property names the actual SKU. It is counted by
+// RecommendedQuantityNormalized, not RecommendedQuantity (issue #1540).
 func WithNormalizedSize(size string) LegacyOpt {
 	return func(_ *armconsumption.LegacyReservationRecommendation, props *armconsumption.LegacyReservationRecommendationProperties) {
 		props.NormalizedSize = &size
@@ -83,8 +116,8 @@ func WithNormalizedSize(size string) LegacyOpt {
 }
 
 // WithSKU is a convenience that seeds SKUProperties with a single
-// `{Name: "SKUName", Value: sku}` entry — the fallback path the converter
-// uses when NormalizedSize is unset.
+// `{Name: "SKUName", Value: sku}` entry — the actual SKU, which the converter
+// prefers over NormalizedSize because RecommendedQuantity counts it.
 func WithSKU(sku string) LegacyOpt {
 	return func(_ *armconsumption.LegacyReservationRecommendation, props *armconsumption.LegacyReservationRecommendationProperties) {
 		name := "SKUName"
@@ -144,10 +177,13 @@ func BuildModernReservationRecommendation(opts ...ModernOpt) *armconsumption.Mod
 	term := "P1Y"
 	qty := float64(1)
 
+	normQty := float32(qty)
+
 	props := &armconsumption.ModernReservationRecommendationProperties{
-		Scope:               &scope,
-		Term:                &term,
-		RecommendedQuantity: &qty,
+		Scope:                         &scope,
+		Term:                          &term,
+		RecommendedQuantity:           &qty,
+		RecommendedQuantityNormalized: &normQty,
 	}
 	rec := &armconsumption.ModernReservationRecommendation{
 		Location:   &location,
@@ -195,10 +231,23 @@ func WithModernTerm(term string) ModernOpt {
 	}
 }
 
-// WithModernQuantity overrides RecommendedQuantity.
+// WithModernQuantity overrides BOTH recommended quantities, for the same
+// reason as the Legacy WithQuantity: the converter pairs each resource-type
+// source with the quantity in that source's units (issue #1540).
 func WithModernQuantity(qty float64) ModernOpt {
 	return func(_ *armconsumption.ModernReservationRecommendation, props *armconsumption.ModernReservationRecommendationProperties) {
+		normQty := float32(qty)
 		props.RecommendedQuantity = &qty
+		props.RecommendedQuantityNormalized = &normQty
+	}
+}
+
+// WithModernNormalizedQuantity overrides RecommendedQuantityNormalized alone,
+// so a test can make the normalized and un-normalized counts differ. Pass it
+// after WithModernQuantity, which sets both.
+func WithModernNormalizedQuantity(qty float32) ModernOpt {
+	return func(_ *armconsumption.ModernReservationRecommendation, props *armconsumption.ModernReservationRecommendationProperties) {
+		props.RecommendedQuantityNormalized = &qty
 	}
 }
 
@@ -211,7 +260,8 @@ func WithModernSKUName(sku string) ModernOpt {
 }
 
 // WithModernNormalizedSize populates NormalizedSize (second-preference
-// source for ResourceType on Modern).
+// source for ResourceType on Modern). Counted by
+// RecommendedQuantityNormalized, not RecommendedQuantity (issue #1540).
 func WithModernNormalizedSize(size string) ModernOpt {
 	return func(_ *armconsumption.ModernReservationRecommendation, props *armconsumption.ModernReservationRecommendationProperties) {
 		props.NormalizedSize = &size
