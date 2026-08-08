@@ -105,6 +105,15 @@ type AuthContext struct { //nolint:revive // exported: doc comment style intenti
 	Groups          []*Group
 	AllowedAccounts []string     // Computed from all groups (union)
 	Permissions     []Permission // Computed from group memberships
+
+	// SkippedGroups counts memberships that could not be resolved (deleted or
+	// unreadable), counted where the skip happens.
+	//
+	// len(User.GroupIDs) - len(Groups) would give the same answer, since Groups
+	// is appended once per ID with no dedup and duplicate IDs therefore produce
+	// duplicate entries. Counting explicitly states the intent rather than
+	// relying on two lengths staying aligned (issue #1748).
+	SkippedGroups int
 }
 
 // adminCarvedOuts is the set of (action, resource) pairs that the admin:*
