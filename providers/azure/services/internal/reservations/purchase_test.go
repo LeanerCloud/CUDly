@@ -946,3 +946,62 @@ func TestDoPurchase_UnreadableBodyOnSuccessStillSucceeds(t *testing.T) {
 	require.NoError(t, doPurchase(ctx, m, "https://example.invalid/purchase", []byte(testBody), "tok"))
 	m.AssertExpectations(t)
 }
+
+// TestDoPurchase_TruncatedNon400IsNotRetryable pins the deliberate narrowing of
+// errRetryabilityUnknown to 400.
+//
+// Without this the sentinel fires on ANY non-2xx whose body fails to read --
+// 409, 500, 502, 504 alike -- which is far broader than IsSessionTimeout, whose
+// existing scope is a 400 plus an Azure-authored message. Breadth matters here
+// because DoIdempotentPurchaseTwoStep performs its idempotency lookup exactly
+// once, BEFORE DoPurchaseTwoStep is entered: there is no recheck between
+// attempts, and each retry mints a fresh reservationOrderId. So an in-loop
+// retry after a status that might follow a committed purchase is a double-buy
+// risk that the guard does not cover (tracked separately as issue #1774).
+//
+// Issue #1766's defect is a 400 "Session timed out" with a truncated body, so
+// narrowing costs no coverage and removes the unverified commit-ambiguous
+// statuses from the retry surface entirely.
+func TestDoPurchase_TruncatedNon400IsNotRetryable(t *testing.T) {
+	ctx := context.Background()
+	for _, status := range []int{
+		http.StatusConflict,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusGatewayTimeout,
+	} {
+		m := &mockHTTPClient{}
+		m.On("Do", mock.Anything).Return(&http.Response{
+			StatusCode: status,
+			Body:       &truncatingBody{data: []byte(`{"error":"truncated"}`), n: 6},
+			Header:     make(http.Header),
+		}, nil).Once()
+
+		err := doPurchase(ctx, m, "https://example.invalid/purchase", []byte(testBody), "tok")
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, errRetryabilityUnknown,
+			"status %d with a truncated body must NOT be marked retryable: a retry there could "+
+				"re-purchase after a commit the idempotency guard does not re-check for (issue #1774)", status)
+		m.AssertExpectations(t)
+	}
+}
+
+// TestDoPurchaseTwoStep_TruncatedNon400DoesNotRetry is the behavioral half of
+// the narrowing: the sentinel scoping must actually keep the retry loop out of
+// the commit-ambiguous statuses, not merely leave the error untagged.
+func TestDoPurchaseTwoStep_TruncatedNon400DoesNotRetry(t *testing.T) {
+	c := &countingPurchaseClient{
+		purchaseResp: func() *http.Response {
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Body:       &truncatingBody{data: []byte(`{"error":"truncated"}`), n: 6},
+				Header:     make(http.Header),
+			}
+		},
+	}
+	_, err := DoPurchaseTwoStep(context.Background(), c, calcURL, []byte(testBody), "tok")
+	require.Error(t, err)
+	assert.Equal(t, 1, c.purchases,
+		"a truncated 500 must be attempted exactly once; retrying it risks re-purchasing after "+
+			"a commit that the once-only idempotency lookup cannot see (issue #1774)")
+}

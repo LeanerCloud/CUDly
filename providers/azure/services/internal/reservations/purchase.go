@@ -210,8 +210,8 @@ type calculatePriceResponse struct {
 // phrasing changes in future API versions.
 const sessionTimeoutFragment = "Session timed out"
 
-// errRetryabilityUnknown marks a purchase failure whose retryability could not
-// be determined because the response body did not read completely.
+// errRetryabilityUnknown marks a 400 purchase failure whose retryability could
+// not be determined because the response body did not read completely.
 //
 // IsSessionTimeout classifies by searching the error text for a fragment Azure
 // puts in the body, so a truncated read cannot be distinguished from a genuinely
@@ -219,10 +219,21 @@ const sessionTimeoutFragment = "Session timed out"
 // lets DoPurchaseTwoStep retry instead of silently abandoning a purchase that
 // the retry loop exists to recover.
 //
-// Retrying is safe here: a non-2xx means the order did not commit, the loop is
-// bounded by purchaseMaxAttempts, and re-drives across invocations are guarded
-// by DoIdempotentPurchaseTwoStep, which refuses to purchase when its idempotency
-// lookup fails.
+// Deliberately scoped to 400, matching IsSessionTimeout's own status scope and
+// the only scenario issue #1766 reports. The wider non-2xx surface is excluded
+// on purpose: a truncated response is mechanistically different from a cleanly
+// read one, because the server may have finished processing and begun writing
+// when the connection died. Whether a 409 or 5xx can follow a purchase that
+// actually committed is unverified for this API, and a retry on an unverified
+// commit-ambiguous status is a double-buy risk that buys nothing -- every such
+// case keeps its pre-existing behavior, which nobody has reported as broken.
+//
+// Note what does NOT bound this: DoIdempotentPurchaseTwoStep performs its
+// idempotency lookup exactly once, before DoPurchaseTwoStep is entered, and
+// there is no recheck between attempts. Each retry mints a fresh
+// reservationOrderId via doCalculatePrice, so the guard covers a re-drive
+// ACROSS invocations, not the loop within one. The bound here is
+// purchaseMaxAttempts.
 var errRetryabilityUnknown = errors.New("purchase retryability unknown: response body did not read completely")
 
 // IsSessionTimeout reports whether err looks like the "Session timed out"
@@ -499,9 +510,12 @@ func doPurchase(ctx context.Context, httpClient HTTPClient, purchaseURL string, 
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusAccepted {
 		return nil
 	}
-	if readErr != nil {
-		// The body did not read completely, so its text cannot be used to
-		// classify retryability. Surface the read failure AND tag the error
+	// Scoped to 400: see errRetryabilityUnknown. Other statuses keep their
+	// pre-existing behavior rather than entering the retry loop on a body that
+	// could not be read.
+	if readErr != nil && resp.StatusCode == http.StatusBadRequest {
+		// A 400 whose body did not read completely: its text cannot be used to
+		// classify retryability, so surface the read failure AND tag the error
 		// with errRetryabilityUnknown so the retry loop treats it as retryable
 		// rather than abandoning the purchase on its first attempt.
 		return fmt.Errorf("reservation purchase failed with status %d (partial body: %q): %w: %w",
