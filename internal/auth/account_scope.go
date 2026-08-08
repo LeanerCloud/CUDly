@@ -53,11 +53,30 @@ func ScopeForAccounts(accounts []string) AccountScope {
 // ScopeFromLegacyList converts a resolved []string using the historical
 // convention where empty or a "*" entry means unrestricted.
 //
-// It is safe ONLY for a list that came from a SUCCESSFUL resolution, because
-// it cannot tell "no restriction configured" from "resolution failed" -- they
-// are the same value, which is issue #1748. Callers must have already failed
-// closed on the failure case (see Service.ResolveAllowedAccounts) before
-// calling this.
+// ScopeFromLegacyList(nil) and ScopeFromLegacyList([]) both return
+// UnrestrictedScope(). That is deliberate and it is also the dangerous part,
+// so be precise about what makes it safe.
+//
+// This function CANNOT distinguish "no restriction configured" from "we could
+// not work out this principal's scope" -- they are the same empty value, which
+// is issue #1748 in its entirety. It therefore carries no safety of its own.
+// It is safe only because Service.ResolveAllowedAccounts has ALREADY refused
+// every input that would make empty mean the wrong thing:
+//
+//   - a store error, or a missing user row -> error, never reaches here
+//   - every group unresolvable -> error
+//   - SOME group unresolvable AND the surviving union empty -> error
+//
+// That third condition is the one to keep in view. An earlier version of the
+// resolver refused only total failure, and under it this function WOULD have
+// converted a widened empty union into UnrestrictedScope() -- carrying the bug
+// forward inside the new type, with the compiler blessing it. The guarantee
+// this depends on is not "the resolver returns successfully"; it is "the
+// resolver refuses any empty union that a skipped group could have caused".
+//
+// Do not call this on a []string from any other source. If a new producer
+// appears, give it the same guarantee first or build the AccountScope
+// directly with ScopeForAccounts / UnrestrictedScope.
 func ScopeFromLegacyList(accounts []string) AccountScope {
 	if IsUnrestrictedAccess(accounts) {
 		return UnrestrictedScope()

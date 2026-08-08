@@ -130,3 +130,23 @@ func TestAccountScope_ParityWithLegacyHelpers(t *testing.T) {
 		}
 	}
 }
+
+// ScopeFromLegacyList's safety is entirely borrowed from the resolver, so pin
+// the boundary: it maps BOTH spellings of empty to unrestricted, which is
+// correct only for inputs the resolver has already vetted.
+//
+// This is the test that would have caught the type change carrying #1748
+// forward: if the resolver stopped refusing a widened empty union, this
+// conversion would silently produce UnrestrictedScope() from it.
+func TestAccountScope_LegacyConversionIsBorrowedSafety(t *testing.T) {
+	assert.True(t, ScopeFromLegacyList(nil).AllowsAll(),
+		"empty means unrestricted under the legacy convention -- safe ONLY post-resolver")
+	assert.True(t, ScopeFromLegacyList([]string{}).AllowsAll())
+
+	// The corollary: a caller that has NOT been through the resolver must not
+	// use this. ScopeForAccounts is the safe constructor for raw input, and it
+	// treats empty as "nothing" rather than "everything".
+	assert.False(t, ScopeForAccounts([]string{}).AllowsAll(),
+		"the raw-input constructor must NOT inherit the legacy empty-means-all rule")
+	assert.False(t, ScopeForAccounts(nil).Allows("acct-A", ""))
+}
