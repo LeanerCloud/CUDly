@@ -141,15 +141,16 @@ func extractLegacy(rec *armconsumption.LegacyReservationRecommendation) *Extract
 		return nil
 	}
 
+	resourceType, quantity := resolveLegacySKUAndQuantity(props)
 	out := &ExtractedFields{
 		Region:       strDeref(rec.Location),
-		ResourceType: resolveLegacyResourceType(props),
+		ResourceType: resourceType,
 		Term:         normaliseTerm(props.Term),
 		Scope:        strDeref(props.Scope),
 	}
 
-	if props.RecommendedQuantity != nil {
-		out.Count = int(*props.RecommendedQuantity)
+	if quantity != nil {
+		out.Count = int(*quantity)
 	}
 	if props.CostWithNoReservedInstances != nil {
 		out.OnDemandCost = *props.CostWithNoReservedInstances
@@ -194,15 +195,16 @@ func extractModern(rec *armconsumption.ModernReservationRecommendation) *Extract
 		region = strDeref(props.Location)
 	}
 
+	resourceType, quantity := resolveModernSKUAndQuantity(props)
 	out := &ExtractedFields{
 		Region:       region,
-		ResourceType: resolveModernResourceType(props),
+		ResourceType: resourceType,
 		Term:         normaliseTerm(props.Term),
 		Scope:        strDeref(props.Scope),
 	}
 
-	if props.RecommendedQuantity != nil {
-		out.Count = int(*props.RecommendedQuantity)
+	if quantity != nil {
+		out.Count = int(*quantity)
 	}
 	out.OnDemandCost = amountValue(props.CostWithNoReservedInstances)
 	out.CommitmentCost = amountValue(props.TotalCostWithReservedInstances)
@@ -222,29 +224,86 @@ func extractModern(rec *armconsumption.ModernReservationRecommendation) *Extract
 	return out
 }
 
-// resolveLegacyResourceType follows the Legacy field ladder:
-// NormalizedSize → SKUProperties[Name==SKUName|skuName].Value → first
-// non-empty SKUProperty.Value.
-func resolveLegacyResourceType(props *armconsumption.LegacyReservationRecommendationProperties) string {
-	if s := strDeref(props.NormalizedSize); s != "" {
-		return s
+// resolveLegacySKUAndQuantity returns the resource type together with the
+// quantity that counts THAT resource type, so the two are always in the same
+// units.
+//
+// Azure carries two quantities on a Legacy recommendation and they are not
+// interchangeable: RecommendedQuantity counts the actual SKU
+// (SKUProperties[SKUName]), while RecommendedQuantityNormalized counts
+// NormalizedSize. Resolving the two independently let the SKU come from one
+// and the count from the other, understating the purchase by the family's
+// instance-size-flexibility ratio -- 4 x Standard_D8s_v3 normalized to
+// 16 x Standard_D2s_v3 was bought as 4 x Standard_D2s_v3, a quarter of the
+// recommended capacity, with the full recommendation's savings still shown
+// against it (issue #1540). They are resolved together here so no branch can
+// produce a mixed pair.
+//
+// The actual SKU is preferred, matching resolveModernSKUAndQuantity, so EA and
+// MCA subscriptions with identical usage yield the same ResourceType. Its
+// partner RecommendedQuantity is also the *float64 field, avoiding the
+// *float32 rounding question on a purchase path.
+//
+// When only NormalizedSize is available the normalized quantity is its only
+// valid partner. If that partner is absent the count is left unset rather than
+// borrowed from RecommendedQuantity: an unpaired count is precisely the defect
+// above, and a zero count is refused downstream by the `Count <= 0` guard every
+// service applies before purchasing.
+func resolveLegacySKUAndQuantity(props *armconsumption.LegacyReservationRecommendationProperties) (resourceType string, quantity *float64) {
+	if s := resourceTypeFromSKUProperties(props.SKUProperties); s != "" {
+		return s, props.RecommendedQuantity
 	}
-	return resourceTypeFromSKUProperties(props.SKUProperties)
+	if normalized := strDeref(props.NormalizedSize); normalized != "" {
+		if props.RecommendedQuantityNormalized == nil {
+			logging.Warnf(
+				"azure recommendations: %q has a normalized size but no RecommendedQuantityNormalized "+
+					"and no SKU properties to pair RecommendedQuantity with; leaving the count unset "+
+					"rather than pairing mismatched units",
+				normalized,
+			)
+			return normalized, nil
+		}
+		return normalized, float64Ptr(float64(*props.RecommendedQuantityNormalized))
+	}
+	// No resource type from either source: there is no normalized size for the
+	// count to disagree with, so this degenerate payload keeps the behavior it
+	// had before the pairing fix.
+	return "", props.RecommendedQuantity
 }
 
-// resolveModernResourceType follows the Modern field ladder. Modern adds
-// a top-level SKUName pointer (the cleanest source), so the preference is
-// SKUName → NormalizedSize → SKUProperties fallback. The SKUProperties
-// fallback matches Legacy's contract so a switch between billing-account
-// types doesn't change ResourceType semantics.
-func resolveModernResourceType(props *armconsumption.ModernReservationRecommendationProperties) string {
+// resolveModernSKUAndQuantity is the Modern counterpart of
+// resolveLegacySKUAndQuantity, pairing each rung of the ladder with the
+// quantity expressed in that rung's units.
+//
+// The ladder is unchanged: Modern adds a top-level SKUName pointer (the
+// cleanest source), so the preference stays SKUName → NormalizedSize →
+// SKUProperties fallback, and the SKUProperties rung still matches Legacy's
+// contract so a switch between billing-account types does not change
+// ResourceType semantics.
+//
+// Both SKU rungs count the actual SKU and so pair with RecommendedQuantity;
+// only the NormalizedSize rung is counted by RecommendedQuantityNormalized.
+// Modern was not the reported instance of #1540 -- real MCA payloads carry
+// SKUName and take the first rung -- but its NormalizedSize rung mixed the
+// same two fields, so it is paired here rather than left as the one branch
+// that can still emit mismatched units.
+func resolveModernSKUAndQuantity(props *armconsumption.ModernReservationRecommendationProperties) (resourceType string, quantity *float64) {
 	if s := strDeref(props.SKUName); s != "" {
-		return s
+		return s, props.RecommendedQuantity
 	}
 	if s := strDeref(props.NormalizedSize); s != "" {
-		return s
+		if props.RecommendedQuantityNormalized == nil {
+			logging.Warnf(
+				"azure recommendations: modern recommendation %q has a normalized size but no "+
+					"RecommendedQuantityNormalized; leaving the count unset rather than pairing "+
+					"mismatched units",
+				s,
+			)
+			return s, nil
+		}
+		return s, float64Ptr(float64(*props.RecommendedQuantityNormalized))
 	}
-	return resourceTypeFromSKUProperties(props.SKUProperties)
+	return resourceTypeFromSKUProperties(props.SKUProperties), props.RecommendedQuantity
 }
 
 // resourceTypeFromSKUProperties scans a SKUProperties key/value list for

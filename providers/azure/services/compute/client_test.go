@@ -16,6 +16,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v5"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/consumption/armconsumption"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -1496,4 +1497,89 @@ func TestComputeClient_PurchaseCommitment_ZeroCountRejected(t *testing.T) {
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "quantity must be greater than zero")
 	mockHTTP.AssertNotCalled(t, "Do", mock.Anything)
+}
+
+// TestPurchaseBody_SKUAndQuantityStayInMatchingUnits is the downstream half of
+// the issue #1540 regression. The pairing is fixed in the shared converter, but
+// the defect only mattered because it reached the wire: the same fields become
+// `sku.name` and `quantity` on the calculatePrice and purchase requests. A test
+// that only exercised the converter would look right while the bytes Azure
+// receives stayed wrong, which is exactly how the defect survived.
+//
+// Both directions are asserted per case: the SKU that must be sent AND the
+// quantity that must accompany it. Asserting only that the old mismatched pair
+// is gone would pass against a converter that produced nothing.
+func TestPurchaseBody_SKUAndQuantityStayInMatchingUnits(t *testing.T) {
+	// Azure recommends 4 x Standard_D8s_v3, normalized to 16 x Standard_D2s_v3.
+	const (
+		actualSKU  = "Standard_D8s_v3"
+		normalized = "Standard_D2s_v3"
+	)
+
+	tests := []struct {
+		name    string
+		opts    []mocks.LegacyOpt
+		wantSKU string
+		wantQty float64
+	}{
+		{
+			name: "actual SKU present: buys the recommended SKU at the recommended count",
+			opts: []mocks.LegacyOpt{
+				mocks.WithSKU(actualSKU),
+				mocks.WithNormalizedSize(normalized),
+				mocks.WithQuantity(4),
+				mocks.WithNormalizedQuantity(16),
+			},
+			wantSKU: actualSKU,
+			wantQty: 4,
+		},
+		{
+			name: "only the normalized size: buys the normalized SKU at the normalized count",
+			opts: []mocks.LegacyOpt{
+				mocks.WithNormalizedSize(normalized),
+				mocks.WithQuantity(4),
+				mocks.WithNormalizedQuantity(16),
+			},
+			wantSKU: normalized,
+			wantQty: 16,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			apiRec := mocks.BuildLegacyReservationRecommendation(append(tt.opts,
+				mocks.WithRegion("eastus"),
+				mocks.WithCosts(1000, 600, 400),
+			)...)
+
+			c := &ComputeClient{subscriptionID: "sub-1", region: "eastus"}
+			rec := c.convertAzureVMRecommendation(context.Background(), apiRec)
+			require.NotNil(t, rec)
+
+			body, err := c.buildReservationBody(*rec, armreservations.ReservationBillingPlanUpfront, "test", "tok")
+			require.NoError(t, err)
+
+			var payload struct {
+				SKU struct {
+					Name string `json:"name"`
+				} `json:"sku"`
+				Properties struct {
+					Quantity float64 `json:"quantity"`
+				} `json:"properties"`
+			}
+			require.NoError(t, json.Unmarshal(body, &payload))
+
+			assert.Equal(t, tt.wantSKU, payload.SKU.Name,
+				"sku.name is what Azure reserves")
+			assert.Equal(t, tt.wantQty, payload.Properties.Quantity,
+				"quantity must be expressed in units of sku.name, never the other size's count (issue #1540)")
+
+			// The specific mismatch #1540 shipped: the normalized (smaller) SKU
+			// carrying the un-normalized count, i.e. a quarter of the capacity.
+			if payload.SKU.Name == normalized {
+				assert.NotEqual(t, float64(4), payload.Properties.Quantity,
+					"normalized SKU %q must never be bought at the un-normalized count", normalized)
+			}
+		})
+	}
 }

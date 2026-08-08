@@ -96,20 +96,21 @@ func TestExtract_QuantityRoundsDown(t *testing.T) {
 	}
 }
 
-func TestExtract_ResourceTypePrefersNormalizedSize(t *testing.T) {
-	// When both NormalizedSize and SKUProperties are populated, NormalizedSize wins.
+func TestExtract_ResourceTypePrefersActualSKUOverNormalizedSize(t *testing.T) {
+	// When both are populated the actual SKU wins, because RecommendedQuantity
+	// counts THAT SKU. Preferring NormalizedSize here was issue #1540: the
+	// normalized size was paired with the un-normalized count.
 	rec := mocks.BuildLegacyReservationRecommendation(
 		mocks.WithNormalizedSize("Standard_D2s_v3"),
-		mocks.WithSKU("SHOULD_NOT_WIN"),
+		mocks.WithSKU("Standard_D8s_v3"),
 	)
 	f := Extract(rec)
 	require.NotNil(t, f)
-	assert.Equal(t, "Standard_D2s_v3", f.ResourceType)
+	assert.Equal(t, "Standard_D8s_v3", f.ResourceType)
 }
 
-func TestExtract_ResourceTypeFallsBackToSKUName(t *testing.T) {
+func TestExtract_ResourceTypeUsesSKUName(t *testing.T) {
 	rec := mocks.BuildLegacyReservationRecommendation(
-		// No NormalizedSize → should fall back to SKUProperties entry with Name="SKUName".
 		mocks.WithSKU("Standard_E4s_v5"),
 	)
 	f := Extract(rec)
@@ -118,8 +119,9 @@ func TestExtract_ResourceTypeFallsBackToSKUName(t *testing.T) {
 }
 
 func TestExtract_ResourceTypeFallsBackToFirstPropertyValue(t *testing.T) {
-	// No NormalizedSize, no SKUName-keyed property — fall back to the
-	// first non-empty value in the list (last-ditch fallback).
+	// No SKUName-keyed property — fall back to the first non-empty value in
+	// the list (last-ditch fallback). Still an actual-SKU rung, so it keeps
+	// RecommendedQuantity as its partner.
 	rec := mocks.BuildLegacyReservationRecommendation(
 		mocks.WithSKUProperty("Cores", "4"),
 		mocks.WithSKUProperty("MemoryGB", "16"),
@@ -127,6 +129,113 @@ func TestExtract_ResourceTypeFallsBackToFirstPropertyValue(t *testing.T) {
 	f := Extract(rec)
 	require.NotNil(t, f)
 	assert.Equal(t, "4", f.ResourceType)
+}
+
+func TestExtract_ResourceTypeFallsBackToNormalizedSize(t *testing.T) {
+	// No SKU properties at all — NormalizedSize is the only source left, and
+	// it is counted by RecommendedQuantityNormalized.
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithNormalizedSize("Standard_D2s_v3"),
+		mocks.WithQuantity(4),
+		mocks.WithNormalizedQuantity(16),
+	)
+	f := Extract(rec)
+	require.NotNil(t, f)
+	assert.Equal(t, "Standard_D2s_v3", f.ResourceType)
+	assert.Equal(t, 16, f.Count,
+		"the normalized size must be counted by RecommendedQuantityNormalized, not RecommendedQuantity")
+}
+
+// TestExtract_LegacySKUAndQuantityStayInMatchingUnits is the regression test
+// for issue #1540. Azure carries two quantities that are NOT interchangeable:
+// RecommendedQuantity counts SKUProperties[SKUName], RecommendedQuantityNormalized
+// counts NormalizedSize. Pairing the normalized SKU with the un-normalized count
+// understated every EA purchase by the family's instance-size-flexibility ratio,
+// while the full recommendation's savings were still reported against it.
+//
+// Both directions are asserted: the mismatched pair must be gone, AND each
+// valid pair must still be produced. Asserting only the first passes against a
+// converter that returns nothing at all.
+func TestExtract_LegacySKUAndQuantityStayInMatchingUnits(t *testing.T) {
+	// Azure recommends 4 x Standard_D8s_v3, normalized to 16 x Standard_D2s_v3.
+	const (
+		actualSKU  = "Standard_D8s_v3"
+		normalized = "Standard_D2s_v3"
+		actualQty  = 4
+		normQty    = 16
+	)
+
+	tests := []struct {
+		name     string
+		opts     []mocks.LegacyOpt
+		wantType string
+		wantQty  int
+	}{
+		{
+			name: "actual SKU present: paired with the un-normalized count",
+			opts: []mocks.LegacyOpt{
+				mocks.WithSKU(actualSKU),
+				mocks.WithNormalizedSize(normalized),
+				mocks.WithQuantity(actualQty),
+				mocks.WithNormalizedQuantity(normQty),
+			},
+			wantType: actualSKU,
+			wantQty:  actualQty,
+		},
+		{
+			name: "only the normalized size: paired with the normalized count",
+			opts: []mocks.LegacyOpt{
+				mocks.WithNormalizedSize(normalized),
+				mocks.WithQuantity(actualQty),
+				mocks.WithNormalizedQuantity(normQty),
+			},
+			wantType: normalized,
+			wantQty:  normQty,
+		},
+		{
+			name: "no normalization: the single quantity pairs with the single SKU",
+			opts: []mocks.LegacyOpt{
+				mocks.WithSKU(actualSKU),
+				mocks.WithQuantity(actualQty),
+			},
+			wantType: actualSKU,
+			wantQty:  actualQty,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := Extract(mocks.BuildLegacyReservationRecommendation(tt.opts...))
+			require.NotNil(t, f)
+			assert.Equal(t, tt.wantType, f.ResourceType)
+			assert.Equal(t, tt.wantQty, f.Count)
+
+			// The invariant the pairing exists to hold: never the normalized
+			// SKU counted by the un-normalized quantity.
+			if f.ResourceType == normalized {
+				assert.NotEqual(t, actualQty, f.Count,
+					"normalized size %q must never carry the un-normalized count %d (issue #1540)",
+					normalized, actualQty)
+			}
+		})
+	}
+}
+
+// TestExtract_LegacyNormalizedSizeWithoutNormalizedQuantityLeavesCountUnset
+// pins the one state with no valid pairing. Borrowing RecommendedQuantity here
+// would reintroduce exactly the mismatch #1540 is about, so the count is left
+// at zero, which every service's `Count <= 0` guard refuses before purchasing.
+func TestExtract_LegacyNormalizedSizeWithoutNormalizedQuantityLeavesCountUnset(t *testing.T) {
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithNormalizedSize("Standard_D2s_v3"),
+		mocks.WithQuantity(4),
+		mocks.WithoutNormalizedQuantity(),
+	)
+	f := Extract(rec)
+	require.NotNil(t, f)
+	assert.Equal(t, "Standard_D2s_v3", f.ResourceType)
+	assert.Equal(t, 0, f.Count,
+		"an unpairable count must be left unset, not borrowed from RecommendedQuantity")
 }
 
 func TestExtract_MissingCostsReadAsZero(t *testing.T) {
@@ -228,24 +337,37 @@ func TestExtract_Modern_RegionFallsBackToInnerProperties(t *testing.T) {
 
 func TestExtract_Modern_ResourceTypePrefersSKUNameOverNormalizedSize(t *testing.T) {
 	// Both populated — Modern's top-level SKUName wins over NormalizedSize
-	// (matches the Modern field-preference documented in resolveModernResourceType).
+	// (matches the Modern field-preference documented in
+	// resolveModernSKUAndQuantity), and is counted by RecommendedQuantity.
 	rec := mocks.BuildModernReservationRecommendation(
 		mocks.WithModernSKUName("Standard_E4s_v5"),
 		mocks.WithModernNormalizedSize("Standard_D2"),
+		mocks.WithModernQuantity(4),
+		mocks.WithModernNormalizedQuantity(16),
 	)
 	f := Extract(rec)
 	require.NotNil(t, f)
 	assert.Equal(t, "Standard_E4s_v5", f.ResourceType)
+	assert.Equal(t, 4, f.Count,
+		"the actual SKU is counted by RecommendedQuantity; this is the rung real MCA payloads take")
 }
 
-func TestExtract_Modern_ResourceTypeFallsBackToNormalizedSize(t *testing.T) {
-	// No SKUName — should fall back to NormalizedSize (second preference).
+// TestExtract_Modern_NormalizedSizeRungIsCountedNormalized covers the one
+// Modern rung that had #1540's mismatch. Modern was not the reported instance
+// -- real MCA payloads carry SKUName and take the first rung, asserted above --
+// but with SKUName absent it paired NormalizedSize with RecommendedQuantity
+// just as Legacy did.
+func TestExtract_Modern_NormalizedSizeRungIsCountedNormalized(t *testing.T) {
 	rec := mocks.BuildModernReservationRecommendation(
 		mocks.WithModernNormalizedSize("Standard_D2"),
+		mocks.WithModernQuantity(4),
+		mocks.WithModernNormalizedQuantity(16),
 	)
 	f := Extract(rec)
 	require.NotNil(t, f)
 	assert.Equal(t, "Standard_D2", f.ResourceType)
+	assert.Equal(t, 16, f.Count,
+		"the normalized size must be counted by RecommendedQuantityNormalized")
 }
 
 func TestExtract_Modern_MissingCostAmountsReadAsZero(t *testing.T) {
