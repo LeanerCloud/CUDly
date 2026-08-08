@@ -435,32 +435,69 @@ func TestCancelViaSession_RequiresCSRF(t *testing.T) {
 func TestApproveRIExchangeViaSession_RequiresCSRF(t *testing.T) {
 	ctx := context.Background()
 	id := "550e8400-e29b-41d4-a716-446655440020"
+	creatorID := "creator-uuid"
 
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 	adminSession := &Session{UserID: "admin-uuid", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(adminSession, nil)
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 	// CSRF token is empty → ValidateCSRFToken must return an error so the
 	// request is rejected before ever fetching the exchange record.
 	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(errors.New("csrf mismatch"))
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	// Full happy-path fixture, registered but never meant to be consumed
+	// (.Maybe()): if the CSRF guard were ever removed or reordered, this lets
+	// execution run all the way to TransitionRIExchangeStatus instead of
+	// panicking on an earlier unmocked call. The assertion below on
+	// TransitionRIExchangeStatus is what must actually fail under that
+	// mutation -- an early panic on GetRIExchangeRecord would prove only
+	// that record wasn't reached, not that the state transition (the
+	// money-moving call) was prevented. Verified: reverting the CSRF guard
+	// with this fixture present makes the TransitionRIExchangeStatus
+	// AssertNotCalled fail cleanly rather than crashing on an earlier call.
+	mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
+		ID:              id,
+		Status:          "pending",
+		ApprovalToken:   "tok",
+		SourceRIIDs:     []string{"ri-123"},
+		PaymentDue:      "100.00",
+		CreatedByUserID: &creatorID,
+	}, nil).Maybe()
+	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything).
+		Return(&config.RIExchangeRecord{ID: id, Status: "processing", SourceRIIDs: []string{"ri-123"}, PaymentDue: "100.00"}, nil).Maybe()
+	mockStore.On("GetRIExchangeDailySpend", mock.Anything, mock.Anything).Return("0", nil).Maybe()
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		RIExchangeMaxDailyUSD:       1000,
+		RIExchangeMaxPerExchangeUSD: 500,
+	}, nil).Maybe()
+	mockStore.On("FailRIExchange", ctx, id, mock.AnythingOfType("string")).Return(nil).Maybe()
+	mockStore.On("StampRIExchangeApprovedBy", ctx, id, adminSession.Email).Return(nil).Maybe()
 
 	h := &Handler{config: mockStore, auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer sess-tok"},
 	}
 	_, err := h.approveRIExchange(ctx, req, id, "")
+
+	// The state-changing assertion comes FIRST and is the primary check:
+	// the money-moving call must never be reached, full stop. Checked ahead
+	// of (and independent of) the error-shape assertions below, using
+	// assert (not require) so it always runs and reports on its own even if
+	// the error-shape checks would also fail. This is the assertion the
+	// mutation verification (see fixture comment above) proved fails
+	// cleanly -- "An error is expected but got nil" plus a call-count
+	// mismatch on TransitionRIExchangeStatus -- when the CSRF guard is
+	// removed, rather than a panic on an earlier unmocked call.
+	mockStore.AssertNotCalled(t, "TransitionRIExchangeStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockStore.AssertNotCalled(t, "GetRIExchangeRecord", mock.Anything, mock.Anything)
+
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "expected a ClientError, got: %v", err)
 	assert.Equal(t, 403, ce.code)
 	assert.Contains(t, ce.Error(), "CSRF validation failed")
-
-	// The state-changing assertion: CSRF must be checked before the record
-	// is even fetched, let alone transitioned. Both must be untouched.
-	mockStore.AssertNotCalled(t, "GetRIExchangeRecord", mock.Anything, mock.Anything)
-	mockStore.AssertNotCalled(t, "TransitionRIExchangeStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestApproveRIExchangeViaSession_PassesCSRF confirms the CSRF guard does
