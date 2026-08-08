@@ -621,10 +621,18 @@ func TestProcessMessage_ApproveRejectsTokenMismatch(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
 
+	// The recommendation carries a CloudAccountID so that approver resolution,
+	// if it were ever hoisted above the token check, would have an account to
+	// look up. Without it the AssertNotCalled below is inert: the ordering bug
+	// it guards could not produce a GetCloudAccount call against this fixture.
+	accountID := "acct-1"
 	exec := &config.PurchaseExecution{
 		ExecutionID:   "exec-bad-token",
 		Status:        "pending",
 		ApprovalToken: "correct-token",
+		Recommendations: []config.RecommendationRecord{
+			{CloudAccountID: &accountID},
+		},
 	}
 
 	mockStore.On("GetExecutionByID", ctx, "exec-bad-token").Return(exec, nil)

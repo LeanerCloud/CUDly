@@ -48,8 +48,9 @@ func TestFireScheduledDelayedPurchases_NoDueRows(t *testing.T) {
 	assert.Equal(t, 0, result.RaceLost)
 	assert.Equal(t, 0, result.Errored)
 	store.AssertExpectations(t)
-	// No CAS attempted when nothing is due.
-	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	// No CAS attempted when nothing is due. Named without matchers: that is
+	// how this mock spells "never called at all, whatever the arguments".
+	store.AssertNotCalled(t, "TransitionExecutionStatus")
 }
 
 func TestFireScheduledDelayedPurchases_ListErrorSurfaces(t *testing.T) {
