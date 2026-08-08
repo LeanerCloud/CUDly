@@ -28,9 +28,12 @@ import (
 // detected, not hardcoded, so a future mock that adopts the same pattern is
 // covered automatically.
 //
-// The check is syntactic and package-scoped: a mock and the tests that use it
-// live in the same package throughout this repo. It parses rather than builds,
-// so it costs milliseconds.
+// The check is syntactic. Mocks are resolved within the using package first and
+// then, for mocks declared elsewhere and aliased in (MockConfigStore is the
+// repo's one such case), through a repo-wide index by type name. A receiver it
+// still cannot place is reported rather than skipped: a skip that says nothing
+// is the same shape of defect the guard exists to catch. It parses rather than
+// builds, so it costs milliseconds.
 
 // mockType is one testify mock in one package.
 type mockType struct {
@@ -39,8 +42,12 @@ type mockType struct {
 	// signature arity: MockSESClient.SendEmail takes three parameters but calls
 	// m.Called(ctx, input).
 	calledArity map[string]int
-	// shadows is true when the type defines its own assertion helpers.
-	shadows bool
+	// shadowed records which assertion helpers the type defines itself, keyed by
+	// helper name. Per-helper rather than per-type: a mock that shadows only
+	// AssertNotCalled leaves AssertCalled going through testify, where the
+	// name-only form is still unfailable, so exempting the whole type would
+	// hand back the very hole this guard closes.
+	shadowed map[string]bool
 }
 
 type assertSite struct {
@@ -76,9 +83,15 @@ func TestNoUnfailableMockAssertions(t *testing.T) {
 		t.Fatalf("walk %s: %v", root, err)
 	}
 
-	var findings []string
-	var skipped []string
-	checked := 0
+	// Mocks are usually declared in the package that uses them, but not always:
+	// MockConfigStore lives in internal/mocks and is aliased into internal/api,
+	// internal/purchase and internal/scheduler. A per-package map alone does not
+	// recognize it there, so those sites would be skipped -- and a skip that
+	// reports nothing is the very defect this guard exists to catch. Index every
+	// mock in the repo by type name as a fallback for exactly that case.
+	global := map[string][]*mockType{}
+	parsed := map[string][]*ast.File{}
+	fsets := map[string]*token.FileSet{}
 	for _, dir := range sortedKeys(pkgFiles) {
 		fset := token.NewFileSet()
 		var files []*ast.File
@@ -92,6 +105,19 @@ func TestNoUnfailableMockAssertions(t *testing.T) {
 			}
 			files = append(files, f)
 		}
+		parsed[dir] = files
+		fsets[dir] = fset
+		for name, m := range collectMocks(files) {
+			global[name] = append(global[name], m)
+		}
+	}
+
+	var findings []string
+	var skipped []string
+	checked := 0
+	for _, dir := range sortedKeys(pkgFiles) {
+		fset := fsets[dir]
+		files := parsed[dir]
 		mocks := collectMocks(files)
 		if len(mocks) == 0 {
 			continue
@@ -101,24 +127,43 @@ func TestNoUnfailableMockAssertions(t *testing.T) {
 				recvType, resolved := resolveRecvType(f, site)
 				m, isMock := mocks[recvType]
 				if resolved && !isMock {
-					// Resolved to a concrete type that is not a testify mock.
-					// Nothing to say about it, and no blind spot either.
-					continue
+					var reason string
+					m, isMock, reason = resolveCrossPackage(global, recvType, site.method)
+					if !isMock {
+						skipped = append(skipped, fmt.Sprintf(
+							"%s: %s.%s(t, %q) -- receiver resolves to %s, which this check "+
+								"could not analyze (%s). Review by hand.",
+							site.pos, site.recv, site.assertFn, site.method, recvType, reason))
+						continue
+					}
 				}
 				if !resolved {
 					// The receiver was not assigned from a mock literal in this
 					// file. Only report it when the method name belongs to some
 					// mock in the package and would be unfailable if it were one,
 					// so an unreviewed blind spot cannot hide behind a pass.
-					if unresolvedLooksRisky(site, mocks) {
+					if unresolvedLooksRisky(site, mocks, global) {
 						skipped = append(skipped, fmt.Sprintf(
 							"%s: %s.%s(t, %q) -- receiver type could not be resolved; "+
 								"review this site by hand", site.pos, site.recv, site.assertFn, site.method))
 					}
 					continue
 				}
+				if m.shadowed[site.assertFn] {
+					// This type implements the helper being used, so it defines
+					// what the matchers mean. See MockConfigStore in assertions.go.
+					continue
+				}
 				arity, known := m.calledArity[site.method]
-				if !known || m.shadows {
+				if !known {
+					// The method exists on a mock but never calls m.Called itself
+					// (it delegates to a sibling), so there is no arity to check
+					// against. Report it: "checked nothing" must never be silent,
+					// which is the same reason checked == 0 is fatal below.
+					skipped = append(skipped, fmt.Sprintf(
+						"%s: %s.%s(t, %q) -- %s does not call m.Called directly, so its "+
+							"argument count cannot be derived. Review by hand.",
+						site.pos, site.recv, site.assertFn, site.method, site.method))
 					continue
 				}
 				checked++
@@ -180,11 +225,11 @@ func collectMocks(files []*ast.File) map[string]*mockType {
 			}
 			m := mocks[typeName]
 			if m == nil {
-				m = &mockType{calledArity: map[string]int{}}
+				m = &mockType{calledArity: map[string]int{}, shadowed: map[string]bool{}}
 				mocks[typeName] = m
 			}
 			if fd.Name.Name == "AssertCalled" || fd.Name.Name == "AssertNotCalled" {
-				m.shadows = true
+				m.shadowed[fd.Name.Name] = true
 			}
 			ast.Inspect(fd.Body, func(n ast.Node) bool {
 				call, ok := n.(*ast.CallExpr)
@@ -355,22 +400,45 @@ func sortedKeys(m map[string][]string) []string {
 // resolved names a method that some mock in the package implements with a
 // non-zero m.Called arity and without shadowing the helpers. Those are the
 // unresolved sites that could be hiding the defect.
-func unresolvedLooksRisky(site assertSite, mocks map[string]*mockType) bool {
-	if site.matchers > 0 {
-		// A site carrying matchers is only wrong if the count is off, which
-		// cannot be judged without knowing which mock it is. Ambiguous rather
-		// than risky, and reporting every one would drown the real findings.
-		return false
+func unresolvedLooksRisky(site assertSite, mocks map[string]*mockType, global map[string][]*mockType) bool {
+	// Any matcher count can be wrong, not just zero: a non-zero count that does
+	// not match the real arity is the third vacuity mode from #1735. Both are
+	// reported, since neither can be judged without knowing the type.
+	looks := func(m *mockType) bool {
+		if m.shadowed[site.assertFn] {
+			return false
+		}
+		arity, ok := m.calledArity[site.method]
+		return ok && arity > 0
 	}
 	for _, m := range mocks {
-		if m.shadows {
-			continue
-		}
-		if arity, ok := m.calledArity[site.method]; ok && arity > 0 {
+		if looks(m) {
 			return true
 		}
 	}
+	for _, defs := range global {
+		for _, m := range defs {
+			if looks(m) {
+				return true
+			}
+		}
+	}
 	return false
+}
+
+// sameShadowing reports whether two same-named mocks define the same set of
+// assertion helpers, so the cross-package fallback does not exempt a site on one
+// mock's opt-out while the real type has none.
+func sameShadowing(a, b *mockType) bool {
+	if len(a.shadowed) != len(b.shadowed) {
+		return false
+	}
+	for k := range a.shadowed {
+		if !b.shadowed[k] {
+			return false
+		}
+	}
+	return true
 }
 
 // TestVacuousAssertionGuardDetects exercises the guard's analysis on synthetic
@@ -434,12 +502,15 @@ func Test(t *testing.T) {
 		if got, ok := m.calledArity["None"]; !ok || got != 0 {
 			t.Errorf("MockThing.None arity = %d (present=%v), want 0", got, ok)
 		}
-		if m.shadows {
+		if len(m.shadowed) != 0 {
 			t.Error("MockThing does not define its own helpers and must not count as shadowing")
 		}
 	}
-	if m, ok := mocks["MockShadowed"]; !ok || !m.shadows {
-		t.Error("MockShadowed defines AssertNotCalled and must count as shadowing")
+	if m, ok := mocks["MockShadowed"]; !ok || !m.shadowed["AssertNotCalled"] {
+		t.Error("MockShadowed defines AssertNotCalled and must be recorded as shadowing it")
+	} else if m.shadowed["AssertCalled"] {
+		t.Error("MockShadowed does not define AssertCalled; shadowing must be per-helper, " +
+			"or its name-only AssertCalled sites would be exempted while still unfailable")
 	}
 
 	type verdict struct {
@@ -447,6 +518,13 @@ func Test(t *testing.T) {
 		matchers int
 		vacuous  bool
 	}
+	// The synthetic source is a single package, so the repo-wide index used by
+	// the real run is just this package's mocks.
+	global := map[string][]*mockType{}
+	for name, m := range mocks {
+		global[name] = append(global[name], m)
+	}
+
 	var got []verdict
 	unresolved := 0
 	for _, site := range collectAssertSites(fset, f) {
@@ -456,13 +534,13 @@ func Test(t *testing.T) {
 			continue
 		}
 		if !resolved {
-			if unresolvedLooksRisky(site, mocks) {
+			if unresolvedLooksRisky(site, mocks, global) {
 				unresolved++
 			}
 			continue
 		}
 		arity, known := m.calledArity[site.method]
-		if !known || m.shadows || arity == 0 {
+		if m.shadowed[site.assertFn] || !known || arity == 0 {
 			continue
 		}
 		got = append(got, verdict{site.method, site.matchers, site.matchers != arity})
@@ -484,5 +562,89 @@ func Test(t *testing.T) {
 	}
 	if unresolved != 1 {
 		t.Errorf("unresolved risky sites = %d, want 1 (the `unknown` receiver)", unresolved)
+	}
+}
+
+// resolveCrossPackage finds a mock declared outside the package that uses it,
+// keyed by type name. Type names are not unique across the repo (MockEmailSender
+// and MockHTTPClient each have several unrelated definitions), so a single
+// candidate is used directly and multiple candidates are accepted only when they
+// agree about the method in question. Anything else is reported rather than
+// assumed, because guessing here would silently attribute one mock's arity to
+// another.
+func resolveCrossPackage(global map[string][]*mockType, typeName, method string) (*mockType, bool, string) {
+	candidates := global[typeName]
+	switch len(candidates) {
+	case 0:
+		return nil, false, "no mock of that name is declared anywhere in the repo"
+	case 1:
+		return candidates[0], true, ""
+	}
+	first := candidates[0]
+	wantArity, wantKnown := first.calledArity[method]
+	for _, c := range candidates[1:] {
+		arity, known := c.calledArity[method]
+		if known != wantKnown || arity != wantArity || !sameShadowing(c, first) {
+			return nil, false, fmt.Sprintf(
+				"%d mocks share that name and disagree about %s", len(candidates), method)
+		}
+	}
+	return first, true, ""
+}
+
+// TestResolveCrossPackage pins the fallback used for mocks declared outside the
+// package that asserts on them. Before it existed, MockConfigStore was
+// unrecognized in internal/api, internal/purchase and internal/scheduler, so
+// every site there was silently skipped: absent from the checked count, absent
+// from the report. Removing MockConfigStore's shadowed helpers took the guard
+// from 6 findings to 56 once this landed, the 50 difference being exactly those
+// cross-package sites.
+//
+// Type names are not unique across this repo (MockHTTPClient has five unrelated
+// definitions), so the fallback must refuse to guess rather than attribute one
+// mock's arity to another.
+func TestResolveCrossPackage(t *testing.T) {
+	twoArgs := &mockType{calledArity: map[string]int{"Do": 2}, shadowed: map[string]bool{}}
+	twoArgsAgain := &mockType{calledArity: map[string]int{"Do": 2}, shadowed: map[string]bool{}}
+	threeArgs := &mockType{calledArity: map[string]int{"Do": 3}, shadowed: map[string]bool{}}
+	shadowed := &mockType{calledArity: map[string]int{"Do": 2}, shadowed: map[string]bool{"AssertNotCalled": true}}
+
+	tests := []struct {
+		name       string
+		candidates []*mockType
+		wantOK     bool
+	}{
+		{"single definition is used", []*mockType{twoArgs}, true},
+		{"no definition anywhere", nil, false},
+		{"duplicates that agree", []*mockType{twoArgs, twoArgsAgain}, true},
+		{"duplicates disagreeing on arity", []*mockType{twoArgs, threeArgs}, false},
+		{"duplicates disagreeing on shadowing", []*mockType{twoArgs, shadowed}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			global := map[string][]*mockType{"MockThing": tt.candidates}
+			got, ok, reason := resolveCrossPackage(global, "MockThing", "Do")
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v (reason %q)", ok, tt.wantOK, reason)
+			}
+			if ok && got == nil {
+				t.Error("resolved but returned no mock")
+			}
+			if !ok && reason == "" {
+				t.Error("refused to resolve but gave no reason; the skip would be silent")
+			}
+		})
+	}
+}
+
+// TestResolveCrossPackage_UnknownMethodStillDisagrees covers the case where one
+// candidate implements the method and another does not: that is a disagreement,
+// not a match, and must not resolve.
+func TestResolveCrossPackage_UnknownMethodStillDisagrees(t *testing.T) {
+	has := &mockType{calledArity: map[string]int{"Do": 2}, shadowed: map[string]bool{}}
+	hasNot := &mockType{calledArity: map[string]int{"Other": 1}, shadowed: map[string]bool{}}
+	global := map[string][]*mockType{"MockThing": {has, hasNot}}
+	if _, ok, reason := resolveCrossPackage(global, "MockThing", "Do"); ok {
+		t.Errorf("resolved across candidates that disagree about Do (reason %q)", reason)
 	}
 }
