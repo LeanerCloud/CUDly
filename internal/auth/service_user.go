@@ -396,15 +396,28 @@ func (s *Service) guardGroupChange(ctx context.Context, actorUserID, targetUserI
 // not sufficient to pass. Split out of guardGroupChange to keep that function
 // under gocyclo's threshold.
 //
+// DO NOT "simplify" this back to re-reading the actor's row
+// (GetUserPermissions, or any fresh GetUserByID). That is the shorter
+// spelling and it is a silent regression.
+//
 // Both checks are evaluated against the actor's PRIOR membership, resolved
-// from `prior` directly rather than by re-reading the actor's row. That is the
-// question a self-escalation guard has to ask -- "did you hold this BEFORE the
-// change?" -- and reading it from `prior` makes the answer independent of when
-// the change reaches storage. Re-reading the row happens to give the same
-// answer today only because the write has not been committed yet; a guard
-// whose correctness rests on that ordering silently defeats itself the moment
-// a caller passes the already-mutated user, which is exactly what an
-// in-memory caller does.
+// from `prior` directly. "Did you hold this BEFORE the change?" is the
+// question a self-escalation guard has to ask, so resolving it from the
+// snapshot is the correct implementation as well as the simpler one -- not a
+// workaround for anything.
+//
+// The previous version re-read the row and was correct only by accident of
+// transaction timing: UpdateUser calls applyUpdateUserRequest BEFORE these
+// guards run, so the in-memory user already carries the NEW membership, and
+// the re-read returned the old values purely because the write had not been
+// committed yet. The tell was in the test suite, where this case had to hand
+// back "a distinct, unmutated viewer copy for that second read" to avoid
+// aliasing the just-mutated object. Any caller that passes the mutated user,
+// or any future change that resolves permissions through it, makes the guard
+// authorize the very escalation it exists to block.
+//
+// Enforced by mutation, not just by this comment: swapping `prior` for `next`
+// below fails the suite (see the M13 row in the PR #1737 mutation matrix).
 func (s *Service) guardSelfEscalation(ctx context.Context, prior, next []string) error {
 	heldBefore, err := s.permissionsForGroups(ctx, prior)
 	if err != nil {
