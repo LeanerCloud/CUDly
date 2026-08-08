@@ -216,14 +216,29 @@ func TestGrantCeiling_InCeilingUpdateSucceeds(t *testing.T) {
 
 // TestGrantCeiling_ConstraintContainment: a constrained holder may hand out a
 // narrower grant but not a broader one.
+//
+// The fixture verb is deliberately NOT one of adminCarvedOuts: this test
+// exercises the general containment logic in grantCeilingAllows, which
+// checkGrantCeiling only reaches for a pair the carve-out check lets through.
+// A carved-out verb refuses unconditionally before containment is ever
+// evaluated (see TestGrantCeiling_CarvedOutNotGrantable), which is exactly
+// what happened here when this test used execute:ri-exchange as its fixture:
+// PR #1758 carved that pair out and every subtest below started failing for
+// the wrong reason. The assertion below fails loudly, at the fixture, if a
+// future carve-out addition collides with this verb again.
 func TestGrantCeiling_ConstraintContainment(t *testing.T) {
 	ctx := context.Background()
+
+	const fixtureAction, fixtureResource = ActionView, ResourcePlans
+	require.False(t, adminCarvedOuts[[2]string{fixtureAction, fixtureResource}],
+		"fixture verb %s:%s must not be carved out, or the carve-out check "+
+			"refuses before this test's containment logic ever runs", fixtureAction, fixtureResource)
 
 	held := []Permission{
 		{Action: ActionUpdate, Resource: ResourceGroups},
 		{
-			Action:   ActionExecute,
-			Resource: ResourceRIExchange,
+			Action:   fixtureAction,
+			Resource: fixtureResource,
 			Constraints: &PermissionConstraints{
 				Providers:         []string{"aws"},
 				MaxPurchaseAmount: 100,
@@ -242,8 +257,8 @@ func TestGrantCeiling_ConstraintContainment(t *testing.T) {
 
 		_, err := svc.UpdateGroupAPI(ctx, ceilingActorID, ceilingTargetID,
 			updateReqWith(APIPermission{
-				Action:   ActionExecute,
-				Resource: ResourceRIExchange,
+				Action:   fixtureAction,
+				Resource: fixtureResource,
 				Constraints: &APIPermissionConstraint{
 					Providers: []string{"aws"},
 					MaxAmount: 50,
@@ -261,7 +276,7 @@ func TestGrantCeiling_ConstraintContainment(t *testing.T) {
 		stubTargetGroup(ctx, mockStore, &Group{ID: ceilingTargetID, Name: "Team"})
 
 		_, err := svc.UpdateGroupAPI(ctx, ceilingActorID, ceilingTargetID,
-			updateReqWith(APIPermission{Action: ActionExecute, Resource: ResourceRIExchange}))
+			updateReqWith(APIPermission{Action: fixtureAction, Resource: fixtureResource}))
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrPermissionCeiling)
@@ -278,8 +293,8 @@ func TestGrantCeiling_ConstraintContainment(t *testing.T) {
 
 		_, err := svc.UpdateGroupAPI(ctx, ceilingActorID, ceilingTargetID,
 			updateReqWith(APIPermission{
-				Action:   ActionExecute,
-				Resource: ResourceRIExchange,
+				Action:   fixtureAction,
+				Resource: fixtureResource,
 				Constraints: &APIPermissionConstraint{
 					Providers: []string{"aws", "azure"},
 					MaxAmount: 50,
