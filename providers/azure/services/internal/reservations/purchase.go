@@ -42,6 +42,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -209,6 +210,21 @@ type calculatePriceResponse struct {
 // phrasing changes in future API versions.
 const sessionTimeoutFragment = "Session timed out"
 
+// errRetryabilityUnknown marks a purchase failure whose retryability could not
+// be determined because the response body did not read completely.
+//
+// IsSessionTimeout classifies by searching the error text for a fragment Azure
+// puts in the body, so a truncated read cannot be distinguished from a genuinely
+// permanent failure by inspecting the message. Carrying the state out of band
+// lets DoPurchaseTwoStep retry instead of silently abandoning a purchase that
+// the retry loop exists to recover.
+//
+// Retrying is safe here: a non-2xx means the order did not commit, the loop is
+// bounded by purchaseMaxAttempts, and re-drives across invocations are guarded
+// by DoIdempotentPurchaseTwoStep, which refuses to purchase when its idempotency
+// lookup fails.
+var errRetryabilityUnknown = errors.New("purchase retryability unknown: response body did not read completely")
+
 // IsSessionTimeout reports whether err looks like the "Session timed out"
 // 400 error from the Azure Reservations purchase endpoint. It matches the
 // error message produced by DoPurchaseTwoStep so callers can distinguish
@@ -255,7 +271,10 @@ func DoPurchaseTwoStep(ctx context.Context, httpClient HTTPClient, calcURL strin
 			return orderID, nil
 		}
 
-		if IsSessionTimeout(purchaseErr) && attempt < purchaseMaxAttempts {
+		// An unreadable body is retried alongside a recognized session timeout:
+		// without this the truncated case was abandoned on its first attempt,
+		// because IsSessionTimeout can only classify what it can read.
+		if (IsSessionTimeout(purchaseErr) || errors.Is(purchaseErr, errRetryabilityUnknown)) && attempt < purchaseMaxAttempts {
 			log.Printf("reservation purchase session timed out (attempt %d/%d), re-running calculatePrice in %s",
 				attempt, purchaseMaxAttempts, purchaseRetryDelay)
 			select {
@@ -481,15 +500,12 @@ func doPurchase(ctx context.Context, httpClient HTTPClient, purchaseURL string, 
 		return nil
 	}
 	if readErr != nil {
-		// IsSessionTimeout classifies this error by searching its text for the
-		// fragment Azure puts in the body, and DoPurchaseTwoStep retries only
-		// when that matches. Discarding the read error therefore made a
-		// retryable session timeout look permanent whenever the body failed to
-		// read, abandoning the purchase on its first attempt with an empty
-		// diagnostic. Surface the read failure rather than classifying
-		// retryability from a body that was never fully received.
-		return fmt.Errorf("reservation purchase failed with status %d and its response body could not be read, so retryability is unknown (partial body: %q): %w",
-			resp.StatusCode, string(body), readErr)
+		// The body did not read completely, so its text cannot be used to
+		// classify retryability. Surface the read failure AND tag the error
+		// with errRetryabilityUnknown so the retry loop treats it as retryable
+		// rather than abandoning the purchase on its first attempt.
+		return fmt.Errorf("reservation purchase failed with status %d (partial body: %q): %w: %w",
+			resp.StatusCode, string(body), errRetryabilityUnknown, readErr)
 	}
 	return fmt.Errorf("reservation purchase failed with status %d: %s", resp.StatusCode, string(body))
 }

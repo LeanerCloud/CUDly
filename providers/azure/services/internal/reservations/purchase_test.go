@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations"
@@ -498,7 +497,7 @@ func TestFindReservationOrderByIdempotencyToken_PaginatedFollowsNextLink(t *test
 // TestDoIdempotentPurchaseTwoStep_EmptyToken_NoLookup pins the CLI legacy path:
 // when no idempotency token is supplied the wrapper falls straight through to
 // the raw DoPurchaseTwoStep (no list call), preserving the pre-issue-721
-// behaviour for callers without an owning execution.
+// behavior for callers without an owning execution.
 func TestDoIdempotentPurchaseTwoStep_EmptyToken_NoLookup(t *testing.T) {
 	m := &mockHTTPClient{}
 	ctx := context.Background()
@@ -644,7 +643,7 @@ func TestDoIdempotentPurchaseTwoStep_DifferentTokens_DistinctReservations(t *tes
 // TestDoIdempotentPurchaseTwoStep_PreservesTwoStepFlow verifies the two-step
 // flow's session-timeout retry semantics from PR #680 still work under the
 // new wrapper -- the wrapper is purely additive for the lookup, and once it
-// falls through to DoPurchaseTwoStep the original retry behaviour applies.
+// falls through to DoPurchaseTwoStep the original retry behavior applies.
 func TestDoIdempotentPurchaseTwoStep_PreservesTwoStepFlow(t *testing.T) {
 	m := &mockHTTPClient{}
 	ctx := context.Background()
@@ -860,20 +859,76 @@ func TestDoPurchase_UnreadableBodyDoesNotSilentlyLookPermanent(t *testing.T) {
 	err := doPurchase(ctx, m, "https://example.invalid/purchase", []byte(testBody), "tok")
 	require.Error(t, err)
 
-	assert.ErrorContains(t, err, "could not be read",
-		"a failed body read must be surfaced, not discarded: the retry decision is made from this error's text")
+	assert.ErrorContains(t, err, "did not read completely",
+		"a failed body read must be surfaced, not discarded")
 	assert.ErrorContains(t, err, "unexpected EOF reading response body",
 		"the underlying read error must be wrapped so the operator can see why retryability is unknown")
 
-	// The essential property: the failure must not be silently classified as a
-	// permanent, non-retryable error on the strength of a body that never
-	// arrived. Either it is recognizably retryable, or the read failure is
-	// visible — never a bare status line that quietly means "give up".
-	assert.True(t,
-		IsSessionTimeout(err) || strings.Contains(err.Error(), "could not be read"),
-		"an unreadable body must not silently produce a non-retryable classification")
+	// Retryability is carried out of band, because it cannot be read off a body
+	// that never fully arrived. Asserting the sentinel rather than the message
+	// is the point: the message is not what the retry loop consults.
+	assert.ErrorIs(t, err, errRetryabilityUnknown,
+		"an unreadable body must mark retryability unknown rather than leave it inferred from text")
 
 	m.AssertExpectations(t)
+}
+
+// countingPurchaseClient answers calculatePrice with a fixed order ID and counts
+// purchase attempts, minting a NEW response per call because the truncating body
+// is stateful and cannot be replayed across attempts.
+type countingPurchaseClient struct {
+	purchases    int
+	purchaseResp func() *http.Response
+}
+
+func (c *countingPurchaseClient) Do(req *http.Request) (*http.Response, error) {
+	if req.URL.String() == PurchaseURL("order-1") {
+		c.purchases++
+		return c.purchaseResp(), nil
+	}
+	return fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":"order-1"}}`), nil
+}
+
+// TestDoPurchaseTwoStep_TruncatedSessionTimeoutStillRetries is the regression
+// test for the retry decision, and it is deliberately an ATTEMPT-COUNT
+// assertion rather than a message assertion.
+//
+// An earlier revision of this fix surfaced the read error in the message and
+// asserted on that text. That assertion passed while the purchase was still
+// abandoned on its first attempt, because retryability was still being inferred
+// from a truncated body: the message changed, the behavior did not. Only
+// counting attempts tells the two apart.
+//
+// The readable control is included so this measures the loop rather than a
+// constant. If the control ever stops reaching the cap, the second half is no
+// longer evidence about anything.
+func TestDoPurchaseTwoStep_TruncatedSessionTimeoutStillRetries(t *testing.T) {
+	ctx := context.Background()
+	full := `{"error":{"code":"BadRequest","message":"Session timed out - Call CalculatePrice again"}}`
+
+	control := &countingPurchaseClient{
+		purchaseResp: func() *http.Response { return fakeResp(http.StatusBadRequest, full) },
+	}
+	_, err := DoPurchaseTwoStep(ctx, control, calcURL, []byte(testBody), "tok")
+	require.Error(t, err)
+	require.Equal(t, purchaseMaxAttempts, control.purchases,
+		"control: a readable session-timeout 400 must retry to the cap, or this test measures nothing")
+
+	truncated := &countingPurchaseClient{
+		purchaseResp: func() *http.Response {
+			return &http.Response{
+				StatusCode: http.StatusBadRequest,
+				// Cut short well before the "Session timed out" fragment.
+				Body:   &truncatingBody{data: []byte(full), n: 12},
+				Header: make(http.Header),
+			}
+		},
+	}
+	_, err = DoPurchaseTwoStep(ctx, truncated, calcURL, []byte(testBody), "tok")
+	require.Error(t, err)
+	assert.Equal(t, purchaseMaxAttempts, truncated.purchases,
+		"a session timeout whose body did not read completely must still be retried; "+
+			"pre-fix this was 1 attempt because retryability was inferred from a truncated body")
 }
 
 // TestDoPurchase_UnreadableBodyOnSuccessStillSucceeds guards the opposite
