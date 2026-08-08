@@ -385,14 +385,98 @@ func (s *Service) guardGroupChange(ctx context.Context, actorUserID, targetUserI
 	// to hold the manage-users permission. A non-privileged user therefore
 	// cannot grant themselves a more powerful group. Internal callers
 	// (actorUserID == "") are already trusted and skip this check.
-	if actorUserID != "" && actorUserID == targetUserID && addsNewGroup(prior, next) {
-		canManage, err := s.HasPermission(ctx, actorUserID, ActionUpdate, ResourceUsers, nil)
+	if actorUserID == "" || actorUserID != targetUserID || !addsNewGroup(prior, next) {
+		return nil
+	}
+	return s.guardSelfEscalation(ctx, prior, next)
+}
+
+// guardSelfEscalation runs the two self-edit checks in order: the #907
+// manage-users gate, then the #1550 carved-out-verb gate that manage-users is
+// not sufficient to pass. Split out of guardGroupChange to keep that function
+// under gocyclo's threshold.
+//
+// Both checks are evaluated against the actor's PRIOR membership, resolved
+// from `prior` directly rather than by re-reading the actor's row. That is the
+// question a self-escalation guard has to ask -- "did you hold this BEFORE the
+// change?" -- and reading it from `prior` makes the answer independent of when
+// the change reaches storage. Re-reading the row happens to give the same
+// answer today only because the write has not been committed yet; a guard
+// whose correctness rests on that ordering silently defeats itself the moment
+// a caller passes the already-mutated user, which is exactly what an
+// in-memory caller does.
+func (s *Service) guardSelfEscalation(ctx context.Context, prior, next []string) error {
+	heldBefore, err := s.permissionsForGroups(ctx, prior)
+	if err != nil {
+		return fmt.Errorf("failed to verify manage-users permission: %w", err)
+	}
+	if !s.permissionsAllow(heldBefore, ActionUpdate, ResourceUsers, nil) {
+		return ErrSelfEscalation
+	}
+	// Holding update:users is NOT enough to hand yourself the money verbs.
+	return s.guardSelfCarvedOutGrant(ctx, heldBefore, next, prior)
+}
+
+// guardSelfCarvedOutGrant blocks the membership route to the same escalation
+// the group-permission grant ceiling blocks (issue #1550).
+//
+// The check above gates self-added groups on update:users, which admin:*
+// grants -- so an admin could add themselves to the Purchaser group and pick
+// up execute / approve-any / retry-any on purchases in one request, voiding
+// the #923 separation of duties exactly as writing those verbs onto their own
+// group would. It is the "one-request alternative" named in #1550's report,
+// and it is why closing only the group-permission path would leave the issue
+// open.
+//
+// The rule matches the grant ceiling's: you cannot grant yourself a carved-out
+// verb you do not already hold. Adding a SECOND group that carries a verb the
+// actor already holds is not an escalation and is allowed, so a user who is
+// legitimately a purchaser is not blocked from ordinary membership changes.
+//
+// Only SELF-edits reach here. An admin may still add another user to the
+// Purchaser group: that is the two-person control separation of duties is
+// meant to create, not a hole. Trusted internal callers (actorUserID == "")
+// never reach here either, so seeding and bootstrap paths are unaffected.
+//
+// held is the actor's PRIOR permission set (see guardSelfEscalation). Fails
+// closed: any error loading a group being joined refuses the change.
+func (s *Service) guardSelfCarvedOutGrant(ctx context.Context, held []Permission, next, prior []string) error {
+	added := addedGroups(prior, next)
+	if len(added) == 0 {
+		return nil
+	}
+	for _, groupID := range added {
+		group, err := s.store.GetGroup(ctx, groupID)
 		if err != nil {
-			return fmt.Errorf("failed to verify manage-users permission: %w", err)
+			return fmt.Errorf("failed to load group %s: %w", groupID, err)
 		}
-		if !canManage {
-			return ErrSelfEscalation
+		if group == nil {
+			// A membership entry for a group that does not exist grants
+			// nothing; the change is validated elsewhere.
+			continue
 		}
+		if perm := s.firstUnheldCarvedOut(group, held); perm != nil {
+			return fmt.Errorf(
+				"%w: joining %q would grant you %s:%s, which is reserved for separation of duties (issue #923); ask another administrator to add you",
+				ErrSelfEscalation, group.Name, perm.Action, perm.Resource)
+		}
+	}
+	return nil
+}
+
+// firstUnheldCarvedOut returns the first permission on group that is carved
+// out of the admin:* wildcard and is NOT already covered by held, or nil if
+// there is none. Coverage is evaluated with permissionsAllow so the carve-out
+// applies: an actor holding only admin:* does not "already hold" these.
+func (s *Service) firstUnheldCarvedOut(group *Group, held []Permission) *Permission {
+	for i, perm := range group.Permissions {
+		if !adminCarvedOuts[[2]string{perm.Action, perm.Resource}] {
+			continue
+		}
+		if s.permissionsAllow(held, perm.Action, perm.Resource, nil) {
+			continue
+		}
+		return &group.Permissions[i]
 	}
 	return nil
 }
@@ -423,14 +507,20 @@ func containsGroup(groups []string, target string) bool {
 	return false
 }
 
-// addsNewGroup reports whether next contains any group not present in prior.
-func addsNewGroup(prior, next []string) bool {
+// addedGroups returns the groups present in next but not in prior.
+func addedGroups(prior, next []string) []string {
+	var added []string
 	for _, g := range next {
 		if !containsGroup(prior, g) {
-			return true
+			added = append(added, g)
 		}
 	}
-	return false
+	return added
+}
+
+// addsNewGroup reports whether next contains any group not present in prior.
+func addsNewGroup(prior, next []string) bool {
+	return len(addedGroups(prior, next)) > 0
 }
 
 // applyUpdateUserRequest applies the non-nil fields of req to user. GroupID
