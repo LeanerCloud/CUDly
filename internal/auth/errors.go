@@ -48,6 +48,15 @@ var (
 	// (issues #923, #1550).
 	ErrPermissionNotGrantable = errors.New("permission not grantable")
 
+	// ErrInvalidPermission is returned when a group write carries a
+	// permission entry with a blank action or resource. A blank resource is
+	// malformed input, NOT a request for the "*" wildcard: the group-edit
+	// form renders an empty stored resource as the selected "All (*)" option
+	// and saves it back as view:*, and the same widening is reachable
+	// directly through the API because nothing validated the list. Mapped to
+	// 400 (issues #1730, #1550).
+	ErrInvalidPermission = errors.New("invalid permission")
+
 	// ErrSystemManagedGroup is returned when a write targets one of the
 	// seeded, system-managed groups. Their contents are owned by migrations;
 	// an API edit that reshapes them can silently disable a whole capability

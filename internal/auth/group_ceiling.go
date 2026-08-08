@@ -74,6 +74,9 @@ func (s *Service) checkGrantCeiling(ctx context.Context, actorUserID string, req
 	if len(requested) == 0 {
 		return nil
 	}
+	if err := validateRequestedPermissions(requested); err != nil {
+		return err
+	}
 	actorPerms, err := s.grantCeilingPermissions(ctx, actorUserID)
 	if err != nil {
 		return err
@@ -91,6 +94,45 @@ func (s *Service) checkGrantCeiling(ctx context.Context, actorUserID string, req
 			return fmt.Errorf(
 				"%w: cannot grant %s:%s because your own permissions do not include it (or not at the requested scope)",
 				ErrPermissionCeiling, req.Action, req.Resource)
+		}
+	}
+	return nil
+}
+
+// validateRequestedPermissions rejects malformed entries before the ceiling
+// runs (issue #1730).
+//
+// This is NOT redundant with the ceiling. The ceiling's admin:* branch grants
+// any (action, resource) pair that is not carved out, and ("view", "") is not
+// carved out, so before this check an admin could write a blank resource
+// straight through. It then round-trips as the "*" WILDCARD: the group-edit
+// form picks its `<option>` with `isDefault = !currentValue && resource ===
+// '*'`, so an empty stored resource renders as the selected "All (*)" entry
+// and saves back as view:*. Nothing validated the list on the way in, so the
+// same widening is reachable from any API client with no form involved.
+//
+// The two blank fields fail differently in the form -- a blank action is
+// silently DROPPED (its index 0 is an empty placeholder) while a blank
+// resource is silently WIDENED (its index 0 is the wildcard) -- which is why
+// the defect is in the defaulting rather than the parsing. Only the resource
+// side escalates; both are refused here, because a silently dropped
+// permission is a different bug rather than an acceptable one.
+//
+// Blank means empty or whitespace-only. Unknown-but-non-blank values are
+// deliberately NOT rejected: vocabulary validation is a separate concern
+// (#1629) and rejecting values this endpoint can legitimately already have
+// stored would break edits of existing groups.
+func validateRequestedPermissions(requested []Permission) error {
+	for i, p := range requested {
+		if strings.TrimSpace(p.Action) == "" {
+			return fmt.Errorf(
+				"%w: entry %d has a blank action (resource %q); a blank action is malformed input, not a permission to drop",
+				ErrInvalidPermission, i, p.Resource)
+		}
+		if strings.TrimSpace(p.Resource) == "" {
+			return fmt.Errorf(
+				"%w: entry %d has a blank resource (action %q); a blank resource is malformed input, not a request for the %q wildcard",
+				ErrInvalidPermission, i, p.Action, ResourceAll)
 		}
 	}
 	return nil
