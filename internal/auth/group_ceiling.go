@@ -250,8 +250,15 @@ func (s *Service) checkAccountGrant(ctx context.Context, actorUserID string, req
 // of everything but means the opposite of narrow. An unrestricted request
 // against a restricted holder is the widening this exists to catch.
 //
-// Comparison is exact, matching MatchesAccount. Case folding would only make
-// the check more permissive, which is the wrong direction for a ceiling.
+// Comparison is EXACT -- no trimming, no case folding -- because that is what
+// MatchesAccount does at enforcement (`a == accountID`). Normalising here
+// would make the ceiling MORE permissive than enforcement: an actor whose
+// stored scope is " acct-A" matches nothing when access is actually checked,
+// yet a trimming ceiling would treat them as holding "acct-A" and let them
+// grant it.
+//
+// The rule to preserve: a ceiling may be STRICTER than enforcement (a false
+// refusal fails closed and is visible), never looser.
 func accountScopeGap(outer, requested []string) string {
 	if IsUnrestrictedAccess(outer) {
 		return ""
@@ -261,10 +268,10 @@ func accountScopeGap(outer, requested []string) string {
 	}
 	permitted := make(map[string]bool, len(outer))
 	for _, a := range outer {
-		permitted[strings.TrimSpace(a)] = true
+		permitted[a] = true
 	}
 	for _, a := range requested {
-		if !permitted[strings.TrimSpace(a)] {
+		if !permitted[a] {
 			return fmt.Sprintf("access to cloud account %q", a)
 		}
 	}
@@ -340,8 +347,18 @@ func constraintsCover(held, req *PermissionConstraints) bool {
 // listCovers reports whether every value in req is permitted by held. An
 // empty held list is "no restriction on this dimension" and covers anything;
 // a non-empty held list requires req to be a NON-EMPTY subset, so a grant can
-// never drop the restriction. Values are trimmed and lower-cased, matching
-// matchAllRegionsConstraint's comparison.
+// never drop the restriction.
+//
+// Comparison is EXACT for every dimension. An earlier version normalised
+// (trim + lower-case) and justified it as "matching matchAllRegionsConstraint"
+// -- true for Regions only. AccountIDs, Providers and Services are enforced by
+// containsAny, an exact case-sensitive lookup, so normalising made the ceiling
+// LOOSER than enforcement there: a holder constrained to ["ACCT-1"] could
+// grant ["acct-1"], a value they cannot themselves use.
+//
+// Being exact on Regions too is stricter than its enforcement, not looser, so
+// it fails closed. A ceiling may exceed enforcement in strictness; it must
+// never fall short.
 func listCovers(held, req []string) bool {
 	if len(held) == 0 {
 		return true
@@ -351,18 +368,14 @@ func listCovers(held, req []string) bool {
 	}
 	permitted := make(map[string]bool, len(held))
 	for _, v := range held {
-		permitted[normalizeConstraintValue(v)] = true
+		permitted[v] = true
 	}
 	for _, v := range req {
-		if !permitted[normalizeConstraintValue(v)] {
+		if !permitted[v] {
 			return false
 		}
 	}
 	return true
-}
-
-func normalizeConstraintValue(v string) string {
-	return strings.ToLower(strings.TrimSpace(v))
 }
 
 // amountCovers reports whether a grant capped at reqMax stays within a holder
