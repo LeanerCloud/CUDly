@@ -224,6 +224,10 @@ func TestSelfCarvedOutGrant_FailsClosedOnGroupLoadError(t *testing.T) {
 	})
 
 	require.Error(t, err)
+	// Assert the underlying error is PROPAGATED, not just that some message
+	// mentions the group. A guard that swallowed loadErr and returned its own
+	// generic error would pass a message-text check while losing the reason.
+	assert.ErrorIs(t, err, loadErr)
 	assert.Contains(t, err.Error(), "failed to load group")
 	mockStore.AssertNotCalled(t, "UpdateUser", mock.Anything, mock.Anything)
 }

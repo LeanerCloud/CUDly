@@ -297,6 +297,11 @@ func (s *Service) CreateGroupAPI(ctx context.Context, actorUserID string, reqInt
 	if err := s.checkGrantCeiling(ctx, actorUserID, perms, nil); err != nil {
 		return nil, err
 	}
+	// A new group has no prior scope, so every allowed_accounts value is a
+	// grant -- including an omitted one, which creates an UNRESTRICTED group.
+	if err := s.checkAccountGrant(ctx, actorUserID, req.AllowedAccounts); err != nil {
+		return nil, err
+	}
 	group := &Group{
 		Name:            req.Name,
 		Description:     req.Description,
@@ -353,6 +358,9 @@ func (s *Service) UpdateGroupAPI(ctx context.Context, actorUserID, groupID strin
 
 	perms := apiPermissionsToPermissions(req.Permissions)
 	if err := s.checkGrantCeiling(ctx, actorUserID, perms, group.Permissions); err != nil {
+		return nil, err
+	}
+	if err := s.checkAccountCeiling(ctx, actorUserID, req.AllowedAccounts, group.AllowedAccounts); err != nil {
 		return nil, err
 	}
 

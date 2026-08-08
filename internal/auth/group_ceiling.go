@@ -138,6 +138,104 @@ func validateRequestedPermissions(requested []Permission) error {
 	return nil
 }
 
+// grantCeilingAccounts returns the account scope a group write is measured
+// against: the union of the acting principal's groups' AllowedAccounts.
+// Fails closed on an unidentified actor or a resolution error.
+//
+// The stateless admin API key has no user row and is unrestricted everywhere
+// else (see getAllowedAccounts in internal/api), so it is unrestricted here.
+func (s *Service) grantCeilingAccounts(ctx context.Context, actorUserID string) ([]string, error) {
+	if actorUserID == "" {
+		return nil, fmt.Errorf("%w: the acting user could not be identified", ErrPermissionCeiling)
+	}
+	if actorUserID == AdminAPIKeyActorID {
+		return nil, nil
+	}
+	authCtx, err := s.BuildAuthContext(ctx, actorUserID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: could not resolve the acting user's account scope: %w", ErrPermissionCeiling, err)
+	}
+	return authCtx.AllowedAccounts, nil
+}
+
+// checkAccountCeiling bounds the OTHER account dimension of a group write.
+//
+// This is deliberately a separate call from checkGrantCeiling rather than a
+// branch inside it. checkGrantCeiling returns early when no permissions are
+// sent, and APIUpdateGroupRequest's "empty means not sent" contract makes an
+// allowed_accounts-only PUT the natural shape -- so folding this in would
+// leave exactly the request that widens account scope unchecked. That was the
+// live gap: widening AllowedAccounts to more accounts, to [] or to ["*"] was
+// accepted, while widening Permissions[].Constraints.AccountIDs on the SAME
+// call was correctly refused.
+//
+// requested == nil means "not sent" and is left alone. A write is in ceiling
+// if it does not widen the group's existing scope, or if it stays within the
+// acting principal's own scope.
+func (s *Service) checkAccountCeiling(ctx context.Context, actorUserID string, requested, existing []string) error {
+	if requested == nil {
+		return nil
+	}
+	// Not a widening of what the group already had -- safe whoever the actor
+	// is. Only reachable on update: a new group has no prior scope, and nil
+	// existing would read as UNRESTRICTED here and swallow every check, which
+	// is why CreateGroupAPI calls checkAccountGrant directly instead.
+	if accountScopeGap(existing, requested) == "" {
+		return nil
+	}
+	return s.checkAccountGrant(ctx, actorUserID, requested)
+}
+
+// checkAccountGrant requires requested to sit inside the acting principal's
+// own account scope. This is the create-path entry point, where there is no
+// prior scope to compare against, so every value is a grant.
+//
+// A nil requested is checked too, and deliberately: on create, omitting
+// allowed_accounts produces an UNRESTRICTED group (IsUnrestrictedAccess reads
+// empty as "all accounts"), so for a scoped actor that is the widest possible
+// grant rather than a no-op.
+func (s *Service) checkAccountGrant(ctx context.Context, actorUserID string, requested []string) error {
+	actorAccounts, err := s.grantCeilingAccounts(ctx, actorUserID)
+	if err != nil {
+		return err
+	}
+	if gap := accountScopeGap(actorAccounts, requested); gap != "" {
+		return fmt.Errorf(
+			"%w: cannot grant %s because your own account scope does not include it",
+			ErrPermissionCeiling, gap)
+	}
+	return nil
+}
+
+// accountScopeGap returns a description of the first way requested reaches
+// beyond outer, or "" when outer covers it entirely.
+//
+// Empty and "*" both mean UNRESTRICTED on either side (IsUnrestrictedAccess),
+// which is why this cannot be a plain subset test: the empty set is a subset
+// of everything but means the opposite of narrow. An unrestricted request
+// against a restricted holder is the widening this exists to catch.
+//
+// Comparison is exact, matching MatchesAccount. Case folding would only make
+// the check more permissive, which is the wrong direction for a ceiling.
+func accountScopeGap(outer, requested []string) string {
+	if IsUnrestrictedAccess(outer) {
+		return ""
+	}
+	if IsUnrestrictedAccess(requested) {
+		return "unrestricted access to all cloud accounts"
+	}
+	permitted := make(map[string]bool, len(outer))
+	for _, a := range outer {
+		permitted[strings.TrimSpace(a)] = true
+	}
+	for _, a := range requested {
+		if !permitted[strings.TrimSpace(a)] {
+			return fmt.Sprintf("access to cloud account %q", a)
+		}
+	}
+	return ""
+}
+
 // grantCeilingAllows reports whether actorPerms holds req in full. Action and
 // resource matching mirrors permissionsAllow exactly, including the admin:*
 // carve-out, so the ceiling can never be looser than enforcement. It adds one

@@ -82,6 +82,12 @@ func TestGroupOnlyAuthz_NonAdminDenied(t *testing.T) {
 	viewer := &User{ID: "viewer-1", GroupIDs: []string{viewerGroup().ID}, Active: true}
 	mockStore.On("GetUserByID", ctx, "viewer-1").Return(viewer, nil)
 	mockStore.On("GetGroup", ctx, viewerGroup().ID).Return(viewerGroup(), nil)
+	// Permissive write stub, deliberately: without it, removing the
+	// self-escalation guard kills this test by panicking on an unstubbed
+	// UpdateUser. With it, the removal is caught by AssertNotCalled below,
+	// which is the actual security property (no write happened).
+	mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Maybe()
+	mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(adminGroup(), nil).Maybe()
 
 	has, err := svc.HasPermission(ctx, "viewer-1", ActionApproveAny, ResourcePurchases, nil)
 	require.NoError(t, err)

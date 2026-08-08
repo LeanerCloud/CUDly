@@ -1,5 +1,11 @@
 package auth
 
+// Grant-ceiling tests (issues #1550, #1629): what a caller may hand out.
+//
+// Shared fixtures live in group_ceiling_fixtures_test.go. Every refusal case
+// asserts that no write reached the store, with per-parameter matchers --
+// a name-only AssertNotCalled can never fail (issue #1595).
+
 import (
 	"context"
 	"errors"
@@ -9,44 +15,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
-
-// Grant-ceiling regression tests for issues #1550 and #1629.
-//
-// Every refusal case here deliberately stubs NO CreateGroup / UpdateGroup /
-// DeleteGroup expectation on the mock store. testify's mock panics on an
-// un-stubbed call, so if the guard under test were removed the write would
-// reach the store and the test would fail loudly rather than silently pass.
-// That is the mutation check: these assertions are not vacuous.
-
-const (
-	ceilingActorID      = "11111111-1111-4111-8111-111111111111"
-	ceilingActorGroupID = "22222222-2222-4222-8222-222222222222"
-	ceilingTargetID     = "33333333-3333-4333-8333-333333333333"
-)
-
-// stubActorPermissions wires the two store lookups GetUserPermissions makes
-// for the acting user: the user row, then each of its groups.
-func stubActorPermissions(ctx context.Context, mockStore *MockStore, perms []Permission) {
-	mockStore.On("GetUserByID", ctx, ceilingActorID).
-		Return(&User{ID: ceilingActorID, GroupIDs: []string{ceilingActorGroupID}}, nil)
-	mockStore.On("GetGroup", ctx, ceilingActorGroupID).
-		Return(&Group{ID: ceilingActorGroupID, Name: "Actor Group", Permissions: perms}, nil)
-}
-
-func stubTargetGroup(ctx context.Context, mockStore *MockStore, group *Group) {
-	mockStore.On("GetGroup", ctx, ceilingTargetID).Return(group, nil)
-}
-
-func newCeilingService(t *testing.T, mockStore *MockStore) *Service {
-	t.Helper()
-	return createTestService(mockStore, new(MockEmailSender))
-}
-
-func updateReqWith(perms ...APIPermission) APIUpdateGroupRequest {
-	return APIUpdateGroupRequest{Name: "Renamed", Permissions: perms}
-}
-
-var adminOnly = []Permission{{Action: ActionAdmin, Resource: ResourceAll}}
 
 // TestGrantCeiling_CarvedOutNotGrantable is the #1550 attack itself: an admin
 // writing the money verbs onto a group in a single request.
@@ -158,131 +126,6 @@ func TestGrantCeiling_CarvedOutMayBeKeptNotWidened(t *testing.T) {
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrPermissionNotGrantable)
 		mockStore.AssertNotCalled(t, "UpdateGroup", mock.Anything, mock.Anything)
-	})
-}
-
-// TestGrantCeiling_RejectsBlankActionOrResource covers the #1730 widening
-// path. A blank resource is NOT caught by the ceiling: the admin:* branch
-// grants any pair that is not carved out, and ("view", "") is not carved out,
-// so before validateRequestedPermissions an admin wrote it straight through
-// and it round-tripped through the group-edit form as the "*" wildcard.
-func TestGrantCeiling_RejectsBlankActionOrResource(t *testing.T) {
-	ctx := context.Background()
-
-	blank := []struct {
-		name string
-		perm APIPermission
-	}{
-		// The escalating case: blank resource widens to "*".
-		{"empty resource", APIPermission{Action: ActionView, Resource: ""}},
-		{"whitespace resource", APIPermission{Action: ActionView, Resource: "   "}},
-		// The non-escalating but still malformed case: blank action is
-		// silently dropped by the form.
-		{"empty action", APIPermission{Action: "", Resource: ResourcePurchases}},
-		{"whitespace action", APIPermission{Action: "  ", Resource: ResourcePurchases}},
-		{"both blank", APIPermission{Action: "", Resource: ""}},
-	}
-
-	for _, tc := range blank {
-		t.Run("update/"+tc.name, func(t *testing.T) {
-			mockStore := new(MockStore)
-			t.Cleanup(func() { mockStore.AssertExpectations(t) })
-			svc := newCeilingService(t, mockStore)
-
-			stubTargetGroup(ctx, mockStore, &Group{ID: ceilingTargetID, Name: "Team"})
-
-			result, err := svc.UpdateGroupAPI(ctx, ceilingActorID, ceilingTargetID, updateReqWith(tc.perm))
-
-			require.Error(t, err)
-			assert.Nil(t, result)
-			assert.ErrorIs(t, err, ErrInvalidPermission)
-			// The refusal names the offending entry.
-			assert.Contains(t, err.Error(), "entry 0")
-			mockStore.AssertNotCalled(t, "UpdateGroup", mock.Anything, mock.Anything)
-			// Validation runs BEFORE the actor lookup, so a malformed entry is
-			// refused whoever the caller is -- including a full admin, whose
-			// admin:* branch would otherwise grant ("view", "") outright.
-			mockStore.AssertNotCalled(t, "GetUserByID", mock.Anything, mock.Anything)
-		})
-
-		t.Run("create/"+tc.name, func(t *testing.T) {
-			mockStore := new(MockStore)
-			t.Cleanup(func() { mockStore.AssertExpectations(t) })
-			svc := newCeilingService(t, mockStore)
-
-			_, err := svc.CreateGroupAPI(ctx, ceilingActorID, APICreateGroupRequest{
-				Name:        "Team",
-				Permissions: []APIPermission{tc.perm},
-			})
-
-			require.Error(t, err)
-			assert.ErrorIs(t, err, ErrInvalidPermission)
-			mockStore.AssertNotCalled(t, "CreateGroup", mock.Anything, mock.Anything)
-			mockStore.AssertNotCalled(t, "GetUserByID", mock.Anything, mock.Anything)
-		})
-	}
-
-	// A blank entry anywhere in the list refuses the WHOLE write; the valid
-	// entries are not saved without it (never silently narrow).
-	t.Run("a blank entry beside valid ones refuses the whole list", func(t *testing.T) {
-		mockStore := new(MockStore)
-		t.Cleanup(func() { mockStore.AssertExpectations(t) })
-		svc := newCeilingService(t, mockStore)
-
-		stubTargetGroup(ctx, mockStore, &Group{ID: ceilingTargetID, Name: "Team"})
-
-		_, err := svc.UpdateGroupAPI(ctx, ceilingActorID, ceilingTargetID, updateReqWith(
-			APIPermission{Action: ActionView, Resource: ResourcePlans},
-			APIPermission{Action: ActionView, Resource: ""},
-		))
-
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidPermission)
-		assert.Contains(t, err.Error(), "entry 1")
-		mockStore.AssertNotCalled(t, "UpdateGroup", mock.Anything, mock.Anything)
-	})
-
-	// Negative control: a well-formed permission is still accepted, so the
-	// validator is not simply refusing everything.
-	t.Run("a well-formed permission is still accepted", func(t *testing.T) {
-		mockStore := new(MockStore)
-		t.Cleanup(func() { mockStore.AssertExpectations(t) })
-		svc := newCeilingService(t, mockStore)
-
-		stubActorPermissions(ctx, mockStore, adminOnly)
-		stubTargetGroup(ctx, mockStore, &Group{ID: ceilingTargetID, Name: "Team"})
-
-		var saved *Group
-		mockStore.On("UpdateGroup", ctx, mock.AnythingOfType("*auth.Group")).
-			Run(func(args mock.Arguments) {
-				g, ok := args.Get(1).(*Group)
-				require.True(t, ok)
-				saved = g
-			}).Return(nil).Once()
-
-		_, err := svc.UpdateGroupAPI(ctx, ceilingActorID, ceilingTargetID,
-			updateReqWith(APIPermission{Action: ActionView, Resource: ResourcePlans}))
-
-		require.NoError(t, err)
-		require.NotNil(t, saved)
-		assert.Equal(t, []Permission{{Action: ActionView, Resource: ResourcePlans}}, saved.Permissions)
-	})
-
-	// An explicit "*" is a legitimate value and must NOT be confused with a
-	// blank one; it is gated by the ceiling instead.
-	t.Run("an explicit wildcard is not treated as blank", func(t *testing.T) {
-		mockStore := new(MockStore)
-		t.Cleanup(func() { mockStore.AssertExpectations(t) })
-		svc := newCeilingService(t, mockStore)
-
-		stubActorPermissions(ctx, mockStore, adminOnly)
-		stubTargetGroup(ctx, mockStore, &Group{ID: ceilingTargetID, Name: "Team"})
-		mockStore.On("UpdateGroup", ctx, mock.AnythingOfType("*auth.Group")).Return(nil).Once()
-
-		_, err := svc.UpdateGroupAPI(ctx, ceilingActorID, ceilingTargetID,
-			updateReqWith(APIPermission{Action: ActionView, Resource: ResourceAll}))
-
-		require.NoError(t, err, "an admin holding admin:* may grant view:*; only a BLANK resource is malformed")
 	})
 }
 
@@ -568,75 +411,5 @@ func TestGrantCeiling_CreateGroupAPI(t *testing.T) {
 			Permissions: []APIPermission{{Action: ActionView, Resource: ResourcePlans}},
 		})
 		require.NoError(t, err)
-	})
-}
-
-// TestSystemManagedGroup_Immutable covers the second half of #1629: the
-// seeded groups are owned by migrations and no API verb may reshape them.
-func TestSystemManagedGroup_Immutable(t *testing.T) {
-	ctx := context.Background()
-
-	seeded := func() *Group {
-		return &Group{
-			ID:            DefaultPurchaserGroupID,
-			Name:          GroupPurchaser,
-			SystemManaged: true,
-			Permissions: []Permission{
-				{Action: ActionExecute, Resource: ResourcePurchases},
-				{Action: ActionApproveAny, Resource: ResourcePurchases},
-				{Action: ActionRetryAny, Resource: ResourcePurchases},
-				{Action: ActionView, Resource: ResourceHistory},
-			},
-		}
-	}
-
-	t.Run("update is refused", func(t *testing.T) {
-		mockStore := new(MockStore)
-		t.Cleanup(func() { mockStore.AssertExpectations(t) })
-		svc := newCeilingService(t, mockStore)
-
-		mockStore.On("GetGroup", ctx, DefaultPurchaserGroupID).Return(seeded(), nil)
-
-		// The exact #1629 payload: approve-any/retry-any dropped, view
-		// widened to the wildcard.
-		result, err := svc.UpdateGroupAPI(ctx, ceilingActorID, DefaultPurchaserGroupID,
-			APIUpdateGroupRequest{
-				Description: "cosmetic edit",
-				Permissions: []APIPermission{
-					{Action: ActionExecute, Resource: ResourcePurchases},
-					{Action: ActionView, Resource: ResourceAll},
-				},
-			})
-
-		require.Error(t, err)
-		assert.Nil(t, result)
-		assert.ErrorIs(t, err, ErrSystemManagedGroup)
-		assert.Contains(t, err.Error(), GroupPurchaser)
-		mockStore.AssertNotCalled(t, "UpdateGroup", mock.Anything, mock.Anything)
-	})
-
-	t.Run("delete is refused", func(t *testing.T) {
-		mockStore := new(MockStore)
-		t.Cleanup(func() { mockStore.AssertExpectations(t) })
-		svc := newCeilingService(t, mockStore)
-
-		mockStore.On("GetGroup", ctx, DefaultPurchaserGroupID).Return(seeded(), nil)
-
-		err := svc.DeleteGroup(ctx, DefaultPurchaserGroupID)
-
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrSystemManagedGroup)
-		mockStore.AssertNotCalled(t, "DeleteGroup", mock.Anything, mock.Anything)
-	})
-
-	t.Run("an ordinary group is still deletable", func(t *testing.T) {
-		mockStore := new(MockStore)
-		t.Cleanup(func() { mockStore.AssertExpectations(t) })
-		svc := newCeilingService(t, mockStore)
-
-		stubTargetGroup(ctx, mockStore, &Group{ID: ceilingTargetID, Name: "Team"})
-		mockStore.On("DeleteGroup", ctx, ceilingTargetID).Return(nil).Once()
-
-		require.NoError(t, svc.DeleteGroup(ctx, ceilingTargetID))
 	})
 }
