@@ -322,8 +322,122 @@ func TestAccountCeiling_FailsClosedWhenActorScopeUnresolvable(t *testing.T) {
 
 			require.Error(t, err, "an unresolvable scope must refuse the widening, not permit it")
 			assert.ErrorIs(t, err, ErrPermissionCeiling)
-			assert.Contains(t, err.Error(), "could not be established")
+			// Total failure is the degenerate case of a partial one -- every
+			// group skipped -- so it is caught by the skipped-group guard and
+			// carries that message. Assert the sentinel plus the shared
+			// substring rather than one guard's exact wording.
+			assert.Contains(t, err.Error(), "could not be resolved")
 			mockStore.AssertNotCalled(t, "UpdateGroup", mock.Anything, mock.Anything)
 		})
 	}
+}
+
+// A PARTIAL group resolution can WIDEN the actor's own scope, letting them
+// grant what their real configuration forbids (#1737 A1, same defect as the
+// read path in #1752).
+//
+// Needs TWO groups: one granting update:groups with no allowed_accounts
+// (unrestricted alone), one carrying the restriction. The union is
+// restricted; lose the restricting group and it collapses to empty = every
+// account, and the ceiling then permits widening a group to ["*"].
+func TestAccountCeiling_PartialActorResolutionThatWidensIsRefused(t *testing.T) {
+	ctx := context.Background()
+	const permGroup, scopeGroup = "g-perm", "g-scope"
+
+	for _, tc := range []struct {
+		name      string
+		scopeResp func(*MockStore)
+	}{
+		{"restricting group missing (ErrNoRows)", func(ms *MockStore) {
+			ms.On("GetGroup", ctx, scopeGroup).Return(nil, pgx.ErrNoRows)
+		}},
+		{"restricting group resolves to (nil, nil)", func(ms *MockStore) {
+			ms.On("GetGroup", ctx, scopeGroup).Return(nil, nil)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			t.Cleanup(func() { mockStore.AssertExpectations(t) })
+			svc := createTestService(mockStore, new(MockEmailSender))
+
+			mockStore.On("GetUserByID", ctx, ceilingActorID).
+				Return(&User{ID: ceilingActorID, GroupIDs: []string{permGroup, scopeGroup}}, nil)
+			mockStore.On("GetGroup", ctx, permGroup).Return(&Group{
+				ID:          permGroup,
+				Permissions: []Permission{{Action: ActionUpdate, Resource: ResourceGroups}},
+			}, nil)
+			tc.scopeResp(mockStore)
+			mockStore.On("GetGroup", ctx, ceilingTargetID).Return(&Group{
+				ID: ceilingTargetID, Name: "Team", AllowedAccounts: []string{scopedAccountA},
+			}, nil)
+
+			_, err := svc.UpdateGroupAPI(ctx, ceilingActorID, ceilingTargetID,
+				APIUpdateGroupRequest{AllowedAccounts: []string{"*"}})
+
+			require.Error(t, err, "a widened actor scope must not authorize widening a group")
+			assert.ErrorIs(t, err, ErrPermissionCeiling)
+			mockStore.AssertNotCalled(t, "UpdateGroup", mock.Anything, mock.Anything)
+		})
+	}
+}
+
+// Baseline control: both groups resolving, the same actor is correctly
+// refused for a DIFFERENT reason (their real scope does not cover "*"), which
+// is what makes the partial case a genuine bypass rather than a no-op.
+func TestAccountCeiling_PartialActorBaselineIsRefusedOnRealScope(t *testing.T) {
+	ctx := context.Background()
+	const permGroup, scopeGroup = "g-perm", "g-scope"
+
+	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	svc := createTestService(mockStore, new(MockEmailSender))
+
+	mockStore.On("GetUserByID", ctx, ceilingActorID).
+		Return(&User{ID: ceilingActorID, GroupIDs: []string{permGroup, scopeGroup}}, nil)
+	mockStore.On("GetGroup", ctx, permGroup).Return(&Group{
+		ID: permGroup, Permissions: []Permission{{Action: ActionUpdate, Resource: ResourceGroups}},
+	}, nil)
+	mockStore.On("GetGroup", ctx, scopeGroup).Return(&Group{
+		ID: scopeGroup, AllowedAccounts: []string{scopedAccountA},
+	}, nil)
+	mockStore.On("GetGroup", ctx, ceilingTargetID).Return(&Group{
+		ID: ceilingTargetID, Name: "Team", AllowedAccounts: []string{scopedAccountA},
+	}, nil)
+
+	_, err := svc.UpdateGroupAPI(ctx, ceilingActorID, ceilingTargetID,
+		APIUpdateGroupRequest{AllowedAccounts: []string{"*"}})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrPermissionCeiling)
+}
+
+// An actor whose surviving union carries "*" was already maximally wide, so a
+// lost group cannot widen them. Refusing them would be pure availability cost
+// -- and all seven seeded groups ship allowed_accounts = ARRAY['*'].
+func TestAccountCeiling_WildcardActorToleratesSkippedGroup(t *testing.T) {
+	ctx := context.Background()
+	const seededGroup, scopeGroup = "g-seeded", "g-scope"
+
+	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	svc := createTestService(mockStore, new(MockEmailSender))
+
+	mockStore.On("GetUserByID", ctx, ceilingActorID).
+		Return(&User{ID: ceilingActorID, GroupIDs: []string{seededGroup, scopeGroup}}, nil)
+	mockStore.On("GetGroup", ctx, seededGroup).Return(&Group{
+		ID:              seededGroup,
+		Permissions:     []Permission{{Action: ActionUpdate, Resource: ResourceGroups}},
+		AllowedAccounts: []string{"*"},
+	}, nil)
+	mockStore.On("GetGroup", ctx, scopeGroup).Return(nil, pgx.ErrNoRows)
+	mockStore.On("GetGroup", ctx, ceilingTargetID).Return(&Group{
+		ID: ceilingTargetID, Name: "Team", AllowedAccounts: []string{scopedAccountA},
+	}, nil)
+	mockStore.On("UpdateGroup", ctx, mock.AnythingOfType("*auth.Group")).Return(nil).Once()
+
+	_, err := svc.UpdateGroupAPI(ctx, ceilingActorID, ceilingTargetID,
+		APIUpdateGroupRequest{AllowedAccounts: []string{"*"}})
+
+	require.NoError(t, err,
+		"an actor already unrestricted at baseline must not be refused for a lost group")
 }

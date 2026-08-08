@@ -155,6 +155,25 @@ func (s *Service) grantCeilingAccounts(ctx context.Context, actorUserID string) 
 	if err != nil {
 		return nil, fmt.Errorf("%w: could not resolve the acting user's account scope: %w", ErrPermissionCeiling, err)
 	}
+	// A PARTIAL resolution can WIDEN the actor's scope, which is the case that
+	// matters and the one an earlier version of this guard missed.
+	//
+	// AllowedAccounts is a union in which the empty set means EVERYTHING, so
+	// dropping a contributing group does not narrow it. The union of [] and
+	// ["acct-A"] is restricted; lose the group carrying ["acct-A"] and it
+	// collapses to [] = unrestricted, and the actor can then widen any group
+	// to ["*"]. Verified by execution against the write path: baseline
+	// REFUSED, one skipped group ACCEPTED.
+	//
+	// The test is len(AllowedAccounts) == 0, NOT IsUnrestrictedAccess. A union
+	// containing "*" was already maximally wide at baseline, so no loss can
+	// widen it; refusing it would be zero security benefit and pure
+	// availability cost, and all seven seeded groups ship ARRAY['*'].
+	if len(authCtx.AllowedAccounts) == 0 && authCtx.SkippedGroups > 0 {
+		return nil, fmt.Errorf(
+			"%w: %d group(s) could not be resolved and the acting user's remaining scope is unrestricted",
+			ErrPermissionCeiling, authCtx.SkippedGroups)
+	}
 	// An unresolved scope is UNKNOWN, not unrestricted.
 	//
 	// collectGroupsAndAccounts skips a missing or deleted group silently
