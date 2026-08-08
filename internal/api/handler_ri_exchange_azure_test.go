@@ -743,6 +743,56 @@ func TestExecuteAzureExchange_MissingExecutePermission(t *testing.T) {
 	assert.Equal(t, 403, ce.code)
 }
 
+// TestExecuteAzureExchange_PlainAdminIsRefused drives the REAL routed
+// handler (POST /api/ri-exchange/azure-instances/exchange), not the
+// permission predicate -- the same gap TestExecuteExchange_PlainAdminIsRefused
+// (ri_exchange_carveout_test.go) closed for the AWS endpoint. executeAzureExchange
+// carries the identical requirePermission(ctx, req, "execute", "ri-exchange")
+// gate (handler_ri_exchange.go:1172), and the nearest existing coverage,
+// TestExecuteAzureExchange_MissingExecutePermission above, stubs
+// HasPermissionAPI to return false directly -- that proves the handler
+// honours a denial, not that a plain admin:* principal IS denied, which is
+// #1644's actual claim. Verified (PR #1758 independent review): with the
+// carve-out pair removed from adminCarvedOuts, every *AzureExchange* test in
+// this file still passed.
+//
+// Asserts the error's IDENTITY (403 ClientError), not substring tokens in
+// its message -- see TestExecuteExchange_PlainAdminIsRefused's docstring for
+// why that matters.
+//
+// mockStore is deliberately left otherwise unstubbed. Under mutation (carve-out
+// removed), buildAzureExchangeClient (handler_ri_exchange.go:206) falls
+// through to h.config.GetCloudAccountByExternalID since azureExchangeFactory
+// is nil here; an unstubbed MockConfigStore method returns (nil, nil) rather
+// than panicking (the isExpected guard), which buildAzureExchangeClient
+// treats as "no Azure account registered" and returns a 404 -- still not
+// 403, so the identity assertion below still fails as intended. Unlike the
+// AWS sibling test, this path never reaches real Azure SDK client
+// construction (credential resolution only happens once an account is
+// found), so no AWS-style credential sandboxing is needed -- mutation-verified
+// against the real handler, not reasoned about.
+func TestExecuteAzureExchange_PlainAdminIsRefused(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
+	mockAuth.grantPermissions([]auth.Permission{{Action: auth.ActionAdmin, Resource: auth.ResourceAll}})
+
+	h := &Handler{auth: mockAuth, config: mockStore}
+	result, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody,
+	})
+
+	require.Error(t, err, "a plain admin must not be able to execute an Azure RI exchange (#1644)")
+	assert.Nil(t, result)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "a carve-out denial must be a client error, not a downstream failure")
+	assert.Equal(t, 403, ce.code, "must be refused at the permission gate, not fail later for an unrelated reason")
+}
+
 // TestExecuteAzureExchange_ConstraintExceeded proves the fail-closed
 // requirePermissionConstraints gate blocks execution BEFORE any pricing
 // call: CalculateExchange must not be invoked when the constraint check
