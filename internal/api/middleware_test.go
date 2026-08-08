@@ -8,6 +8,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -421,6 +422,98 @@ func TestCancelViaSession_RequiresCSRF(t *testing.T) {
 	assert.Contains(t, ce.Error(), "CSRF validation failed")
 }
 
+// TestApproveRIExchangeViaSession_RequiresCSRF is the RI-exchange analog of
+// TestApproveViaSession_RequiresCSRF (issue #1757). Before this fix,
+// approveRIExchangeViaSession had no CSRF check at all -- the endpoint is
+// AuthPublic, so the outer middleware skips CSRF (same as purchases), but
+// unlike purchases nothing enforced it inside the handler. A comment at
+// middleware.go claimed parity with the purchases path; it didn't hold.
+//
+// Asserts on the call to TransitionRIExchangeStatus directly, not just on
+// the returned error: an error alone doesn't prove the state transition was
+// prevented, only that something failed somewhere.
+func TestApproveRIExchangeViaSession_RequiresCSRF(t *testing.T) {
+	ctx := context.Background()
+	id := "550e8400-e29b-41d4-a716-446655440020"
+
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	adminSession := &Session{UserID: "admin-uuid", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+	// CSRF token is empty → ValidateCSRFToken must return an error so the
+	// request is rejected before ever fetching the exchange record.
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(errors.New("csrf mismatch"))
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	h := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	_, err := h.approveRIExchange(ctx, req, id, "")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a ClientError, got: %v", err)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.Error(), "CSRF validation failed")
+
+	// The state-changing assertion: CSRF must be checked before the record
+	// is even fetched, let alone transitioned. Both must be untouched.
+	mockStore.AssertNotCalled(t, "GetRIExchangeRecord", mock.Anything, mock.Anything)
+	mockStore.AssertNotCalled(t, "TransitionRIExchangeStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestApproveRIExchangeViaSession_PassesCSRF confirms the CSRF guard does
+// not block the legitimate dashboard flow: a valid CSRF token still reaches
+// TransitionRIExchangeStatus. Without this, "add the CSRF check" could ship
+// a fix that also breaks the happy path.
+func TestApproveRIExchangeViaSession_PassesCSRF(t *testing.T) {
+	ctx := context.Background()
+	id := "550e8400-e29b-41d4-a716-446655440021"
+	creatorID := "creator-uuid"
+
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	adminSession := &Session{UserID: "admin-uuid", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(adminSession, nil)
+	// approve-any:purchases is carved out of admin:* (#923); grantAdminPurchaser
+	// grants it explicitly so this test reaches TransitionRIExchangeStatus
+	// without also depending on the ownership comparison, matching the sibling
+	// TestApproveRIExchange_SessionAdmin fixture.
+	mockAuth.grantAdminPurchaser()
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "csrf-abc").Return(nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
+		ID:              id,
+		Status:          "pending",
+		ApprovalToken:   "tok",
+		SourceRIIDs:     []string{"ri-123"},
+		PaymentDue:      "100.00",
+		CreatedByUserID: &creatorID,
+	}, nil).Once()
+	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything).
+		Return(&config.RIExchangeRecord{ID: id, Status: "processing", SourceRIIDs: []string{"ri-123"}, PaymentDue: "100.00"}, nil)
+	mockStore.On("GetRIExchangeDailySpend", mock.Anything, mock.Anything).Return("0", nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		RIExchangeMaxDailyUSD:       1000,
+		RIExchangeMaxPerExchangeUSD: 500,
+	}, nil)
+	mockStore.On("FailRIExchange", ctx, id, mock.AnythingOfType("string")).Return(nil)
+	mockStore.On("StampRIExchangeApprovedBy", ctx, id, adminSession.Email).Return(nil)
+
+	h := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"authorization": "Bearer sess-tok",
+			"x-csrf-token":  "csrf-abc",
+		},
+	}
+	_, err := h.approveRIExchange(ctx, req, id, "")
+	require.NoError(t, err)
+	mockStore.AssertCalled(t, "TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything)
+}
+
 // TestTokenOnlyApprove_BypassesCSRF asserts that the email-link token path
 // does NOT invoke approvePurchaseViaSession, so CSRF is not checked on that
 // code path. The token path uses authorizeApprovalAction which validates the
@@ -480,10 +573,29 @@ func TestTokenOnlyApprove_BypassesCSRF(t *testing.T) {
 	assert.Equal(t, "completed", result.(map[string]string)["status"])
 }
 
-// Regression test for #404: approve/cancel/reject paths must require CSRF
-// when the request carries a session bearer token. Previously they were
-// unconditionally exempt, meaning a logged-in user could be CSRF-attacked
-// into approving a purchase via a malicious page.
+// Regression test for #404: pins requiresCSRFValidation's own per-path
+// decision for the approve/cancel/reject paths.
+//
+// IMPORTANT SCOPE LIMIT (issue #1757): this calls requiresCSRFValidation
+// directly, bypassing validateSecurityContext's isPublicEndpoint gate. Every
+// path in tokenPaths below is registered AuthPublic in router.go, so in the
+// real request path isPublicEndpoint short-circuits BEFORE
+// requiresCSRFValidation is ever reached -- this function's return value for
+// these four paths is never actually consulted by the live dispatch. A
+// passing assertion here is NOT proof that CSRF is enforced end-to-end; it
+// was misread as exactly that for approveRIExchangeViaSession, which had no
+// validateCSRF call of its own until this issue. The end-to-end guarantee
+// for a given AuthPublic route comes only from that route's handler calling
+// h.validateCSRF directly (see TestApproveViaSession_RequiresCSRF /
+// TestCancelViaSession_RequiresCSRF / TestApproveRIExchangeViaSession_
+// RequiresCSRF, which drive the real handler.approvePurchase /
+// cancelPurchase / approveRIExchange entry points instead).
+//
+// Kept rather than deleted: requiresCSRFValidation's per-path table is real
+// logic that would matter again if any of these routes ever stopped being
+// AuthPublic, and this is the only test that pins it. Deleting it would
+// trade a mislabeled test for no coverage at all; the comment above is the
+// fix for the mislabeling.
 func TestRequiresCSRFValidation_TokenBasedPathsWithSession(t *testing.T) {
 	h := &Handler{}
 

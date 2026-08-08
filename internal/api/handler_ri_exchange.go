@@ -2103,6 +2103,16 @@ func (h *Handler) approveRIExchangeViaToken(ctx context.Context, id, token strin
 // The session parameter may be non-nil (already validated by the caller) or nil
 // (requireSession will validate it and return 401 if absent).
 func (h *Handler) approveRIExchangeViaSession(ctx context.Context, req *events.LambdaFunctionURLRequest, id string, session *Session) (any, error) {
+	// This endpoint is AuthPublic so the outer middleware skips CSRF.
+	// Enforce it here for the session-authed sub-path, mirroring
+	// approvePurchaseViaSession / cancelPurchaseViaSession: the session
+	// bearer token is cookie-equivalent and must be CSRF-protected (issue
+	// #1757 -- this call was previously reachable with no CSRF token at
+	// all, despite a comment claiming parity with the purchases path).
+	if err := h.validateCSRF(ctx, req); err != nil {
+		return nil, NewClientError(403, "CSRF validation failed")
+	}
+
 	var err error
 	if session == nil {
 		session, err = h.requireSession(ctx, req)
