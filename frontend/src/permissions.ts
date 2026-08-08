@@ -164,9 +164,11 @@ export const RI_EXCHANGER_GROUP_ID = '00000000-0000-5000-8000-000000000008';
 
 /**
  * The set of (action, resource) pairs carved out of the admin:*
- * wildcard. Mirrors adminCarvedOuts in internal/auth/types.go.
- * Admin-group members must also be in the Purchaser group to pass
- * these checks.
+ * wildcard. Mirrors adminCarvedOuts in internal/auth/types.go. Which
+ * group's membership grants each key back during the fallback path
+ * (effectivePermissions not yet loaded) is NOT uniform across this set --
+ * see CARVE_OUT_FALLBACK_CHECK below, which every entry here must also
+ * appear in.
  */
 const ADMIN_CARVED_OUTS: ReadonlySet<string> = new Set([
   'execute:purchases',
@@ -177,6 +179,19 @@ const ADMIN_CARVED_OUTS: ReadonlySet<string> = new Set([
   // set drifts from adminCarvedOuts the UI offers an action the backend
   // then refuses with a 403.
   'execute:ri-exchange',
+]);
+
+/**
+ * Subset of ADMIN_CARVED_OUTS specific to the three money-spending purchase
+ * verbs (issue #923). isPurchaser() consults only these -- NOT the full
+ * ADMIN_CARVED_OUTS set -- so that holding execute:ri-exchange alone (issue
+ * #1644, a disjoint carve-out with its own group) does not also satisfy the
+ * "can spend money" predicate the no-Purchaser banners key off.
+ */
+const PURCHASER_CARVED_OUTS: ReadonlySet<string> = new Set([
+  'execute:purchases',
+  'approve-any:purchases',
+  'retry-any:purchases',
 ]);
 
 /**
@@ -218,7 +233,7 @@ export function isPurchaser(): boolean {
     // same way the backend's HasPermission accepts ResourceAll. Walk
     // each carved-out key and accept either an exact match or a
     // wildcard-resource match on the same action.
-    for (const key of ADMIN_CARVED_OUTS) {
+    for (const key of PURCHASER_CARVED_OUTS) {
       const colon = key.indexOf(':');
       if (colon < 0) continue;
       const action = key.slice(0, colon);
@@ -235,26 +250,70 @@ export function isPurchaser(): boolean {
 }
 
 /**
+ * Return true when the current session is authorised for the
+ * execute:ri-exchange carved-out verb (issue #1644). Mirrors isPurchaser()'s
+ * shape: when effectivePermissions has loaded, drive off the permission set
+ * itself so a user granted the verb via a custom group (not just the seeded
+ * RI Exchanger group) also returns true; while it is still loading, fall
+ * back to seeded RI-Exchanger-group membership so this helper agrees with
+ * canAccess()'s fallback in the same window.
+ */
+export function isRIExchanger(): boolean {
+  const user = state.getCurrentUser();
+  if (!user) return false;
+  if (user.effectivePermissions) {
+    for (const p of user.effectivePermissions) {
+      if (p.action === 'execute' && (p.resource === 'ri-exchange' || p.resource === '*')) {
+        return true;
+      }
+    }
+    return false;
+  }
+  return Array.isArray(user.groups) && user.groups.includes(RI_EXCHANGER_GROUP_ID);
+}
+
+/**
+ * Maps each carved-out (action:resource) key to the predicate that grants it
+ * back during the fallback (effectivePermissions not yet loaded) path.
+ * ADMIN_CARVED_OUTS mirrors the backend's *set* of carved-out verbs; this map
+ * mirrors which group's membership grants each one back, which is NOT
+ * uniform (Purchaser for the three money-spending verbs, RI Exchanger for
+ * execute:ri-exchange). A carved-out key missing from this map would be
+ * silently hardcoded to the wrong predicate here, which is exactly the bug
+ * this map replaces: canAccess() used to route every carved-out verb through
+ * isPurchaser() regardless of which group actually granted it (PR #1758
+ * review).
+ */
+const CARVE_OUT_FALLBACK_CHECK: ReadonlyMap<string, () => boolean> = new Map([
+  ['execute:purchases', isPurchaser],
+  ['approve-any:purchases', isPurchaser],
+  ['retry-any:purchases', isPurchaser],
+  ['execute:ri-exchange', isRIExchanger],
+]);
+
+/**
  * Returns true when the current session's effective permissions grant
  * the specified action on the specified resource.
  *
  * When effectivePermissions is populated (fetched from
  * GET /api/auth/me/permissions on login/bootstrap) the set is
- * consulted directly: admin:* grants everything EXCEPT the three
- * money-spending verbs carved out of admin:* by the backend
- * (issue #923) -- those require an explicit (action, resource) entry
- * in effectivePermissions (which the backend only returns when the
- * user is in the Purchaser group or a custom group that grants the
- * verb directly). For non-admin entries an exact action:resource
- * match (or matching action with resource '*') is required.
+ * consulted directly: admin:* grants everything EXCEPT the verbs carved
+ * out of admin:* by the backend (the three money-spending verbs from
+ * issue #923, plus execute:ri-exchange from issue #1644) -- those require
+ * an explicit (action, resource) entry in effectivePermissions (which the
+ * backend only returns when the user is in the group that grants the verb,
+ * or a custom group that grants it directly). For non-admin entries an
+ * exact action:resource match (or matching action with resource '*') is
+ * required.
  *
  * While effectivePermissions is not yet loaded (e.g. during the first
  * render before the async fetch completes) the function falls back to
- * group-membership checks: Administrators-group members pass every
- * check EXCEPT the carved-out money-spending verbs, which require
- * Purchaser-group membership. This mirrors the backend's
- * HasPermission carve-out so UX and enforcement agree on the same
- * verbs whether or not effectivePermissions has loaded yet.
+ * group-membership checks via CARVE_OUT_FALLBACK_CHECK: Administrators-
+ * group members pass every check EXCEPT the carved-out verbs, each of which
+ * requires membership in the specific group that grants it (Purchaser for
+ * the money-spending verbs, RI Exchanger for execute:ri-exchange). This
+ * mirrors the backend's HasPermission carve-out so UX and enforcement agree
+ * on the same verbs whether or not effectivePermissions has loaded yet.
  *
  * UX-only gate. The backend still enforces on every request; a
  * wrong-positive surfaces as a 403 on click, a wrong-negative just
@@ -282,10 +341,11 @@ export function canAccess(action: Action, resource: Resource): boolean {
   }
 
   // Fallback while permissions are still loading. Mirror the backend's
-  // carve-out: admin grants everything except the money-spending verbs,
-  // which require explicit Purchaser-group membership.
+  // carve-out: admin grants everything except the carved-out verbs, each of
+  // which requires membership in the specific group that grants it back.
   if (isCarvedOut) {
-    return isPurchaser();
+    const check = CARVE_OUT_FALLBACK_CHECK.get(key);
+    return check !== undefined && check();
   }
   return isAdmin();
 }
