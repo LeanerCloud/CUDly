@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
@@ -293,6 +294,18 @@ func permissionDecision(args mock.Arguments, action, resource string) bool {
 
 func (m *MockAuthService) HasPermissionForConstraintsAPI(ctx context.Context, userID, action, resource string, constraintSets []auth.PermissionConstraints) (bool, error) {
 	args := m.Called(ctx, userID, action, resource, constraintSets)
+	// The decision-function path (registered by grantPermissionsScoped) must
+	// mirror auth.Service.HasPermissionForConstraintsAPI's fail-closed
+	// contract: an empty constraintSets is a caller bug, not a grant. Explicit
+	// mock.On(...).Return(bool, err) expectations for constrained-permission
+	// tests are untouched -- those already encode the intended outcome for
+	// whatever constraintSets the test passes, via permissionDecision below.
+	if decide, ok := args.Get(0).(func(action, resource string) bool); ok {
+		if len(constraintSets) == 0 {
+			return false, fmt.Errorf("no permission constraint sets provided for %s on %s", action, resource)
+		}
+		return decide(action, resource), args.Error(1)
+	}
 	return permissionDecision(args, action, resource), args.Error(1)
 }
 
@@ -328,6 +341,12 @@ func (m *MockAuthService) allowConstraintChecks() {
 // have been deleted outright without a single test in this package failing,
 // so the #923 separation-of-duties control had no handler-level coverage at
 // all. See TestGrantAdmin_CarveOutIsEnforcedAtHandler.
+//
+// Register any test-specific mock.On(...) expectation for a method this
+// grants (e.g. a HasPermissionAPI denial) BEFORE calling grantAdmin, or
+// express it via grantPermissions([...]) instead: testify serves the first
+// registered matching expectation, so one added after this call is silently
+// shadowed by the generic one grantAdmin registers and never actually runs.
 func (m *MockAuthService) grantAdmin() {
 	m.grantPermissions([]auth.Permission{{Action: auth.ActionAdmin, Resource: auth.ResourceAll}})
 }

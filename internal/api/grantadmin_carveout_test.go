@@ -159,3 +159,35 @@ func TestExecutePurchase_PlainAdminIsRefused(t *testing.T) {
 	// (issue #1595: a name-only AssertNotCalled can never fail).
 	mockStore.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
 }
+
+// TestGrantPermissionsScoped_ConstrainedCheckFailsClosedOnEmptyConstraintSets
+// pins the mock's HasPermissionForConstraintsAPI to the same fail-closed
+// contract as auth.Service.HasPermissionForConstraintsAPI (SEC-01, issue
+// #1141): an empty constraintSets is a caller bug, not a grant.
+//
+// Before this fix, grantAdmin/grantAdminPurchaser/grantScoped's shared
+// decision function answered purely from action/resource and never looked at
+// constraintSets, so it allowed an empty slice for any held verb. Harmless
+// today -- every current grant helper passes only Constraints == nil
+// permissions, so no test exercises the divergence -- but a trap for the
+// first constrained-permission test that reaches HasPermissionForConstraintsAPI
+// through the auto-answering path instead of an explicit mock.On(...)
+// expectation (found in review of #1596).
+func TestGrantPermissionsScoped_ConstrainedCheckFailsClosedOnEmptyConstraintSets(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	mockAuth.grantAdminPurchaser()
+
+	has, err := mockAuth.HasPermissionForConstraintsAPI(ctx, "u1", auth.ActionExecute, auth.ResourcePurchases, nil)
+	require.Error(t, err, "an empty constraintSets must be refused, matching auth.Service's fail-closed contract")
+	assert.False(t, has)
+
+	// Positive control: the same verb with a non-empty constraint set still
+	// resolves through the decision function instead of being rejected
+	// outright.
+	has, err = mockAuth.HasPermissionForConstraintsAPI(ctx, "u1", auth.ActionExecute, auth.ResourcePurchases,
+		[]auth.PermissionConstraints{{}})
+	require.NoError(t, err)
+	assert.True(t, has)
+}
