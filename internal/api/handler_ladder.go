@@ -86,9 +86,12 @@ func (h *Handler) filterLadderConfigsByAllowedAccounts(ctx context.Context, sess
 // reasoning was never applied to the write, so the row was also invisible to
 // its author afterwards.
 func (h *Handler) upsertLadderConfig(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	session, err := h.requirePermission(ctx, req, "update", "config")
-	if err != nil {
-		return nil, err
+	// Named permErr rather than err: the body-parsing and validation steps
+	// below each bind their own `err` in an if-statement, which would shadow a
+	// function-scoped `err` and trip govet's shadow check.
+	session, permErr := h.requirePermission(ctx, req, "update", "config")
+	if permErr != nil {
+		return nil, permErr
 	}
 
 	// DisallowUnknownFields so a typo'd key is rejected loudly instead of
