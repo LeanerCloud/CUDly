@@ -60,7 +60,8 @@ func (h *Handler) getConfig(ctx context.Context, req *events.LambdaFunctionURLRe
 
 func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionURLRequest) (*StatusResponse, error) {
 	// Require update:config permission
-	if _, err := h.requirePermission(ctx, req, "update", "config"); err != nil {
+	session, err := h.requirePermission(ctx, req, "update", "config")
+	if err != nil {
 		return nil, err
 	}
 
@@ -76,7 +77,7 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 	// a deliberately-partial PUT (e.g. the kill-switch toggle) does not rewrite
 	// per-service customizations.
 	var present map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(req.Body), &present); err != nil {
+	if pErr := json.Unmarshal([]byte(req.Body), &present); pErr != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 	_, gracePresent := present["grace_period_days"]
@@ -92,6 +93,14 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 	// ClientError(400) on a bad body or validation failure, which the store
 	// propagates unchanged; DB/transport errors surface as 500.
 	cfg, err := h.config.UpdateGlobalConfigAtomic(ctx, func(existing *config.GlobalConfig) error {
+		// Snapshot before the wholesale unmarshal: this body writes onto the
+		// entire GlobalConfig, so ri_exchange_mode / ri_exchange_enabled reach
+		// the scheduler through this endpoint exactly as they do through the
+		// dedicated PUT /api/ri-exchange/config (issue #1765). Taken inside the
+		// closure so the comparison reads the same advisory-locked row the
+		// write lands on.
+		before := *existing
+
 		// grace_period_days is a map: json.Unmarshal into a non-nil map MERGES
 		// keys (an omitted key can never be deleted). When the caller sends the
 		// key, nil the stored map first so the body's map REPLACES it wholesale
@@ -105,7 +114,7 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 		if vErr := existing.Validate(); vErr != nil {
 			return NewClientError(400, fmt.Sprintf("validation error: %s", vErr))
 		}
-		return nil
+		return h.requireRIExchangeAutoModeGrant(ctx, session, &before, existing)
 	})
 	if err != nil {
 		return nil, err

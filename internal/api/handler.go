@@ -523,6 +523,68 @@ func (h *Handler) requirePermissionConstraints(ctx context.Context, session *Ses
 	return nil
 }
 
+// riExchangeAutoArmed reports whether a config state will make the scheduled
+// TaskRIExchangeReshape execute exchanges against the provider without a human
+// approval step.
+//
+// The predicate mirrors the CONSUMER exactly. pkg/exchange/auto.go's
+// processRecommendation routes to processManualExchange only on the literal
+// "manual" and sends every other value -- including "", "Auto" and any typo --
+// to processAutoExchange. Defining "armed" as Mode == "auto" would therefore
+// leave the gate below open on precisely the route that matters: PUT /api/config
+// unmarshals onto GlobalConfig wholesale and GlobalConfig.Validate never
+// constrains RIExchangeMode, so any non-"manual" string reaches the scheduler.
+// Both axes of the guard must see what the scheduler sees.
+func riExchangeAutoArmed(cfg *config.GlobalConfig) bool {
+	return cfg.RIExchangeEnabled && cfg.RIExchangeMode != "manual"
+}
+
+// requireRIExchangeAutoModeGrant gates the config write that arms unattended
+// RI exchange behind the same execute:ri-exchange verb the direct execute
+// handlers require.
+//
+// execute:ri-exchange is deliberately carved out of admin:* (issue #1644,
+// PR #1758) so a compromised admin account alone cannot drain commitments.
+// update:config is NOT carved out, by design. But arming auto-mode is
+// functionally equivalent to pre-authorizing every future exchange: the
+// scheduled task then executes against the provider with no approval step and
+// no execute:ri-exchange check anywhere on its path, which reopened the exact
+// threat the carve-out closed (issue #1765).
+//
+// Only the escalation is gated, never the whole ri-exchange config surface. An
+// update:config-only operator keeps view:config, mode "manual", the utilization
+// and lookback tunables, and even RIExchangeEnabled while mode stays manual --
+// that merely has the scheduler raise Pending approvals, which move no money.
+// Two transitions require the verb:
+//
+//   - arming: the write leaves the config armed when it was not armed before;
+//   - raising a spend ceiling while already armed, since the caps are plain
+//     fields on the same struct and the same actor would otherwise set both the
+//     switch and its bound.
+//
+// Lowering a cap, or an idempotent re-write of an already-armed config, is a
+// de-escalation and stays available to update:config alone.
+//
+// Called from BOTH config write paths. PUT /api/config (updateConfig) reaches
+// these fields exactly as effectively as the dedicated PUT /api/ri-exchange/config
+// (updateRIExchangeConfig), so a gate on one alone would look complete and
+// would not be.
+func (h *Handler) requireRIExchangeAutoModeGrant(ctx context.Context, session *Session, before, after *config.GlobalConfig) error {
+	if !riExchangeAutoArmed(after) {
+		return nil
+	}
+	wasArmed := riExchangeAutoArmed(before)
+	raisesCap := after.RIExchangeMaxPerExchangeUSD > before.RIExchangeMaxPerExchangeUSD ||
+		after.RIExchangeMaxDailyUSD > before.RIExchangeMaxDailyUSD
+	if wasArmed && !raisesCap {
+		return nil
+	}
+	if _, err := h.requireSessionPermission(ctx, session, auth.ActionExecute, auth.ResourceRIExchange); err != nil {
+		return err
+	}
+	return nil
+}
+
 // getAccountScope returns the auth.AccountScope describing which cloud
 // accounts the session may reach.
 //
