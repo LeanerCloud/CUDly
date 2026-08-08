@@ -4,9 +4,12 @@
  * Issue #917: canAccess() now consults user.effectivePermissions when
  * populated (fetched from GET /api/auth/me/permissions on bootstrap).
  * When effectivePermissions is absent (loading race) it falls back to
- * group-membership checks: admin passes everywhere EXCEPT the three
- * money-spending verbs carved out by issue #923, which require
- * explicit Purchaser-group membership.
+ * group-membership checks: admin passes everywhere EXCEPT the carved-out
+ * verbs -- the three money-spending verbs from issue #923 (require
+ * explicit Purchaser-group membership) and execute:ri-exchange from issue
+ * #1644 (requires explicit RI-Exchanger-group membership). Each carved-out
+ * verb is gated by the specific group that grants it back, not a single
+ * hardcoded group (PR #1758 review).
  *
  * isAdmin() returns true when the current user is a member of the
  * Administrators group (UUID 00000000-0000-5000-8000-000000000001).
@@ -14,7 +17,7 @@
  * getRolePermissions() is kept for the effective-permissions display in
  * the admin Users page and still returns the same sets as before.
  */
-import { canAccess, getRolePermissions, isAdmin, isPurchaser, ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID } from '../permissions';
+import { canAccess, getRolePermissions, isAdmin, isPurchaser, isRIExchanger, ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID, RI_EXCHANGER_GROUP_ID } from '../permissions';
 import type { PermissionEntry } from '../api/types';
 
 jest.mock('../state', () => ({
@@ -156,9 +159,11 @@ describe('permissions', () => {
       expect(canAccess('view', 'users')).toBe(true);
       expect(canAccess('delete', 'plans')).toBe(true);
       expect(canAccess('view', 'accounts')).toBe(true);
-      // execute:ri-exchange is NOT carved out of admin:* (issue #660 split it
-      // from execute:purchases), so an admin-only member still passes it.
-      expect(canAccess('execute', 'ri-exchange')).toBe(true);
+      // execute:ri-exchange is carved out of admin:* (issue #1644) and
+      // requires explicit RI-Exchanger-group membership; an admin-only
+      // member (no RI Exchanger membership) is refused during the
+      // fallback path just like the money-spending verbs.
+      expect(canAccess('execute', 'ri-exchange')).toBe(false);
       // execute:purchases is carved out of admin:* and requires Purchaser membership.
       expect(canAccess('execute', 'purchases')).toBe(false);
       expect(canAccess('approve-any', 'purchases')).toBe(false);
@@ -187,6 +192,38 @@ describe('permissions', () => {
       expect(canAccess('admin', '*')).toBe(false);
       expect(canAccess('view', 'users')).toBe(false);
       expect(canAccess('delete', 'plans')).toBe(false);
+    });
+
+    test('Administrators + Purchaser (NOT RI Exchanger) is refused execute:ri-exchange', () => {
+      // PR #1758 F2: the fallback must consult the group that actually
+      // grants execute:ri-exchange, not fall through to Purchaser just
+      // because Purchaser grants the neighbouring money-spending verbs.
+      mockUserWithGroups([ADMIN_GID, PURCHASER_GROUP_ID]);
+      expect(canAccess('execute', 'ri-exchange')).toBe(false);
+      // Confirm the fix didn't regress the Purchaser verbs it shares a
+      // code path with.
+      expect(canAccess('execute', 'purchases')).toBe(true);
+    });
+
+    test('Administrators + RI Exchanger (NOT Purchaser) is allowed execute:ri-exchange but not purchases', () => {
+      mockUserWithGroups([ADMIN_GID, RI_EXCHANGER_GROUP_ID]);
+      expect(canAccess('execute', 'ri-exchange')).toBe(true);
+      // RI Exchanger membership must not also unlock the money-spending
+      // verbs -- the two carve-outs are granted by disjoint groups.
+      expect(canAccess('execute', 'purchases')).toBe(false);
+      expect(canAccess('approve-any', 'purchases')).toBe(false);
+      expect(canAccess('retry-any', 'purchases')).toBe(false);
+      // Non-carved-out admin actions remain available via admin:*.
+      expect(canAccess('view', 'users')).toBe(true);
+      expect(canAccess('delete', 'plans')).toBe(true);
+    });
+
+    test('RI Exchanger-only (no admin) passes execute:ri-exchange but not other admin actions', () => {
+      mockUserWithGroups([RI_EXCHANGER_GROUP_ID]);
+      expect(canAccess('execute', 'ri-exchange')).toBe(true);
+      expect(canAccess('admin', '*')).toBe(false);
+      expect(canAccess('view', 'users')).toBe(false);
+      expect(canAccess('execute', 'purchases')).toBe(false);
     });
 
     test('Standard Users group member blocked during loading (effectivePermissions undefined)', () => {
@@ -472,6 +509,89 @@ describe('permissions', () => {
     test('null user (logged out) returns false', () => {
       mockNoUser();
       expect(isPurchaser()).toBe(false);
+    });
+
+    test('explicit execute:ri-exchange grant alone does NOT make isPurchaser() true', () => {
+      // isPurchaser() must consult only the three money-spending verbs
+      // (PURCHASER_CARVED_OUTS), not the full carved-out set. Holding
+      // execute:ri-exchange (issue #1644, a disjoint carve-out with its
+      // own group) is not "can spend money" -- if isPurchaser() looped
+      // over every carved-out key it would wrongly return true here and
+      // the "add yourself to Purchaser" first-run prompt (userActions.ts)
+      // would wrongly stay hidden for an RI-Exchanger-only admin.
+      const customGid = '00000000-0000-5000-8000-00000000fade';
+      mockUserWithGroups([customGid], [
+        { action: 'execute', resource: 'ri-exchange' },
+      ]);
+      expect(isPurchaser()).toBe(false);
+    });
+
+    test('RI Exchanger group membership alone (no effectivePermissions) does NOT make isPurchaser() true', () => {
+      mockUserWithGroups([RI_EXCHANGER_GROUP_ID]);
+      expect(isPurchaser()).toBe(false);
+    });
+  });
+
+  describe('isRIExchanger', () => {
+    test('seeded RI Exchanger group member (no effectivePermissions yet) returns true via fallback', () => {
+      // Pre-bootstrap loading window: effectivePermissions not yet
+      // populated. The helper falls back to seeded group membership.
+      mockUserWithGroups([RI_EXCHANGER_GROUP_ID]);
+      expect(isRIExchanger()).toBe(true);
+    });
+
+    test('user without RI Exchanger group and no effectivePermissions returns false', () => {
+      mockUserWithGroups([ADMIN_GID]); // admin only
+      expect(isRIExchanger()).toBe(false);
+    });
+
+    test('Purchaser group membership alone does NOT make isRIExchanger() true', () => {
+      // Inverse of the isPurchaser regression test above: the two
+      // carve-outs are granted by disjoint groups in both directions.
+      mockUserWithGroups([PURCHASER_GROUP_ID]);
+      expect(isRIExchanger()).toBe(false);
+    });
+
+    test('explicit execute:ri-exchange grant in effectivePermissions (custom group) returns true', () => {
+      const customGid = '00000000-0000-5000-8000-00000000b00c';
+      mockUserWithGroups([customGid], [
+        { action: 'execute', resource: 'ri-exchange' },
+        { action: 'view', resource: 'recommendations' },
+      ]);
+      expect(isRIExchanger()).toBe(true);
+    });
+
+    test('wildcard resource on execute grants RI Exchanger (matches canAccess semantics)', () => {
+      const customGid = '00000000-0000-5000-8000-00000000c0de';
+      mockUserWithGroups([customGid], [
+        { action: 'execute', resource: '*' },
+      ]);
+      expect(isRIExchanger()).toBe(true);
+    });
+
+    test('explicit execute:purchases grant does NOT make isRIExchanger() true', () => {
+      const customGid = '00000000-0000-5000-8000-00000000da7a';
+      mockUserWithGroups([customGid], [
+        { action: 'execute', resource: 'purchases' },
+      ]);
+      expect(isRIExchanger()).toBe(false);
+    });
+
+    test('admin:* in effectivePermissions WITHOUT explicit carved-out grant returns false', () => {
+      mockUserWithGroups([ADMIN_GID], [
+        { action: 'admin', resource: '*' },
+      ]);
+      expect(isRIExchanger()).toBe(false);
+    });
+
+    test('empty effectivePermissions array returns false even with RI_EXCHANGER_GROUP_ID', () => {
+      mockUserWithGroups([RI_EXCHANGER_GROUP_ID], []);
+      expect(isRIExchanger()).toBe(false);
+    });
+
+    test('null user (logged out) returns false', () => {
+      mockNoUser();
+      expect(isRIExchanger()).toBe(false);
     });
   });
 });

@@ -125,6 +125,12 @@ var adminCarvedOuts = map[[2]string]bool{
 	{ActionExecute, ResourcePurchases}:    true,
 	{ActionApproveAny, ResourcePurchases}: true,
 	{ActionRetryAny, ResourcePurchases}:   true,
+	// execute:ri-exchange (issue #1644). An RI exchange consumes existing
+	// commitments and buys replacements, and the provider APIs have no
+	// rollback once submitted, so it belongs under the same separation of
+	// duties as execute:purchases. Membership in the seeded RI Exchanger
+	// group (migration 000096) is what grants it.
+	{ActionExecute, ResourceRIExchange}: true,
 }
 
 // HasPermission checks if the auth context has a specific permission.
@@ -328,6 +334,13 @@ const DefaultAdminGroupID = "00000000-0000-5000-8000-000000000001"
 // (issue #942). It holds the three money-spending verbs carved out of the
 // admin:* wildcard (issue #923).
 const DefaultPurchaserGroupID = "00000000-0000-5000-8000-000000000007"
+
+// DefaultRIExchangerGroupID is the fixed UUID of the RI Exchanger group
+// seeded by migration 000096. It holds execute:ri-exchange, carved out of
+// the admin:* wildcard by issue #1644. 000008 is the next free id in the
+// seeded namespace (000005 Standard Users, 000006 Read-Only Users,
+// 000007 Purchaser).
+const DefaultRIExchangerGroupID = "00000000-0000-5000-8000-000000000008"
 
 // GroupPurchaser is the canonical name of the system-managed Purchaser
 // group. MUST match the literal name inserted by migration
