@@ -110,12 +110,40 @@ func TestRIExchangeCarveOut_AdminKeepsNonCarvedVerbs(t *testing.T) {
 // dispatch never consults. This exercises executeExchange itself, the handler
 // behind POST /api/ri-exchange/execute.
 //
-// mockStore is stubbed with no expectations, so if the carve-out ever stops
-// refusing, the handler reaches the store and testify panics rather than
-// quietly returning a 200. The explicit per-parameter matchers keep the
-// AssertNotCalled non-vacuous either way (#1595/#1740): SaveRIExchangeRecord
-// hands two arguments to m.Called, so two matchers are required.
+// The discriminating assertion is the error's IDENTITY, not its wording:
+// requirePermission's carve-out denial is a *clientError with code 403
+// (handler.go's requireSessionPermission), and executeExchange returns it
+// unwrapped (handler_ri_exchange.go:1713-1716). Asserting substrings of the
+// message ("execute", "ri-exchange") is fragile in the wrong direction: if
+// the carve-out is dropped, executeExchange proceeds into
+// exchange.ExecuteExchange, which builds its own AWS clients from ambient
+// credentials and fails at AWS credential/STS resolution before ever
+// touching the store -- an error whose wording has nothing to do with
+// permissions. A prior version of this test relied on that STS error's
+// message happening not to contain "execute"/"ri-exchange", which discovers
+// a regression only by accident and stops working the moment that wording
+// changes. Asserting the 403 ClientError identity instead means the test
+// fails for the right reason regardless of what the downstream AWS error
+// says.
+//
+// mockStore's AssertNotCalled is defense-in-depth, not the guard that
+// currently fires: executeExchange's success path never calls
+// SaveRIExchangeRecord at all (only the scheduled auto-exchange path in
+// pkg/exchange/auto.go does), so this assertion holds unconditionally on
+// this handler and does not discriminate the mutation. It stays in case a
+// future change routes this handler through the store.
+//
+// t.Setenv("AWS_EC2_METADATA_DISABLED", "true") bounds the AWS SDK client
+// construction inside exchange.ExecuteExchange, reached only if the
+// carve-out regresses (#1644), to fail fast against an unreachable
+// credential source instead of depending on what credentials happen to be
+// configured in whichever environment re-runs this test (tracked more
+// broadly as #1760: executeExchange builds AWS clients from ambient
+// credentials with no injected seam, unlike internal/server's
+// riExchangeClients).
 func TestExecuteExchange_PlainAdminIsRefused(t *testing.T) {
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
@@ -135,7 +163,8 @@ func TestExecuteExchange_PlainAdminIsRefused(t *testing.T) {
 
 	require.Error(t, err, "a plain admin must not be able to execute an RI exchange (#1644)")
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), auth.ActionExecute)
-	assert.Contains(t, err.Error(), auth.ResourceRIExchange)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "a carve-out denial must be a client error, not a downstream AWS failure")
+	assert.Equal(t, 403, ce.code, "must be refused at the permission gate, not fail later for an unrelated reason")
 	mockStore.AssertNotCalled(t, "SaveRIExchangeRecord", mock.Anything, mock.Anything)
 }
