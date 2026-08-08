@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -31,10 +30,11 @@ func TestGetAllowedAccounts_FailsClosedWhenAuthMissing(t *testing.T) {
 	ctx := context.Background()
 	h := &Handler{auth: nil}
 
-	got, err := h.getAllowedAccounts(ctx, &Session{UserID: scopeSessionUser})
+	got, err := h.getAccountScope(ctx, &Session{UserID: scopeSessionUser})
 
 	require.Error(t, err, "a nil auth service must refuse, not grant unrestricted access")
-	assert.Nil(t, got)
+	assert.False(t, got.AllowsAll(), "the scope returned alongside the error must not be unrestricted")
+	assert.False(t, got.Allows("any-account", ""), "and must grant no account at all")
 	assert.Contains(t, err.Error(), "cannot establish account scope")
 }
 
@@ -49,10 +49,11 @@ func TestGetAllowedAccounts_PropagatesResolverFailure(t *testing.T) {
 	m.On("GetAllowedAccountsAPI", ctx, scopeSessionUser).Return([]string(nil), boom)
 
 	h := &Handler{auth: m}
-	got, err := h.getAllowedAccounts(ctx, &Session{UserID: scopeSessionUser})
+	got, err := h.getAccountScope(ctx, &Session{UserID: scopeSessionUser})
 
 	require.Error(t, err)
-	assert.Nil(t, got)
+	assert.False(t, got.AllowsAll(), "a failed resolution must not yield an unrestricted scope")
+	assert.False(t, got.Allows("any-account", ""))
 }
 
 // End-to-end through the shared scoping seam every scoped handler uses: an
@@ -84,10 +85,10 @@ func TestGetAllowedAccounts_AdminAPIKeyStillUnrestricted(t *testing.T) {
 	ctx := context.Background()
 	h := &Handler{auth: new(MockAuthService)}
 
-	got, err := h.getAllowedAccounts(ctx, &Session{UserID: apiKeyAdminUserID})
+	got, err := h.getAccountScope(ctx, &Session{UserID: apiKeyAdminUserID})
 
 	require.NoError(t, err, "the admin API key must remain unrestricted")
-	assert.True(t, auth.IsUnrestrictedAccess(got))
+	assert.True(t, got.AllowsAll(), "expressed as a SET flag, never as an empty list")
 }
 
 // The other two legitimate unrestricted principals, resolved through the auth
@@ -111,10 +112,10 @@ func TestGetAllowedAccounts_LegitimateUnrestrictedPrincipalsPass(t *testing.T) {
 			m.On("GetAllowedAccountsAPI", ctx, scopeSessionUser).Return(tc.resolved, nil)
 
 			h := &Handler{auth: m}
-			got, err := h.getAllowedAccounts(ctx, &Session{UserID: scopeSessionUser})
+			got, err := h.getAccountScope(ctx, &Session{UserID: scopeSessionUser})
 
 			require.NoError(t, err, "a successfully resolved scope must not be refused")
-			assert.True(t, auth.IsUnrestrictedAccess(got),
+			assert.True(t, got.AllowsAll(),
 				"a successful resolution to an empty/wildcard scope still means all accounts")
 		})
 	}

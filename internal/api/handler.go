@@ -527,18 +527,27 @@ func (h *Handler) requirePermissionConstraints(ctx context.Context, session *Ses
 // access. Empty slice means all access (Administrators-group members carry the
 // "*" wildcard, which GetAllowedAccountsAPI surfaces as unrestricted). The
 // stateless admin API key has no user row, so it short-circuits to all access.
-func (h *Handler) getAllowedAccounts(ctx context.Context, session *Session) ([]string, error) {
+func (h *Handler) getAccountScope(ctx context.Context, session *Session) (auth.AccountScope, error) {
 	if session.UserID == apiKeyAdminUserID {
-		return nil, nil // stateless admin API key = all access
+		// Positively unrestricted: the stateless admin API key is an
+		// infrastructure credential with no user row. Expressed as a set flag,
+		// never as an empty list (issue #1748).
+		return auth.UnrestrictedScope(), nil
 	}
 	if h.auth == nil {
-		// Fail closed. Returning an empty list here meant "all accounts", so a
-		// handler running without an auth service granted every caller access
-		// to every cloud account (issue #1748). Auth components must fail
-		// closed when nil, never fall through.
-		return nil, fmt.Errorf("authentication service not configured: cannot establish account scope")
+		// Fail closed. Auth components must fail closed when nil, never fall
+		// through. The zero AccountScope returned alongside this error denies
+		// everything even if a caller ignores the error.
+		return auth.AccountScope{}, fmt.Errorf("authentication service not configured: cannot establish account scope")
 	}
-	return h.auth.GetAllowedAccountsAPI(ctx, session.UserID)
+	accounts, err := h.auth.GetAllowedAccountsAPI(ctx, session.UserID)
+	if err != nil {
+		return auth.AccountScope{}, err
+	}
+	// Safe here and only here: GetAllowedAccountsAPI has already failed closed
+	// on an unestablishable scope, so an empty list at this point genuinely
+	// means "no restriction configured".
+	return auth.ScopeFromLegacyList(accounts), nil
 }
 
 // setSecurityHeaders adds comprehensive security headers to the response.

@@ -391,11 +391,15 @@ func (h *Handler) checkRevokeOwnAccountAccess(ctx context.Context, userID string
 	if record.CloudAccountID == nil || *record.CloudAccountID == "" {
 		return NewClientError(403, "permission denied: cannot verify ownership for this purchase")
 	}
-	allowed, err := h.auth.GetAllowedAccountsAPI(ctx, userID)
+	// Goes through getAccountScope rather than calling GetAllowedAccountsAPI
+	// directly: the direct call skipped the admin-API-key and nil-auth
+	// branches, and the `len(allowed) > 0 &&` guard read an empty list as
+	// unrestricted independently of any producer (issue #1748).
+	scope, err := h.getAccountScope(ctx, &Session{UserID: userID})
 	if err != nil {
 		return fmt.Errorf("account access check failed: %w", err)
 	}
-	if len(allowed) > 0 && !stringInSlice(*record.CloudAccountID, allowed) {
+	if !scope.Allows(*record.CloudAccountID, "") {
 		return NewClientError(403, "permission denied: purchase is in an account you do not have access to")
 	}
 	return nil

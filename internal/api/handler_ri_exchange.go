@@ -364,11 +364,11 @@ func filterAzureReservationsBySubscription(reservations []azurecompute.Exchangea
 // logging the identifiers would just relocate the disclosure this filter
 // exists to prevent.
 func (h *Handler) filterAzureReservationsByScope(ctx context.Context, session *Session, reservations []azurecompute.ExchangeableReservation) ([]azurecompute.ExchangeableReservation, error) {
-	allowed, err := h.getAllowedAccounts(ctx, session)
+	allowed, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
-	if auth.IsUnrestrictedAccess(allowed) {
+	if allowed.AllowsAll() {
 		// client.ListExchangeableReservations may return a nil slice for zero
 		// results; every other path here returns a non-nil empty slice, so
 		// normalize here too rather than letting an admin session alone see
@@ -417,7 +417,7 @@ func azureScopeIndex(accounts []config.CloudAccount) map[string]config.CloudAcco
 // list covers (auth.MatchesAccount). Fails closed: a reservation with no
 // BillingScopeID, or one that resolves to no registered CloudAccount, is
 // dropped rather than kept.
-func filterReservationsByScopeIndex(reservations []azurecompute.ExchangeableReservation, scopeToAccount map[string]config.CloudAccount, allowed []string) []azurecompute.ExchangeableReservation {
+func filterReservationsByScopeIndex(reservations []azurecompute.ExchangeableReservation, scopeToAccount map[string]config.CloudAccount, allowed auth.AccountScope) []azurecompute.ExchangeableReservation {
 	filtered := make([]azurecompute.ExchangeableReservation, 0, len(reservations))
 	for i := range reservations {
 		r := reservations[i]
@@ -428,7 +428,7 @@ func filterReservationsByScopeIndex(reservations []azurecompute.ExchangeableRese
 		if !ok {
 			continue
 		}
-		if auth.MatchesAccount(allowed, account.ID, account.Name) {
+		if allowed.Allows(account.ID, account.Name) {
 			filtered = append(filtered, r)
 		}
 	}
@@ -792,18 +792,18 @@ func exchangeRegions(targets []AzureExchangeTargetBody, sources []AzureExchangeS
 // Unrestricted / admin sessions short-circuit before the account fetch,
 // mirroring requireExecutionAccess.
 func (h *Handler) requireAzureSubscriptionScope(ctx context.Context, session *Session, subscriptionID string) error {
-	allowed, err := h.getAllowedAccounts(ctx, session)
+	allowed, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
-	if auth.IsUnrestrictedAccess(allowed) {
+	if allowed.AllowsAll() {
 		return nil
 	}
 	account, err := h.config.GetCloudAccountByExternalID(ctx, "azure", subscriptionID)
 	if err != nil {
 		return fmt.Errorf("failed to resolve cloud account scope: %w", err)
 	}
-	if account == nil || !auth.MatchesAccount(allowed, account.ID, account.Name) {
+	if account == nil || !allowed.Allows(account.ID, account.Name) {
 		return errNotFound
 	}
 	return nil
@@ -1262,11 +1262,11 @@ func (h *Handler) loadAWSConfigWithRegion(ctx context.Context, region string) (a
 // Used by listConvertibleRIs, getRIUtilization, and getReshapeRecommendations
 // to eliminate duplicated account-scoping blocks.
 func (h *Handler) reshapeCloudAccountInScope(ctx context.Context, session *Session) (bool, error) {
-	allowed, aErr := h.getAllowedAccounts(ctx, session)
+	allowed, aErr := h.getAccountScope(ctx, session)
 	if aErr != nil {
 		return false, fmt.Errorf("failed to get allowed accounts: %w", aErr)
 	}
-	if auth.IsUnrestrictedAccess(allowed) {
+	if allowed.AllowsAll() {
 		return true, nil
 	}
 	cloudAccountID, aErr := h.resolveReshapeCloudAccountID(ctx)
@@ -1274,7 +1274,7 @@ func (h *Handler) reshapeCloudAccountInScope(ctx context.Context, session *Sessi
 		return false, fmt.Errorf("failed to resolve cloud account scope: %w", aErr)
 	}
 	nameByID := h.resolveAccountNamesByID(ctx)
-	return auth.MatchesAccount(allowed, cloudAccountID, nameByID[cloudAccountID]), nil
+	return allowed.Allows(cloudAccountID, nameByID[cloudAccountID]), nil
 }
 
 // resolveReshapeCloudAccountID returns the cloud account ID for the running
@@ -1992,16 +1992,16 @@ func (h *Handler) getRIExchangeHistory(ctx context.Context, req *events.LambdaFu
 	// Filter records by the session's allowed_accounts against the record's
 	// AccountID. Scoped users don't see history for accounts outside their
 	// scope. Admin / unrestricted sessions pass through unchanged.
-	allowed, err := h.getAllowedAccounts(ctx, session)
+	allowed, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
-	if !auth.IsUnrestrictedAccess(allowed) {
+	if !allowed.AllowsAll() {
 		nameByID := h.resolveAccountNamesByID(ctx)
 		filtered := records[:0]
 		for _rvc := range records {
 			r := records[_rvc]
-			if auth.MatchesAccount(allowed, r.AccountID, nameByID[r.AccountID]) {
+			if allowed.Allows(r.AccountID, nameByID[r.AccountID]) {
 				filtered = append(filtered, r)
 			}
 		}

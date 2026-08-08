@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 )
@@ -47,18 +46,18 @@ func (h *Handler) getLadderConfigs(ctx context.Context, req *events.LambdaFuncti
 // outside the session's allowed_accounts. Admin/unrestricted sessions pass
 // through unchanged.
 func (h *Handler) filterLadderConfigsByAllowedAccounts(ctx context.Context, session *Session, configs []config.LadderConfigDB) ([]config.LadderConfigDB, error) {
-	allowed, err := h.getAllowedAccounts(ctx, session)
+	allowed, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
-	if auth.IsUnrestrictedAccess(allowed) {
+	if allowed.AllowsAll() {
 		return configs, nil
 	}
 	nameByID := h.resolveAccountNamesByID(ctx)
 	filtered := make([]config.LadderConfigDB, 0, len(configs))
 	for _rvc := range configs {
 		c := configs[_rvc]
-		if auth.MatchesAccount(allowed, c.CloudAccountID, nameByID[c.CloudAccountID]) {
+		if allowed.Allows(c.CloudAccountID, nameByID[c.CloudAccountID]) {
 			filtered = append(filtered, c)
 		}
 	}

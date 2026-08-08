@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
@@ -139,11 +138,11 @@ func (h *Handler) resolveDashboardAccountScope(ctx context.Context, params map[s
 // so a scoped user with zero accessible accounts sees zeroed KPIs rather than
 // everyone's data.
 func (h *Handler) resolveAllowedAccountScope(ctx context.Context, session *Session) (uuids []string, externalIDsByProvider map[string][]string, err error) {
-	allowed, err := h.getAllowedAccounts(ctx, session)
+	allowed, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
-	if auth.IsUnrestrictedAccess(allowed) {
+	if allowed.AllowsAll() {
 		return nil, nil, nil
 	}
 	accounts, err := h.config.ListCloudAccounts(ctx, config.CloudAccountFilter{})
@@ -155,7 +154,7 @@ func (h *Handler) resolveAllowedAccountScope(ctx context.Context, session *Sessi
 	allowedUUIDs := []string{}
 	for _rvc := range accounts {
 		a := accounts[_rvc]
-		if auth.MatchesAccount(allowed, a.ID, a.Name) {
+		if allowed.Allows(a.ID, a.Name) {
 			allowedUUIDs = append(allowedUUIDs, a.ID)
 		}
 	}
@@ -167,11 +166,11 @@ func (h *Handler) resolveAllowedAccountScope(ctx context.Context, session *Sessi
 // to the recommendations list before aggregation so scoped users don't see
 // cross-account totals. Admin/unrestricted sessions pass through unchanged.
 func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *Session, recs []config.RecommendationRecord) ([]config.RecommendationRecord, error) {
-	allowed, err := h.getAllowedAccounts(ctx, session)
+	allowed, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
-	if auth.IsUnrestrictedAccess(allowed) {
+	if allowed.AllowsAll() {
 		return recs, nil
 	}
 
@@ -182,7 +181,7 @@ func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *S
 			continue
 		}
 		id := *recs[_rvc].CloudAccountID
-		if auth.MatchesAccount(allowed, id, nameByID[id]) {
+		if allowed.Allows(id, nameByID[id]) {
 			filtered = append(filtered, recs[_rvc])
 		}
 	}

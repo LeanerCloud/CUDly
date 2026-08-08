@@ -13,7 +13,6 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/LeanerCloud/CUDly/internal/accounts"
-	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/oidc"
@@ -105,15 +104,15 @@ func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionUR
 	// Filter by allowed accts if the user has restricted access.
 	// An empty list or one containing "*" grants unrestricted access.
 	// Otherwise each entry is matched against the account's ID or Name.
-	allowedAccounts, err := h.getAllowedAccounts(ctx, session)
+	allowedAccounts, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
-	if !auth.IsUnrestrictedAccess(allowedAccounts) {
+	if !allowedAccounts.AllowsAll() {
 		filtered := accts[:0]
 		for _rvc := range accts {
 			acct := accts[_rvc]
-			if auth.MatchesAccount(allowedAccounts, acct.ID, acct.Name) {
+			if allowedAccounts.Allows(acct.ID, acct.Name) {
 				filtered = append(filtered, acct)
 			}
 		}
@@ -162,18 +161,18 @@ func (h *Handler) listAccountsMinimal(ctx context.Context, req *events.LambdaFun
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
 
-	allowedAccounts, err := h.getAllowedAccounts(ctx, session)
+	allowedAccounts, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
-	unrestricted := auth.IsUnrestrictedAccess(allowedAccounts)
+	unrestricted := allowedAccounts.AllowsAll()
 
 	// Build the minimal projection in place, applying allowed_accounts scoping
 	// during the copy so a restricted user only ever sees their entitled rows.
 	summaries := make([]AccountSummary, 0, len(accts))
 	for i := range accts {
 		acct := &accts[i]
-		if !unrestricted && !auth.MatchesAccount(allowedAccounts, acct.ID, acct.Name) {
+		if !unrestricted && !allowedAccounts.Allows(acct.ID, acct.Name) {
 			continue
 		}
 		summaries = append(summaries, AccountSummary{

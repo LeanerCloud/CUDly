@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 )
 
@@ -32,14 +31,14 @@ func (h *Handler) requireAccountAccess(ctx context.Context, session *Session, ac
 		return nil, errNotFound
 	}
 
-	allowed, err := h.getAllowedAccounts(ctx, session)
+	allowed, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
-	if auth.IsUnrestrictedAccess(allowed) {
+	if allowed.AllowsAll() {
 		return account, nil
 	}
-	if !auth.MatchesAccount(allowed, account.ID, account.Name) {
+	if !allowed.Allows(account.ID, account.Name) {
 		return nil, errNotFound
 	}
 	return account, nil
@@ -55,11 +54,11 @@ func (h *Handler) requireAccountAccess(ctx context.Context, session *Session, ac
 // caller passes here. This is the plan-level analog of requireAccountAccess
 // and is used by the plans/purchases/ri-exchange per-record scoping.
 func (h *Handler) requirePlanAccess(ctx context.Context, session *Session, planID string) error {
-	allowed, err := h.getAllowedAccounts(ctx, session)
+	allowed, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
-	if auth.IsUnrestrictedAccess(allowed) {
+	if allowed.AllowsAll() {
 		return nil
 	}
 	accounts, err := h.config.GetPlanAccounts(ctx, planID)
@@ -68,7 +67,7 @@ func (h *Handler) requirePlanAccess(ctx context.Context, session *Session, planI
 	}
 	for _rvc := range accounts {
 		acct := accounts[_rvc]
-		if auth.MatchesAccount(allowed, acct.ID, acct.Name) {
+		if allowed.Allows(acct.ID, acct.Name) {
 			return nil
 		}
 	}
@@ -81,11 +80,11 @@ func (h *Handler) requirePlanAccess(ctx context.Context, session *Session, planI
 // CloudAccountID are rejected when the session is scoped — we can't
 // attribute them, and silently letting them through would bypass the filter.
 func (h *Handler) validatePurchaseRecommendationScope(ctx context.Context, session *Session, recs []config.RecommendationRecord) error {
-	allowed, err := h.getAllowedAccounts(ctx, session)
+	allowed, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
-	if auth.IsUnrestrictedAccess(allowed) {
+	if allowed.AllowsAll() {
 		return nil
 	}
 	nameByID := h.resolveAccountNamesByID(ctx)
@@ -95,7 +94,7 @@ func (h *Handler) validatePurchaseRecommendationScope(ctx context.Context, sessi
 			return NewClientError(400, fmt.Sprintf("recommendation %d has no cloud_account_id; scoped users cannot execute unattributed recommendations", i))
 		}
 		id := *rec.CloudAccountID
-		if !auth.MatchesAccount(allowed, id, nameByID[id]) {
+		if !allowed.Allows(id, nameByID[id]) {
 			return NewClientError(403, fmt.Sprintf("recommendation %d targets account %s which is outside your allowed_accounts", i, id))
 		}
 	}
@@ -114,11 +113,11 @@ func (h *Handler) validatePurchaseRecommendationScope(ctx context.Context, sessi
 // round-trip (and to keep existing unit-test fixtures for admin operations
 // working without adding execution mocks).
 func (h *Handler) requireExecutionAccess(ctx context.Context, session *Session, executionID string) error {
-	allowed, err := h.getAllowedAccounts(ctx, session)
+	allowed, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
-	if auth.IsUnrestrictedAccess(allowed) {
+	if allowed.AllowsAll() {
 		return nil
 	}
 	execution, err := h.config.GetExecutionByID(ctx, executionID)
