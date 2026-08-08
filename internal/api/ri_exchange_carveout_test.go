@@ -7,6 +7,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -97,4 +98,44 @@ func TestRIExchangeCarveOut_AdminKeepsNonCarvedVerbs(t *testing.T) {
 			assert.NotNil(t, got)
 		})
 	}
+}
+
+// TestExecuteExchange_PlainAdminIsRefused drives the REAL routed handler,
+// not the permission predicate.
+//
+// The three tests above call requirePermission directly, which proves the
+// carve-out set refuses the pair; it does not prove the endpoint does. Those
+// are different claims, and #1757 is the standing example of the gap: a test
+// named "...MUST be required" passed while calling a predicate the real
+// dispatch never consults. This exercises executeExchange itself, the handler
+// behind POST /api/ri-exchange/execute.
+//
+// mockStore is stubbed with no expectations, so if the carve-out ever stops
+// refusing, the handler reaches the store and testify panics rather than
+// quietly returning a 200. The explicit per-parameter matchers keep the
+// AssertNotCalled non-vacuous either way (#1595/#1740): SaveRIExchangeRecord
+// hands two arguments to m.Called, so two matchers are required.
+func TestExecuteExchange_PlainAdminIsRefused(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	session := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "exchange-token").Return(session, nil)
+	mockAuth.grantPermissions([]auth.Permission{{Action: auth.ActionAdmin, Resource: auth.ResourceAll}})
+
+	h := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer exchange-token"},
+		Body:    `{"ri_ids":["ri-1"],"target_offering_id":"off-1","region":"us-east-1","target_count":1,"max_payment_due_usd":"100.00"}`,
+	}
+
+	result, err := h.executeExchange(ctx, req)
+
+	require.Error(t, err, "a plain admin must not be able to execute an RI exchange (#1644)")
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), auth.ActionExecute)
+	assert.Contains(t, err.Error(), auth.ResourceRIExchange)
+	mockStore.AssertNotCalled(t, "SaveRIExchangeRecord", mock.Anything, mock.Anything)
 }
