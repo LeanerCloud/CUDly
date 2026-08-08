@@ -163,30 +163,12 @@ export const PURCHASER_GROUP_ID = '00000000-0000-5000-8000-000000000007';
 export const RI_EXCHANGER_GROUP_ID = '00000000-0000-5000-8000-000000000008';
 
 /**
- * The set of (action, resource) pairs carved out of the admin:*
- * wildcard. Mirrors adminCarvedOuts in internal/auth/types.go. Which
- * group's membership grants each key back during the fallback path
- * (effectivePermissions not yet loaded) is NOT uniform across this set --
- * see CARVE_OUT_FALLBACK_CHECK below, which every entry here must also
- * appear in.
- */
-const ADMIN_CARVED_OUTS: ReadonlySet<string> = new Set([
-  'execute:purchases',
-  'approve-any:purchases',
-  'retry-any:purchases',
-  // execute:ri-exchange is carved out by issue #1644 and granted by the
-  // seeded RI Exchanger group (migration 000096), not by admin:*. If this
-  // set drifts from adminCarvedOuts the UI offers an action the backend
-  // then refuses with a 403.
-  'execute:ri-exchange',
-]);
-
-/**
- * Subset of ADMIN_CARVED_OUTS specific to the three money-spending purchase
- * verbs (issue #923). isPurchaser() consults only these -- NOT the full
- * ADMIN_CARVED_OUTS set -- so that holding execute:ri-exchange alone (issue
- * #1644, a disjoint carve-out with its own group) does not also satisfy the
- * "can spend money" predicate the no-Purchaser banners key off.
+ * Subset of the carved-out verbs specific to the three money-spending
+ * purchase verbs (issue #923). isPurchaser() consults only these -- NOT the
+ * full carved-out set (see CARVE_OUT_FALLBACK_CHECK below) -- so that
+ * holding execute:ri-exchange alone (issue #1644, a disjoint carve-out with
+ * its own group) does not also satisfy the "can spend money" predicate the
+ * no-Purchaser banners key off.
  */
 const PURCHASER_CARVED_OUTS: ReadonlySet<string> = new Set([
   'execute:purchases',
@@ -274,11 +256,11 @@ export function isRIExchanger(): boolean {
 
 /**
  * Maps each carved-out (action:resource) key to the predicate that grants it
- * back during the fallback (effectivePermissions not yet loaded) path.
- * ADMIN_CARVED_OUTS mirrors the backend's *set* of carved-out verbs; this map
- * mirrors which group's membership grants each one back, which is NOT
- * uniform (Purchaser for the three money-spending verbs, RI Exchanger for
- * execute:ri-exchange). A carved-out key missing from this map would be
+ * back during the fallback (effectivePermissions not yet loaded) path. This
+ * is the single source of truth for which verbs are carved out of admin:* at
+ * all (its keys) AND which group's membership grants each one back, which is
+ * NOT uniform (Purchaser for the three money-spending verbs, RI Exchanger
+ * for execute:ri-exchange). A carved-out key missing from this map would be
  * silently hardcoded to the wrong predicate here, which is exactly the bug
  * this map replaces: canAccess() used to route every carved-out verb through
  * isPurchaser() regardless of which group actually granted it (PR #1758
@@ -290,6 +272,16 @@ const CARVE_OUT_FALLBACK_CHECK: ReadonlyMap<string, () => boolean> = new Map([
   ['retry-any:purchases', isPurchaser],
   ['execute:ri-exchange', isRIExchanger],
 ]);
+
+/**
+ * The set of (action, resource) pairs carved out of the admin:* wildcard.
+ * Mirrors adminCarvedOuts in internal/auth/types.go. Derived from
+ * CARVE_OUT_FALLBACK_CHECK's keys rather than hand-maintained as a second
+ * list (PR #1758 review, Finding 4), so the two can never drift out of sync
+ * -- the failure mode a hand-maintained second list invites is exactly the
+ * class of bug this PR fixed one instance of.
+ */
+const ADMIN_CARVED_OUTS: ReadonlySet<string> = new Set(CARVE_OUT_FALLBACK_CHECK.keys());
 
 /**
  * Returns true when the current session's effective permissions grant
