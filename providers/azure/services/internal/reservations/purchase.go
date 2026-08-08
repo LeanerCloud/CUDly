@@ -472,11 +472,24 @@ func doPurchase(ctx context.Context, httpClient HTTPClient, purchaseURL string, 
 	if err != nil {
 		return fmt.Errorf("failed to purchase reservation: %w", err)
 	}
-	body, _ := io.ReadAll(resp.Body)
+	body, readErr := io.ReadAll(resp.Body)
 	resp.Body.Close() // #nosec G104 -- body fully drained by io.ReadAll before Close; transport close error does not affect correctness
 
+	// Success is decided by the status code alone, so an unreadable body cannot
+	// turn a completed purchase into a failure.
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusAccepted {
 		return nil
+	}
+	if readErr != nil {
+		// IsSessionTimeout classifies this error by searching its text for the
+		// fragment Azure puts in the body, and DoPurchaseTwoStep retries only
+		// when that matches. Discarding the read error therefore made a
+		// retryable session timeout look permanent whenever the body failed to
+		// read, abandoning the purchase on its first attempt with an empty
+		// diagnostic. Surface the read failure rather than classifying
+		// retryability from a body that was never fully received.
+		return fmt.Errorf("reservation purchase failed with status %d and its response body could not be read, so retryability is unknown (partial body: %q): %w",
+			resp.StatusCode, string(body), readErr)
 	}
 	return fmt.Errorf("reservation purchase failed with status %d: %s", resp.StatusCode, string(body))
 }

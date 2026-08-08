@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations"
@@ -809,4 +810,84 @@ func TestBillingPlanForPaymentOption_UnrecognizedIsNotBlamedOnPartialUpfront(t *
 	_, paddedErr := BillingPlanForPaymentOption("  Partial-Upfront  ")
 	require.Error(t, paddedErr)
 	assert.Contains(t, paddedErr.Error(), "partial-upfront has no azure equivalent")
+}
+
+// truncatingBody yields the first n bytes of data and then fails, modeling a
+// response whose body is cut short mid-transfer.
+type truncatingBody struct {
+	data []byte
+	n    int
+	off  int
+}
+
+func (b *truncatingBody) Read(p []byte) (int, error) {
+	if b.off >= b.n {
+		return 0, errors.New("unexpected EOF reading response body")
+	}
+	k := copy(p, b.data[b.off:b.n])
+	b.off += k
+	return k, nil
+}
+
+func (b *truncatingBody) Close() error { return nil }
+
+// TestDoPurchase_UnreadableBodyDoesNotSilentlyLookPermanent is the regression
+// test for the retry-classification defect.
+//
+// doPurchase's error text is the ONLY input to IsSessionTimeout, and
+// DoPurchaseTwoStep retries only when that predicate matches. When the read
+// error was discarded, a 400 whose body was truncated before the
+// "Session timed out" fragment produced a bare `status 400: <partial>` error.
+// IsSessionTimeout then returned false and the purchase was abandoned on its
+// first attempt — the precise condition purchaseMaxAttempts exists to survive —
+// with no indication that anything had gone wrong reading the response.
+//
+// The fix must not classify retryability from a body that was never fully
+// received. Pre-fix this test fails: the error carries neither the read failure
+// nor the session-timeout fragment, so both assertions below are false.
+func TestDoPurchase_UnreadableBodyDoesNotSilentlyLookPermanent(t *testing.T) {
+	ctx := context.Background()
+	full := `{"error":{"code":"BadRequest","message":"Session timed out - Call CalculatePrice again"}}`
+
+	m := &mockHTTPClient{}
+	m.On("Do", mock.Anything).Return(&http.Response{
+		StatusCode: http.StatusBadRequest,
+		// Cut short well before the "Session timed out" fragment.
+		Body:   &truncatingBody{data: []byte(full), n: 12},
+		Header: make(http.Header),
+	}, nil).Once()
+
+	err := doPurchase(ctx, m, "https://example.invalid/purchase", []byte(testBody), "tok")
+	require.Error(t, err)
+
+	assert.ErrorContains(t, err, "could not be read",
+		"a failed body read must be surfaced, not discarded: the retry decision is made from this error's text")
+	assert.ErrorContains(t, err, "unexpected EOF reading response body",
+		"the underlying read error must be wrapped so the operator can see why retryability is unknown")
+
+	// The essential property: the failure must not be silently classified as a
+	// permanent, non-retryable error on the strength of a body that never
+	// arrived. Either it is recognizably retryable, or the read failure is
+	// visible — never a bare status line that quietly means "give up".
+	assert.True(t,
+		IsSessionTimeout(err) || strings.Contains(err.Error(), "could not be read"),
+		"an unreadable body must not silently produce a non-retryable classification")
+
+	m.AssertExpectations(t)
+}
+
+// TestDoPurchase_UnreadableBodyOnSuccessStillSucceeds guards the opposite
+// direction: success is decided by the status code alone, so a body that fails
+// to read must not turn a completed purchase into a reported failure.
+func TestDoPurchase_UnreadableBodyOnSuccessStillSucceeds(t *testing.T) {
+	ctx := context.Background()
+	m := &mockHTTPClient{}
+	m.On("Do", mock.Anything).Return(&http.Response{
+		StatusCode: http.StatusOK,
+		Body:       &truncatingBody{data: []byte(`{"ok":true}`), n: 3},
+		Header:     make(http.Header),
+	}, nil).Once()
+
+	require.NoError(t, doPurchase(ctx, m, "https://example.invalid/purchase", []byte(testBody), "tok"))
+	m.AssertExpectations(t)
 }
