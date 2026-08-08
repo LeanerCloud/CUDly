@@ -155,6 +155,22 @@ func (s *Service) grantCeilingAccounts(ctx context.Context, actorUserID string) 
 	if err != nil {
 		return nil, fmt.Errorf("%w: could not resolve the acting user's account scope: %w", ErrPermissionCeiling, err)
 	}
+	// An unresolved scope is UNKNOWN, not unrestricted.
+	//
+	// collectGroupsAndAccounts skips a missing or deleted group silently
+	// (pgx.ErrNoRows, or a nil group), so an actor whose groups all fail to
+	// load yields an EMPTY account list -- which IsUnrestrictedAccess reads as
+	// "all accounts". That turns this ceiling into a no-op on exactly the
+	// path it guards, so require that at least one group actually resolved.
+	//
+	// Note the asymmetry this closes: the permission ceiling already fails
+	// closed on the same input, because an empty permission set grants
+	// nothing. Without this the account ceiling failed OPEN on it.
+	if len(authCtx.Groups) == 0 {
+		return nil, fmt.Errorf(
+			"%w: the acting user's account scope could not be established (no group resolved)",
+			ErrPermissionCeiling)
+	}
 	return authCtx.AllowedAccounts, nil
 }
 

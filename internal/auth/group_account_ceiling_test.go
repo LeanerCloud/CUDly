@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -279,4 +281,49 @@ func TestAccountCeiling_FailsClosedOnUnidentifiedActor(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrPermissionCeiling)
 	mockStore.AssertNotCalled(t, "UpdateGroup", mock.Anything, mock.Anything)
+}
+
+// An actor whose groups do not resolve has an UNKNOWN scope, not an
+// unrestricted one. collectGroupsAndAccounts skips a missing or deleted group
+// silently, so before this guard a total resolution failure produced an empty
+// list -- read as "all accounts" -- and the ceiling became a no-op on exactly
+// the path it guards.
+//
+// The permission ceiling already failed closed on the same input (an empty
+// permission set grants nothing); this closes the asymmetry.
+func TestAccountCeiling_FailsClosedWhenActorScopeUnresolvable(t *testing.T) {
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name      string
+		groupResp func(*MockStore)
+	}{
+		{"actor's only group is missing", func(ms *MockStore) {
+			ms.On("GetGroup", ctx, ceilingActorGroupID).Return(nil, pgx.ErrNoRows)
+		}},
+		{"actor's only group resolves to nil", func(ms *MockStore) {
+			ms.On("GetGroup", ctx, ceilingActorGroupID).Return(nil, nil)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			t.Cleanup(func() { mockStore.AssertExpectations(t) })
+			svc := createTestService(mockStore, new(MockEmailSender))
+
+			mockStore.On("GetUserByID", ctx, ceilingActorID).
+				Return(&User{ID: ceilingActorID, GroupIDs: []string{ceilingActorGroupID}}, nil)
+			tc.groupResp(mockStore)
+			mockStore.On("GetGroup", ctx, ceilingTargetID).Return(&Group{
+				ID: ceilingTargetID, Name: "Team", AllowedAccounts: []string{scopedAccountA},
+			}, nil)
+
+			_, err := svc.UpdateGroupAPI(ctx, ceilingActorID, ceilingTargetID,
+				APIUpdateGroupRequest{AllowedAccounts: []string{"*"}})
+
+			require.Error(t, err, "an unresolvable scope must refuse the widening, not permit it")
+			assert.ErrorIs(t, err, ErrPermissionCeiling)
+			assert.Contains(t, err.Error(), "could not be established")
+			mockStore.AssertNotCalled(t, "UpdateGroup", mock.Anything, mock.Anything)
+		})
+	}
 }
