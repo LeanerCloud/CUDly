@@ -540,14 +540,14 @@ func (h *Handler) getAccountScope(ctx context.Context, session *Session) (auth.A
 		// everything even if a caller ignores the error.
 		return auth.AccountScope{}, fmt.Errorf("authentication service not configured: cannot establish account scope")
 	}
-	accounts, err := h.auth.GetAllowedAccountsAPI(ctx, session.UserID)
+	resolved, err := h.auth.GetAllowedAccountsAPI(ctx, session.UserID)
 	if err != nil {
 		return auth.AccountScope{}, err
 	}
 	// Safe here and only here: GetAllowedAccountsAPI has already failed closed
 	// on an unestablishable scope, so an empty list at this point genuinely
 	// means "no restriction configured".
-	return auth.ScopeFromLegacyList(accounts), nil
+	return auth.ScopeFromLegacyList(resolved), nil
 }
 
 // setSecurityHeaders adds comprehensive security headers to the response.
