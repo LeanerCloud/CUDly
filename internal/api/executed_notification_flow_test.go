@@ -219,7 +219,7 @@ func TestExecutedNotification_SessionApprovePath(t *testing.T) {
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 
 	mockPurchase := new(MockPurchaseManager)
