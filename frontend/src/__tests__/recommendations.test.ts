@@ -1218,10 +1218,10 @@ describe('Recommendations Module', () => {
       await loadRecommendations();
 
       const summary = document.getElementById('recommendations-action-summary');
-      // #281: min!=max so formatSavingsRange emits the "X – Y" form. The
-      // commas in $1,100 / $1,800 depend on the runtime's default locale
-      // (formatCurrency uses toLocaleString(undefined, ...)); JSDOM may emit
-      // "$1100" without a separator, so the regex makes the comma optional.
+      // #281: min!=max so formatSavingsRange emits the "X – Y" form.
+      // formatCurrency is pinned to en-US (#1728), so $1,100 / $1,800 always
+      // render with a comma; the regex still leaves it optional so the
+      // assertion doesn't couple to that separator choice.
       expect(summary?.textContent).toMatch(/\$300\s*[–\-]\s*\$500\/mo/);
       expect(summary?.textContent).toMatch(/\$1,?100\s*[–\-]\s*\$1,?800 upfront/);
       expect(summary?.textContent).toMatch(/2 cells\b/);
@@ -7325,9 +7325,9 @@ describe('Issue #484: numeric filter matches the displayed rounded value', () =>
   // changes.
   describe('displayPrecision agrees with formatCurrency for currency columns', () => {
     function fractionDigitsOf(s: string): number {
-      // Strip leading currency symbol(s) and any locale group separators,
-      // then count digits after a decimal point. Returns 0 for "$123",
-      // 2 for "$123.45", etc.
+      // Strip the leading currency symbol and formatCurrency's en-US comma
+      // group separators (#1728), then count digits after a decimal point.
+      // Returns 0 for "$123", 2 for "$123.45", etc.
       const stripped = s.replace(/[^0-9.]/g, '');
       const dot = stripped.indexOf('.');
       return dot < 0 ? 0 : stripped.length - dot - 1;

@@ -962,7 +962,7 @@ export function renderSavingsByService(
               // tooltip; the range datasets share the full breakdown.
               if (ctx.dataset?.label === 'Current / Committed') {
                 const current = byService[svc]?.current_savings ?? 0;
-                return `Current / Committed: $${current.toLocaleString()}`;
+                return `Current / Committed: ${formatCurrency(current)}`;
               }
               const current = byService[svc]?.current_savings ?? 0;
               const maxRec = s?.max ?? 0;
@@ -973,10 +973,10 @@ export function renderSavingsByService(
               const pct = totalSavings > 0 ? ((total / totalSavings) * 100).toFixed(1) : '0.0';
               const lines = [
                 `Service: ${svc}`,
-                `Total: $${total.toLocaleString()} (${pct}% of all services)`,
-                `Current / Committed: $${current.toLocaleString()}`,
-                `Lowest option: $${lowestOption.toLocaleString()}`,
-                `Upside: $${upside.toLocaleString()}`,
+                `Total: ${formatCurrency(total)} (${pct}% of all services)`,
+                `Current / Committed: ${formatCurrency(current)}`,
+                `Lowest option: ${formatCurrency(lowestOption)}`,
+                `Upside: ${formatCurrency(upside)}`,
               ];
               if (s?.minLabel) lines.push(`Min option: ${s.minLabel}`);
               if (s?.maxLabel) lines.push(`Max option: ${s.maxLabel}`);
@@ -994,7 +994,7 @@ export function renderSavingsByService(
           stacked: true,
           beginAtZero: true,
           title: { display: true, text: 'Monthly savings ($)' },
-          ticks: { callback: (v) => '$' + (v as number).toLocaleString() },
+          ticks: { callback: (v) => formatCurrency(v as number) },
         },
       },
     },
@@ -1131,7 +1131,7 @@ export async function loadSavingsTrendChart(): Promise<void> {
                 const raw = items[0]?.raw as { x: number; y: number } | undefined;
                 return raw?.x != null ? formatTrendAxisTick(raw.x, interval) : '';
               },
-              label: (ctx) => `Cumulative savings: $${((ctx.raw as { x: number; y: number }).y).toLocaleString()}`,
+              label: (ctx) => `Cumulative savings: ${formatCurrency((ctx.raw as { x: number; y: number }).y)}`,
             },
           },
         },
@@ -1147,7 +1147,7 @@ export async function loadSavingsTrendChart(): Promise<void> {
           },
           y: {
             beginAtZero: true,
-            ticks: { callback: (v) => '$' + (v as number).toLocaleString() },
+            ticks: { callback: (v) => formatCurrency(v as number) },
           },
         },
       },

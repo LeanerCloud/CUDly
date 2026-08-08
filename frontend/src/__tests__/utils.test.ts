@@ -137,7 +137,9 @@ describe('getDateParts', () => {
   test('returns day and month for valid date', () => {
     const result = getDateParts('2024-03-15');
     expect(result.day).toBe(15);
-    expect(result.month).toBeTruthy();
+    // Pinned to en-US (#1728): assert the literal abbreviation, not just
+    // truthiness, so a locale regression here fails this test directly.
+    expect(result.month).toBe('Mar');
   });
 
   test('returns zeros for null/undefined', () => {
@@ -156,6 +158,54 @@ describe('getDateParts', () => {
     // reported the previous day's date west of UTC.
     expect(getDateParts('2024-03-15').day).toBe(15);
     expect(getDateParts('2024-01-01').day).toBe(1);
+  });
+});
+
+describe('locale independence (issue #1728)', () => {
+  // formatCurrency and getDateParts must render the same digits/month
+  // abbreviation no matter what locale the host browser (or, for tests,
+  // the machine running jest) defaults to. The pre-fix code asked for the
+  // host default explicitly -- `toLocaleString(undefined, ...)` in
+  // formatCurrency, `toLocaleString('default', ...)` in getDateParts --
+  // so a real regression only shows up when that default isn't en-US.
+  // Rather than depend on the CI runner's own locale (which is en-US, so
+  // these tests would stay green with the bug present -- see PR #1732),
+  // simulate a de-DE host default by intercepting the "no explicit
+  // locale" call shape and rerouting it to a real de-DE formatter, while
+  // leaving the fixed code's explicit 'en-US' calls untouched.
+  const realNumberToLocaleString = Number.prototype.toLocaleString;
+  const realDateToLocaleString = Date.prototype.toLocaleString;
+
+  beforeEach(() => {
+    jest.spyOn(Number.prototype, 'toLocaleString').mockImplementation(
+      function (this: number, locale?: Intl.LocalesArgument, options?: Intl.NumberFormatOptions) {
+        const hostDefault = locale === undefined ? 'de-DE' : locale;
+        return realNumberToLocaleString.call(this, hostDefault, options);
+      }
+    );
+    jest.spyOn(Date.prototype, 'toLocaleString').mockImplementation(
+      function (this: Date, locale?: Intl.LocalesArgument, options?: Intl.DateTimeFormatOptions) {
+        const hostDefault = locale === undefined || locale === 'default' ? 'de-DE' : locale;
+        return realDateToLocaleString.call(this, hostDefault, options);
+      }
+    );
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('formatCurrency keeps en-US comma grouping under a de-DE host default', () => {
+    // de-DE would render this "1.000" (period as thousands separator);
+    // confirms formatCurrency's explicit 'en-US' argument, not the host
+    // default, drives the output.
+    expect(formatCurrency(1000)).toBe('$1,000');
+  });
+
+  test('getDateParts keeps the en-US month abbreviation under a de-DE host default', () => {
+    // de-DE would render March as "Mär"; confirms getDateParts passes an
+    // explicit 'en-US' locale rather than 'default'.
+    expect(getDateParts('2024-03-15').month).toBe('Mar');
   });
 });
 
