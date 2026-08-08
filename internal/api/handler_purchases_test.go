@@ -307,7 +307,7 @@ func TestHandler_approvePurchase_SessionApproveAnyChainsToExecute(t *testing.T) 
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 	// approvePurchaseViaSession enforces CSRF on the session-authed path (issue #404).
 	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 
@@ -356,7 +356,7 @@ func TestHandler_approvePurchase_SessionExecuteFailureSurfacesAs409(t *testing.T
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 	// approvePurchaseViaSession enforces CSRF on the session-authed path (issue #404).
 	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 
@@ -449,7 +449,7 @@ func TestHandler_approvePurchaseViaSession_GlobalConfigError_FailsClosed(t *test
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 	// approvePurchaseViaSession enforces CSRF.
 	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 
@@ -572,7 +572,7 @@ func TestHandler_approvePurchase_AWSOrphanFallsThrough(t *testing.T) {
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 	// approvePurchaseViaSession enforces CSRF on the session-authed path (issue #404).
 	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 
@@ -613,7 +613,7 @@ func TestHandler_approvePurchase_NonOrphanUnchanged(t *testing.T) {
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 	// approvePurchaseViaSession enforces CSRF on the session-authed path (issue #404).
 	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 
@@ -1258,7 +1258,7 @@ func TestHandler_runPlannedPurchase(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "running", mock.Anything).Return(transitioned, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -2192,7 +2192,7 @@ func TestHandler_executePurchase_Success(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	// executePurchase reads GlobalConfig to look up the per-provider
 	// grace period. Return an empty-but-valid config so the grace
@@ -2239,7 +2239,7 @@ func TestHandler_executePurchase_InvalidBody(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -2265,7 +2265,7 @@ func TestHandler_executePurchase_EmptyRecommendations(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -2291,7 +2291,7 @@ func TestHandler_executePurchase_NegativeUpfrontCost(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -2317,7 +2317,7 @@ func TestHandler_executePurchase_NegativeSavings(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -2343,7 +2343,7 @@ func TestHandler_executePurchase_TooManyRecommendations(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -2380,7 +2380,7 @@ func TestHandler_executePurchase_ExceedsMaxAmount(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -2407,7 +2407,7 @@ func TestHandler_executePurchase_SaveError(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(errors.New("database error"))
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
@@ -5664,7 +5664,7 @@ func TestHandler_approvePurchaseViaSession_FourEyesOn_DifferentApproverSucceeds(
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{UserID: approverID, Email: approverEmail}, nil)
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 
 	realManager := purchase.NewManager(purchase.ManagerConfig{ConfigStore: mockConfig, EmailSender: &stubEmailNotifier{}})

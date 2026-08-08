@@ -369,7 +369,7 @@ func TestApproveRIExchange_SessionAdmin(t *testing.T) {
 
 	adminSession := &Session{UserID: "admin-uuid", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "admin-bearer").Return(adminSession, nil)
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 
 	// authorizeSessionApproveRIExchange: admin role short-circuits (no HasPermissionAPI call)
 
@@ -1755,7 +1755,7 @@ func TestApproveRIExchange_SessionActorStamped(t *testing.T) {
 
 	adminSession := &Session{UserID: actorID, Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "admin-bearer").Return(adminSession, nil)
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 
 	mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
 		ID: id, Status: "pending", ApprovalToken: "tok", SourceRIIDs: []string{"ri-1"}, PaymentDue: "10.00",

@@ -361,7 +361,7 @@ func TestApproveViaSession_PassesCSRF(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(adminSession, nil)
 	// Authorization is group-membership-only after issue #907: the session must
 	// pass the approve-* HasPermissionAPI check before the CSRF guard runs.
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 	// Valid CSRF token supplied → ValidateCSRFToken succeeds.
 	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "csrf-abc").Return(nil)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })

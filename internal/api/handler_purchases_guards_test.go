@@ -359,7 +359,7 @@ func TestHandler_executePurchase_SurfacesPaymentAdjustments(t *testing.T) {
 		Email:  "admin@example.com",
 	}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
@@ -409,7 +409,7 @@ func TestHandler_executePurchase_NoAdjustmentsWhenCanonical(t *testing.T) {
 		Email:  "admin@example.com",
 	}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockAuth.grantAdmin()
+	mockAuth.grantAdminPurchaser()
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)

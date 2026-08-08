@@ -276,12 +276,24 @@ func (m *MockAuthService) ListGroupsAPI(ctx context.Context) (interface{}, error
 
 func (m *MockAuthService) HasPermissionAPI(ctx context.Context, userID, action, resource string) (bool, error) {
 	args := m.Called(ctx, userID, action, resource)
-	return args.Bool(0), args.Error(1)
+	return permissionDecision(args, action, resource), args.Error(1)
+}
+
+// permissionDecision reads a mock return that is either a constant bool or a
+// decision function (registered by grantPermissions, which answers through the
+// real matcher). It is called AFTER m.Called so the invocation is always
+// recorded first: short-circuiting ahead of m.Called is what made 20
+// assertions vacuous in issue #1595, and this must not reintroduce it.
+func permissionDecision(args mock.Arguments, action, resource string) bool {
+	if decide, ok := args.Get(0).(func(action, resource string) bool); ok {
+		return decide(action, resource)
+	}
+	return args.Bool(0)
 }
 
 func (m *MockAuthService) HasPermissionForConstraintsAPI(ctx context.Context, userID, action, resource string, constraintSets []auth.PermissionConstraints) (bool, error) {
 	args := m.Called(ctx, userID, action, resource, constraintSets)
-	return args.Bool(0), args.Error(1)
+	return permissionDecision(args, action, resource), args.Error(1)
 }
 
 func (m *MockAuthService) GetUserPermissionsAPI(ctx context.Context, userID string) (any, error) {
@@ -301,26 +313,88 @@ func (m *MockAuthService) allowConstraintChecks() {
 		Return(true, nil).Maybe()
 }
 
-// grantAdmin makes every HasPermissionAPI check succeed, modeling an
-// Administrators-group member. Authorization is group-membership-only after
-// issue #907, so admin-gated handlers resolve "is admin" / specific permissions
-// through HasPermissionAPI rather than a Session.Role short-circuit; tests that
-// previously set Role:"admin" register this instead. Uses .Maybe() so handlers
-// that don't reach a permission check don't fail the expectation, and matches
-// any userID so a single call covers the test's admin session regardless of its
-// UUID.
+// grantAdmin models an Administrators-group member: a principal holding
+// exactly {admin, *}, with unrestricted account access (the seeded group
+// carries allowed_accounts ARRAY['*'], surfaced as nil).
+//
+// It does NOT stub the authorization decision. Every question is answered by
+// the REAL matcher, auth.AuthContext.HasPermission, so the mock models the
+// principal's STATE and lets production logic work out the answer -- including
+// the adminCarvedOuts money verbs, which admin:* does NOT grant.
+//
+// Before issue #1596 this returned a constant true for every (action,
+// resource) triple. That modeled a principal production cannot have: an admin
+// who may spend money. The practical effect was that adminCarvedOuts could
+// have been deleted outright without a single test in this package failing,
+// so the #923 separation-of-duties control had no handler-level coverage at
+// all. See TestGrantAdmin_CarveOutIsEnforcedAtHandler.
 func (m *MockAuthService) grantAdmin() {
+	m.grantPermissions([]auth.Permission{{Action: auth.ActionAdmin, Resource: auth.ResourceAll}})
+}
+
+// grantAdminPurchaser models the principal a purchase actually requires: an
+// Administrators member who is ALSO in the Purchaser group.
+//
+// admin:* alone cannot execute, approve-any or retry-any a purchase -- those
+// three verbs are carved out of the wildcard for separation of duties (#923),
+// so they require explicit membership in a group that grants them. Migrations
+// 000059/000064 backfill exactly this pairing onto every existing admin, so
+// this is the DEFAULT real-world operator on the money paths, not an exotic
+// one.
+//
+// Tests on execute/approve/retry handlers must use this rather than
+// grantAdmin. Before #1596 they used grantAdmin and passed anyway, because the
+// stub answered true for verbs production denies.
+func (m *MockAuthService) grantAdminPurchaser() {
+	m.grantPermissions([]auth.Permission{
+		{Action: auth.ActionAdmin, Resource: auth.ResourceAll},
+		{Action: auth.ActionExecute, Resource: auth.ResourcePurchases},
+		{Action: auth.ActionApproveAny, Resource: auth.ResourcePurchases},
+		{Action: auth.ActionRetryAny, Resource: auth.ResourcePurchases},
+	})
+}
+
+// grantScoped models an admin whose account access is RESTRICTED to the given
+// accounts, so handlers that claim to honor allowed_accounts can be exercised
+// on the restricted path. grantAdmin's nil allow-list means unrestricted, so
+// without this no test could ever exercise account scoping (issue #1596; the
+// #950/#956 regression class this made untestable).
+func (m *MockAuthService) grantScoped(accounts ...string) {
+	m.grantPermissionsScoped(
+		[]auth.Permission{{Action: auth.ActionAdmin, Resource: auth.ResourceAll}},
+		accounts,
+	)
+}
+
+// grantPermissions models a principal holding exactly perms, with
+// unrestricted account access.
+func (m *MockAuthService) grantPermissions(perms []auth.Permission) {
+	m.grantPermissionsScoped(perms, nil)
+}
+
+// grantPermissionsScoped is the shared implementation. The permission checks
+// are answered by auth.AuthContext.HasPermission rather than by a constant, so
+// a handler asking for a verb this principal does not hold is DENIED exactly
+// as it would be in production.
+//
+// .Maybe() is retained: many handlers legitimately return before reaching a
+// permission check (bad body, bad UUID). Asserting the check happened is a
+// per-handler contract that grantAdmin cannot state for all 235 call sites;
+// tests that need it should assert the call explicitly.
+func (m *MockAuthService) grantPermissionsScoped(perms []auth.Permission, accounts []string) {
+	authCtx := &auth.AuthContext{Permissions: perms}
+	decide := func(action, resource string) bool {
+		return authCtx.HasPermission(action, resource)
+	}
 	m.On("HasPermissionAPI", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(true, nil).Maybe()
-	// Admins hold {admin, *}, which grants every constraint set, so the
-	// SEC-01 execution-time constraint check succeeds too.
+		Return(decide, nil).Maybe()
+	// The SEC-01 execution-time constraint check. A principal holding only
+	// admin:* satisfies any constraint set for the verbs it holds, and holds
+	// none of the carved-out verbs, so the same decision function applies.
 	m.On("HasPermissionForConstraintsAPI", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(true, nil).Maybe()
-	// Administrators-group members carry the "*" wildcard, surfaced as
-	// unrestricted access (nil/empty). Handlers that scope by account call
-	// GetAllowedAccountsAPI after the permission check, so stub it too.
+		Return(decide, nil).Maybe()
 	m.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).
-		Return([]string(nil), nil).Maybe()
+		Return(accounts, nil).Maybe()
 }
 
 func (m *MockAuthService) GetAllowedAccountsAPI(ctx context.Context, userID string) ([]string, error) {
