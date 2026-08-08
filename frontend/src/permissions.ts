@@ -82,6 +82,60 @@ export type Resource =
   | 'ri-exchange'
   | '*';
 
+// ALL_ACTIONS / ALL_RESOURCES: runtime enumeration of the Action / Resource
+// unions above, for UI surfaces that must be able to represent every
+// permission the backend can store -- the group-edit form's action/resource
+// <select> lists (issue #1629). Before this, those lists were a *third*,
+// independently hand-maintained copy of the vocabulary in groupModals.ts
+// that had drifted 13 actions and 2 resources behind this file, so any
+// group edit silently dropped or widened permissions the form couldn't
+// represent. Deriving from Action/Resource instead of hand-writing this
+// array again keeps there being exactly one place to update.
+//
+// The Record<Action, true> / Record<Resource, true> assignments below are a
+// compile-time exhaustiveness check: TS rejects the assignment if a key is
+// missing OR if a key doesn't belong to the union, so adding a new Action
+// or Resource variant without updating these objects fails the build
+// instead of silently reintroducing the drift this issue closes.
+const ACTION_EXHAUSTIVENESS_CHECK: Record<Action, true> = {
+  view: true,
+  create: true,
+  update: true,
+  delete: true,
+  execute: true,
+  approve: true,
+  'cancel-own': true,
+  'cancel-any': true,
+  'retry-own': true,
+  'retry-any': true,
+  'approve-own': true,
+  'approve-any': true,
+  'execute-own': true,
+  'execute-any': true,
+  'update-any': true,
+  'revoke-own': true,
+  'revoke-any': true,
+  'sell-own': true,
+  'sell-any': true,
+  admin: true,
+};
+export const ALL_ACTIONS: readonly Action[] = Object.keys(ACTION_EXHAUSTIVENESS_CHECK) as Action[];
+
+const RESOURCE_EXHAUSTIVENESS_CHECK: Record<Resource, true> = {
+  '*': true,
+  recommendations: true,
+  plans: true,
+  purchases: true,
+  history: true,
+  accounts: true,
+  config: true,
+  users: true,
+  groups: true,
+  'api-keys': true,
+  'ri-exchange': true,
+};
+export const ALL_RESOURCES: readonly Resource[] = Object.keys(RESOURCE_EXHAUSTIVENESS_CHECK) as Resource[];
+
 /**
  * Well-known group UUID for the Administrators group seeded by
  * migration 000057. Being a member of this group is the frontend
