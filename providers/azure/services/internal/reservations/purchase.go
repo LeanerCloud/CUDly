@@ -261,10 +261,17 @@ const (
 // DoPurchaseTwoStep executes the calculatePrice->purchase two-step flow.
 //
 // It POSTs bodyBytes to calculateURL to mint an Azure-assigned reservationOrderId,
-// then POSTs the same body to the derived purchaseURL. On a "Session timed out"
-// 400 from the purchase endpoint (Azure has retired the session) it re-runs
-// calculatePrice from scratch (up to purchaseMaxAttempts total attempts).
-// Other 4xx/5xx errors are returned immediately without retry.
+// then POSTs the same body to the derived purchaseURL. It re-runs calculatePrice
+// from scratch (up to purchaseMaxAttempts total attempts) in exactly two cases:
+//
+//  1. a "Session timed out" 400 from the purchase endpoint, meaning Azure has
+//     retired the session; and
+//  2. a 400 whose response body did not read completely, where case 1 cannot be
+//     ruled out because the fragment it matches on may be in the part that never
+//     arrived (see errRetryabilityUnknown).
+//
+// Every other response, including a cleanly read 4xx or any 5xx, is returned
+// immediately without retry.
 //
 // Returns the Azure-minted reservationOrderId on success, which the caller
 // should store as the CommitmentID.

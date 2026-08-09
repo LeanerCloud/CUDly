@@ -833,17 +833,23 @@ func (b *truncatingBody) Close() error { return nil }
 // TestDoPurchase_UnreadableBodyDoesNotSilentlyLookPermanent is the regression
 // test for the retry-classification defect.
 //
-// doPurchase's error text is the ONLY input to IsSessionTimeout, and
-// DoPurchaseTwoStep retries only when that predicate matches. When the read
-// error was discarded, a 400 whose body was truncated before the
-// "Session timed out" fragment produced a bare `status 400: <partial>` error.
-// IsSessionTimeout then returned false and the purchase was abandoned on its
-// first attempt — the precise condition purchaseMaxAttempts exists to survive —
-// with no indication that anything had gone wrong reading the response.
+// Current rule: DoPurchaseTwoStep retries when IsSessionTimeout matches the
+// error text, OR when the error carries errRetryabilityUnknown — which
+// doPurchase attaches to a 400 whose body did not read completely, and to
+// nothing else. Retryability is no longer inferred solely from text.
 //
-// The fix must not classify retryability from a body that was never fully
-// received. Pre-fix this test fails: the error carries neither the read failure
-// nor the session-timeout fragment, so both assertions below are false.
+// Why the test exists (pre-fix behavior): the error text was once the only
+// input to IsSessionTimeout, and that predicate the only retry trigger. With
+// the read error discarded, a 400 truncated before the "Session timed out"
+// fragment produced a bare `status 400: <partial>`; IsSessionTimeout returned
+// false and the purchase was abandoned on its first attempt — the precise
+// condition purchaseMaxAttempts exists to survive — with no indication that
+// anything had gone wrong reading the response.
+//
+// This test pins the surfacing and the out-of-band tag. The retry decision
+// itself is pinned by TestDoPurchaseTwoStep_TruncatedSessionTimeoutStillRetries,
+// which counts attempts, because a message assertion cannot tell a changed
+// message from changed behavior.
 func TestDoPurchase_UnreadableBodyDoesNotSilentlyLookPermanent(t *testing.T) {
 	ctx := context.Background()
 	full := `{"error":{"code":"BadRequest","message":"Session timed out - Call CalculatePrice again"}}`
