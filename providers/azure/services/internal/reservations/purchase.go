@@ -30,6 +30,9 @@
 // idempotency token, so a re-driven purchase of a stranded execution (issue
 // #636) reuses the prior reservation rather than buying a second one. Mirrors
 // the AWS EC2 findRIByIdempotencyToken pattern (providers/aws/services/ec2).
+// The same lookup repeats inside the retry loop before each attempt after the
+// first, because every retry mints a new order ID and would otherwise be blind
+// to a first attempt that committed before reporting failure (issue #1774).
 //
 // This package exposes IsSessionTimeout to let callers classify errors,
 // DoPurchaseTwoStep (the raw two-step flow without the dedupe guard, retained
@@ -228,12 +231,12 @@ const sessionTimeoutFragment = "Session timed out"
 // commit-ambiguous status is a double-buy risk that buys nothing -- every such
 // case keeps its pre-existing behavior, which nobody has reported as broken.
 //
-// Note what does NOT bound this: DoIdempotentPurchaseTwoStep performs its
-// idempotency lookup exactly once, before DoPurchaseTwoStep is entered, and
-// there is no recheck between attempts. Each retry mints a fresh
-// reservationOrderId via doCalculatePrice, so the guard covers a re-drive
-// ACROSS invocations, not the loop within one. The bound here is
-// purchaseMaxAttempts.
+// What bounds a retry here: when an idempotency token is present, the loop
+// re-checks before every attempt after the first whether the previous one
+// committed despite reporting failure, and returns the existing order rather
+// than buying again (issue #1774). Without a token -- the bare
+// DoPurchaseTwoStep entry point -- no such check is possible and the only
+// bound is purchaseMaxAttempts.
 var errRetryabilityUnknown = errors.New("purchase retryability unknown: response body did not read completely")
 
 // IsSessionTimeout reports whether err looks like the "Session timed out"
@@ -276,7 +279,85 @@ const (
 // Returns the Azure-minted reservationOrderId on success, which the caller
 // should store as the CommitmentID.
 func DoPurchaseTwoStep(ctx context.Context, httpClient HTTPClient, calcURL string, bodyBytes []byte, bearerToken string) (string, error) {
+	// No idempotency token, so no re-check is possible between attempts. This
+	// entry point is retained for callers that have none; every service executor
+	// goes through DoIdempotentPurchaseTwoStep.
+	return purchaseTwoStepGuarded(ctx, httpClient, calcURL, bodyBytes, bearerToken, "")
+}
+
+// purchaseIsRetryable reports whether a failed purchase attempt should be
+// retried. Two triggers: a session timeout Azure names in the response body,
+// and a 400 whose body did not read completely, where the first cannot be ruled
+// out because the fragment it matches on may never have arrived
+// (errRetryabilityUnknown). Attempts beyond purchaseMaxAttempts are never
+// retryable regardless of cause.
+func purchaseIsRetryable(purchaseErr error, attempt int) bool {
+	if attempt >= purchaseMaxAttempts {
+		return false
+	}
+	return IsSessionTimeout(purchaseErr) || errors.Is(purchaseErr, errRetryabilityUnknown)
+}
+
+// waitBeforeRetry sleeps the inter-attempt delay, honoring cancellation so a
+// canceled context does not sit out the full wait before failing.
+func waitBeforeRetry(ctx context.Context) error {
+	select {
+	case <-time.After(purchaseRetryDelay):
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("reservation purchase canceled during retry delay: %w", ctx.Err())
+	}
+}
+
+// recheckAlreadyPurchased asks, before a retry, whether the attempt that just
+// failed nevertheless committed on Azure's side. It is a no-op on the first
+// attempt and when no idempotency token is available.
+//
+// Extracted rather than inlined so purchaseTwoStepGuarded stays under the
+// gocyclo:10 threshold the pre-merge check enforces, matching what
+// fetchReservationOrdersPage does for the pagination loop.
+//
+// A lookup that cannot be completed returns an error rather than a not-found,
+// so the caller refuses the retry. Treating an unusable lookup as "no existing
+// order" would reinstate exactly the fall-through this guard exists to prevent.
+func recheckAlreadyPurchased(ctx context.Context, httpClient HTTPClient, bearerToken, idempotencyToken string, attempt int) (orderID string, found bool, err error) {
+	if attempt == 1 || idempotencyToken == "" {
+		return "", false, nil
+	}
+	existingID, found, err := FindReservationOrderByIdempotencyToken(ctx, httpClient, bearerToken, idempotencyToken)
+	if err != nil {
+		return "", false, fmt.Errorf(
+			"idempotency re-check before purchase retry %d/%d failed (refusing to retry to avoid a possible double-buy): %w",
+			attempt, purchaseMaxAttempts, err)
+	}
+	if found {
+		log.Printf("reservation order for idempotency token %s already exists (%s) after attempt %d; the previous attempt committed despite reporting failure, so not purchasing again (issue #1774)",
+			common.MaskToken(idempotencyToken), existingID, attempt-1)
+	}
+	return existingID, found, nil
+}
+
+// purchaseTwoStepGuarded is the retry loop shared by both entry points. When
+// idempotencyToken is non-empty it re-checks, before every attempt after the
+// first, whether the previous attempt committed despite reporting failure.
+//
+// This closes the gap in issue #1774. The pre-loop lookup in
+// DoIdempotentPurchaseTwoStep catches a re-drive ACROSS invocations, but each
+// retry inside this loop mints a NEW reservationOrderId via doCalculatePrice, so
+// nothing linked attempt N+1 to a purchase that attempt N may have committed
+// before failing. The re-check is what makes the loop safe to enter at all.
+//
+// Ordering matters: the check runs before doCalculatePrice, so a purchase that
+// already exists short-circuits without minting yet another order ID.
+func purchaseTwoStepGuarded(ctx context.Context, httpClient HTTPClient, calcURL string, bodyBytes []byte, bearerToken, idempotencyToken string) (string, error) {
 	for attempt := 1; attempt <= purchaseMaxAttempts; attempt++ {
+		existingID, found, err := recheckAlreadyPurchased(ctx, httpClient, bearerToken, idempotencyToken, attempt)
+		if err != nil {
+			return "", err
+		}
+		if found {
+			return existingID, nil
+		}
 		// Step 1: calculatePrice -- mint a session-bound reservationOrderId.
 		orderID, err := doCalculatePrice(ctx, httpClient, calcURL, bodyBytes, bearerToken)
 		if err != nil {
@@ -289,22 +370,20 @@ func DoPurchaseTwoStep(ctx context.Context, httpClient HTTPClient, calcURL strin
 			return orderID, nil
 		}
 
-		// An unreadable body is retried alongside a recognized session timeout:
-		// without this the truncated case was abandoned on its first attempt,
-		// because IsSessionTimeout can only classify what it can read.
-		if (IsSessionTimeout(purchaseErr) || errors.Is(purchaseErr, errRetryabilityUnknown)) && attempt < purchaseMaxAttempts {
-			log.Printf("reservation purchase session timed out (attempt %d/%d), re-running calculatePrice in %s",
-				attempt, purchaseMaxAttempts, purchaseRetryDelay)
-			select {
-			case <-time.After(purchaseRetryDelay):
-			case <-ctx.Done():
-				return "", fmt.Errorf("reservation purchase canceled during retry delay: %w", ctx.Err())
-			}
-			continue
+		if !purchaseIsRetryable(purchaseErr, attempt) {
+			return "", purchaseErr
 		}
-		return "", purchaseErr
+		log.Printf("reservation purchase retryable (attempt %d/%d), re-running calculatePrice in %s",
+			attempt, purchaseMaxAttempts, purchaseRetryDelay)
+		if err := waitBeforeRetry(ctx); err != nil {
+			return "", err
+		}
 	}
-	return "", fmt.Errorf("reservation purchase failed after %d attempts (session timeout)", purchaseMaxAttempts)
+	// Unreachable: purchaseIsRetryable is false once attempt == purchaseMaxAttempts,
+	// so the final iteration always returns purchaseErr from inside the loop. Kept
+	// because the compiler cannot prove that, and worded generally rather than
+	// naming session timeout, which is now only one of two retry triggers.
+	return "", fmt.Errorf("reservation purchase exhausted %d attempts", purchaseMaxAttempts)
 }
 
 // doCalculatePrice calls the calculatePrice endpoint and returns the
@@ -469,15 +548,20 @@ func matchReservationOrderInPage(page *reservationOrdersListResponse, idempotenc
 //     the token. If found, short-circuit and return its order ID -- this is a
 //     re-drive of an execution that already created the reservation; buying
 //     again would double-charge the customer (issues #641, #721).
-//  3. Otherwise, call DoPurchaseTwoStep. The caller is responsible for having
+//  3. Otherwise, run the two-step flow. The caller is responsible for having
 //     stamped the idempotency tag into bodyBytes via ApplyPurchaseTags so the
 //     resulting order is tagged and the NEXT re-drive will short-circuit at
 //     step 2.
 //
-// A failed lookup must NOT fall through to a purchase: doing so would defeat
-// the guard and risk a double-buy on a re-drive. The lookup error is returned
-// verbatim, and the recovery sweep treats the recommendation as not-yet-
-// purchased and retries the whole guarded path (mirroring the EC2 EC2
+// The same lookup runs again inside the retry loop before every attempt after
+// the first, so a first attempt that committed before reporting failure is
+// found rather than duplicated (issue #1774). Step 2 covers a re-drive ACROSS
+// invocations; that in-loop check covers the loop within one.
+//
+// A failed lookup must NOT fall through to a purchase, in either position:
+// doing so would defeat the guard and risk a double-buy. The lookup error is
+// returned verbatim, and the recovery sweep treats the recommendation as
+// not-yet-purchased and retries the whole guarded path (mirroring the EC2
 // findRIByIdempotencyToken safety contract in providers/aws/services/ec2).
 func DoIdempotentPurchaseTwoStep(ctx context.Context, httpClient HTTPClient, calcURL string, bodyBytes []byte, bearerToken, idempotencyToken string) (string, error) {
 	if idempotencyToken != "" {
@@ -490,7 +574,7 @@ func DoIdempotentPurchaseTwoStep(ctx context.Context, httpClient HTTPClient, cal
 			return existingID, nil
 		}
 	}
-	return DoPurchaseTwoStep(ctx, httpClient, calcURL, bodyBytes, bearerToken)
+	return purchaseTwoStepGuarded(ctx, httpClient, calcURL, bodyBytes, bearerToken, idempotencyToken)
 }
 
 // doPurchase calls the purchase endpoint with the given body.
