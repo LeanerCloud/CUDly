@@ -650,10 +650,23 @@ func TestDoIdempotentPurchaseTwoStep_PreservesTwoStepFlow(t *testing.T) {
 
 	sessionTimeoutBody := `{"error":{"code":"BadRequest","message":"Session timed out - Call CalculatePrice again"}}`
 
-	// Lookup: no match.
-	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
-		return r.Method == http.MethodGet
-	})).Return(fakeResp(http.StatusOK, `{"value":[]}`), nil).Once()
+	// Lookup: no match. Registered TWICE, each with its own response, because
+	// the flow now performs two lookups: once before the flow, and again before
+	// the retry as the in-loop re-check added for issue #1774. Both report no
+	// existing order, so the retry proceeds and the two-step flow is preserved.
+	//
+	// Two .Once() registrations rather than one .Times(2): fakeResp wraps a
+	// bytes.Buffer, so testify handing back the same *http.Response twice would
+	// serve an already-drained body to the second caller and fail the decode.
+	for i := 0; i < 2; i++ {
+		m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+			return r.Method == http.MethodGet
+		})).Return(&http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewBufferString(`{"value":[]}`)),
+			Header:     make(http.Header),
+		}, nil).Once()
+	}
 	// calculatePrice #1.
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost && r.URL.String() == calcURL
@@ -1010,4 +1023,129 @@ func TestDoPurchaseTwoStep_TruncatedNon400DoesNotRetry(t *testing.T) {
 	assert.Equal(t, 1, c.purchases,
 		"a truncated 500 must be attempted exactly once; retrying it risks re-purchasing after "+
 			"a commit that the once-only idempotency lookup cannot see (issue #1774)")
+}
+
+// idempotencyRetryClient drives the real retry loop while counting each kind of
+// call, so tests can assert on what actually reached Azure rather than on an
+// error message. listResp is re-evaluated per call because the list result must
+// be able to change between attempts -- that is the whole scenario.
+type idempotencyRetryClient struct {
+	purchases int
+	calcs     int
+	lists     int
+	listResp  func(callNo int) (*http.Response, error)
+	purchase  func(callNo int) *http.Response
+}
+
+func (c *idempotencyRetryClient) Do(req *http.Request) (*http.Response, error) {
+	switch {
+	case req.URL.String() == ReservationOrdersListURL():
+		c.lists++
+		return c.listResp(c.lists)
+	case req.URL.String() == calcURL:
+		c.calcs++
+		return fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":"order-`+itoa(c.calcs)+`"}}`), nil
+	default:
+		c.purchases++
+		return c.purchase(c.purchases), nil
+	}
+}
+
+func itoa(i int) string { return string(rune('0' + i)) }
+
+// ordersListWith renders a reservation-orders page containing one order tagged
+// with the given idempotency token, in the shape matchReservationOrderInPage
+// expects.
+func ordersListWith(orderID, token string) string {
+	return `{"value":[{"name":"` + orderID + `","properties":{"provisioningState":"Succeeded",` +
+		`"reservationsProperties":{"userFriendlyAppliedScopeType":"Shared"}},` +
+		`"tags":{"cudly-idempotency-token":"` + token + `"}}]}`
+}
+
+const emptyOrdersList = `{"value":[]}`
+
+// TestPurchaseRetry_DoesNotDoubleBuyWhenFirstAttemptCommitted is the regression
+// test for issue #1774.
+//
+// The first purchase attempt reports a retryable session timeout, but it had in
+// fact committed on Azure's side. Before the in-loop re-check, the loop went
+// straight to a second calculatePrice (minting a NEW order ID) and purchased
+// again, because the only idempotency lookup happened before the loop was ever
+// entered. The bound was purchaseMaxAttempts, not the guard.
+func TestPurchaseRetry_DoesNotDoubleBuyWhenFirstAttemptCommitted(t *testing.T) {
+	const token = "tok-1774"
+	sessionTimeout := `{"error":{"code":"BadRequest","message":"Session timed out - Call CalculatePrice again"}}`
+
+	c := &idempotencyRetryClient{
+		// Pre-loop lookup: nothing yet. After attempt 1, the order exists.
+		listResp: func(n int) (*http.Response, error) {
+			if n == 1 {
+				return fakeResp(http.StatusOK, emptyOrdersList), nil
+			}
+			return fakeResp(http.StatusOK, ordersListWith("committed-order", token)), nil
+		},
+		purchase: func(int) *http.Response { return fakeResp(http.StatusBadRequest, sessionTimeout) },
+	}
+
+	orderID, err := DoIdempotentPurchaseTwoStep(context.Background(), c, calcURL, []byte(testBody), "tok", token)
+	require.NoError(t, err, "the committed order must be adopted, not treated as a failure")
+	assert.Equal(t, "committed-order", orderID)
+	assert.Equal(t, 1, c.purchases,
+		"exactly one purchase must reach Azure; a second would be a duplicate reservation the "+
+			"customer pays for (issue #1774)")
+	assert.Equal(t, 1, c.calcs,
+		"the re-check must run BEFORE calculatePrice, so no further order ID is minted once the "+
+			"purchase is known to exist")
+}
+
+// TestPurchaseRetry_StillRecoversWhenFirstAttemptGenuinelyFailed is the other
+// direction, and it is the one a duplicate-only test would miss: a fix that
+// simply refused to retry would pass the test above while silently breaking the
+// recovery this retry loop exists for.
+func TestPurchaseRetry_StillRecoversWhenFirstAttemptGenuinelyFailed(t *testing.T) {
+	const token = "tok-1774-recover"
+	sessionTimeout := `{"error":{"code":"BadRequest","message":"Session timed out - Call CalculatePrice again"}}`
+
+	c := &idempotencyRetryClient{
+		// The order never appears: attempt 1 genuinely did not commit.
+		listResp: func(int) (*http.Response, error) { return fakeResp(http.StatusOK, emptyOrdersList), nil },
+		purchase: func(n int) *http.Response {
+			if n == 1 {
+				return fakeResp(http.StatusBadRequest, sessionTimeout)
+			}
+			return fakeResp(http.StatusOK, `{}`)
+		},
+	}
+
+	orderID, err := DoIdempotentPurchaseTwoStep(context.Background(), c, calcURL, []byte(testBody), "tok", token)
+	require.NoError(t, err, "a genuine session timeout must still be recovered by the retry")
+	assert.Equal(t, "order-2", orderID, "the second attempt's freshly minted order ID must be returned")
+	assert.Equal(t, 2, c.purchases, "the retry must actually happen")
+	assert.Equal(t, 2, c.calcs, "each attempt mints its own session-bound order ID")
+}
+
+// TestPurchaseRetry_RefusesRetryWhenRecheckLookupFails pins the fail-closed
+// property in its new position. The pre-loop guard already refuses to purchase
+// when its lookup errors; the in-loop check must behave identically, or it
+// would reintroduce the fall-through it exists to prevent.
+func TestPurchaseRetry_RefusesRetryWhenRecheckLookupFails(t *testing.T) {
+	const token = "tok-1774-lookup-fail"
+	sessionTimeout := `{"error":{"code":"BadRequest","message":"Session timed out - Call CalculatePrice again"}}`
+
+	c := &idempotencyRetryClient{
+		listResp: func(n int) (*http.Response, error) {
+			if n == 1 {
+				return fakeResp(http.StatusOK, emptyOrdersList), nil
+			}
+			return fakeResp(http.StatusInternalServerError, `{"error":"list unavailable"}`), nil
+		},
+		purchase: func(int) *http.Response { return fakeResp(http.StatusBadRequest, sessionTimeout) },
+	}
+
+	_, err := DoIdempotentPurchaseTwoStep(context.Background(), c, calcURL, []byte(testBody), "tok", token)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to retry",
+		"an unusable re-check must stop the retry rather than proceed blind")
+	assert.Equal(t, 1, c.purchases,
+		"no second purchase may be attempted when the re-check could not be completed")
 }
