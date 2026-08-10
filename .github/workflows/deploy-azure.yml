@@ -243,14 +243,19 @@ jobs:
       - name: Explain a missing bootstrap role
         if: failure()
         run: |
-          # Both logs: the data source is read at plan time as well as apply, so a
-          # missing role can surface in either step depending on state freshness.
+          # Both logs are checked. Today the role lookup is deferred to apply --
+          # the plan reports "will be read during apply (config refers to values
+          # not yet known)" -- because of the module-level depends_on at
+          # terraform/environments/azure/compute.tf:75. That is contingent, not
+          # structural: if that stops forcing deferral the read moves to plan, and
+          # the diagnostic should not have to move with it.
           #
-          # Each file is grepped separately rather than passing both to one grep.
-          # With multiple operands where one does not exist, grep's exit status is
-          # implementation-defined: GNU returns 0 when -q matched an earlier file,
-          # BSD returns 2. Either log may legitimately be absent when an earlier
-          # step failed first, so the combined form would go silent on some hosts.
+          # Each file is checked separately so that "this log does not exist" is an
+          # explicit, expected case at the point of reading -- either log is absent
+          # when an earlier step failed first. Passing both to one grep would also
+          # work (POSIX: -q exits 0 if a line is selected, and the only combinations
+          # returning 2 are those with no match anywhere, where silence is wanted),
+          # but it leaves that reasoning implicit.
           found=0
           for log in "${RUNNER_TEMP}/tf-plan.log" "${RUNNER_TEMP}/tf-apply.log"; do
             [ -f "$log" ] || continue
