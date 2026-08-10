@@ -164,11 +164,15 @@ jobs:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
           TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
+          # pipefail for the same reason as the apply step below: the default
+          # shell is `bash -e`, where a pipeline takes tee's exit status and a
+          # failed plan would be reported as success.
+          set -o pipefail
           cd terraform/environments/azure
           terraform plan \
             -var-file="github-${{ needs.prepare.outputs.environment }}.tfvars" \
             -var="location=${{ env.AZURE_LOCATION }}" \
-            -out=tfplan
+            -out=tfplan 2>&1 | tee "${RUNNER_TEMP}/tf-plan.log"
 
 
       - name: Wait for resource group deletion to complete
@@ -217,8 +221,11 @@ jobs:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
           TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
+          # pipefail is required: the default shell is `bash -e`, where a pipeline
+          # takes tee's exit status and a failed apply would be reported as success.
+          set -o pipefail
           cd terraform/environments/azure
-          terraform apply -auto-approve tfplan
+          terraform apply -auto-approve tfplan 2>&1 | tee "${RUNNER_TEMP}/tf-apply.log"
 
           # Get app URL
           APP_URL=$(terraform output -raw container_app_url 2>/dev/null | grep -v '::' || echo "")
@@ -227,6 +234,56 @@ jobs:
           # Get app name
           APP_NAME=$(terraform output -raw container_app_name 2>/dev/null | grep -v '::' || echo "")
           echo "app_name=$APP_NAME" >> $GITHUB_OUTPUT
+
+      # The provider fails the data read outright when the custom role is absent,
+      # so a Terraform precondition can never run for this case. Issue #1794: the
+      # Azure deploy failed on every main run for three weeks because the raw
+      # provider error names neither the missing prerequisite nor the stack that
+      # creates it, and the explanation lived only in a source comment.
+      - name: Explain a missing bootstrap role
+        if: failure()
+        run: |
+          # Both logs are checked. Today the role lookup is deferred to apply --
+          # the plan reports "will be read during apply (config refers to values
+          # not yet known)" -- because of the module-level depends_on at
+          # terraform/environments/azure/compute.tf:75. That is contingent, not
+          # structural: if that stops forcing deferral the read moves to plan, and
+          # the diagnostic should not have to move with it.
+          #
+          # Each file is checked separately so that "this log does not exist" is an
+          # explicit, expected case at the point of reading -- either log is absent
+          # when an earlier step failed first. Passing both to one grep would also
+          # work (POSIX: -q exits 0 if a line is selected, and the only combinations
+          # returning 2 are those with no match anywhere, where silence is wanted),
+          # but it leaves that reasoning implicit.
+          found=0
+          for log in "${RUNNER_TEMP}/tf-plan.log" "${RUNNER_TEMP}/tf-apply.log"; do
+            [ -f "$log" ] || continue
+            if grep -qiE 'could not find role|Role Definition .* was not found' "$log"; then
+              found=1
+              break
+            fi
+          done
+          [ "$found" -eq 1 ] || exit 0
+          cat >&2 <<'EOT'
+          ::error title=Missing bootstrap role::The custom reservation-purchaser role does not exist in this subscription.
+
+          Apply the bootstrap stack that creates it:
+              terraform/environments/azure/ci-cd-permissions
+
+          Do NOT grant Microsoft.Authorization/roleDefinitions/write to the deploy
+          service principal to work around this. The split is deliberate: this
+          pipeline holds roleAssignments/write only.
+
+          If the bootstrap HAS been applied, check in this order:
+            1. the deploy SP has Microsoft.Authorization/roleDefinitions/read.
+               Without it the lookup returns empty, which is indistinguishable
+               from the role being absent.
+            2. the role was not renamed or deleted out of band.
+            3. the name suffix still matches. The runtime module looks up
+               "CUDly Reservation Purchaser (custom) - <subscription-id>";
+               the bootstrap builds the name from its own var.name_suffix.
+          EOT
 
       - name: Release state lock on failure
         if: failure() || cancelled()

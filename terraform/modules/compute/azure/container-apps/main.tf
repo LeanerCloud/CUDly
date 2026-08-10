@@ -278,8 +278,24 @@ resource "azurerm_role_assignment" "subscription_reader" {
 # (re-)applied, this data source fails loudly with "Role Definition ... was not
 # found" -- the signal to re-run the ci-cd-permissions bootstrap, NOT to grant
 # roleDefinitions/write to the deploy SP.
+locals {
+  # Reconstruction of local.role_definition_name from
+  # terraform/modules/iam/azure/cudly-reservation-role. That module's
+  # role_definition_name output cannot be referenced here: it is instantiated in
+  # the ci-cd-permissions stack, which has separate state, and this repo does not
+  # use terraform_remote_state. Keeping the format string in one place per module
+  # is the most the split allows; changing it requires changing both.
+  cudly_reservation_purchaser_role_name = "CUDly Reservation Purchaser (custom) - ${data.azurerm_subscription.current.subscription_id}"
+}
+
+# A lifecycle postcondition deliberately is NOT used here. The azurerm provider
+# fails the data read itself when the role is absent ("loading Role Definition
+# List: could not find role ..."), so Terraform aborts before any postcondition
+# evaluates -- the check would never fire for the failure it was meant to explain.
+# The remediation is surfaced from the workflow's failure path instead; see the
+# "Explain a missing bootstrap role" step in .github/workflows/deploy-azure.yml.
 data "azurerm_role_definition" "cudly_reservation_purchaser" {
-  name  = "CUDly Reservation Purchaser (custom) - ${data.azurerm_subscription.current.subscription_id}"
+  name  = local.cudly_reservation_purchaser_role_name
   scope = data.azurerm_subscription.current.id
 }
 
