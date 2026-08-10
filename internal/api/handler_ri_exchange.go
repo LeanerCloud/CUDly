@@ -1962,14 +1962,28 @@ func (h *Handler) updateRIExchangeConfig(ctx context.Context, req *events.Lambda
 	// already validated the inputs, so (matching the prior behavior) we do not
 	// re-run the whole-config Validate here.
 	if _, err := h.config.UpdateGlobalConfigAtomic(ctx, func(existing *config.GlobalConfig) error {
+		// Snapshot before mutating: the auto-mode gate compares the stored state
+		// against the proposed one, and `existing` becomes the proposed state
+		// below. Inside the closure so the comparison reads the same
+		// advisory-locked row the write lands on -- checking beforehand would
+		// race a concurrent writer between the check and the write.
+		before := riExchangeArmStateOf(existing)
+
 		existing.RIExchangeEnabled = body.AutoExchangeEnabled
 		existing.RIExchangeMode = body.Mode
 		existing.RIExchangeUtilizationThreshold = body.UtilizationThreshold
 		existing.RIExchangeMaxPerExchangeUSD = body.MaxPaymentPerExchangeUSD
 		existing.RIExchangeMaxDailyUSD = body.MaxPaymentDailyUSD
 		existing.RIExchangeLookbackDays = body.LookbackDays
-		return nil
+
+		return h.requireRIExchangeAutoModeGrant(ctx, req, before, riExchangeArmStateOf(existing))
 	}); err != nil {
+		// A refused write is not a failed save. Surface the gate's 403 (and any
+		// other ClientError the closure raises) unwrapped, so the response says
+		// permission denied rather than blaming the store.
+		if ce, ok := IsClientError(err); ok {
+			return nil, ce
+		}
 		return nil, fmt.Errorf("failed to save config: %w", err)
 	}
 
