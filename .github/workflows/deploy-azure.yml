@@ -164,11 +164,15 @@ jobs:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
           TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
+          # pipefail for the same reason as the apply step below: the default
+          # shell is `bash -e`, where a pipeline takes tee's exit status and a
+          # failed plan would be reported as success.
+          set -o pipefail
           cd terraform/environments/azure
           terraform plan \
             -var-file="github-${{ needs.prepare.outputs.environment }}.tfvars" \
             -var="location=${{ env.AZURE_LOCATION }}" \
-            -out=tfplan
+            -out=tfplan 2>&1 | tee "${RUNNER_TEMP}/tf-plan.log"
 
 
       - name: Wait for resource group deletion to complete
@@ -239,9 +243,23 @@ jobs:
       - name: Explain a missing bootstrap role
         if: failure()
         run: |
-          if ! grep -qiE 'could not find role|Role Definition .* was not found' "${RUNNER_TEMP}/tf-apply.log" 2>/dev/null; then
-            exit 0
-          fi
+          # Both logs: the data source is read at plan time as well as apply, so a
+          # missing role can surface in either step depending on state freshness.
+          #
+          # Each file is grepped separately rather than passing both to one grep.
+          # With multiple operands where one does not exist, grep's exit status is
+          # implementation-defined: GNU returns 0 when -q matched an earlier file,
+          # BSD returns 2. Either log may legitimately be absent when an earlier
+          # step failed first, so the combined form would go silent on some hosts.
+          found=0
+          for log in "${RUNNER_TEMP}/tf-plan.log" "${RUNNER_TEMP}/tf-apply.log"; do
+            [ -f "$log" ] || continue
+            if grep -qiE 'could not find role|Role Definition .* was not found' "$log"; then
+              found=1
+              break
+            fi
+          done
+          [ "$found" -eq 1 ] || exit 0
           cat >&2 <<'EOT'
           ::error title=Missing bootstrap role::The custom reservation-purchaser role does not exist in this subscription.
 
