@@ -370,6 +370,10 @@ func TestApproveRIExchange_SessionAdmin(t *testing.T) {
 	adminSession := &Session{UserID: "admin-uuid", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "admin-bearer").Return(adminSession, nil)
 	mockAuth.grantAdminPurchaser()
+	// approveRIExchangeViaSession validates CSRF before anything else (issue
+	// #1757); a valid token must be supplied for this session-authed path
+	// to reach the record fetch at all.
+	mockAuth.On("ValidateCSRFToken", ctx, "admin-bearer", "csrf-abc").Return(nil)
 
 	// authorizeSessionApproveRIExchange: admin role short-circuits (no HasPermissionAPI call)
 
@@ -398,7 +402,10 @@ func TestApproveRIExchange_SessionAdmin(t *testing.T) {
 	mockStore.On("StampRIExchangeApprovedBy", ctx, id, adminSession.Email).Return(nil)
 
 	req := &events.LambdaFunctionURLRequest{
-		Headers: map[string]string{"authorization": "Bearer admin-bearer"},
+		Headers: map[string]string{
+			"authorization": "Bearer admin-bearer",
+			"x-csrf-token":  "csrf-abc",
+		},
 	}
 	_, err := h.approveRIExchange(ctx, req, id, "")
 	require.NoError(t, err)
@@ -427,6 +434,8 @@ func TestApproveRIExchange_SessionApproveOwn(t *testing.T) {
 		mockAuth.On("ValidateSession", ctx, "owner-bearer").Return(ownerSession, nil)
 		mockAuth.On("HasPermissionAPI", ctx, ownerID, auth.ActionApproveAny, auth.ResourcePurchases).Return(false, nil)
 		mockAuth.On("HasPermissionAPI", ctx, ownerID, auth.ActionApproveOwn, auth.ResourcePurchases).Return(true, nil)
+		// Issue #1757: CSRF must be validated before the record fetch.
+		mockAuth.On("ValidateCSRFToken", ctx, "owner-bearer", "csrf-abc").Return(nil)
 
 		// authorizeSessionApproveRIExchange fetches record for ownership check
 		mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
@@ -449,7 +458,10 @@ func TestApproveRIExchange_SessionApproveOwn(t *testing.T) {
 		mockStore.On("StampRIExchangeApprovedBy", ctx, id, ownerSession.Email).Return(nil)
 
 		req := &events.LambdaFunctionURLRequest{
-			Headers: map[string]string{"authorization": "Bearer owner-bearer"},
+			Headers: map[string]string{
+				"authorization": "Bearer owner-bearer",
+				"x-csrf-token":  "csrf-abc",
+			},
 		}
 		_, err := h.approveRIExchange(ctx, req, id, "")
 		require.NoError(t, err)
@@ -465,6 +477,9 @@ func TestApproveRIExchange_SessionApproveOwn(t *testing.T) {
 		mockAuth.On("ValidateSession", ctx, "owner-bearer").Return(ownerSession, nil)
 		mockAuth.On("HasPermissionAPI", ctx, ownerID, auth.ActionApproveAny, auth.ResourcePurchases).Return(false, nil)
 		mockAuth.On("HasPermissionAPI", ctx, ownerID, auth.ActionApproveOwn, auth.ResourcePurchases).Return(true, nil)
+		// Issue #1757: CSRF must be validated before the record fetch, so this
+		// test needs a valid token to reach the ownership check it targets.
+		mockAuth.On("ValidateCSRFToken", ctx, "owner-bearer", "csrf-abc").Return(nil)
 
 		// authorizeSessionApproveRIExchange fetches record — creator does not match
 		mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
@@ -475,7 +490,10 @@ func TestApproveRIExchange_SessionApproveOwn(t *testing.T) {
 		}, nil)
 
 		req := &events.LambdaFunctionURLRequest{
-			Headers: map[string]string{"authorization": "Bearer owner-bearer"},
+			Headers: map[string]string{
+				"authorization": "Bearer owner-bearer",
+				"x-csrf-token":  "csrf-abc",
+			},
 		}
 		_, err := h.approveRIExchange(ctx, req, id, "")
 		require.Error(t, err)
@@ -1758,6 +1776,8 @@ func TestApproveRIExchange_SessionActorStamped(t *testing.T) {
 	adminSession := &Session{UserID: actorID, Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "admin-bearer").Return(adminSession, nil)
 	mockAuth.grantAdminPurchaser()
+	// Issue #1757: CSRF must be validated before the record fetch.
+	mockAuth.On("ValidateCSRFToken", ctx, "admin-bearer", "csrf-abc").Return(nil)
 
 	mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
 		ID: id, Status: "pending", ApprovalToken: "tok", SourceRIIDs: []string{"ri-1"}, PaymentDue: "10.00",
@@ -1774,7 +1794,10 @@ func TestApproveRIExchange_SessionActorStamped(t *testing.T) {
 	mockStore.On("StampRIExchangeApprovedBy", ctx, id, adminSession.Email).Return(nil)
 
 	req := &events.LambdaFunctionURLRequest{
-		Headers: map[string]string{"authorization": "Bearer admin-bearer"},
+		Headers: map[string]string{
+			"authorization": "Bearer admin-bearer",
+			"x-csrf-token":  "csrf-abc",
+		},
 	}
 	_, err := (&Handler{config: mockStore, auth: mockAuth}).approveRIExchange(ctx, req, id, "")
 	require.NoError(t, err)

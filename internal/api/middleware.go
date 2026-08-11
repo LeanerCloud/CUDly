@@ -287,6 +287,14 @@ func (h *Handler) requiresCSRFValidation(method, path string, req *events.Lambda
 	//
 	// Similarly, /api/ri-exchange/approve/ and /api/ri-exchange/reject/ are
 	// AuthPublic and therefore exempted by isPublicEndpoint(), not here.
+	// approve/ has a session-authed sub-path (approveRIExchangeViaSession)
+	// and, like the purchases functions above, enforces CSRF directly
+	// inside that function -- NOT here, and not automatically just because
+	// it is "similar" to purchases (issue #1757: this exemption used to
+	// exist in prose only, with no actual validateCSRF call backing it).
+	// reject/ has no session-authed path at all -- it is unconditionally
+	// gated on a constant-time comparison against the record's stored
+	// approval token, so CSRF does not apply to it.
 	//
 	// All exemptions use exact-match to prevent a path like
 	// /api/register-malicious from bypassing CSRF via accidental prefix overlap.
