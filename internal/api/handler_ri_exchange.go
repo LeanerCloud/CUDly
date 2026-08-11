@@ -2057,7 +2057,15 @@ func (h *Handler) approveRIExchange(ctx context.Context, req *events.LambdaFunct
 			}
 			// Record-level RBAC denied (e.g. approve-own user is not the creator).
 			// If a token is present, preserve legacy token flow; otherwise surface the error.
-			if token == "" || !isPermissionDenied(sessErr) {
+			//
+			// A CSRF rejection must NOT fall through, even with a token present.
+			// isPermissionDenied is a bare 403 test, so without this it cannot tell a
+			// forged cross-site request from a legitimate approve-own denial, and the
+			// request would proceed on the token alone: the exchange executes, but as
+			// an unattributed system approval (transitioned_by NULL, no approved_by
+			// stamp) on a money path. Checked first so the sentinel is never reached
+			// by the 403 test below.
+			if errors.Is(sessErr, errCSRFRejected) || token == "" || !isPermissionDenied(sessErr) {
 				return nil, sessErr
 			}
 		case isPermissionDenied(err):
@@ -2110,7 +2118,7 @@ func (h *Handler) approveRIExchangeViaSession(ctx context.Context, req *events.L
 	// #1757 -- this call was previously reachable with no CSRF token at
 	// all, despite a comment claiming parity with the purchases path).
 	if err := h.validateCSRF(ctx, req); err != nil {
-		return nil, NewClientError(403, "CSRF validation failed")
+		return nil, errCSRFRejected
 	}
 
 	var err error

@@ -500,6 +500,74 @@ func TestApproveRIExchangeViaSession_RequiresCSRF(t *testing.T) {
 	assert.Contains(t, ce.Error(), "CSRF validation failed")
 }
 
+// TestApproveRIExchange_CSRFFailureDoesNotFallThroughToToken covers the case
+// the empty-token test above cannot reach: a session-authed approve that fails
+// CSRF while carrying a VALID ?token=.
+//
+// approveRIExchange's dispatch falls back to the token flow on a 403 from the
+// session path, so email-link holders can still approve. isPermissionDenied
+// tests the status code alone, so without a distinguishable CSRF error a forged
+// cross-site request is indistinguishable from a legitimate approve-own denial
+// and proceeds on the token: the exchange executes, but as an unattributed
+// system approval (transitioned_by NULL, no approved_by stamp) on a money path.
+//
+// Verified by mutation: replacing errCSRFRejected with a plain
+// NewClientError(403, ...) makes the TransitionRIExchangeStatus assertion below
+// fail, because control reaches approveRIExchangeViaToken.
+func TestApproveRIExchange_CSRFFailureDoesNotFallThroughToToken(t *testing.T) {
+	ctx := context.Background()
+	id := "550e8400-e29b-41d4-a716-446655440021"
+	creatorID := "creator-uuid"
+
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	adminSession := &Session{UserID: "admin-uuid", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(adminSession, nil)
+	mockAuth.grantAdminPurchaser()
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(errors.New("csrf mismatch"))
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	// Same full happy-path fixture as the empty-token test, and for the same
+	// reason: registered .Maybe() so a broken guard runs on to the state
+	// transition and fails the assertion, rather than panicking earlier and
+	// proving only that some intermediate call was not reached. ApprovalToken
+	// matches the token passed below, so the token path would genuinely succeed
+	// if the CSRF failure were swallowed.
+	mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
+		ID:              id,
+		Status:          "pending",
+		ApprovalToken:   "tok",
+		SourceRIIDs:     []string{"ri-123"},
+		PaymentDue:      "100.00",
+		CreatedByUserID: &creatorID,
+	}, nil).Maybe()
+	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything).
+		Return(&config.RIExchangeRecord{ID: id, Status: "processing", SourceRIIDs: []string{"ri-123"}, PaymentDue: "100.00"}, nil).Maybe()
+	mockStore.On("GetRIExchangeDailySpend", mock.Anything, mock.Anything).Return("0", nil).Maybe()
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		RIExchangeMaxDailyUSD:       1000,
+		RIExchangeMaxPerExchangeUSD: 500,
+	}, nil).Maybe()
+	mockStore.On("FailRIExchange", ctx, id, mock.AnythingOfType("string")).Return(nil).Maybe()
+	mockStore.On("StampRIExchangeApprovedBy", ctx, id, adminSession.Email).Return(nil).Maybe()
+
+	h := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	// Valid token, so the fallback path would succeed if CSRF were swallowed.
+	_, err := h.approveRIExchange(ctx, req, id, "tok")
+
+	// Primary assertion: the money-moving call is never reached.
+	mockStore.AssertNotCalled(t, "TransitionRIExchangeStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a ClientError, got: %v", err)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.Error(), "CSRF validation failed")
+}
+
 // TestApproveRIExchangeViaSession_PassesCSRF confirms the CSRF guard does
 // not block the legitimate dashboard flow: a valid CSRF token still reaches
 // TransitionRIExchangeStatus. Without this, "add the CSRF check" could ship

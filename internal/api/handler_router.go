@@ -18,6 +18,14 @@ func (h *Handler) routeRequest(ctx context.Context, method, path string, req *ev
 // errNotFound is a sentinel error for 404 responses.
 var errNotFound = &notFoundError{}
 
+// errCSRFRejected marks a CSRF validation failure so it stays distinguishable
+// from an authorization denial. Both surface as 403, and isPermissionDenied
+// tests the code alone, so a dispatch that falls back to a token flow on 403
+// cannot otherwise tell a forged cross-site request from a legitimate
+// approve-own denial. Compare with errors.Is before any 403 test that decides
+// whether to continue rather than return (issue #1757).
+var errCSRFRejected = NewClientError(403, "CSRF validation failed")
+
 type notFoundError struct{}
 
 func (e *notFoundError) Error() string {
