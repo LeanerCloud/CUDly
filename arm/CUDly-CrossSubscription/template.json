@@ -39,7 +39,7 @@
       "name": "[variables('customRoleName')]",
       "properties": {
         "roleName": "CUDly Reservation Purchaser (custom)",
-        "description": "Custom role granting CUDly exactly the Microsoft.Capacity and Microsoft.BillingBenefits actions required by the calculatePrice -> purchase flow. Replaces the built-in Reservation Purchaser, which lacks reservationOrders/purchase/action.",
+        "description": "Custom role granting CUDly exactly the Microsoft.Capacity and Microsoft.BillingBenefits actions required by the calculatePrice -> purchase flow. Replaces the built-in Reservation Purchaser, which lacks reservationOrders/write, calculatePrice/action and every Microsoft.BillingBenefits action.",
         "type": "CustomRole",
         "permissions": [
           {
@@ -49,7 +49,6 @@
               "Microsoft.Capacity/catalogs/read",
               "Microsoft.Capacity/reservationOrders/read",
               "Microsoft.Capacity/reservationOrders/write",
-              "Microsoft.Capacity/reservationOrders/purchase/action",
               "Microsoft.Capacity/reservationOrders/reservations/read",
               "Microsoft.BillingBenefits/register/action",
               "Microsoft.BillingBenefits/savingsPlanOrderAliases/write",
@@ -79,7 +78,7 @@
         "roleDefinitionId": "[variables('customRoleDefinitionId')]",
         "principalId": "[parameters('servicePrincipalObjectId')]",
         "principalType": "ServicePrincipal",
-        "description": "CUDly — subscription-scope assignment of custom role; grants calculatePrice + purchase/action required by the two-step reservation purchase flow"
+        "description": "CUDly — subscription-scope assignment of custom role; grants calculatePrice/action and reservationOrders/write required by the two-step reservation purchase flow"
       }
     },
 

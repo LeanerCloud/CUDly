@@ -237,9 +237,12 @@ jobs:
 
       # The provider fails the data read outright when the custom role is absent,
       # so a Terraform precondition can never run for this case. Issue #1794: the
-      # Azure deploy failed on every main run for three weeks because the raw
-      # provider error names neither the missing prerequisite nor the stack that
-      # creates it, and the explanation lived only in a source comment.
+      # Azure deploy failed on every main run since 2026-07-19 because the
+      # bootstrap stack's role definition carried an action that does not exist
+      # in Azure's operation catalog, so Azure rejected the whole role definition
+      # with InvalidActionOrNotAction and the role was never created. That action
+      # is removed in this PR. The message below still covers the general "role
+      # missing" case for any future recurrence.
       - name: Explain a missing bootstrap role
         if: failure()
         run: |
@@ -276,11 +279,16 @@ jobs:
           pipeline holds roleAssignments/write only.
 
           If the bootstrap HAS been applied, check in this order:
-            1. the deploy SP has Microsoft.Authorization/roleDefinitions/read.
+            1. the bootstrap stack's own apply log for InvalidActionOrNotAction.
+               That means the role definition itself was rejected by Azure and
+               never created, not merely unassigned (issue #1794's root cause:
+               a nonexistent action in the role's actions list). Make sure the
+               bootstrap module is on a commit that includes that fix.
+            2. the deploy SP has Microsoft.Authorization/roleDefinitions/read.
                Without it the lookup returns empty, which is indistinguishable
                from the role being absent.
-            2. the role was not renamed or deleted out of band.
-            3. the name suffix still matches. The runtime module looks up
+            3. the role was not renamed or deleted out of band.
+            4. the name suffix still matches. The runtime module looks up
                "CUDly Reservation Purchaser (custom) - <subscription-id>";
                the bootstrap builds the name from its own var.name_suffix.
           EOT

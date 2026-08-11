@@ -60,8 +60,9 @@ resource "azuread_application_federated_identity_credential" "cudly" {
 
 # Custom role: grants the exact Microsoft.Capacity and Microsoft.BillingBenefits actions
 # used by the calculatePrice -> purchase flow (introduced in PR #680). The built-in
-# Reservation Purchaser role lacks reservationOrders/purchase/action, which causes 403 on
-# production reservation purchases.
+# Reservation Purchaser role lacks reservationOrders/write and calculatePrice/action, plus
+# every Microsoft.BillingBenefits action, which is what caused 403s on production
+# reservation purchases.
 #
 # The role definition is factored into a shared module so the customer-side (here) and
 # host-side (terraform/modules/compute/azure/container-apps) definitions stay in lockstep.
