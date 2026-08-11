@@ -11,7 +11,7 @@ resource "azurerm_role_definition" "cudly_reservation_purchaser" {
       "Microsoft.Capacity/catalogs/read",
       "Microsoft.Capacity/reservationOrders/read",
       "Microsoft.Capacity/reservationOrders/write",
-      "Microsoft.Capacity/reservationOrders/purchase/action",
+      "Microsoft.BillingBenefits/register/action",
       "Microsoft.Capacity/reservationOrders/reservations/read",
       "Microsoft.BillingBenefits/savingsPlanOrderAliases/write",
       "Microsoft.BillingBenefits/savingsPlanOrders/read",

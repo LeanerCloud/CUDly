@@ -261,7 +261,8 @@ resource "azurerm_role_assignment" "subscription_reader" {
 
 # Custom reservation-purchaser role: same role as customer-side but scoped to
 # the host subscription. The built-in Reservation Purchaser lacks
-# reservationOrders/purchase/action (same gap fixed customer-side by PR #744).
+# reservationOrders/write and calculatePrice/action, plus every
+# Microsoft.BillingBenefits action (same gap fixed customer-side by PR #744).
 #
 # BOOTSTRAP-vs-RUNTIME SPLIT: the role *definition* is created by the
 # human-applied bootstrap module

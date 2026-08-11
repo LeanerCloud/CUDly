@@ -15,7 +15,8 @@ terraform {
 
 # Custom role: grants the exact Microsoft.Capacity and Microsoft.BillingBenefits
 # actions used by the calculatePrice -> purchase flow. The built-in Reservation
-# Purchaser role lacks reservationOrders/purchase/action, which causes 403 on
+# Purchaser role lacks reservationOrders/write and calculatePrice/action, plus
+# every Microsoft.BillingBenefits action, which is what caused 403s on
 # production reservation purchases.
 #
 # Used by both:
@@ -35,7 +36,7 @@ locals {
 resource "azurerm_role_definition" "cudly_reservation_purchaser" {
   name        = local.role_definition_name
   scope       = var.scope
-  description = "Custom role granting CUDly exactly the Microsoft.Capacity and Microsoft.BillingBenefits actions required by the calculatePrice -> purchase flow. Replaces the built-in Reservation Purchaser, which lacks reservationOrders/purchase/action."
+  description = "Custom role granting CUDly exactly the Microsoft.Capacity and Microsoft.BillingBenefits actions required by the calculatePrice -> purchase flow. Replaces the built-in Reservation Purchaser, which lacks reservationOrders/write, calculatePrice/action and every Microsoft.BillingBenefits action."
 
   permissions {
     actions = [
@@ -44,7 +45,6 @@ resource "azurerm_role_definition" "cudly_reservation_purchaser" {
       "Microsoft.Capacity/catalogs/read",
       "Microsoft.Capacity/reservationOrders/read",
       "Microsoft.Capacity/reservationOrders/write",
-      "Microsoft.Capacity/reservationOrders/purchase/action",
       "Microsoft.Capacity/reservationOrders/reservations/read",
       "Microsoft.BillingBenefits/register/action",
       "Microsoft.BillingBenefits/savingsPlanOrderAliases/write",
