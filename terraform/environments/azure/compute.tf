@@ -2,6 +2,48 @@
 # Compute Module: Container Apps (Serverless)
 # ==============================================
 
+locals {
+  # Azure renders subscription GUIDs lowercase in resource IDs, and the role
+  # display name the bootstrap created carries that same lowercase GUID.
+  # Normalising once here keeps the lookup name and every RBAC scope matching
+  # whatever casing the TF_VAR_subscription_id secret happens to use; a scope
+  # differing from the API's canonical form only by case would diff on every
+  # refresh and replace the (ForceNew) role assignments forever.
+  host_subscription_id = lower(var.subscription_id)
+}
+
+# Bootstrap-created custom reservation-purchaser role definition, looked up by
+# name. The definition is owned by the human-applied bootstrap stack
+# (terraform/environments/azure/ci-cd-permissions/reservation_role.tf) because
+# creating it needs Microsoft.Authorization/roleDefinitions/write, which the
+# deploy service principal deliberately lacks; see the BOOTSTRAP-vs-RUNTIME
+# SPLIT comment in ../../modules/compute/azure/container-apps/main.tf.
+#
+# The lookup lives here, not inside that module, because the module carries a
+# depends_on (below) and Terraform propagates a module-level depends_on to every
+# data source in the module, deferring the read to apply. That made the
+# resulting role_definition_id "(known after apply)" on every plan and forced a
+# destroy/recreate of the reservation-purchaser assignment on every deploy
+# (#1802). Nothing defers this read, so the ID is known at plan time.
+#
+# A lifecycle postcondition deliberately is NOT used here. The azurerm provider
+# fails the data read itself when the role is absent ("loading Role Definition
+# List: could not find role ..."), so Terraform aborts before any postcondition
+# evaluates -- the check would never fire for the failure it was meant to explain.
+# The remediation is surfaced from the workflow's failure path instead; see the
+# "Explain a missing bootstrap role" step in .github/workflows/deploy-azure.yml.
+data "azurerm_role_definition" "cudly_reservation_purchaser" {
+  count = var.compute_platform == "container-apps" ? 1 : 0
+
+  # Reconstruction of local.role_definition_name from
+  # ../../modules/iam/azure/cudly-reservation-role. That module's
+  # role_definition_name output cannot be referenced here: it is instantiated in
+  # the ci-cd-permissions stack, which has separate state, and this repo does not
+  # use terraform_remote_state. Changing the format string requires changing both.
+  name  = "CUDly Reservation Purchaser (custom) - ${local.host_subscription_id}"
+  scope = "/subscriptions/${local.host_subscription_id}"
+}
+
 module "compute_container_apps" {
   source = "../../modules/compute/azure/container-apps"
   count  = var.compute_platform == "container-apps" ? 1 : 0
@@ -10,6 +52,11 @@ module "compute_container_apps" {
   environment         = var.environment
   resource_group_name = azurerm_resource_group.main.name
   location            = var.location
+
+  # RBAC inputs. Both are resolved here rather than inside the module so they
+  # stay known at plan time despite the module-level depends_on below (#1802).
+  subscription_id                = local.host_subscription_id
+  reservation_role_definition_id = data.azurerm_role_definition.cudly_reservation_purchaser[0].id
 
   # Container image (from build module or var.image_uri)
   image_uri                      = var.enable_docker_build ? module.build[0].image_uri : var.image_uri

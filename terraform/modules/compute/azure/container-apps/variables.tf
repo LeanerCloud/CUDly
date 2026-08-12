@@ -107,6 +107,16 @@ variable "database_password_secret_name" {
   type        = string
 }
 
+variable "subscription_id" {
+  description = "Host subscription GUID. Supplied by the caller rather than read from data.azurerm_subscription so every RBAC scope in this module stays known at plan time; see the RBAC section of main.tf."
+  type        = string
+}
+
+variable "reservation_role_definition_id" {
+  description = "Full ARM resource ID of the bootstrap-created custom reservation-purchaser role definition (terraform/modules/iam/azure/cudly-reservation-role, output role_definition_resource_id). Looked up by the caller so it is known at plan time."
+  type        = string
+}
+
 variable "key_vault_uri" {
   description = "Key Vault URI (data-plane, e.g. https://<name>.vault.azure.net/)"
   type        = string

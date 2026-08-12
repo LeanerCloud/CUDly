@@ -246,12 +246,12 @@ jobs:
       - name: Explain a missing bootstrap role
         if: failure()
         run: |
-          # Both logs are checked. Today the role lookup is deferred to apply --
-          # the plan reports "will be read during apply (config refers to values
-          # not yet known)" -- because of the module-level depends_on at
-          # terraform/environments/azure/compute.tf:75. That is contingent, not
-          # structural: if that stops forcing deferral the read moves to plan, and
-          # the diagnostic should not have to move with it.
+          # Both logs are checked. Today the role lookup runs at plan: it lives in
+          # the root module (terraform/environments/azure/compute.tf), outside the
+          # module-level depends_on that used to defer it to apply and churn the
+          # assignment on every deploy (#1802). Keeping the apply log in the loop
+          # costs nothing and means the diagnostic does not have to move if the
+          # read ever shifts back.
           #
           # Each file is checked separately so that "this log does not exist" is an
           # explicit, expected case at the point of reading -- either log is absent
