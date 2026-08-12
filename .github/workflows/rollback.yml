@@ -398,6 +398,14 @@ jobs:
     timeout-minutes: 30
     needs: validate
     if: inputs.cloud == 'azure'
+    # `terraform apply` against github-<environment>.terraform.tfstate, the same
+    # blob deploy-azure.yml and cleanup-staging.yml write, so it takes the same
+    # concurrency group (#1801). `inputs.environment` is a required `choice`
+    # constrained to dev|staging|prod, so the suffix is never empty; it is the
+    # same value this job interpolates into the state key below.
+    concurrency:
+      group: azure-tfstate-${{ inputs.environment }}
+      cancel-in-progress: false
     permissions:
       id-token: write
       contents: read

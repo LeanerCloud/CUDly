@@ -252,6 +252,13 @@ jobs:
     name: Destroy Azure (staging)
     runs-on: ubuntu-latest
     needs: guard
+    # Shares the Azure Terraform state blob github-staging.terraform.tfstate
+    # with deploy-azure.yml and rollback.yml, so it shares their concurrency
+    # group: one writer per state file, whatever workflow or ref it came from
+    # (#1801). The suffix is a literal because this job's state key is too.
+    concurrency:
+      group: azure-tfstate-staging
+      cancel-in-progress: false
     permissions:
       id-token: write
       contents: read
@@ -284,28 +291,16 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Break stale Azure state lock
+      # This step used to also break the blob lease on the state file, with no
+      # age check and no --lease-break-period, so it broke a live lease held by
+      # a concurrent writer. Removed with #1801; the job-level `concurrency`
+      # group above is what keeps writers apart now, and a loud "Error acquiring
+      # the state lock" is the correct outcome if one ever slips through.
+      - name: Write Terraform backend config (staging state)
         env:
           TF_BACKEND: ${{ secrets.TF_BACKEND_AZURE }}
         run: |
           printf '%s\nkey = "github-staging.terraform.tfstate"\n' "$TF_BACKEND" > /tmp/backend.tfbackend
-          STORAGE_ACCOUNT=$(grep -E '^\s*storage_account_name\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
-          CONTAINER=$(grep -E '^\s*container_name\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
-          RESOURCE_GROUP=$(grep -E '^\s*resource_group_name\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
-          STATE_KEY="github-staging.terraform.tfstate"
-          if [ -n "$STORAGE_ACCOUNT" ] && [ -n "$CONTAINER" ]; then
-            ACCOUNT_KEY=$(az storage account keys list \
-              --account-name "${STORAGE_ACCOUNT}" \
-              ${RESOURCE_GROUP:+--resource-group "${RESOURCE_GROUP}"} \
-              --query '[0].value' -o tsv 2>/dev/null || echo "")
-            if [ -n "$ACCOUNT_KEY" ]; then
-              az storage blob lease break \
-                --account-name "${STORAGE_ACCOUNT}" \
-                --container-name "${CONTAINER}" \
-                --blob-name "${STATE_KEY}" \
-                --account-key "${ACCOUNT_KEY}" 2>/dev/null || echo "No lease to break (clean)"
-            fi
-          fi
 
       - name: Terraform Init (staging state)
         run: |

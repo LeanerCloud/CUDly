@@ -26,9 +26,13 @@ permissions:
   id-token: write
   contents: read
 
-concurrency:
-  group: deploy-azure-${{ github.ref }}
-  cancel-in-progress: false
+# No workflow-level `concurrency` on purpose. What needs protecting is the
+# Terraform state blob, which is keyed on the environment, and only the
+# job-level key can see `needs.prepare.outputs.environment` -- this level is
+# limited to the `github`, `inputs` and `vars` contexts. Keying it on
+# `github.ref` here was issue #1801: two refs resolving to the same environment
+# landed in different groups and applied against one state file. See
+# `build-and-deploy` below.
 
 on:
   push:
@@ -104,6 +108,21 @@ jobs:
     name: Build & Deploy
     runs-on: ubuntu-latest
     needs: prepare
+    # Every run that writes github-<environment>.terraform.tfstate serializes
+    # here, whatever its ref and whatever workflow it came from. The group name
+    # is a 1:1 function of the state key, and the same literal prefix is used by
+    # cleanup-staging.yml and rollback.yml, which write the same blob.
+    #
+    # `prepare` rejects anything outside dev|staging|prod and fails the run, so
+    # this expression cannot evaluate to an empty suffix while this job runs --
+    # that would collapse every environment into one group.
+    #
+    # cancel-in-progress stays false, stated explicitly rather than left to the
+    # default: cancelling mid-`terraform apply` is how you get a half-applied
+    # stack and a lease nobody releases.
+    concurrency:
+      group: azure-tfstate-${{ needs.prepare.outputs.environment }}
+      cancel-in-progress: false
     outputs:
       app_url: ${{ steps.deploy.outputs.app_url }}
       app_name: ${{ steps.deploy.outputs.app_name }}
@@ -129,30 +148,19 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Break stale state lock (if any)
+      # This step used to also run `az storage blob lease break` on the state
+      # blob, with no lease-age check and no --lease-break-period, so it broke a
+      # *live* lease immediately. Removed with #1801: the lease is the last line
+      # of defence against two writers, and a loud "Error acquiring the state
+      # lock" is the correct outcome of a real collision. A genuinely stranded
+      # lease (runner killed mid-apply) is recovered with `terraform
+      # force-unlock <ID>`, using the lock ID Terraform prints in that error.
+      - name: Write Terraform backend config
         env:
           TF_BACKEND: ${{ secrets.TF_BACKEND_AZURE }}
           ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
         run: |
           printf '%s\nkey = "github-%s.terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
-          STORAGE_ACCOUNT=$(grep -E '^\s*storage_account_name\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
-          CONTAINER=$(grep -E '^\s*container_name\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
-          RESOURCE_GROUP=$(grep -E '^\s*resource_group_name\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
-          if [ -n "$STORAGE_ACCOUNT" ] && [ -n "$CONTAINER" ]; then
-            STATE_KEY="github-${ENVIRONMENT}.terraform.tfstate"
-            ACCOUNT_KEY=$(az storage account keys list \
-              --account-name "${STORAGE_ACCOUNT}" \
-              ${RESOURCE_GROUP:+--resource-group "${RESOURCE_GROUP}"} \
-              --query '[0].value' -o tsv 2>/dev/null || echo "")
-            if [ -n "$ACCOUNT_KEY" ]; then
-              echo "Breaking any stale blob lease on ${STATE_KEY}..."
-              az storage blob lease break \
-                --account-name "${STORAGE_ACCOUNT}" \
-                --container-name "${CONTAINER}" \
-                --blob-name "${STATE_KEY}" \
-                --account-key "${ACCOUNT_KEY}" 2>/dev/null || echo "No lease to break (clean)"
-            fi
-          fi
 
       - name: Terraform Init
         run: |
@@ -293,31 +301,14 @@ jobs:
                the bootstrap builds the name from its own var.name_suffix.
           EOT
 
-      - name: Release state lock on failure
-        if: failure() || cancelled()
-        env:
-          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
-        run: |
-          STORAGE_ACCOUNT=$(grep -E '^\s*storage_account_name\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
-          CONTAINER=$(grep -E '^\s*container_name\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
-          RESOURCE_GROUP=$(grep -E '^\s*resource_group_name\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
-          if [ -n "$STORAGE_ACCOUNT" ] && [ -n "$CONTAINER" ]; then
-            STATE_KEY="github-${ENVIRONMENT}.terraform.tfstate"
-            ACCOUNT_KEY=$(az storage account keys list \
-              --account-name "${STORAGE_ACCOUNT}" \
-              ${RESOURCE_GROUP:+--resource-group "${RESOURCE_GROUP}"} \
-              --query '[0].value' -o tsv 2>/dev/null || echo "")
-            if [ -n "$ACCOUNT_KEY" ]; then
-              echo "Breaking Azure Blob lease on ${STATE_KEY}"
-              az storage blob lease break \
-                --account-name "${STORAGE_ACCOUNT}" \
-                --container-name "${CONTAINER}" \
-                --blob-name "${STATE_KEY}" \
-                --account-key "${ACCOUNT_KEY}" 2>/dev/null || echo "No lease to break (already clean)"
-            else
-              echo "WARNING: Could not get storage account key — lease may remain held"
-            fi
-          fi
+      # A "Release state lock on failure" step used to break the lease here on
+      # `failure() || cancelled()`. Removed with #1801: on an ordinary failure
+      # Terraform unlocks on its way out, so the step did nothing; on cancelled()
+      # a SIGINT'd apply is still shutting down and may still be writing state,
+      # so it broke the lease out from under it; and if the runner dies hard no
+      # step runs at all. That leaves only a Terraform crash, where a stranded
+      # lease should surface loudly and be cleared with `terraform force-unlock`,
+      # not swept up by a step that also breaks live leases.
 
       - name: Save deployment info
         run: |
