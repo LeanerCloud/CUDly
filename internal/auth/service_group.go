@@ -120,6 +120,37 @@ func (s *Service) permissionsForGroups(ctx context.Context, groupIDs []string) (
 	return permissions, nil
 }
 
+// accountsForGroups returns the union of allowed_accounts across the given
+// groups, taking the membership list directly so a caller reasoning about a
+// membership CHANGE can evaluate the PRIOR and the RESULTING scope with the
+// same function (see guardSelfAccountScope).
+//
+// It FAILS CLOSED on any group it cannot resolve, which is the one place it
+// deliberately differs from its permission-side twin permissionsForGroups.
+// That twin skips a missing group because a lost group can only shrink a
+// permission union. Here the union is inverted: EMPTY means every account
+// (IsUnrestrictedAccess), so a silently skipped group WIDENS the result. The
+// union of [] and ["acct-A"] is restricted; lose the group carrying
+// ["acct-A"] and it reads as unrestricted. A guard that swallowed the skip
+// would compute an unrestricted prior scope and then wave through every
+// change -- issue #1748's failure mode reappearing in a new place.
+//
+// Refusing is safe here in a way it is not for the broadly-consumed
+// ResolveAllowedAccounts, which has to keep a user with one stale membership
+// working everywhere else: this path is a single self-edit, so the cost of a
+// refusal is one rejected request naming the group to clean up.
+func (s *Service) accountsForGroups(ctx context.Context, groupIDs []string) ([]string, error) {
+	authCtx := &AuthContext{}
+	if err := s.collectGroupsAndAccounts(ctx, authCtx, groupIDs); err != nil {
+		return nil, fmt.Errorf("failed to resolve account scope: %w", err)
+	}
+	if authCtx.SkippedGroups > 0 {
+		return nil, fmt.Errorf(
+			"failed to resolve account scope: %d group(s) could not be loaded", authCtx.SkippedGroups)
+	}
+	return authCtx.AllowedAccounts, nil
+}
+
 // BuildAuthContext builds a complete authorization context for a user.
 // Permissions and allowed accounts are derived purely from the union of the
 // user's group memberships; a user with no groups gets an empty context and
