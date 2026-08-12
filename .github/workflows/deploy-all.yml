@@ -162,6 +162,18 @@ jobs:
       TF_BACKEND_GCP: ${{ secrets.TF_BACKEND_GCP }}
 
   # Deploy to Azure Container Apps
+  #
+  # Deliberately carries no `concurrency` (#1801). The Terraform state guard is
+  # the group on the called workflow's own build-and-deploy job, which runs as a
+  # real job of this run and is serialized there. That group is derived from the
+  # called workflow's own `prepare` output, which is not necessarily the
+  # `environment` computed above, so do not assume the two agree.
+  #
+  # Putting that same group on this caller job would deadlock: this job would
+  # hold the group while waiting on the inner job queued behind it. GitHub
+  # documents the sibling hazard for `cancel-in-progress: true`: sharing a group
+  # between caller and called cancels the already-running caller. At `false` it
+  # stalls instead.
   deploy-azure:
     name: Deploy Azure Container Apps
     needs: determine-deployment
