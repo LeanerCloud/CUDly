@@ -204,3 +204,37 @@ func TestSelfAccountScope_FailsClosedOnUnresolvablePriorGroup(t *testing.T) {
 	assert.Contains(t, err.Error(), "could not be loaded")
 	mockStore.AssertNotCalled(t, "UpdateUser", mock.Anything, mock.Anything)
 }
+
+// T6 -- Control for T5, and the reason the fail-closed rule is "the surviving
+// union is EMPTY", not "anything was skipped".
+//
+// DeleteGroup drops the groups row and never purges users.group_ids (an array
+// column with no FK), so a dangling membership id is the ORDINARY state after
+// any custom group is deleted. Refusing on any skip would leave an admin who
+// is already unrestricted unable to remove that dangling id from their own
+// membership -- a change that widens nothing, from a principal at maximum
+// scope -- so a single-admin deployment could never clean up after itself.
+//
+// The surviving union here is ["*"], so the skip cannot have widened anything
+// and the cleanup must go through. Only an EMPTY surviving union (T5) is
+// ambiguous enough to refuse.
+func TestSelfAccountScope_UnrestrictedActorCanDropDanglingGroup(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	svc := createTestService(mockStore, new(MockEmailSender))
+
+	mockStore.On("GetUserByID", ctx, scopedActorID).
+		Return(&User{ID: scopedActorID, Active: true,
+			GroupIDs: []string{DefaultAdminGroupID, deletedGroupID}}, nil)
+	mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(adminGroup(), nil).Maybe()
+	mockStore.On("GetGroup", ctx, deletedGroupID).Return(nil, nil).Maybe()
+	mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Once()
+
+	updated, err := svc.UpdateUser(ctx, scopedActorID, scopedActorID, UpdateUserRequest{
+		GroupIDs: []string{DefaultAdminGroupID},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{DefaultAdminGroupID}, updated.GroupIDs)
+}
