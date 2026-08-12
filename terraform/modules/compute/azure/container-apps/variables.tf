@@ -107,6 +107,26 @@ variable "database_password_secret_name" {
   type        = string
 }
 
+variable "subscription_id" {
+  description = "Host subscription GUID. Supplied by the caller rather than read from data.azurerm_subscription so every RBAC scope in this module stays known at plan time; see the RBAC section of main.tf."
+  type        = string
+
+  # Input validation, not a security control: a GUID-shaped string is accepted
+  # whether or not that subscription exists, is reachable, or is the right one.
+  # What it buys is a clear plan-time message for a value that is not a GUID at
+  # all (a subscription display name, say), which would otherwise surface as an
+  # opaque Azure rejection of a malformed RBAC scope far from the cause.
+  validation {
+    condition     = can(regex("^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$", var.subscription_id))
+    error_message = "The subscription_id must be an Azure subscription GUID in 8-4-4-4-12 hexadecimal form, upper or lower case."
+  }
+}
+
+variable "reservation_role_definition_id" {
+  description = "Full ARM resource ID of the bootstrap-created custom reservation-purchaser role definition (terraform/modules/iam/azure/cudly-reservation-role, output role_definition_resource_id). Looked up by the caller so it is known at plan time."
+  type        = string
+}
+
 variable "key_vault_uri" {
   description = "Key Vault URI (data-plane, e.g. https://<name>.vault.azure.net/)"
   type        = string

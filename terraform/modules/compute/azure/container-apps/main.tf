@@ -127,7 +127,7 @@ resource "azurerm_container_app" "main" {
             ADMIN_PASSWORD_SECRET = var.admin_password_secret_name
             SECRET_PROVIDER       = "azure"
             AZURE_CLIENT_ID       = azurerm_user_assigned_identity.container_app.client_id
-            AZURE_SUBSCRIPTION_ID = data.azurerm_subscription.current.subscription_id
+            AZURE_SUBSCRIPTION_ID = var.subscription_id
             AZURE_TENANT_ID       = data.azurerm_subscription.current.tenant_id
             AZURE_KEY_VAULT_URL   = var.key_vault_uri
             AZURE_REGION          = var.location
@@ -239,12 +239,25 @@ resource "azurerm_container_app" "main" {
 # Runtime RBAC: CUDly application cloud API access
 # ==============================================
 
+# Read only for tenant_id (an env var, not an RBAC scope). This module carries a
+# module-level depends_on at terraform/environments/azure/compute.tf, which
+# Terraform propagates to every data source inside it, so this read is deferred
+# to apply and its attributes are "(known after apply)" on every plan. That is
+# tolerable for an env var; it is not tolerable for anything ForceNew, which is
+# why the RBAC scopes below use var.subscription_id instead (#1802).
 data "azurerm_subscription" "current" {}
+
+locals {
+  # Subscription RBAC scope, built from the caller-supplied ID so it is known at
+  # plan time. scope is ForceNew on azurerm_role_assignment, so it must match the
+  # casing Azure returns in resource IDs; the caller normalises for that.
+  subscription_resource_id = "/subscriptions/${var.subscription_id}"
+}
 
 # Cost Management Reader: grants access to Azure Consumption API (reservation
 # recommendations, reservation details) needed for CUDly RI/SP features.
 resource "azurerm_role_assignment" "cost_management_reader" {
-  scope                = data.azurerm_subscription.current.id
+  scope                = local.subscription_resource_id
   role_definition_name = "Cost Management Reader"
   principal_id         = azurerm_user_assigned_identity.container_app.principal_id
 }
@@ -254,7 +267,7 @@ resource "azurerm_role_assignment" "cost_management_reader" {
 # account is ingested as a "Self" account. Without this, every per-service SDK
 # list call against the host subscription returns 403.
 resource "azurerm_role_assignment" "subscription_reader" {
-  scope                = data.azurerm_subscription.current.id
+  scope                = local.subscription_resource_id
   role_definition_name = "Reader"
   principal_id         = azurerm_user_assigned_identity.container_app.principal_id
 }
@@ -269,49 +282,28 @@ resource "azurerm_role_assignment" "subscription_reader" {
 # (terraform/environments/azure/ci-cd-permissions/reservation_role.tf), NOT
 # here. Creating an azurerm_role_definition needs
 # Microsoft.Authorization/roleDefinitions/write, which the runtime CI deploy
-# service principal intentionally lacks. This runtime module only looks the
+# service principal intentionally lacks. The runtime side only looks the
 # definition up and creates the *assignment* (roleAssignments/write, which the
 # deploy SP does have).
 #
-# The lookup name MUST stay in lockstep with
-# terraform/modules/iam/azure/cudly-reservation-role (its role_definition_name
-# output / local.role_definition_name). If the bootstrap has not been
-# (re-)applied, this data source fails loudly with "Role Definition ... was not
-# found" -- the signal to re-run the ci-cd-permissions bootstrap, NOT to grant
-# roleDefinitions/write to the deploy SP.
-locals {
-  # Reconstruction of local.role_definition_name from
-  # terraform/modules/iam/azure/cudly-reservation-role. That module's
-  # role_definition_name output cannot be referenced here: it is instantiated in
-  # the ci-cd-permissions stack, which has separate state, and this repo does not
-  # use terraform_remote_state. Keeping the format string in one place per module
-  # is the most the split allows; changing it requires changing both.
-  cudly_reservation_purchaser_role_name = "CUDly Reservation Purchaser (custom) - ${data.azurerm_subscription.current.subscription_id}"
-}
-
-# A lifecycle postcondition deliberately is NOT used here. The azurerm provider
-# fails the data read itself when the role is absent ("loading Role Definition
-# List: could not find role ..."), so Terraform aborts before any postcondition
-# evaluates -- the check would never fire for the failure it was meant to explain.
-# The remediation is surfaced from the workflow's failure path instead; see the
-# "Explain a missing bootstrap role" step in .github/workflows/deploy-azure.yml.
-data "azurerm_role_definition" "cudly_reservation_purchaser" {
-  name  = local.cudly_reservation_purchaser_role_name
-  scope = data.azurerm_subscription.current.id
-}
-
+# The lookup itself lives in the caller (terraform/environments/azure/compute.tf)
+# rather than in this module: a module-level depends_on defers every data source
+# inside the module to apply time, which made role_definition_id and scope
+# "(known after apply)" on every plan and destroyed/recreated this money-path
+# grant on every deploy (#1802). The caller has no such depends_on, so its read
+# happens at plan and this assignment is stable across applies.
+#
+# If the bootstrap has not been (re-)applied, the caller's data read fails loudly
+# with "Role Definition ... was not found" -- the signal to re-run the
+# ci-cd-permissions bootstrap, NOT to grant roleDefinitions/write to the deploy SP.
 resource "azurerm_role_assignment" "reservations_purchaser" {
-  scope = data.azurerm_subscription.current.id
-  # .id is the full scoped ARM resource ID of the role definition
+  scope = local.subscription_resource_id
+  # Full scoped ARM resource ID of the role definition
   # (/subscriptions/<sub>/providers/Microsoft.Authorization/roleDefinitions/<guid>),
   # the same form the bootstrap exposes via role_definition_resource_id and what
   # azurerm_role_assignment.role_definition_id expects.
-  role_definition_id = data.azurerm_role_definition.cudly_reservation_purchaser.id
+  role_definition_id = var.reservation_role_definition_id
   principal_id       = azurerm_user_assigned_identity.container_app.principal_id
-
-  # RBAC propagation: the bootstrap-created role definition can take time to be
-  # readable at assignment time; the data dependency below also gates this.
-  depends_on = [data.azurerm_role_definition.cudly_reservation_purchaser]
 }
 
 # Key Vault Crypto User: allows the container app's managed identity
