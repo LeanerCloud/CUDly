@@ -15,6 +15,15 @@
 
 name: Deploy to All Clouds
 
+# Adding a trigger here, or a second caller of the deploy-* workflows, means
+# revisiting the `prepare` comments in deploy-azure.yml, deploy-gcp.yml and
+# deploy-aws-lambda.yml. Since #1805 those three resolve their environment from
+# `inputs.environment` and fall back on `github.event_name`, which inside a
+# reusable workflow is whatever event started THIS run. They are correct today
+# only because this workflow is their only caller, has no `push` trigger, and
+# allowlists the environment it passes. A `push:` trigger here would make
+# Azure and GCP silently resolve dev for a caller that asked for something
+# else, which is #1805 restored.
 on:
   workflow_dispatch:
     inputs:
@@ -56,12 +65,35 @@ jobs:
     steps:
       - name: Set environment
         id: set-env
+        env:
+          # This workflow is always the entry point of its own run, never a
+          # reusable one, so `github.event_name` here really is the trigger that
+          # started it. The called workflows cannot rely on that and read
+          # `inputs.environment` instead (issue #1805).
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_ENVIRONMENT: ${{ inputs.environment }}
         run: |
-          if [[ "${{ github.event_name }}" == "release" ]]; then
-            echo "environment=prod" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          INPUT_ENVIRONMENT="${INPUT_ENVIRONMENT:-}"
+
+          if [ "$EVENT_NAME" = release ]; then
+            ENVIRONMENT=prod
           else
-            echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+            ENVIRONMENT="$INPUT_ENVIRONMENT"
           fi
+
+          # Every called workflow takes this value verbatim, so an empty or
+          # unknown value has to stop the fan-out here rather than reach four
+          # deployments.
+          case "$ENVIRONMENT" in
+            dev|staging|prod) ;;
+            *)
+              echo "::error::Refusing unknown environment: '$ENVIRONMENT'"
+              exit 1
+              ;;
+          esac
+
+          echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
 
       - name: Set cloud providers
         id: set-clouds
@@ -166,8 +198,9 @@ jobs:
   # Deliberately carries no `concurrency` (#1801). The Terraform state guard is
   # the group on the called workflow's own build-and-deploy job, which runs as a
   # real job of this run and is serialized there. That group is derived from the
-  # called workflow's own `prepare` output, which is not necessarily the
-  # `environment` computed above, so do not assume the two agree.
+  # called workflow's own `prepare` output, which since #1805 is the
+  # `environment` computed above verbatim: `prepare` takes the non-empty input
+  # it is passed and fails the run rather than substituting a default.
   #
   # Putting that same group on this caller job would deadlock: this job would
   # hold the group while waiting on the inner job queued behind it. GitHub
@@ -263,7 +296,22 @@ jobs:
         run: |
           FAILED=false
 
-          if [[ "${{ needs.deploy-aws-lambda.result }}" == "failure" ]] || \
+          # determine-deployment is checked for anything other than success, not
+          # just "failure". When it stops the run the four deploy jobs are
+          # SKIPPED rather than failed, so testing only those would report "all
+          # deployments completed successfully" for a run that deployed nothing.
+          #
+          # The four deploy jobs are deliberately still tested for "failure"
+          # only. A CANCELLED run leaves them `cancelled` and reaches the
+          # success line, which is the same false report. That predates this
+          # change, so it is tracked in #1810 rather than fixed here.
+          #
+          # Note this step is the only success-by-default check in the repo. All
+          # four per-cloud `summary` jobs allowlist on `== "success"` instead,
+          # so an unenumerated result falls to their failure branch and errs
+          # safe. This denylist is the outlier, not the pattern.
+          if [[ "${{ needs.determine-deployment.result }}" != "success" ]] || \
+             [[ "${{ needs.deploy-aws-lambda.result }}" == "failure" ]] || \
              [[ "${{ needs.deploy-aws-fargate.result }}" == "failure" ]] || \
              [[ "${{ needs.deploy-gcp.result }}" == "failure" ]] || \
              [[ "${{ needs.deploy-azure.result }}" == "failure" ]]; then
@@ -272,7 +320,7 @@ jobs:
 
           if [ "$FAILED" = true ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "❌ **One or more deployments failed. Check individual job logs.**" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **Deployment did not complete successfully. Check individual job logs.**" >> $GITHUB_STEP_SUMMARY
             exit 1
           else
             echo "" >> $GITHUB_STEP_SUMMARY
