@@ -24,10 +24,13 @@ permissions:
   id-token: write
   contents: read
 
-concurrency:
-  group: deploy-gcp-${{ github.ref }}
-  cancel-in-progress: false
-
+# No workflow-level `concurrency` on purpose. What needs protecting is the
+# Terraform state object, which is keyed on the environment, and only the
+# job-level key can see `needs.prepare.outputs.environment` -- this level is
+# limited to the `github`, `inputs` and `vars` contexts. Keying it on
+# `github.ref` put two runs on different refs that both resolve to `dev` into
+# different groups against one state file (#1806). The group lives on
+# `build-and-deploy` below.
 on:
   push:
     branches: [main]
@@ -115,6 +118,18 @@ jobs:
     name: Build & Deploy
     runs-on: ubuntu-latest
     needs: prepare
+    # Every run that writes gs://<bucket>/github-<environment>/default.tfstate
+    # serializes here, whatever ref or workflow it came from (#1806). The suffix
+    # is the exact value the backend prefix below is built from, so the group and
+    # the state object cannot drift apart, and `prepare` fails the run on
+    # anything outside dev|staging|prod so it can never be empty.
+    #
+    # `cancel-in-progress: false` is stated rather than left to the default:
+    # cancelling mid-`terraform apply` is how you get a half-applied stack and a
+    # lock nobody releases.
+    concurrency:
+      group: gcp-tfstate-${{ needs.prepare.outputs.environment }}
+      cancel-in-progress: false
     outputs:
       service_url: ${{ steps.deploy.outputs.service_url }}
 
@@ -136,18 +151,20 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
+      # This step used to `gsutil rm` the state lock object before every init,
+      # unconditionally and with no check that the lock was stale or anyone
+      # else's, so it deleted a live lock held by a concurrent writer. Removed
+      # with #1806; the job-level `concurrency` group above is what keeps
+      # writers apart now, and a loud "Error acquiring the state lock" is the
+      # correct outcome if one ever slips through. Recovery from a genuinely
+      # stranded lock is `terraform force-unlock <ID>` -- see
+      # runbooks/terraform-stuck-lock.md.
       - name: Terraform Init
         env:
           TF_BACKEND: ${{ secrets.TF_BACKEND_GCP }}
           ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
         run: |
           printf '%s\nprefix = "github-%s"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
-          # Break any stale state lock from a previous failed run
-          BUCKET=$(grep -E '^\s*bucket\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
-          if [ -n "$BUCKET" ]; then
-            LOCK_FILE="gs://${BUCKET}/github-${ENVIRONMENT}/default.tflock"
-            gsutil rm "${LOCK_FILE}" 2>/dev/null || true
-          fi
           cd terraform/environments/gcp
           terraform init -backend-config=/tmp/backend.tfbackend
 
@@ -173,17 +190,16 @@ jobs:
           SERVICE_URL=$(terraform output -raw cloud_run_service_url 2>/dev/null | grep -v '::' || echo "")
           echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
 
-      - name: Release state lock on failure
-        if: failure() || cancelled()
-        env:
-          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
-        run: |
-          BUCKET=$(grep -E '^\s*bucket\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
-          if [ -n "$BUCKET" ]; then
-            LOCK_FILE="gs://${BUCKET}/github-${ENVIRONMENT}/default.tflock"
-            echo "Releasing GCS state lock: ${LOCK_FILE}"
-            gsutil rm "${LOCK_FILE}" 2>/dev/null || echo "No lock file found (already clean)"
-          fi
+      # No automatic state-lock release on failure. The step that used to live
+      # here ran on `failure() || cancelled()` with no age check and no check
+      # that the lock was this run's, so it deleted whatever lock object was
+      # there. The `cancelled()` half is the decisive one: GitHub runs those
+      # steps while `terraform apply` is still shutting down and may still be
+      # writing state, so it destroyed a lock out from under an active writer.
+      # Terraform releases its own lock on a clean apply error; a lock that
+      # survives a run means the run died abnormally, which needs operator
+      # confirmation that the owning run is dead. Recovery is
+      # `terraform force-unlock <ID>` -- see runbooks/terraform-stuck-lock.md.
 
       - name: Save deployment info
         run: |

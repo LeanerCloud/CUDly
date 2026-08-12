@@ -50,6 +50,14 @@ on:
   release:
     types: [created]
 
+# None of the four `uses:` caller jobs below carries a `concurrency` group, and
+# that is deliberate (#1801, #1806). The Terraform state guard is the group on
+# each called workflow's own deploying job, which runs as a real job of THIS run
+# and is serialized there. Putting the same group on a caller job would deadlock:
+# the caller would hold the group while waiting on the inner job queued behind
+# it. GitHub documents the sibling hazard for `cancel-in-progress: true` (sharing
+# a group between caller and called cancels the already-running caller); at
+# `false` it stalls instead. The per-job note on `deploy-azure` spells this out.
 jobs:
   # Determine deployment strategy
   determine-deployment:

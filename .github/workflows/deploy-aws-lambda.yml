@@ -30,10 +30,13 @@ name: Deploy to AWS Lambda
 permissions:
   contents: read
 
-concurrency:
-  group: deploy-lambda-${{ github.ref }}
-  cancel-in-progress: false
-
+# No workflow-level `concurrency` on purpose. What needs protecting is the
+# Terraform state object, which is keyed on the environment, and only the
+# job-level key can see `needs.prepare.outputs.target_environment` -- this level
+# is limited to the `github`, `inputs` and `vars` contexts. Keying it on
+# `github.ref` put two runs on different refs that both resolve to the same
+# environment into different groups against one state file (#1806). The group
+# lives on `build-and-deploy` below.
 on:
   push:
     branches: [main]
@@ -206,6 +209,18 @@ jobs:
       # change none of this repo's Environments have any. See #1648.
       id-token: write
       contents: read
+    # Every run that writes s3://<bucket>/github-<environment>/terraform.tfstate
+    # serializes here, whatever ref or workflow it came from (#1806). The suffix
+    # is the exact value the backend key below is built from, so the group and
+    # the state object cannot drift apart, and `prepare` fails the run on
+    # anything outside dev|staging|prod so it can never be empty.
+    #
+    # `cancel-in-progress: false` is stated rather than left to the default:
+    # cancelling mid-`terraform apply` is how you get a half-applied stack and a
+    # lock nobody releases.
+    concurrency:
+      group: aws-tfstate-${{ needs.prepare.outputs.target_environment }}
+      cancel-in-progress: false
     # Bind to the named GitHub Environment matching the target so
     # secrets.* resolve to environment-scoped values when defined,
     # falling back to repo-scoped secrets otherwise. Without this,
@@ -280,18 +295,19 @@ jobs:
           cd terraform/environments/aws
           terraform apply -auto-approve tfplan
 
-      - name: Release state lock on failure
-        if: failure() || cancelled()
-        env:
-          TF_BACKEND: ${{ secrets.TF_BACKEND_AWS }}
-          ENVIRONMENT: ${{ needs.prepare.outputs.target_environment }}
-        run: |
-          BUCKET=$(grep -E '^\s*bucket\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
-          if [ -n "$BUCKET" ]; then
-            LOCK_KEY="github-${ENVIRONMENT}/terraform.tfstate.tflock"
-            echo "Releasing S3 state lock: s3://${BUCKET}/${LOCK_KEY}"
-            aws s3 rm "s3://${BUCKET}/${LOCK_KEY}" 2>/dev/null || echo "No lock file found (already clean)"
-          fi
+      # No automatic state-lock release on failure. The step that used to live
+      # here ran on `failure() || cancelled()` with no age check and no check
+      # that the lock was this run's, so it deleted whatever lock object was
+      # there. The `cancelled()` half is the decisive one: GitHub runs those
+      # steps while `terraform apply` is still shutting down and may still be
+      # writing state, so it destroyed a lock out from under an active writer.
+      # A run that failed *because* it could not acquire the lock would also
+      # have deleted the lock held by the run still applying. Removed with
+      # #1806, matching the shape deploy-aws-fargate.yml already uses.
+      # Terraform releases its own lock on a clean apply error; a lock that
+      # survives a run means the run died abnormally, which needs operator
+      # confirmation that the owning run is dead. Recovery is
+      # `terraform force-unlock <ID>` -- see runbooks/terraform-stuck-lock.md.
 
       - name: Get Terraform outputs
         id: outputs
