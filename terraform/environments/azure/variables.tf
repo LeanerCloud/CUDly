@@ -3,8 +3,21 @@
 # ==============================================
 
 variable "subscription_id" {
-  description = "Azure subscription ID"
+  description = "Azure subscription ID (GUID), supplied as TF_VAR_subscription_id by .github/workflows/deploy-azure.yml. Besides configuring the azurerm provider it now builds the reservation-purchaser role-definition lookup name and every subscription-scoped RBAC scope; see compute.tf."
   type        = string
+
+  # Validated here as well as on the container-apps module input, because only a
+  # root variable validation is guaranteed to run before the role-definition
+  # data source in compute.tf. A non-GUID value (a subscription display name,
+  # say) would otherwise reach that lookup and fail as "role not found", which
+  # reads as a missing bootstrap rather than as bad input.
+  #
+  # Input validation, not a security control: a GUID-shaped string is accepted
+  # whether or not that subscription exists, is reachable, or is the right one.
+  validation {
+    condition     = can(regex("^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$", var.subscription_id))
+    error_message = "The subscription_id must be an Azure subscription GUID in 8-4-4-4-12 hexadecimal form, upper or lower case."
+  }
 }
 
 variable "project_name" {
