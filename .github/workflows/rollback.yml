@@ -403,6 +403,16 @@ jobs:
     # concurrency group (#1801). `inputs.environment` is a required `choice`
     # constrained to dev|staging|prod, so the suffix is never empty; it is the
     # same value this job interpolates into the state key below.
+    #
+    # Two consequences of sharing the group across workflows, both accepted as
+    # better than concurrent writers:
+    #   - GitHub keeps one pending entry per group, so a queued rollback can be
+    #     evicted by a later arrival. That surfaces: the summary job below exits
+    #     1 on any non-success result, so an evicted rollback reddens the run.
+    #   - if the `environment:` binding below is ever given required reviewers
+    #     (see the header note; none are configured today), it is undocumented
+    #     whether a job parked awaiting approval holds its group. If it does, an
+    #     unapproved rollback blocks deploys to that environment meanwhile.
     concurrency:
       group: azure-tfstate-${{ inputs.environment }}
       cancel-in-progress: false
