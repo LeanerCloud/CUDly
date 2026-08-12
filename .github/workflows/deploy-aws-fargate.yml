@@ -74,16 +74,21 @@ jobs:
       - name: Determine environment
         id: set-env
         env:
-          EVENT_NAME: ${{ github.event_name }}
           INPUT_ENVIRONMENT: ${{ inputs.environment }}
         run: |
           set -euo pipefail
           INPUT_ENVIRONMENT="${INPUT_ENVIRONMENT:-}"
 
-          case "$EVENT_NAME" in
-            workflow_dispatch|workflow_call) ENVIRONMENT="$INPUT_ENVIRONMENT" ;;
-            *)                               ENVIRONMENT=dev ;;
-          esac
+          # workflow_dispatch and workflow_call are this workflow's only
+          # triggers and both declare `environment` as `required: true`, so the
+          # input is the single source of truth and there is nothing to fall
+          # back to. Branching on `github.event_name` here was issue #1805:
+          # inside a reusable workflow it reports the CALLER's event and is
+          # never "workflow_call", so a release-triggered caller passing
+          # environment=prod would have mis-resolved to a `dev` default arm.
+          # deploy-all.yml hardcodes this workflow off, so the case was latent
+          # here and live only for Azure and GCP.
+          ENVIRONMENT="$INPUT_ENVIRONMENT"
 
           # workflow_dispatch constrains this to the declared `choice` options,
           # but the workflow_call input is typed as a free-form string, so the
@@ -91,7 +96,7 @@ jobs:
           case "$ENVIRONMENT" in
             dev|staging|prod) ;;
             *)
-              echo "::error::Refusing unknown environment: $ENVIRONMENT"
+              echo "::error::Refusing unknown environment: '$ENVIRONMENT'"
               exit 1
               ;;
           esac

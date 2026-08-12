@@ -107,17 +107,31 @@ jobs:
           set -euo pipefail
           INPUT_ENVIRONMENT="${INPUT_ENVIRONMENT:-}"
 
-          # Inside a reusable workflow `github.event_name` is the CALLER's
-          # event, so it is never "workflow_call" — a caller's free-form
-          # `inputs.environment` arrives through the workflow_dispatch arm.
-          # Caveat: the `*` arm forces dev, so a push-triggered caller would
-          # have its requested environment silently ignored. deploy-all.yml
-          # triggers only on workflow_dispatch and release today.
-          case "$EVENT_NAME" in
-            release)           TARGET_ENVIRONMENT=prod ;;
-            workflow_dispatch) TARGET_ENVIRONMENT="$INPUT_ENVIRONMENT" ;;
-            *)                 TARGET_ENVIRONMENT=dev ;;
-          esac
+          # Branch on whether an environment was REQUESTED, not on the event
+          # name. Inside a reusable workflow `github.event_name` is the CALLER's
+          # event and is never "workflow_call", so no event name can identify a
+          # workflow_call invocation (issue #1805). A non-empty input is always
+          # an explicit request and wins.
+          #
+          # An empty input means none was supplied, which this workflow's own
+          # `release` and `push` triggers are the legitimate causes of; every
+          # other event stops the run. Note that `release` is inherited by a
+          # workflow_call from a release-triggered caller, so a caller passing
+          # an EMPTY environment would resolve to prod here rather than
+          # failing. deploy-all.yml is the only caller and allowlists the value
+          # it passes, so that cannot happen. Telling the two apart would need
+          # `github.job_workflow_ref`, which is not worth the machinery for an
+          # unreachable path.
+          if [ -n "$INPUT_ENVIRONMENT" ]; then
+            TARGET_ENVIRONMENT="$INPUT_ENVIRONMENT"
+          elif [ "$EVENT_NAME" = release ]; then
+            TARGET_ENVIRONMENT=prod
+          elif [ "$EVENT_NAME" = push ]; then
+            TARGET_ENVIRONMENT=dev
+          else
+            echo "::error::No environment supplied on a '$EVENT_NAME'-triggered run; refusing to guess a deployment target."
+            exit 1
+          fi
 
           # workflow_dispatch constrains this to the declared `choice` options,
           # but the workflow_call input is typed as a free-form string, so the
@@ -125,7 +139,7 @@ jobs:
           case "$TARGET_ENVIRONMENT" in
             dev|staging|prod) ;;
             *)
-              echo "::error::Refusing unknown environment: $TARGET_ENVIRONMENT"
+              echo "::error::Refusing unknown environment: '$TARGET_ENVIRONMENT'"
               exit 1
               ;;
           esac

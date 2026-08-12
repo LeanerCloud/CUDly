@@ -85,10 +85,30 @@ jobs:
           set -euo pipefail
           INPUT_ENVIRONMENT="${INPUT_ENVIRONMENT:-}"
 
-          case "$EVENT_NAME" in
-            workflow_dispatch|workflow_call) ENVIRONMENT="$INPUT_ENVIRONMENT" ;;
-            *)                               ENVIRONMENT=dev ;;
-          esac
+          # Branch on whether an environment was REQUESTED, not on the event
+          # name. Inside a reusable workflow `github.event_name` is the CALLER's
+          # event and is never "workflow_call", so no event name can identify a
+          # workflow_call invocation: a release-triggered deploy-all.yml passing
+          # environment=prod would have landed on a `dev` default arm and
+          # resolved to dev while the summary said prod (issue #1805).
+          #
+          # `inputs` is populated on workflow_dispatch and workflow_call, the
+          # only two triggers that carry an environment, so a non-empty input is
+          # always an explicit request and wins. An empty input means none was
+          # supplied: under `push` that is this workflow's own main-branch
+          # deploy and means dev, and every other event stops the run rather
+          # than guessing. A workflow_call from a push-triggered caller would
+          # read as `push` here too, since `github.event_name` is inherited, but
+          # deploy-all.yml is the only caller, has no push trigger, and
+          # allowlists the value it passes.
+          if [ -n "$INPUT_ENVIRONMENT" ]; then
+            ENVIRONMENT="$INPUT_ENVIRONMENT"
+          elif [ "$EVENT_NAME" = push ]; then
+            ENVIRONMENT=dev
+          else
+            echo "::error::No environment supplied on a '$EVENT_NAME'-triggered run; refusing to guess a deployment target."
+            exit 1
+          fi
 
           # workflow_dispatch constrains this to the declared `choice` options,
           # but the workflow_call input is typed as a free-form string, so the
@@ -96,7 +116,7 @@ jobs:
           case "$ENVIRONMENT" in
             dev|staging|prod) ;;
             *)
-              echo "::error::Refusing unknown environment: $ENVIRONMENT"
+              echo "::error::Refusing unknown environment: '$ENVIRONMENT'"
               exit 1
               ;;
           esac
