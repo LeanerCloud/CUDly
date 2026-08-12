@@ -120,6 +120,52 @@ func (s *Service) permissionsForGroups(ctx context.Context, groupIDs []string) (
 	return permissions, nil
 }
 
+// accountsForGroups returns the union of allowed_accounts across the given
+// groups, taking the membership list directly so a caller reasoning about a
+// membership CHANGE can evaluate the PRIOR and the RESULTING scope with the
+// same function (see guardSelfAccountScope).
+//
+// It FAILS CLOSED where its permission-side twin permissionsForGroups can
+// safely fail open. That twin skips a missing group because a lost group can
+// only shrink a permission union. Here the union is inverted: EMPTY means
+// every account (IsUnrestrictedAccess), so a skipped group can WIDEN the
+// result. The union of [] and ["acct-A"] is restricted; lose the group
+// carrying ["acct-A"] and it reads as unrestricted -- issue #1748's failure
+// mode, which a guard swallowing the skip would reproduce here by computing
+// an unrestricted prior scope and then waving through every change.
+//
+// The two refusal conditions are deliberately IDENTICAL to grantCeilingAccounts
+// and ResolveAllowedAccounts, and the emptiness test is the load-bearing part:
+// a skip only widens the union when what survives is EMPTY. Otherwise the
+// computed union is a SUBSET of the true one, which makes this ceiling
+// stricter than reality rather than looser, and stricter fails closed.
+//
+// Refusing on ANY skip instead is the tempting stronger rule and is wrong.
+// DeleteGroup drops the groups row without purging users.group_ids (there is
+// no FK on that array column), so a dangling membership id is the ordinary
+// state after any custom group is deleted. Under a refuse-on-any-skip rule an
+// unrestricted admin carrying one dangling id cannot even remove that id from
+// their own membership -- a change that widens nothing, from a principal
+// already at maximum scope -- so a single-admin deployment has no way to clean
+// up. That is pure availability cost for zero security benefit, which is
+// precisely the trade-off grantCeilingAccounts documents rejecting.
+func (s *Service) accountsForGroups(ctx context.Context, groupIDs []string) ([]string, error) {
+	authCtx := &AuthContext{}
+	if err := s.collectGroupsAndAccounts(ctx, authCtx, groupIDs); err != nil {
+		return nil, fmt.Errorf("failed to resolve account scope: %w", err)
+	}
+	if len(authCtx.AllowedAccounts) == 0 && authCtx.SkippedGroups > 0 {
+		return nil, fmt.Errorf(
+			"failed to resolve account scope: %d group(s) could not be loaded and the remaining scope is unrestricted",
+			authCtx.SkippedGroups)
+	}
+	// An unresolved scope is UNKNOWN, not unrestricted.
+	if len(authCtx.Groups) == 0 {
+		return nil, fmt.Errorf("failed to resolve account scope: no group could be loaded")
+	}
+	return authCtx.AllowedAccounts, nil
+}
+
 // BuildAuthContext builds a complete authorization context for a user.
 // Permissions and allowed accounts are derived purely from the union of the
 // user's group memberships; a user with no groups gets an empty context and

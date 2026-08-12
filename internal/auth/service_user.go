@@ -381,20 +381,39 @@ func (s *Service) guardGroupChange(ctx context.Context, actorUserID, targetUserI
 	}
 
 	// Self-escalation guard: when the actor is editing their own membership,
-	// any group being ADDED that they did not already have requires the actor
-	// to hold the manage-users permission. A non-privileged user therefore
-	// cannot grant themselves a more powerful group. Internal callers
-	// (actorUserID == "") are already trusted and skip this check.
-	if actorUserID == "" || actorUserID != targetUserID || !addsNewGroup(prior, next) {
+	// the change must not leave them holding more than they went in with.
+	// Internal callers (actorUserID == "") are already trusted and skip it.
+	//
+	// This deliberately does NOT filter on addsNewGroup, and that condition
+	// used to live here (issue #1756). Screening the whole guard on "does this
+	// add a group?" is right for the permission dimension and wrong for the
+	// account dimension, because a REMOVAL widens account scope: the union of
+	// allowed_accounts is a set in which EMPTY means every account, so dropping
+	// the group carrying the restriction removes the restriction. The
+	// add-only screen therefore left the pure-removal self-edit completely
+	// unguarded. addsNewGroup now sits inside guardSelfEscalation, scoped to
+	// the dimension it is actually true for.
+	if actorUserID == "" || actorUserID != targetUserID {
 		return nil
 	}
 	return s.guardSelfEscalation(ctx, prior, next)
 }
 
-// guardSelfEscalation runs the two self-edit checks in order: the #907
-// manage-users gate, then the #1550 carved-out-verb gate that manage-users is
-// not sufficient to pass. Split out of guardGroupChange to keep that function
-// under gocyclo's threshold.
+// guardSelfEscalation runs the self-edit checks: the #907 manage-users gate,
+// the #1550 carved-out-verb gate that manage-users is not sufficient to pass,
+// and the #1756 account ceiling. Split out of guardGroupChange to keep that
+// function under gocyclo's threshold.
+//
+// The two dimensions have deliberately different reach, and the difference is
+// a property of the data rather than a convenience:
+//
+//   - Permissions are a plain union with no inverted empty case, so dropping a
+//     group can only SHRINK the effective set. Only an added group can grant a
+//     permission, which is why the permission checks stay behind addsNewGroup.
+//   - allowed_accounts is a union in which the EMPTY set means every account
+//     (IsUnrestrictedAccess). Dropping the group that carries the restriction
+//     collapses the union to empty and thereby WIDENS scope, so the account
+//     ceiling has to run on every self-edit, additions or not.
 //
 // DO NOT "simplify" this back to re-reading the actor's row
 // (GetUserPermissions, or any fresh GetUserByID). That is the shorter
@@ -419,15 +438,61 @@ func (s *Service) guardGroupChange(ctx context.Context, actorUserID, targetUserI
 // Enforced by mutation, not just by this comment: swapping `prior` for `next`
 // below fails the suite (see the M13 row in the PR #1737 mutation matrix).
 func (s *Service) guardSelfEscalation(ctx context.Context, prior, next []string) error {
-	heldBefore, err := s.permissionsForGroups(ctx, prior)
+	if addsNewGroup(prior, next) {
+		heldBefore, err := s.permissionsForGroups(ctx, prior)
+		if err != nil {
+			return fmt.Errorf("failed to verify manage-users permission: %w", err)
+		}
+		if !s.permissionsAllow(heldBefore, ActionUpdate, ResourceUsers, nil) {
+			return ErrSelfEscalation
+		}
+		// Holding update:users is NOT enough to hand yourself the money verbs.
+		if err := s.guardSelfCarvedOutGrant(ctx, heldBefore, next, prior); err != nil {
+			return err
+		}
+	}
+	// Runs whether or not anything was added: see the account bullet above.
+	return s.guardSelfAccountScope(ctx, prior, next)
+}
+
+// guardSelfAccountScope bounds the account dimension of a self-membership
+// change: the scope the actor comes out with may not reach beyond the scope
+// they went in with (issue #1756).
+//
+// It compares RESULTING scope against PRIOR scope rather than inspecting what
+// is being added, and that is the whole point. Two routes widen scope and they
+// run in opposite directions, so an "is anything being granted?" check only
+// ever sees one of them:
+//
+//   - JOIN a wider group. The seeded Administrators group ships
+//     allowed_accounts = ARRAY['*'] (migrations 000024/000057), so adding it
+//     hands the actor every account. The permission gate passes this happily:
+//     update:users is what it asks for and the actor already holds it.
+//   - LEAVE the scoping group. The union collapses to empty, which
+//     IsUnrestrictedAccess reads as every account. Removing the restriction
+//     grants the restriction.
+//
+// accountScopeGap gets both cases right because it treats empty and "*" as
+// UNRESTRICTED on EITHER side, so it is not a subset test: the empty set is a
+// subset of everything while meaning the opposite of narrow. Prior
+// unrestricted accepts anything (nothing left to widen); next unrestricted
+// against a restricted prior is refused whatever produced it; otherwise next
+// must name only accounts prior already named.
+func (s *Service) guardSelfAccountScope(ctx context.Context, prior, next []string) error {
+	priorAccounts, err := s.accountsForGroups(ctx, prior)
 	if err != nil {
-		return fmt.Errorf("failed to verify manage-users permission: %w", err)
+		return err
 	}
-	if !s.permissionsAllow(heldBefore, ActionUpdate, ResourceUsers, nil) {
-		return ErrSelfEscalation
+	nextAccounts, err := s.accountsForGroups(ctx, next)
+	if err != nil {
+		return err
 	}
-	// Holding update:users is NOT enough to hand yourself the money verbs.
-	return s.guardSelfCarvedOutGrant(ctx, heldBefore, next, prior)
+	if gap := accountScopeGap(priorAccounts, nextAccounts); gap != "" {
+		return fmt.Errorf(
+			"%w: this change would give you %s, beyond your current account scope; ask another administrator to make it",
+			ErrSelfEscalation, gap)
+	}
+	return nil
 }
 
 // guardSelfCarvedOutGrant blocks the membership route to the same escalation
