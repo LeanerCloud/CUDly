@@ -409,10 +409,11 @@ jobs:
     #   - GitHub keeps one pending entry per group, so a queued rollback can be
     #     evicted by a later arrival. That surfaces: the summary job below exits
     #     1 on any non-success result, so an evicted rollback reddens the run.
-    #   - if the `environment:` binding below is ever given required reviewers
-    #     (see the header note; none are configured today), it is undocumented
-    #     whether a job parked awaiting approval holds its group. If it does, an
-    #     unapproved rollback blocks deploys to that environment meanwhile.
+    #   - if the `environment:` binding below carries required reviewers (see
+    #     #1660 for the live state, deliberately not restated here), it is
+    #     undocumented whether a job parked awaiting approval holds its group.
+    #     If it does, an unapproved rollback blocks deploys to that environment
+    #     for the whole approval window.
     concurrency:
       group: azure-tfstate-${{ inputs.environment }}
       cancel-in-progress: false

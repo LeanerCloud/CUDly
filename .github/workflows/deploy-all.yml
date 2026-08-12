@@ -171,8 +171,9 @@ jobs:
   #
   # Putting that same group on this caller job would deadlock: this job would
   # hold the group while waiting on the inner job queued behind it. GitHub
-  # documents the sibling hazard for `cancel-in-progress: true` (caller and
-  # called sharing a group cancel each other); at `false` it stalls instead.
+  # documents the sibling hazard for `cancel-in-progress: true`: sharing a group
+  # between caller and called cancels the already-running caller. At `false` it
+  # stalls instead.
   deploy-azure:
     name: Deploy Azure Container Apps
     needs: determine-deployment
