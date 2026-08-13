@@ -170,7 +170,12 @@ func TestExecuteAzureExchange_RetryOfInFlightSubmitDoesNotDoubleSpend(t *testing
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "expected a ClientError, got: %v", err)
 	assert.Equal(t, 409, ce.code)
-	assert.Contains(t, err.Error(), "identical RI exchange was submitted")
+	assert.Contains(t, err.Error(), "identical RI exchange claimed this submit")
+	// The refusal must not promise the caller that the earlier submit
+	// committed: the claim is retained even when the provider call failed, so
+	// a client reading 409 as "it already succeeded" would skip verifying a
+	// purchase that may never have happened.
+	assert.Contains(t, err.Error(), "verify its outcome before resubmitting")
 
 	assert.Equal(t, []string{"sess-1"}, committed,
 		"exactly one exchange may reach Azure; a second commit is the #1642 double spend")
@@ -555,6 +560,16 @@ func TestClaimExchangeSubmit_Outcomes(t *testing.T) {
 		assert.Equal(t, 409, ce.code)
 		assert.Contains(t, err.Error(), riExchangeIdempotencyWindow.String(),
 			"the refusal must tell the caller how long the claim holds")
+
+		// The claim is retained even when the provider call FAILED, so the
+		// refusal must leave the earlier submit's outcome open. A client that
+		// reads 409 as "the earlier one succeeded" skips verification and
+		// assumes a purchase that may never have happened.
+		for _, outcome := range []string{"may be running", "may have committed", "may have failed"} {
+			assert.Contains(t, err.Error(), outcome,
+				"the refusal must not assert which outcome the earlier submit had")
+		}
+		assert.Contains(t, err.Error(), "verify its outcome before resubmitting")
 	})
 
 	t.Run("store failure refuses rather than proceeding unguarded", func(t *testing.T) {

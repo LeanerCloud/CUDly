@@ -277,9 +277,12 @@ type StoreInterface interface {
 	// A claim older than window is reclaimable, so a genuine intentional
 	// repeat of the same exchange is not blocked forever.
 	//
-	// The claim is deliberately NOT released when the provider call fails:
-	// past the point of submission the outcome is ambiguous, and holding the
-	// claim for the rest of the window is the fail-closed choice.
+	// There is no release: once taken, a claim stands for the rest of the
+	// window whatever the provider call does, including when it fails. Past
+	// the point of submission the outcome is ambiguous, and holding the claim
+	// is the fail-closed choice. The consequence for the caller's 409 is that
+	// it cannot promise the earlier submit committed, only that it claimed the
+	// window.
 	ClaimRIExchangeIdempotencyKey(ctx context.Context, key string, window time.Duration) (bool, error)
 
 	// RI Exchange history

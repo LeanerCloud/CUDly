@@ -780,7 +780,8 @@ paths:
         so a retry after a client timeout returns 409 rather than committing
         the exchange a second time. The spend cap and currency are not part of
         that fingerprint: raising the cap does not make it a different
-        purchase.
+        purchase. See the 409 response: it does not assert that the earlier
+        submit succeeded, only that it claimed the window.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -930,7 +931,8 @@ paths:
         with their counts, so a retry after a client timeout returns 409 rather
         than committing the exchange a second time. `max_payment_due_usd` is
         not part of that fingerprint: raising the cap does not make it a
-        different purchase.
+        different purchase. See the 409 response: it does not assert that the
+        earlier submit succeeded, only that it claimed the window.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -1899,9 +1901,15 @@ components:
             $ref: '#/components/schemas/Error'
     Conflict:
       description: >
-        An identical submit is already in flight or recently committed. The
-        request was NOT executed a second time; check the outcome of the
-        earlier one before resubmitting.
+        An identical submit already holds the idempotency claim, so THIS
+        request was not executed. The claim is retained unconditionally once
+        taken, including when the earlier submit failed, so this response
+        asserts nothing about that submit's outcome: it may still be running,
+        it may have committed, its outcome may be unresolved (the provider
+        call can fail after the operation was already submitted), or it may
+        have failed without committing anything. Do not read a 409 as
+        confirmation that the earlier submit succeeded. Verify its outcome
+        with the provider before resubmitting.
       content:
         application/json:
           schema:

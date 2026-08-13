@@ -166,10 +166,18 @@ func awsExchangeIdempotencyKey(cloudAccountID string, body ExchangeExecuteReques
 //
 // Claiming last is what makes a release path unnecessary: no request that
 // failed a gate ever holds a claim, so no legitimate retry is turned away with
-// a spurious 409. Conversely the claim is deliberately NOT released when the
-// commit itself fails, because past that point the provider may already have
-// accepted the exchange; holding the claim for the rest of the window is the
-// fail-closed choice.
+// a spurious 409. Conversely, once taken the claim is never released, for the
+// rest of the window, WHATEVER the commit does. That is unconditional and not
+// only for the ambiguous failures: past the commit call the provider may
+// already have accepted the exchange, and a handler that released the claim on
+// the errors it believes to be definite rejections would be guessing about the
+// one thing it cannot observe.
+//
+// The cost of that choice is what the 409 below must not paper over. A caller
+// receiving it knows only that an identical submit claimed the window; it may
+// be running, may have committed, may have failed after reaching the provider,
+// or may have failed without committing anything. The message therefore
+// asserts none of those and tells the caller to go and look.
 //
 // A store failure refuses the exchange rather than proceeding unguarded: an
 // idempotency guard that cannot be evaluated is not a guard.
@@ -180,8 +188,9 @@ func (h *Handler) claimExchangeSubmit(ctx context.Context, key string) error {
 	}
 	if !claimed {
 		return NewClientError(409, fmt.Sprintf(
-			"an identical RI exchange was submitted within the last %s and may still be settling; "+
-				"check the exchange's outcome before resubmitting rather than committing it twice",
+			"an identical RI exchange claimed this submit within the last %s, so this request was "+
+				"not executed; that earlier submit may be running, may have committed, or may have "+
+				"failed, so verify its outcome before resubmitting rather than risking a second commitment",
 			riExchangeIdempotencyWindow))
 	}
 	return nil
