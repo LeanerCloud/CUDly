@@ -53,6 +53,20 @@
 # any workload role can carry. Effective permissions are identity AND ceiling,
 # so a ceiling that already covers the whole identity side changes nothing.
 #
+# The managed-policy half of that claim was checked against all four documents
+# the modules attach, not inferred: AmazonSSMManagedInstanceCore (ssm,
+# ssmmessages, ec2messages), AWSLambdaBasicExecutionRole (logs),
+# AWSLambdaVPCAccessExecutionRole (logs, ec2) and
+# AmazonECSTaskExecutionRolePolicy (ecr, logs, and no ecs action despite the
+# name). Only the first grants an ecs, lambda or ssm action, and it is the one
+# enumerated verbatim below; logs, ec2 and ecr stay wildcarded here, so no
+# managed-policy path can 403 as a result of the #1723 narrowing. AWS owns
+# those documents, so only AmazonSSMManagedInstanceCore is guarded in CI (see
+# TestBoundaryCoversSSMManagedInstanceCore); for the other three the exposure
+# is "AWS edits an existing policy", since a NEW attachment is caught by
+# TestDeployPolicyAllowsAttachedManagedPolicies. Re-check them when touching
+# this.
+#
 # DRIFT IS GUARDED IN CI, in both directions, by policy_guard_test.go in this
 # directory. TestBoundaryCoversWorkloadServices re-derives the action set from
 # the IAM policy documents in terraform/modules and fails if this document does
@@ -86,11 +100,17 @@ resource "aws_iam_policy" "workload_boundary" {
         #     policy. RunTask keeps a RESIDUAL this ceiling does not close:
         #     running an ALREADY-REGISTERED task definition unchanged runs as
         #     that definition's task role, and the ceiling's Resource is "*".
-        #     Overriding overrides.taskRoleArn / overrides.executionRoleArn
-        #     needs iam:PassRole, which PassRoleCeiling scopes to cudly-*, so
-        #     only the no-override form is reachable, and only against a task
-        #     definition that already exists and already carries a role more
-        #     privileged than this ceiling. It is deliberately NOT closed by
+        #     RunTask requires iam:PassRole on the task definition's task and
+        #     execution roles in EVERY form, not just when
+        #     overrides.taskRoleArn / overrides.executionRoleArn are supplied:
+        #     the four EventBridge invoker roles in
+        #     modules/compute/aws/fargate do a plain no-override RunTask (their
+        #     ecs_target passes only containerOverrides.command) and every one
+        #     of them carries iam:PassRole on both role ARNs, which would be
+        #     dead code otherwise. So PassRoleCeiling confines the residual to
+        #     task definitions whose task and execution roles are already
+        #     cudly-*, i.e. already boundaried by everything above; the
+        #     no-override form is not exempt. It is deliberately NOT closed by
         #     resource-scoping the way CrossAccountAssumeRoleCeiling is: the
         #     family is local.name_prefix, i.e. "<stack_name>-fargate", and
         #     stack_name defaults to project_name-environment-<random hex>, so
@@ -107,6 +127,20 @@ resource "aws_iam_policy" "workload_boundary" {
         #     lambda:InvokeFunctionUrl in aws_lambda_permission blocks are
         #     RESOURCE policies granting a service principal, not grants to a
         #     workload role, so this ceiling never gates them.
+        #     lambda:InvokeFunction keeps a RESIDUAL of the same shape as
+        #     ecs:RunTask's, stated here so it is not read as fully closed:
+        #     this statement's Resource is "*", so it permits invoking ANY
+        #     function in the account, which runs that function's code as its
+        #     execution role with an attacker-chosen payload and needs no
+        #     iam:PassRole. Functions this deploy role did not create carry no
+        #     boundary. It is narrower than it looks, because the module grants
+        #     are themselves scoped (modules/compute/aws/lambda/main.tf uses
+        #     aws_lambda_function.main.arn, signing-key.tf uses
+        #     arn:aws:lambda:*:*:function:${stack_name}-api*) and effective
+        #     permissions are the intersection, so the residual is only
+        #     reachable by a role whose own identity policy is wider. Scoping
+        #     this entry to arn:aws:lambda:*:*:function:cudly-* would close it
+        #     and is tracked separately rather than folded into #1723.
         #   - the ssm entries are AmazonSSMManagedInstanceCore v2 verbatim (the
         #     fck-nat instance role in modules/networking/aws is the only role
         #     that carries it, for Session Manager access). No module grants an

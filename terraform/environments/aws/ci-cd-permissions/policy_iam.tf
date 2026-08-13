@@ -26,8 +26,10 @@
 #
 # The deploy role also keeps iam:AddRoleToInstanceProfile (policy_data.tf,
 # IAMRolesAndPolicies, scoped to arn:aws:iam::*:instance-profile/cudly-* and
-# arn:aws:iam::*:role/cudly-*). That action supports no condition key at all, so
-# it cannot be gated on the target role carrying the boundary the way
+# arn:aws:iam::*:role/cudly-*). That action supports no SERVICE-SPECIFIC
+# condition key (the global keys, aws:RequestedRegion, aws:PrincipalTag and
+# aws:ResourceTag among them, apply to every IAM action, but none of them can
+# express "the target role carries this boundary"), so it cannot be gated the way
 # iam:AttachRolePolicy is below, and it is left unconditioned. It is not
 # exploitable on its own: putting a role into an instance profile only matters
 # once that profile reaches an instance, and that needs iam:PassRole, which

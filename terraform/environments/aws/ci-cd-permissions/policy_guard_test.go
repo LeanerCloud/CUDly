@@ -178,7 +178,18 @@ var actionAssignmentPattern = regexp.MustCompile(`(?m)^[ \t]*(?:Action|actions)\
 // in a set the star never entered. Both read exactly like a clean ceiling.
 // Mutation M6 in the #1723 verification caught this; it is the reason the
 // pattern is an alternation rather than one branch.
-var actionStringPattern = regexp.MustCompile(`"([A-Za-z0-9]+:[A-Za-z0-9_*]+|\*)"`)
+//
+// The hyphen in the SERVICE half is load-bearing for the same reason, in the
+// same direction. AWS service prefixes are not all alphanumeric:
+// application-autoscaling (the ECS service auto-scaling grant, on the Fargate
+// deploy path), execute-api, aws-marketplace, s3-object-lambda,
+// network-firewall and resource-groups all carry one. Without it, a module
+// granting application-autoscaling:RegisterScalableTarget to a workload role
+// contributes nothing to TestBoundaryCoversWorkloadServices' derived set, so
+// the ceiling is never required to cover it and the role 403s at RUNTIME with
+// the apply green: the under-reporting direction, which is the failure mode
+// this file is organised to avoid.
+var actionStringPattern = regexp.MustCompile(`"([A-Za-z0-9-]+:[A-Za-z0-9_*]+|\*)"`)
 
 // resourceAssignmentPattern matches a `Resource = [...]` or `Resource = "..."`
 // assignment inside a single statement block and captures the value.
@@ -524,6 +535,31 @@ func equalStringSets(got, want []string) bool {
 // document carries (DenyPassDeployRole) is resource-scoped, so "the action
 // appears in a Deny" does not imply the action is unreachable, and pretending
 // otherwise would produce a wrong answer in the direction that hides a gap.
+//
+// IT FAILS CLOSED, WHICH IS THE WHOLE DESIGN. Every statement that is not
+// positively identified as a Deny is treated as part of the ceiling and must
+// yield at least one action, and no such statement may use NotAction:
+//
+//   - NotAction expresses a ceiling as "everything except", which no assertion
+//     in this file can check. It is also the FIRST thing a future author asked
+//     to stop maintaining a 34-entry allow list would reach for, and
+//     `NotAction = ["iam:*"]` with `Resource = "*"` grants every service AWS
+//     has. terraform fmt and terraform validate both accept it (inside
+//     jsonencode these are ordinary map keys) and AWS treats it as a
+//     first-class IAM element, so CI is the only place it can be refused.
+//   - a statement yielding zero actions is either a real grant this file's
+//     patterns could not parse (a whole statement written on one line, past the
+//     ^-anchored Action/Effect patterns; `Action = local.something`, past the
+//     literal-only extractor) or a statement that grants nothing. Both must be
+//     the same loud failure, because the parser cannot tell them apart and the
+//     "could not parse" half silently widens the ceiling to whatever the
+//     statement says. Collapsing the two is what makes this closed against
+//     forms nobody has thought of yet, rather than against the three that have
+//     been enumerated.
+//
+// Refusing an unparseable statement outright costs nothing legitimate: every
+// statement in this document is one attribute per line with a literal Action
+// list, which is the form terraform fmt produces.
 func boundaryAllowedActions(t *testing.T) []string {
 	t.Helper()
 
@@ -534,13 +570,20 @@ func boundaryAllowedActions(t *testing.T) []string {
 
 	var allowed []string
 	for _, stmt := range stmts {
-		if statementEffect(stmt) != "Allow" {
+		if statementEffect(stmt) == "Deny" {
 			continue
 		}
-		allowed = append(allowed, extractActionListActions(stmt)...)
+		if strings.Contains(stmt, "NotAction") {
+			t.Fatalf("%s: statement %q uses NotAction, which caps nothing this test can check: a NotAction ceiling grants every service except the ones it names, so `NotAction = [\"iam:*\"]` on Resource \"*\" reopens every cross-principal escape #1723, #1722 and #1705 closed while every other assertion in this file stays green. Express the ceiling as an allow list. Statement: %q", boundaryFile, statementSid(stmt), stmt)
+		}
+		actions := extractActionListActions(stmt)
+		if len(actions) == 0 {
+			t.Fatalf("%s: statement %q is not a Deny and yields zero actions, so it either grants something this test cannot parse or grants nothing at all, and there is no way to tell which. Both are refused: an unparsed grant is a silent widening of the ceiling. Write it as one attribute per line with a literal Action list (an inline one-line statement hides Effect and Action from the ^-anchored patterns above, and `Action = local.x` hides them from the literal extractor). Statement: %q", boundaryFile, statementSid(stmt), stmt)
+		}
+		allowed = append(allowed, actions...)
 	}
 	if len(allowed) == 0 {
-		t.Fatalf("%s: parsed zero actions out of its Allow statements; every coverage assertion below would otherwise report the whole ceiling as missing, or (in the escape direction) report every escape as closed", boundaryFile)
+		t.Fatalf("%s: every statement in it is a Deny, so it grants nothing and is not a ceiling; every coverage assertion below would otherwise report the whole ceiling as missing, or (in the escape direction) report every escape as closed", boundaryFile)
 	}
 	sort.Strings(allowed)
 	return allowed
@@ -613,18 +656,32 @@ func TestActionPermittedMatchesWholeActionCaseInsensitively(t *testing.T) {
 // code as a DIFFERENT principal, which is a complete exit from this boundary
 // rather than a widening within it: a permissions boundary constrains the
 // principal it is attached to and does not follow the principal the code ends
-// up running as. None of them needs iam:PassRole, so PassRoleCeiling's cudly-*
-// scoping does not constrain them either (#1723).
+// up running as (#1723).
+//
+// All but one need no iam:PassRole, so PassRoleCeiling's cudly-* scoping does
+// not constrain them at all. ecs:RegisterTaskDefinition is the exception: a
+// revision naming a task or execution role needs PassRole for it, which is why
+// the deploy role's own iam:PassRole is scoped to ecs-tasks.amazonaws.com in
+// policy_data.tf beside its ecs:RegisterTaskDefinition grant in
+// policy_compute.tf. So PassRoleCeiling confines that one to cudly-* rather
+// than closing it, and a cudly-* role created by hand or from the console
+// carries no boundary (the residual PassRoleCeiling's own comment admits). It
+// is on this list because policy_boundary.tf states outright that it is
+// absent, and a stated invariant with no guard is one edit from being untrue.
 //
 // The value is the principal the escape lands on, quoted in the failure so the
 // next reader does not have to rediscover why the entry is here.
 var crossPrincipalEscapeActions = map[string]string{
 	"ecs:ExecuteCommand":                 "the task role of the running task the command lands in",
+	"ecs:RegisterTaskDefinition":         "the task role named by the new revision, which the ceiling's own ecs:RunTask then runs",
 	"ecs:UpdateService":                  "the task role of the task definition revision the service is pointed at",
 	"lambda:UpdateFunctionCode":          "the execution role of the function whose code is replaced",
 	"lambda:UpdateFunctionConfiguration": "the execution role of the function whose handler, layers or environment is replaced",
+	"ssm:CreateAssociation":              "the instance profile of every instance the association binds its document to",
 	"ssm:SendCommand":                    "the instance profile of the SSM-managed instance the command runs on",
+	"ssm:StartAutomationExecution":       "the instance profile of the instances the automation document targets",
 	"ssm:StartSession":                   "the instance profile of the SSM-managed instance the session opens on",
+	"ssm:UpdateAssociation":              "the instance profile of every instance the retargeted association now runs on",
 }
 
 // TestBoundaryDeniesCrossPrincipalEscapes asserts policy_boundary.tf permits
@@ -648,7 +705,7 @@ func TestBoundaryDeniesCrossPrincipalEscapes(t *testing.T) {
 
 	for _, action := range escapes {
 		if actionPermitted(allowed, action) {
-			t.Errorf("%s permits %s, which runs code as %s. A permissions boundary caps the principal it is attached to and does not follow a different one, so this is not a widening of the ceiling but an exit from it, and it needs no iam:PassRole, so PassRoleCeiling does not constrain it either. The ceiling currently allows %v (#1723)", boundaryFile, action, crossPrincipalEscapeActions[action], allowed)
+			t.Errorf("%s permits %s, which runs code as %s. A permissions boundary caps the principal it is attached to and does not follow a different one, so this is not a widening of the ceiling but an exit from it, and PassRoleCeiling does not close it (see crossPrincipalEscapeActions above for which entries need no iam:PassRole at all and which one it merely confines). The ceiling currently allows %v (#1723)", boundaryFile, action, crossPrincipalEscapeActions[action], allowed)
 		}
 	}
 }
@@ -1087,7 +1144,13 @@ func TestBoundaryPolicyNameStaysInProtectedNamespace(t *testing.T) {
 
 // iamRoleResourcePattern matches an `resource "aws_iam_role" "<name>" {`
 // block header and captures the role's local name.
-var iamRoleResourcePattern = regexp.MustCompile(`resource\s+"aws_iam_role"\s+"([A-Za-z0-9_]+)"\s*\{`)
+//
+// The name class includes "-" because Terraform resource names permit it. The
+// repo happens to use underscores everywhere today, which is exactly why the
+// omission never fired: a role named "sneaky-role" with no permissions_boundary
+// was invisible to TestEveryModuleRoleHasPermissionsBoundary, and the
+// roleCount vacuity guard could not help because the other roles still counted.
+var iamRoleResourcePattern = regexp.MustCompile(`resource\s+"aws_iam_role"\s+"([A-Za-z0-9_-]+)"\s*\{`)
 
 // permissionsBoundaryArgumentPattern matches the exact
 // `permissions_boundary = var.permissions_boundary_arn` argument a module role
@@ -1289,5 +1352,83 @@ func TestBoundaryMatchesCrossAccountRolePrefix(t *testing.T) {
 
 	if got := statementResources(stmts[0]); !equalStringSets(got, []string{want}) {
 		t.Errorf("%s: CrossAccountAssumeRoleCeiling caps sts:AssumeRole at %v, but %s defaults to %q in %v, so the modules grant %q. A permissions boundary caps by intersection: this mismatch is INVISIBLE at `terraform apply` (both documents are written exactly as configured, the apply is green) and surfaces as a RUNTIME AccessDenied the first time CUDly assumes a role in a linked account, i.e. cross-account cost collection silently stops working in the deployed environment. Change both in the same commit", boundaryFile, got, crossAccountPrefixVariable, prefix, crossAccountModuleVariableFiles, want)
+	}
+}
+
+// passRoleAction is the one IAM action policy_boundary.tf grants, in
+// PassRoleCeiling, and the one it denies, in DenyPassDeployRole. Both
+// statements are located by their Action set rather than by their Sid, for the
+// reason boundaryGatedRoleMutationActions gives: a Sid is free text and
+// renaming one must not silently skip the check.
+const passRoleAction = "iam:PassRole"
+
+// passRoleCeilingResource is the Resource PassRoleCeiling must be scoped to.
+// It is spelled out here rather than shared with boundaryGatedRoleMutationResource
+// (which happens to be the same string) because they are separate invariants in
+// separate documents: one is what the deploy role may mutate, this one is what
+// a boundaried workload role may pass.
+const passRoleCeilingResource = "arn:aws:iam::*:role/cudly-*"
+
+// deployRoleResource is the exact ARN of the deploy role DenyPassDeployRole
+// protects. Unlike passRoleCeilingResource it carries no wildcard, which is
+// what stops the IAM-path trick (arn:aws:iam::123:role/cudly-x/EvilRole
+// satisfies cudly-*) from evading the Deny.
+const deployRoleResource = "arn:aws:iam::*:role/cudly-terraform-deploy"
+
+// TestBoundaryScopesPassRoleToCudlyRoles pins the Resource of PassRoleCeiling,
+// which is the premise the rest of this boundary reasons from rather than an
+// ordinary drift check.
+//
+// Three separate arguments in policy_boundary.tf and policy_iam.tf are only
+// valid while iam:PassRole is capped at cudly-*: that the ecs:RunTask residual
+// reaches only task definitions whose roles are already boundaried; that the
+// three services narrowed in #1723 are the ones PassRole scoping does NOT
+// constrain (implying it constrains the others); and that
+// iam:AddRoleToInstanceProfile is safe unconditioned because reaching an
+// instance needs a scoped PassRole. Widening this Resource to "*" invalidates
+// all three at once and re-opens the escalation the boundary exists to close:
+// a boundaried role could hand an unrelated administrator role to a new Lambda
+// and run as it. Every other test in this file stays green while that happens,
+// because they are action-set guards.
+func TestBoundaryScopesPassRoleToCudlyRoles(t *testing.T) {
+	allows := findStatements(t, boundaryFile, func(stmt string) bool {
+		return statementEffect(stmt) == "Allow" && equalStringSets(statementActions(stmt), []string{passRoleAction})
+	})
+	if len(allows) != 1 {
+		t.Fatalf("%s: found %d Allow statements whose Action set is exactly [%q], want exactly 1 (PassRoleCeiling). A second one widens the cap by union, and none at all takes down the four EventBridge invoker roles that pass the task and task-execution roles to ecs:RunTask", boundaryFile, len(allows), passRoleAction)
+	}
+
+	if got := statementResources(allows[0]); !equalStringSets(got, []string{passRoleCeilingResource}) {
+		t.Errorf("%s: statement %q caps %s at Resource %v, want exactly [%q]. Widening it (to \"*\" above all) lets a boundaried workload role pass ANY role in the account to a new Lambda or task and run as it, which is a complete exit from this boundary and not a widening within it; narrowing it 403s the EventBridge invoker roles at RUNTIME with `terraform apply` still green", boundaryFile, statementSid(allows[0]), passRoleAction, got, passRoleCeilingResource)
+	}
+}
+
+// TestBoundaryDeniesPassingTheDeployRole pins the Deny that stops PassRoleCeiling
+// covering cudly-terraform-deploy itself, which is a cudly-* role and therefore
+// matches the Allow above. Without it a boundaried workload role could pass the
+// deploy role to a Lambda and inherit it: a workload -> deploy escalation, the
+// same shape as the #542 self-pass loop.
+//
+// It locates the statement by Action set AND Resource rather than by Effect, so
+// flipping Deny to Allow leaves it matched and fails on the Effect assertion
+// instead of quietly matching nothing.
+func TestBoundaryDeniesPassingTheDeployRole(t *testing.T) {
+	denies := findStatements(t, boundaryFile, func(stmt string) bool {
+		if !equalStringSets(statementActions(stmt), []string{passRoleAction}) {
+			return false
+		}
+		for _, r := range statementResources(stmt) {
+			if r == deployRoleResource {
+				return true
+			}
+		}
+		return false
+	})
+	if len(denies) != 1 {
+		t.Fatalf("%s: found %d statements covering %s on %q, want exactly 1 (DenyPassDeployRole). PassRoleCeiling allows cudly-*, and the deploy role is a cudly-* role, so without this statement a boundaried workload role may pass cudly-terraform-deploy to a Lambda and run as it", boundaryFile, len(denies), passRoleAction, deployRoleResource)
+	}
+
+	if effect := statementEffect(denies[0]); effect != "Deny" {
+		t.Errorf("%s: statement %q has Effect %q, want \"Deny\". As an Allow it is not merely inert, it is redundant with PassRoleCeiling and removes the one thing stopping a workload -> deploy escalation; an explicit Deny is what beats the cudly-* Allow", boundaryFile, statementSid(denies[0]), effect)
 	}
 }
