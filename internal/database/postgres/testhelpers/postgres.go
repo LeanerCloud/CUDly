@@ -44,11 +44,13 @@ func SetupPostgresContainer(ctx context.Context, t *testing.T) (*PostgresContain
 	// Get connection details
 	host, err := postgresContainer.Host(ctx)
 	if err != nil {
+		terminateAfterError(ctx, postgresContainer, "container host lookup")
 		return nil, fmt.Errorf("failed to get container host: %w", err)
 	}
 
 	port, err := postgresContainer.MappedPort(ctx, "5432")
 	if err != nil {
+		terminateAfterError(ctx, postgresContainer, "container port lookup")
 		return nil, fmt.Errorf("failed to get container port: %w", err)
 	}
 
@@ -74,9 +76,7 @@ func SetupPostgresContainer(ctx context.Context, t *testing.T) (*PostgresContain
 	// Create database connection
 	db, err := database.NewConnection(ctx, config, nil)
 	if err != nil {
-		if termErr := postgresContainer.Terminate(ctx); termErr != nil {
-			log.Printf("testhelpers: failed to terminate postgres container after DB connect error: %v", termErr)
-		}
+		terminateAfterError(ctx, postgresContainer, "database connect")
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
@@ -85,6 +85,24 @@ func SetupPostgresContainer(ctx context.Context, t *testing.T) (*PostgresContain
 		Config:    config,
 		DB:        db,
 	}, nil
+}
+
+// terminateAfterError stops a container that started but will not be returned
+// to the caller, so nothing is left to call Cleanup on it. Every error path
+// after postgres.Run needs this: #1597 turned them from skips into failures, so
+// a bad run now accumulates live containers where it used to accumulate skips.
+// Ryuk would reap them eventually; not relying on that is cheaper than the bug.
+func terminateAfterError(ctx context.Context, c testcontainers.Container, stage string) {
+	// Detached deliberately. The error that brought us here is very often the
+	// context expiring, and Terminate on an already-dead context returns
+	// immediately without stopping anything, so passing ctx straight through
+	// would leave exactly the leak this function exists to prevent.
+	termCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+
+	if err := c.Terminate(termCtx); err != nil {
+		log.Printf("testhelpers: failed to terminate postgres container after %s failed: %v", stage, err)
+	}
 }
 
 // RequirePostgresContainer starts a PostgreSQL test container for t, skipping

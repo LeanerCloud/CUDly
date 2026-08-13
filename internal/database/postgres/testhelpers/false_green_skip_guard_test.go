@@ -12,8 +12,9 @@ import (
 	"testing"
 )
 
-// This guard closes the class of defect behind #1597 for tests not yet written,
-// rather than only the call sites that exist today.
+// This guard is a tripwire against the defect behind #1597, not a proof of its
+// absence. It catches the direct shapes, which is what raises the cost of
+// reintroducing the defect; it does not close the class.
 //
 // The rule is not "no skips". It is that a skip predicate must test the
 // precondition it claims to. Docker being absent is probed directly by
@@ -22,11 +23,15 @@ import (
 // preconditions, so an error from either has to fail.
 //
 // Parse-only, so it needs no build tag and still sees the files behind
-// //go:build integration that a default `go test` never compiles.
+// //go:build integration that a default `go test` never compiles. Having no
+// type information is what buys that, and it is paid for in shapes this
+// implementation does not see. They are deliberately not listed here in prose:
+// TestFalseGreenSkipGuardKnownBypasses executes each one, so what this guard
+// misses cannot quietly drift away from what the comment claims it misses.
 //
-// Deliberate boundary: this finds skips, not every way to report a false green.
-// `if err != nil { t.Logf(...); return }` reports PASS, which is worse, but it
-// is indistinguishable from an ordinary early return without type information.
+// It finds skips, not every way to report a false green: `if err != nil {
+// t.Logf(...); return }` reports PASS, which is worse, but it is
+// indistinguishable from an ordinary early return without type information.
 
 // guardedCalls are the calls whose error must never be answered with a skip,
 // mapped to why.
@@ -58,7 +63,7 @@ func TestNoSkipOnDatabaseSetupFailure(t *testing.T) {
 
 	fset := token.NewFileSet()
 	var findings []finding
-	files := 0
+	parsed := 0
 	calls := map[string]int{}
 
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -67,7 +72,13 @@ func TestNoSkipOnDatabaseSetupFailure(t *testing.T) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "node_modules", "vendor", ".terraform", "frontend":
+			case ".git", "node_modules", "vendor", ".terraform":
+				return filepath.SkipDir
+			}
+			// Anchored, unlike the names above: it prunes the TypeScript tree
+			// at the repo root, and must not silently swallow a Go package
+			// that happens to be called frontend.
+			if path == filepath.Join(root, "frontend") {
 				return filepath.SkipDir
 			}
 			return nil
@@ -75,14 +86,15 @@ func TestNoSkipOnDatabaseSetupFailure(t *testing.T) {
 		if !isGuardedSource(path) {
 			return nil
 		}
-		files++
 		// A file that does not parse is the compiler's problem, not this
 		// guard's: a package that does not compile has no passing tests to
-		// falsely report green either.
+		// falsely report green either. It is counted only once it has actually
+		// been inspected, so the total below cannot overstate the coverage.
 		f, parseErr := parser.ParseFile(fset, path, nil, 0)
 		if parseErr != nil {
 			return nil
 		}
+		parsed++
 		perName, fs := inspectFile(fset, f)
 		for name, n := range perName {
 			calls[name] += n
@@ -111,7 +123,7 @@ func TestNoSkipOnDatabaseSetupFailure(t *testing.T) {
 			"is genuinely gone from the repo, drop it from guardedCalls deliberately.",
 			strings.Join(missing, ", "))
 	}
-	t.Logf("found %v across %d file(s)", calls, files)
+	t.Logf("found %v across %d parsed file(s)", calls, parsed)
 
 	if len(findings) > 0 {
 		msgs := make([]string, 0, len(findings))
@@ -414,5 +426,101 @@ func TestUnrelatedSkip(t *testing.T) {
 		if !got[line] {
 			t.Errorf("no finding on line %d", line)
 		}
+	}
+}
+
+// TestFalseGreenSkipGuardKnownBypasses records what the guard does not catch,
+// so the header's boundary is executed rather than asserted. Each case is a
+// real false green that would slip past.
+//
+// This is documentation, not a requirement: widening the guard to catch one of
+// these is an improvement, and the failure it produces here is the prompt to
+// move that case into TestFalseGreenSkipGuardDetects and update the header.
+//
+// Every case still leaves the guarded call countable, which is the part that
+// matters operationally: a bypass hides a finding, but it cannot also silence
+// the per-name floor into reporting a clean repo it never looked at.
+func TestFalseGreenSkipGuardKnownBypasses(t *testing.T) {
+	cases := []struct {
+		name     string
+		why      string
+		wantCall string
+		src      string
+	}{
+		{
+			name:     "skip behind a helper",
+			why:      "only a t.Skip* selector counts as a skip, so any wrapper hides it",
+			wantCall: "RunMigrations",
+			src: `package p
+func TestX(t *testing.T) {
+	if err := migrations.RunMigrations(ctx, pool, path, "", ""); err != nil {
+		skipDB(t, err)
+	}
+}`,
+		},
+		{
+			name:     "switch case rather than an if",
+			why:      "a finding is an IfStmt; a CaseClause guard is never considered",
+			wantCall: "RunMigrations",
+			src: `package p
+func TestX(t *testing.T) {
+	err := migrations.RunMigrations(ctx, pool, path, "", "")
+	switch {
+	case err != nil:
+		t.Skipf("nope: %v", err)
+	}
+}`,
+		},
+		{
+			name:     "assignment in the parent, check inside a t.Run closure",
+			why:      "each statement list carries its own scope, so err is unresolved in the closure",
+			wantCall: "SetupPostgresContainer",
+			src: `package p
+func TestX(t *testing.T) {
+	_, err := testhelpers.SetupPostgresContainer(ctx, t)
+	t.Run("sub", func(t *testing.T) {
+		if err != nil {
+			t.Skip("no container")
+		}
+	})
+}`,
+		},
+		{
+			name:     "wrapper returning the guarded call's error",
+			why:      "the if statement names only the wrapper, and there is no type information to follow it",
+			wantCall: "RunMigrations",
+			src: `package p
+func setup(t *testing.T) error {
+	return migrations.RunMigrations(ctx, pool, path, "", "")
+}
+func TestX(t *testing.T) {
+	if err := setup(t); err != nil {
+		t.Skip("setup failed")
+	}
+}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, "synthetic.go", tc.src, 0)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+
+			calls, findings := inspectFile(fset, f)
+
+			if len(findings) > 0 {
+				t.Errorf("the guard now catches this shape (%s). That is an improvement: "+
+					"move the case into TestFalseGreenSkipGuardDetects and drop it from the "+
+					"header's boundary list.", tc.why)
+			}
+			if calls[tc.wantCall] != 1 {
+				t.Errorf("calls[%q] = %d, want 1: the bypass must still leave the call "+
+					"countable, or it would disarm the per-name floor as well",
+					tc.wantCall, calls[tc.wantCall])
+			}
+		})
 	}
 }
