@@ -111,4 +111,6 @@ func TestExecuteExchange_InvalidBodyNeverClaims(t *testing.T) {
 	require.True(t, ok, "expected a ClientError, got: %v", err)
 	assert.Equal(t, 400, ce.code)
 	assert.Empty(t, ledger.claimedKeys(), "a request refused at validation must not hold a claim")
+	mockAuth.AssertNotCalled(t, "HasPermissionForConstraintsAPI",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
