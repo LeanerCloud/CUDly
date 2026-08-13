@@ -775,6 +775,12 @@ paths:
         the fresh quote carries policy errors, omits a net payable amount,
         is denominated in a different currency than requested, or exceeds
         `max_payment_due`.
+        Submits are deduplicated for 15 minutes on a fingerprint of
+        `subscription_id` plus the sources and targets with their quantities,
+        so a retry after a client timeout returns 409 rather than committing
+        the exchange a second time. The spend cap and currency are not part of
+        that fingerprint: raising the cap does not make it a different
+        purchase.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -820,6 +826,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
 
@@ -917,6 +925,12 @@ paths:
         exchanges submitted to AWS cannot be rolled back. Non-admin users must
         be explicitly granted `execute:ri-exchange` via a custom group; there
         is no default user-role grant.
+        Submits are deduplicated for 15 minutes on a fingerprint of the
+        deployment's cloud account and region plus the source RIs and targets
+        with their counts, so a retry after a client timeout returns 409 rather
+        than committing the exchange a second time. `max_payment_due_usd` is
+        not part of that fingerprint: raising the cap does not make it a
+        different purchase.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -951,6 +965,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
 
   /api/ri-exchange/config:
     get:
@@ -1877,6 +1893,15 @@ components:
             $ref: '#/components/schemas/Error'
     UnprocessableEntity:
       description: Request understood but rejected by a business-rule guardrail
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: >
+        An identical submit is already in flight or recently committed. The
+        request was NOT executed a second time; check the outcome of the
+        earlier one before resubmitting.
       content:
         application/json:
           schema:

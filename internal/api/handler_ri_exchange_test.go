@@ -1522,7 +1522,7 @@ func TestExecuteExchange_EmptyRegionReturns400(t *testing.T) {
 
 	_, err := h.executeExchange(context.Background(), &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer test-token"},
-		Body:    `{"ri_ids":["ri-123"],"target_offering_id":"off-1","max_payment_due_usd":"10.00"}`,
+		Body:    `{"ri_ids":["ri-123"],"target_offering_id":"off-1","target_count":1,"max_payment_due_usd":"10.00"}`,
 	})
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
@@ -1571,7 +1571,7 @@ func TestExecuteExchange_PermissionConstraintsDenied(t *testing.T) {
 	}
 	_, err := h.executeExchange(ctx, &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer exchange-token"},
-		Body:    `{"ri_ids":["ri-123"],"target_offering_id":"off-1","max_payment_due_usd":"250.50","region":"eu-central-1"}`,
+		Body:    `{"ri_ids":["ri-123"],"target_offering_id":"off-1","target_count":1,"max_payment_due_usd":"250.50","region":"eu-central-1"}`,
 	})
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
@@ -1606,7 +1606,7 @@ func TestExecuteExchange_AccountResolutionErrorFailsClosed(t *testing.T) {
 	}
 	_, err := h.executeExchange(ctx, &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer exchange-token"},
-		Body:    `{"ri_ids":["ri-123"],"target_offering_id":"off-1","max_payment_due_usd":"250.50","region":"eu-central-1"}`,
+		Body:    `{"ri_ids":["ri-123"],"target_offering_id":"off-1","target_count":1,"max_payment_due_usd":"250.50","region":"eu-central-1"}`,
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "resolve cloud account scope")
@@ -1643,7 +1643,7 @@ func TestExecuteExchange_UnattributedAccountStillConstrained(t *testing.T) {
 	}
 	_, err := h.executeExchange(ctx, &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer exchange-token"},
-		Body:    `{"ri_ids":["ri-123"],"target_offering_id":"off-1","max_payment_due_usd":"250.50","region":"eu-central-1"}`,
+		Body:    `{"ri_ids":["ri-123"],"target_offering_id":"off-1","target_count":1,"max_payment_due_usd":"250.50","region":"eu-central-1"}`,
 	})
 	require.Error(t, err)
 	ce, ok := IsClientError(err)

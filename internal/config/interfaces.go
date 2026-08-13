@@ -265,6 +265,23 @@ type StoreInterface interface {
 	// FlipPurchaseRevocationInFlight.
 	ClaimMarketplaceListingSlot(ctx context.Context, purchaseID string) (bool, error)
 
+	// ClaimRIExchangeIdempotencyKey atomically claims key for an RI exchange
+	// submit, so a client that retries a timed-out execute request cannot
+	// commit the same exchange twice (issue #1642). key is a fingerprint of
+	// what the request buys; the caller derives it and claims it immediately
+	// before the irreversible provider call.
+	//
+	// Returns (true, nil) when this call won the claim and may proceed to
+	// commit, and (false, nil) when another submit of the same fingerprint
+	// claimed it less than window ago (the caller maps this to a 409).
+	// A claim older than window is reclaimable, so a genuine intentional
+	// repeat of the same exchange is not blocked forever.
+	//
+	// The claim is deliberately NOT released when the provider call fails:
+	// past the point of submission the outcome is ambiguous, and holding the
+	// claim for the rest of the window is the fail-closed choice.
+	ClaimRIExchangeIdempotencyKey(ctx context.Context, key string, window time.Duration) (bool, error)
+
 	// RI Exchange history
 	SaveRIExchangeRecord(ctx context.Context, record *RIExchangeRecord) error
 	GetRIExchangeRecord(ctx context.Context, id string) (*RIExchangeRecord, error)

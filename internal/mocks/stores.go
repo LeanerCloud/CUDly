@@ -533,6 +533,20 @@ func (m *MockConfigStore) ClaimMarketplaceListingSlot(ctx context.Context, purch
 	return args.Bool(0), args.Error(1)
 }
 
+// ClaimRIExchangeIdempotencyKey mocks the atomic RI exchange submit claim
+// (issue #1642). With no registered expectation it defaults to "this call won
+// the claim" so the many pre-existing execute-path tests, whose subject is a
+// gate upstream of the claim, keep exercising the commit call. Tests whose
+// subject IS the claim register an explicit expectation and assert on it.
+func (m *MockConfigStore) ClaimRIExchangeIdempotencyKey(ctx context.Context, key string, window time.Duration) (bool, error) {
+	m.record("ClaimRIExchangeIdempotencyKey", ctx, key, window)
+	if !isExpected(&m.Mock, "ClaimRIExchangeIdempotencyKey") {
+		return true, nil
+	}
+	args := m.Called(ctx, key, window)
+	return args.Bool(0), args.Error(1)
+}
+
 func (m *MockConfigStore) SaveRIExchangeRecord(ctx context.Context, record *config.RIExchangeRecord) error {
 	m.record("SaveRIExchangeRecord", ctx, record)
 	args := m.Called(ctx, record)
