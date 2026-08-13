@@ -181,22 +181,41 @@ run_case "more than one argument exits 2" 2 "" "$ACCOUNT_LISTING" "$OWNED" "cudl
 # recurrence mode that produced #1592 was exactly that: the guard landed in
 # cleanup-staging.yml and not in its sibling.
 #
-# The pattern matches the pipe stage, not the script name: the workflow also
-# names the script in a comment, so a bare name match would stay green after
-# the stage was removed.
+# Scoped to the one step that deletes: the selector invocation, its
+# "$OWNED_REPO" argument and `aws ecr delete-repository` must all appear inside
+# `- name: Force-delete ECR repo`. Asserting them anywhere in the file would let
+# an unrelated line keep this green after the delete step lost its selector
+# stage or its argument -- the same "the string is present somewhere" mistake
+# the selector itself exists to remove. The step name is a variable so the
+# regex and both messages cannot drift apart.
+#
+# `[|]` and `[$]` rather than `\|` and `\$`: escaping those is undefined in
+# POSIX ERE, and CI's awk is mawk rather than the awk this was written on.
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONSUMER="${REPO_ROOT}/.github/workflows/destroy-fargate-dev.yml"
+DELETE_STEP="Force-delete ECR repo"
 
 if [[ ! -f "$CONSUMER" ]]; then
   echo "FAIL: consumer workflow not found at ${CONSUMER}"
   ((fail++)) || true
-elif grep -qE '\|[[:space:]]*\./scripts/select-ecr-repos-to-delete\.sh' "$CONSUMER"; then
-  echo "PASS: destroy-fargate-dev.yml pipes ECR deletion through the selector"
+elif awk -v step="$DELETE_STEP" '
+    $0 ~ ("^[[:space:]]*-[[:space:]]+name:[[:space:]]*" step "[[:space:]]*$") {
+      in_step = 1
+      next
+    }
+    in_step && /^[[:space:]]*-[[:space:]]+name:/ { in_step = 0 }
+    in_step && /[|][[:space:]]*\.\/scripts\/select-ecr-repos-to-delete\.sh[[:space:]]+"[$]OWNED_REPO"/ { has_selector = 1 }
+    in_step && /aws ecr delete-repository/ { has_delete = 1 }
+    END { exit !(has_selector && has_delete) }
+  ' "$CONSUMER"; then
+  echo "PASS: the '${DELETE_STEP}' step pipes ECR deletion through the selector"
   ((pass++)) || true
 else
-  echo "FAIL: destroy-fargate-dev.yml no longer pipes ECR deletion through the selector"
-  echo "      the cases above only exercise the script standalone, so removing the"
-  echo "      pipe stage leaves them green while the #1592 over-match returns"
+  echo "FAIL: the '${DELETE_STEP}' step in destroy-fargate-dev.yml does not pipe through"
+  echo "      ./scripts/select-ecr-repos-to-delete.sh \"\$OWNED_REPO\" alongside its"
+  echo "      'aws ecr delete-repository' call (stage removed, argument dropped, or"
+  echo "      step renamed). The cases above only exercise the script standalone, so"
+  echo "      they stay green while the #1592 over-match returns"
   ((fail++)) || true
 fi
 
