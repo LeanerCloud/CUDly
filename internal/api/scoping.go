@@ -74,6 +74,48 @@ func (h *Handler) requirePlanAccess(ctx context.Context, session *Session, planI
 	return errNotFound
 }
 
+// requirePlanAccountsAccess guards BOTH axes of a plan↔account association
+// write (PUT /api/plans/:id/accounts, issue #1769): the plan being re-pointed
+// and every account being attached to it.
+//
+// Checking only one axis leaves the other open. Without the plan check a
+// scoped caller can re-point a plan whose accounts are all outside their
+// scope; without the per-account check they can attach an account they have
+// no entitlement to onto a plan they legitimately hold. A plan's account set
+// decides which accounts that plan buys commitments for, so either half
+// redirects purchasing.
+//
+// The scope is resolved once and unrestricted callers short-circuit BEFORE
+// any store lookup, mirroring requireExecutionAccess: an admin/API-key
+// session must not pay for (or need fixtures for) reads it cannot be refused
+// by. Empty and "*" allow-lists are unrestricted at exactly this seam
+// (getAccountScope → AccountScope.AllowsAll), so "empty means all accounts"
+// is handled in one place rather than re-derived here.
+//
+// Refusals are the enumeration-safe errNotFound from requireAccountAccess /
+// requirePlanAccess rather than a 403, so a scoped caller cannot use this
+// endpoint to confirm that a plan or an account exists.
+//
+// requirePermission must fire first; pass it the session that returned.
+func (h *Handler) requirePlanAccountsAccess(ctx context.Context, session *Session, planID string, accountIDs []string) error {
+	allowed, err := h.getAccountScope(ctx, session)
+	if err != nil {
+		return fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	if allowed.AllowsAll() {
+		return nil
+	}
+	if err := h.requirePlanAccess(ctx, session, planID); err != nil {
+		return err
+	}
+	for _, aid := range accountIDs {
+		if _, err := h.requireAccountAccess(ctx, session, aid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // validatePurchaseRecommendationScope returns a 400 client error when any
 // recommendation in the batch targets an account the session can't access.
 // Admin / unrestricted sessions pass through. Recommendations with a nil

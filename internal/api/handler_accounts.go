@@ -1300,12 +1300,19 @@ func (h *Handler) getPlanForAccountProviderValidation(ctx context.Context, planI
 // providers (extracted from plan.Services keys). Mismatches return 400
 // listing every offender; the assignment is rejected atomically (no
 // partial writes).
+//
+// update:plans is a default Standard User grant, so the verb gate alone does
+// not bound WHICH plan or WHICH accounts the caller may write (issue #1769).
+// requirePlanAccountsAccess supplies that bound on both axes and runs before
+// the provider validation below, so a scoped caller cannot use the
+// mismatch/not-found messages to learn about accounts outside their scope.
 func (h *Handler) setPlanAccounts(ctx context.Context, httpReq *events.LambdaFunctionURLRequest, id string) (any, error) {
 	if err := validateUUID(id); err != nil {
 		return nil, err
 	}
 
-	if _, err := h.requirePermission(ctx, httpReq, "update", "plans"); err != nil {
+	session, err := h.requirePermission(ctx, httpReq, "update", "plans")
+	if err != nil {
 		return nil, err
 	}
 
@@ -1316,18 +1323,12 @@ func (h *Handler) setPlanAccounts(ctx context.Context, httpReq *events.LambdaFun
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	// Reject empty account_ids: a plan must remain tied to at least one
-	// cloud_account row. Allowing the PUT to clear all rows would recreate
-	// the universal-plan bug class (purchase_plans row with no matching
-	// plan_accounts row) that createPlan now refuses at insert time.
-	if len(body.AccountIDs) == 0 {
-		return nil, NewClientError(400, "account_ids is required: a plan must be tied to at least one account")
+	if err := validatePlanAccountIDs(body.AccountIDs); err != nil {
+		return nil, err
 	}
 
-	for _, aid := range body.AccountIDs {
-		if err := validateUUID(aid); err != nil {
-			return nil, NewClientError(400, fmt.Sprintf("invalid account_id %q: must be a valid UUID", aid))
-		}
+	if err := h.requirePlanAccountsAccess(ctx, session, id, body.AccountIDs); err != nil {
+		return nil, err
 	}
 
 	// Provider-match validation (issue #209). Extracted to keep
@@ -1346,13 +1347,52 @@ func (h *Handler) setPlanAccounts(ctx context.Context, httpReq *events.LambdaFun
 	return nil, nil
 }
 
+// validatePlanAccountIDs rejects a missing/empty account_ids payload and
+// entries that are not valid UUIDs.
+//
+// Empty is refused because a plan must remain tied to at least one
+// cloud_account row: letting the PUT clear all rows would recreate the
+// universal-plan bug class (a purchase_plans row with no matching
+// plan_accounts row) that createPlan refuses at insert time. It is also what
+// keeps the account-axis scope check in requirePlanAccountsAccess meaningful,
+// since an empty list has nothing to check.
+//
+// Same contract as validateTargetAccounts (handler_plans.go) with this
+// endpoint's field names in the messages, so a payload that gets past
+// createPlan also gets past here.
+func validatePlanAccountIDs(ids []string) error {
+	if len(ids) == 0 {
+		return NewClientError(400, "account_ids is required: a plan must be tied to at least one account")
+	}
+	for _, aid := range ids {
+		if err := validateUUID(aid); err != nil {
+			return NewClientError(400, fmt.Sprintf("invalid account_id %q: must be a valid UUID", aid))
+		}
+	}
+	return nil
+}
+
 // listPlanAccounts handles GET /api/plans/:id/accounts.
+//
+// The read sibling of setPlanAccounts, and it carries the mirror image of the
+// same gap (issue #1769): view:plans is a default Standard User grant, so
+// without requirePlanAccess a scoped caller could enumerate the accounts of
+// any plan by id. requirePlanAccess bounds WHICH plans are visible; the
+// per-account filter then bounds WHAT of a visible plan is disclosed, since a
+// plan the caller legitimately reaches through one of their accounts may also
+// carry accounts they have no entitlement to see.
 func (h *Handler) listPlanAccounts(ctx context.Context, req *events.LambdaFunctionURLRequest, id string) (any, error) {
 	if err := validateUUID(id); err != nil {
 		return nil, err
 	}
 
-	if _, err := h.requirePermission(ctx, req, "view", "plans"); err != nil {
+	session, err := h.requirePermission(ctx, req, "view", "plans")
+	if err != nil {
+		return nil, err
+	}
+
+	err = h.requirePlanAccess(ctx, session, id)
+	if err != nil {
 		return nil, err
 	}
 
@@ -1361,11 +1401,22 @@ func (h *Handler) listPlanAccounts(ctx context.Context, req *events.LambdaFuncti
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
 
-	if accts == nil {
-		accts = []config.CloudAccount{}
+	allowed, err := h.getAccountScope(ctx, session)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
 
-	return accts, nil
+	// Allows() is true for every account of an unrestricted scope, so this is
+	// one loop rather than a branch on AllowsAll. make() also gives the
+	// endpoint its no-nil-slice contract for free.
+	scoped := make([]config.CloudAccount, 0, len(accts))
+	for i := range accts {
+		if allowed.Allows(accts[i].ID, accts[i].Name) {
+			scoped = append(scoped, accts[i])
+		}
+	}
+
+	return scoped, nil
 }
 
 // DiscoverOrgRequest is the request body for POST /api/accounts/discover-org.
