@@ -1,0 +1,17 @@
+# Fixture: an access policy declared at a non-zero indentation. Must exit 1.
+#
+# `terraform fmt` moves top-level blocks to column 0, but the repo-wide fmt gate
+# in CI only covers `terraform/` while this guard also scans `iac/`. A guard
+# anchored strictly at column 0 would therefore depend, on one of its two scan
+# roots, on a normalization nothing enforces there. This fixture pins the
+# tolerance so that dependency cannot creep back in.
+
+  resource "azurerm_key_vault_access_policy" "indented" {
+    key_vault_id = var.key_vault_id
+    tenant_id    = data.azurerm_client_config.current.tenant_id
+    object_id    = azurerm_user_assigned_identity.app.principal_id
+
+    secret_permissions = [
+      "Get",
+    ]
+  }
