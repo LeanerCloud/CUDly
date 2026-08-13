@@ -25,7 +25,8 @@
 #
 # Exit codes:
 #   0  selection completed (an empty selection is normal -- the repository may
-#      already be gone, and the caller must not treat that as an error)
+#      already be gone, and the caller must not treat that as an error, so it
+#      is reported on stderr rather than through the exit code)
 #   2  usage error, including an empty or whitespace-bearing owned name, which
 #      is what a failed `terraform output` looks like. Never degrades into
 #      "select nothing" or "select everything".
@@ -50,10 +51,23 @@ case "$owned" in
     ;;
 esac
 
-while IFS= read -r candidate; do
+found=0
+
+# `|| [[ -n "$candidate" ]]` so a final line with no trailing newline is still
+# compared. `read` returns non-zero on such a line, which would otherwise drop
+# the one entry the caller is looking for and report an empty selection.
+while IFS= read -r candidate || [[ -n "$candidate" ]]; do
   # Quoted right-hand side: [[ ]] would otherwise treat it as a glob pattern,
   # which is the same class of over-matching this script exists to remove.
   if [[ "$candidate" == "$owned" ]]; then
     printf '%s\n' "$candidate"
+    found=1
   fi
 done
+
+# An empty selection is a normal outcome (exit 0 above), but it is also what a
+# listing taken from the wrong region or account looks like. Say which name was
+# looked for so the two are distinguishable in the caller's log.
+if [[ "$found" -eq 0 ]]; then
+  echo "note: '${owned}' is not present in the listing on stdin; nothing to delete (already deleted, or the listing came from a different region or account)" >&2
+fi

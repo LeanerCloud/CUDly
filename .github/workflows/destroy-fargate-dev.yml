@@ -139,10 +139,24 @@ jobs:
       # `cudly-dev-prod-mirror`, with every image in them (#1592).
       # scripts/select-ecr-repos-to-delete.sh holds the comparison and the name
       # table pinning it, including why a `cudly-dev*` prefix is not enough.
+      # Reads the name through `output -json`, not `output -raw`: on a state
+      # with no outputs at all, `output -raw <name>` exits 0 and writes its "No
+      # outputs found" warning to STDOUT, so the name became that warning text
+      # and re-dispatching the destroy after a completed one failed here before
+      # `terraform destroy` ever ran. `output -json` returns `{}` for that state
+      # and the two cases separate cleanly:
+      #   no outputs at all      -> already destroyed, skip the ECR cleanup
+      #   outputs but not this one -> `jq -e` exits 1, the step fails loudly
+      # `exit 0` ends this step only; the steps after it still run.
       - name: Force-delete ECR repo
         run: |
           set -euo pipefail
-          OWNED_REPO="$(terraform -chdir=terraform/environments/aws output -raw ecr_repository_name)"
+          OUTPUTS_JSON="$(terraform -chdir=terraform/environments/aws output -json)"
+          if [ "$(jq -r 'length' <<<"$OUTPUTS_JSON")" -eq 0 ]; then
+            echo "State has no outputs; the stack is already destroyed and there is no ECR repository to clean up."
+            exit 0
+          fi
+          OWNED_REPO="$(jq -er '.ecr_repository_name.value' <<<"$OUTPUTS_JSON")"
           echo "This state owns ECR repository '$OWNED_REPO'"
           aws ecr describe-repositories --query 'repositories[].repositoryName' --output text \
             | tr '\t' '\n' \

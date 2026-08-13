@@ -40,16 +40,13 @@ EOF
 pass=0
 fail=0
 
-# run_case LABEL EXPECTED_EXIT EXPECTED_STDOUT STDIN [ARGS...]
-run_case() {
+# assert_case LABEL EXPECTED_EXIT EXPECTED_STDOUT ACTUAL_EXIT ACTUAL_STDOUT
+assert_case() {
   local label="$1"
   local expected_exit="$2"
   local expected_out="$3"
-  local stdin_data="$4"
-  shift 4
-
-  local actual_out actual_exit=0
-  actual_out="$("$SELECT" "$@" <<<"$stdin_data" 2>/dev/null)" || actual_exit=$?
+  local actual_exit="$4"
+  local actual_out="$5"
 
   if [[ "$actual_exit" -eq "$expected_exit" && "$actual_out" == "$expected_out" ]]; then
     echo "PASS: $label"
@@ -61,6 +58,38 @@ run_case() {
     echo "      actual stdout:   '${actual_out}'"
     ((fail++)) || true
   fi
+}
+
+# run_case LABEL EXPECTED_EXIT EXPECTED_STDOUT STDIN [ARGS...]
+run_case() {
+  local label="$1"
+  local expected_exit="$2"
+  local expected_out="$3"
+  local stdin_data="$4"
+  shift 4
+
+  local actual_out actual_exit=0
+  actual_out="$("$SELECT" "$@" <<<"$stdin_data" 2>/dev/null)" || actual_exit=$?
+
+  assert_case "$label" "$expected_exit" "$expected_out" "$actual_exit" "$actual_out"
+}
+
+# run_case_no_trailing_newline LABEL EXPECTED_EXIT EXPECTED_STDOUT STDIN [ARGS...]
+#
+# Same assertions, but stdin has no trailing newline. `<<<` always appends one,
+# so run_case structurally cannot reach the final-unterminated-line path where
+# `read` returns non-zero with the line already in the variable.
+run_case_no_trailing_newline() {
+  local label="$1"
+  local expected_exit="$2"
+  local expected_out="$3"
+  local stdin_data="$4"
+  shift 4
+
+  local actual_out actual_exit=0
+  actual_out="$(printf '%s' "$stdin_data" | "$SELECT" "$@" 2>/dev/null)" || actual_exit=$?
+
+  assert_case "$label" "$expected_exit" "$expected_out" "$actual_exit" "$actual_out"
 }
 
 # --- Positive direction: the repository that SHOULD be destroyed is selected --
@@ -83,6 +112,18 @@ run_case "owned repo already deleted selects nothing, exit 0" \
 
 run_case "empty account listing selects nothing, exit 0" \
   0 "" "" "$OWNED"
+
+# The owned repository arriving as the last line of an unterminated stream is
+# still selected. A plain `while read` drops it and reports an empty selection,
+# which reads as "already deleted" and leaves the repository behind for
+# `terraform destroy` to trip over.
+run_case_no_trailing_newline "owned repo on an unterminated final line is selected" \
+  0 "$OWNED" \
+  "$(printf 'cudly\n%s' "$OWNED")" \
+  "$OWNED"
+
+run_case_no_trailing_newline "owned repo as the only, unterminated line is selected" \
+  0 "$OWNED" "$OWNED" "$OWNED"
 
 # --- Negative direction: every non-owned name is excluded -------------------
 #
@@ -130,6 +171,34 @@ run_case "whitespace-only owned name exits 2" 2 "" "$ACCOUNT_LISTING" "  "
 run_case "owned name containing a space exits 2" 2 "" "$ACCOUNT_LISTING" "cudly dev"
 run_case "no arguments exits 2" 2 "" "$ACCOUNT_LISTING"
 run_case "more than one argument exits 2" 2 "" "$ACCOUNT_LISTING" "$OWNED" "cudly-dev-deadbeef"
+
+# --- Wiring: the consumer still routes ECR deletion through this selector ----
+#
+# Every case above exercises the script standalone. Delete the
+# `| ./scripts/select-ecr-repos-to-delete.sh "$OWNED_REPO"` stage from
+# destroy-fargate-dev.yml and all of them stay green while the workflow goes
+# back to force-deleting whatever the replacement filter matches. The
+# recurrence mode that produced #1592 was exactly that: the guard landed in
+# cleanup-staging.yml and not in its sibling.
+#
+# The pattern matches the pipe stage, not the script name: the workflow also
+# names the script in a comment, so a bare name match would stay green after
+# the stage was removed.
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+CONSUMER="${REPO_ROOT}/.github/workflows/destroy-fargate-dev.yml"
+
+if [[ ! -f "$CONSUMER" ]]; then
+  echo "FAIL: consumer workflow not found at ${CONSUMER}"
+  ((fail++)) || true
+elif grep -qE '\|[[:space:]]*\./scripts/select-ecr-repos-to-delete\.sh' "$CONSUMER"; then
+  echo "PASS: destroy-fargate-dev.yml pipes ECR deletion through the selector"
+  ((pass++)) || true
+else
+  echo "FAIL: destroy-fargate-dev.yml no longer pipes ECR deletion through the selector"
+  echo "      the cases above only exercise the script standalone, so removing the"
+  echo "      pipe stage leaves them green while the #1592 over-match returns"
+  ((fail++)) || true
+fi
 
 echo
 echo "passed: ${pass}, failed: ${fail}"
