@@ -75,6 +75,15 @@ jobs:
     name: Terraform Destroy (Fargate dev)
     runs-on: ubuntu-24.04-arm
     needs: guard
+    # Destroys s3://<bucket>/github-fargate-dev/terraform.tfstate, the same
+    # state object deploy-aws-fargate.yml and cleanup-staging.yml write, so it
+    # takes the same concurrency group: one writer per state file, whatever
+    # workflow or ref it came from (#1806). The suffix is a literal because this
+    # job's state key is too. `cancel-in-progress: false` because cancelling
+    # mid-`terraform destroy` leaves a half-destroyed stack and a stuck lock.
+    concurrency:
+      group: aws-fargate-tfstate-dev
+      cancel-in-progress: false
     permissions:
       id-token: write
       contents: read
@@ -103,15 +112,19 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
+      # This step used to `aws s3 rm` the state lock object before every init,
+      # unconditionally and with no check that the lock was stale or anyone
+      # else's, so it deleted a live lock held by a concurrent writer. Removed
+      # with #1806; the job-level `concurrency` group above is what keeps
+      # writers apart now, and a loud "Error acquiring the state lock" is the
+      # correct outcome if one ever slips through. Recovery from a genuinely
+      # stranded lock is `terraform force-unlock <ID>` -- see
+      # runbooks/terraform-stuck-lock.md.
       - name: Terraform Init
         env:
           TF_BACKEND: ${{ secrets.TF_BACKEND_AWS }}
         run: |
           printf '%s\nkey = "github-fargate-dev/terraform.tfstate"\n' "$TF_BACKEND" > /tmp/backend.tfbackend
-          BUCKET=$(grep -E '^\s*bucket\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
-          if [ -n "$BUCKET" ]; then
-            aws s3 rm "s3://${BUCKET}/github-fargate-dev/terraform.tfstate.tflock" 2>/dev/null || true
-          fi
           cd terraform/environments/aws
           terraform init -backend-config=/tmp/backend.tfbackend
 

@@ -25,10 +25,13 @@ permissions:
   id-token: write
   contents: read
 
-concurrency:
-  group: deploy-fargate-${{ github.ref }}
-  cancel-in-progress: false
-
+# No workflow-level `concurrency` on purpose. What needs protecting is the
+# Terraform state object, which is keyed on the environment, and only the
+# job-level key can see `needs.prepare.outputs.environment` -- this level is
+# limited to the `github`, `inputs` and `vars` contexts. Keying it on
+# `github.ref` put two runs on different refs that both resolve to the same
+# environment into different groups against one state file (#1806). The group
+# lives on `deploy` below.
 on:
   workflow_dispatch:
     inputs:
@@ -113,6 +116,21 @@ jobs:
     name: Deploy to Fargate
     runs-on: ubuntu-24.04-arm
     needs: prepare
+    # Every run that writes
+    # s3://<bucket>/github-fargate-<environment>/terraform.tfstate serializes
+    # here, whatever ref or workflow it came from (#1806). This is a DIFFERENT
+    # state object from the Lambda one (github-<environment>/), so it takes its
+    # own group rather than sharing `aws-tfstate-*`; sharing would serialize two
+    # independent state files against each other for no gain. The suffix is the
+    # exact value the backend key below is built from, and `prepare` fails the
+    # run on anything outside dev|staging|prod so it can never be empty.
+    #
+    # `cancel-in-progress: false` is stated rather than left to the default:
+    # cancelling mid-`terraform apply` is how you get a half-applied stack and a
+    # lock nobody releases.
+    concurrency:
+      group: aws-fargate-tfstate-${{ needs.prepare.outputs.environment }}
+      cancel-in-progress: false
     outputs:
       alb_url: ${{ steps.outputs.outputs.alb_url }}
       service_name: ${{ steps.outputs.outputs.service_name }}
