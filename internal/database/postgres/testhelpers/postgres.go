@@ -91,13 +91,16 @@ func SetupPostgresContainer(ctx context.Context, t *testing.T) (*PostgresContain
 // the test only when this environment has no usable Docker provider and failing
 // loudly for every other error.
 //
-// Drawing that line is the whole point (issue #1597). "No Docker daemon on this
-// machine" is an environment fact and the one legitimate reason to skip, so it
-// is probed explicitly before anything is started. Past that probe the daemon is
-// known healthy, which makes a container that still refuses to come up -- a
-// missing image, an exhausted host, a database that never accepts connections --
-// a real failure. Reporting it as a skip would turn a broken run green, which is
+// Drawing that line is the whole point (issue #1597). "No usable Docker daemon"
+// is an environment fact and the one legitimate reason to skip, so it is probed
+// explicitly before anything is started. Past that probe the daemon answered a
+// health check, which makes a container that still refuses to come up -- a
+// missing image, a database that never accepts connections -- a real failure.
+// Reporting it as a skip would turn a broken run green, which is
 // indistinguishable from a run that had nothing to say.
+//
+// The probe owns the whole environment side of that line, so a daemon that is
+// present but unhealthy skips too, rather than failing.
 //
 // Callers remain responsible for Cleanup, matching SetupPostgresContainer.
 func RequirePostgresContainer(ctx context.Context, t *testing.T) *PostgresContainer {

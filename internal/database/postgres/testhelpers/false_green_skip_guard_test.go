@@ -15,23 +15,18 @@ import (
 // This guard closes the class of defect behind #1597 for tests not yet written,
 // rather than only the call sites that exist today.
 //
-// t.Skip reports a test as neither passed nor failed. That is the right answer
-// for "this environment cannot run the test at all" and the wrong answer for
-// anything the test was written to detect. The DB-backed suites used it for
-// both: a testcontainer that would not start AND a set of migrations that would
-// not apply took the same t.Skipf branch, so breaking any SQL file under
-// internal/database/postgres/migrations turned the whole integration suite
-// green.
-//
-// The rule enforced here is not "no skips". It is that a skip predicate must
-// test the precondition it claims to. Docker being absent is probed directly by
-// RequirePostgresContainer; that is the only thing allowed to skip. Whether a
+// The rule is not "no skips". It is that a skip predicate must test the
+// precondition it claims to. Docker being absent is probed directly by
+// RequirePostgresContainer and is the only thing allowed to skip; whether a
 // container came up and whether migrations applied are results, not
 // preconditions, so an error from either has to fail.
 //
-// The check is parse-only, so it costs milliseconds and needs no build tags,
-// which matters because every file it guards is behind //go:build integration
-// and would otherwise be invisible to a default `go test`.
+// Parse-only, so it needs no build tag and still sees the files behind
+// //go:build integration that a default `go test` never compiles.
+//
+// Deliberate boundary: this finds skips, not every way to report a false green.
+// `if err != nil { t.Logf(...); return }` reports PASS, which is worse, but it
+// is indistinguishable from an ordinary early return without type information.
 
 // guardedCalls are the calls whose error must never be answered with a skip,
 // mapped to why.
@@ -63,7 +58,8 @@ func TestNoSkipOnDatabaseSetupFailure(t *testing.T) {
 
 	fset := token.NewFileSet()
 	var findings []finding
-	files, calls := 0, 0
+	files := 0
+	calls := map[string]int{}
 
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -76,7 +72,7 @@ func TestNoSkipOnDatabaseSetupFailure(t *testing.T) {
 			}
 			return nil
 		}
-		if !strings.HasSuffix(path, "_test.go") {
+		if !isGuardedSource(path) {
 			return nil
 		}
 		files++
@@ -87,8 +83,10 @@ func TestNoSkipOnDatabaseSetupFailure(t *testing.T) {
 		if parseErr != nil {
 			return nil
 		}
-		n, fs := inspectFile(fset, f)
-		calls += n
+		perName, fs := inspectFile(fset, f)
+		for name, n := range perName {
+			calls[name] += n
+		}
 		findings = append(findings, fs...)
 		return nil
 	})
@@ -97,16 +95,23 @@ func TestNoSkipOnDatabaseSetupFailure(t *testing.T) {
 	}
 
 	// "Found nothing" and "looked at nothing" are the same color on a terminal,
-	// and telling them apart is precisely what this guard is about. The tripwire
-	// counts guarded CALLS rather than the if statements checking them: once the
-	// suites are fixed they check with require.NoError and hardly any of the if
-	// shape survives, so a count of those would sit near zero and the guard could
-	// lose its file discovery, its parsing or its name matching without saying so.
-	if calls == 0 {
-		t.Fatal("guard found zero calls to any guarded function; its detection has broken " +
-			"and it would report success on a repo that skips on every migration failure")
+	// and telling them apart is precisely what this guard is about. The floor is
+	// per name, not a total: a total stays comfortably non-zero while an excluded
+	// directory or one broken name silently drops that name's findings to zero.
+	var missing []string
+	for name := range guardedCalls {
+		if calls[name] == 0 {
+			missing = append(missing, name)
+		}
 	}
-	t.Logf("found %d guarded call(s) across %d test file(s)", calls, files)
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		t.Fatalf("guard saw no call to %s anywhere: its file discovery, parsing or name "+
+			"matching has regressed and findings for it would silently be zero. If the call "+
+			"is genuinely gone from the repo, drop it from guardedCalls deliberately.",
+			strings.Join(missing, ", "))
+	}
+	t.Logf("found %v across %d file(s)", calls, files)
 
 	if len(findings) > 0 {
 		msgs := make([]string, 0, len(findings))
@@ -119,19 +124,35 @@ func TestNoSkipOnDatabaseSetupFailure(t *testing.T) {
 	}
 }
 
-// inspectFile reports how many guarded calls the file makes and which of them
-// are answered with a skip. The repo-wide run and the self-test both go through
-// it, so the self-test cannot pass against logic the real run does not have.
+// isGuardedSource reports whether a file can hold a skip decision: any test
+// file, plus the non-test files of the shared test-helper packages. #1597 moved
+// the decision into testhelpers/postgres.go, so that is now exactly where the
+// next helper that skips would be written.
+func isGuardedSource(path string) bool {
+	if strings.HasSuffix(path, "_test.go") {
+		return true
+	}
+	if !strings.HasSuffix(path, ".go") {
+		return false
+	}
+	switch filepath.Base(filepath.Dir(path)) {
+	case "testhelpers", "testutil":
+		return true
+	}
+	return false
+}
+
+// inspectFile reports how many times the file calls each guarded function and
+// which of those are answered with a skip. The repo-wide run and the self-test
+// both go through it, so the self-test cannot pass against logic the real run
+// does not have.
 //
 // A finding is an if statement that mentions a guarded call in its init or
-// condition and skips in its body. That covers `if err := f(); err != nil` and
-// the `x, err := f()` / `if err != nil` pair alike: for the latter the call is
-// resolved through the preceding assignment in the same statement list. Each
-// list gets its own assignment scope, because reusing `err` across tests in one
-// file is the norm and a file-wide map would attribute one test's call to
-// another's check.
-func inspectFile(fset *token.FileSet, f *ast.File) (int, []finding) {
-	calls := 0
+// condition and skips in its body, which covers `if err := f(); err != nil` and
+// the `x, err := f()` / `if err != nil` pair alike. Each statement list gets its
+// own assignment scope, since reusing `err` across tests in one file is the norm.
+func inspectFile(fset *token.FileSet, f *ast.File) (map[string]int, []finding) {
+	calls := map[string]int{}
 	var findings []finding
 
 	scan := func(list []ast.Stmt) {
@@ -154,9 +175,8 @@ func inspectFile(fset *token.FileSet, f *ast.File) (int, []finding) {
 		}
 	}
 
-	// Every statement list that can hold an assignment followed by its check is
-	// scanned with its own scope. Descending unconditionally means nested
-	// blocks, closures and subtests are reached as lists in their own right.
+	// Descending unconditionally means nested blocks, closures and subtests are
+	// reached as statement lists in their own right, each with its own scope.
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch v := n.(type) {
 		case *ast.BlockStmt:
@@ -164,8 +184,8 @@ func inspectFile(fset *token.FileSet, f *ast.File) (int, []finding) {
 		case *ast.CaseClause:
 			scan(v.Body)
 		}
-		if guardedCallName(n) != "" {
-			calls++
+		if name := guardedCallName(n); name != "" {
+			calls[name]++
 		}
 		return true
 	})
@@ -364,10 +384,17 @@ func TestUnrelatedSkip(t *testing.T) {
 
 	calls, findings := inspectFile(fset, f)
 
-	// One guarded call in each function except TestUnrelatedSkip, which makes
-	// none. This is the same count the repo-wide tripwire relies on.
-	if calls != 6 {
-		t.Errorf("calls = %d guarded call(s), want 6", calls)
+	// Per-name counts, the same measurement the repo-wide floor relies on.
+	wantCalls := map[string]int{
+		"RunMigrations":          2, // TestInlineSkip, TestFails
+		"SetupPostgresContainer": 2, // TestTwoStatementSkip, TestRebindClearsAssociation
+		"MigrateToVersion":       1,
+		"RollbackMigrations":     1,
+	}
+	for name, want := range wantCalls {
+		if calls[name] != want {
+			t.Errorf("calls[%q] = %d, want %d", name, calls[name], want)
+		}
 	}
 
 	// Line numbers of the four t.Skip* calls that must be reported.
