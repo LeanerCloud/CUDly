@@ -572,7 +572,10 @@ func validateAzureExchangeTargets(targets []AzureExchangeTargetBody, subscriptio
 	}
 	scope := azureBillingScopeID(subscriptionID)
 	for i, t := range targets {
-		if t.SKU == "" {
+		// Trimmed, like location below: the #1642 idempotency fingerprint
+		// normalizes surrounding whitespace away, so a blank-but-not-empty
+		// SKU would reach it as "" and collapse onto other blank spellings.
+		if strings.TrimSpace(t.SKU) == "" {
 			return NewClientError(400, fmt.Sprintf("targets[%d].sku is required", i))
 		}
 		// Blank-but-not-empty is rejected too: targetLocations trims before
@@ -1203,10 +1206,28 @@ func (h *Handler) executeAzureExchange(ctx context.Context, req *events.LambdaFu
 		return nil, err
 	}
 
+	// Submit-time idempotency (#1642). The re-quote above mints a FRESH
+	// session on every request, so Azure's own session-level replay
+	// protection cannot see two POSTs of one logical exchange as duplicates:
+	// without this claim a client that times out mid-LRO and retries commits
+	// the exchange twice, each half individually under the cap. Taken here,
+	// last, so no gate rejection ever leaves a claim behind.
+	err = h.claimExchangeSubmit(ctx, azureExchangeIdempotencyKey(body))
+	if err != nil {
+		return nil, err
+	}
+
 	result, err := client.ExecuteExchange(ctx, preview.SessionID)
 	if err != nil {
 		logging.Errorf("azure exchange execution failed: %v", err)
-		return nil, mapAzureExchangeError("exchange execution failed", err)
+		// Non-4xx failures here are ambiguous: BeginPost may already have
+		// submitted the exchange, and a ctx cancellation mid-poll looks
+		// identical to one that never reached Azure. Say so rather than
+		// reporting a flat failure that invites the retry this claim now
+		// refuses (#1642).
+		return nil, mapAzureExchangeError(
+			"exchange execution failed and may already have been submitted to Azure; "+
+				"verify the reservation state in the Azure portal before retrying", err)
 	}
 
 	logging.Infof("azure ri-exchange executed: subscription=%s session=%s status=%s", body.SubscriptionID, result.SessionID, result.Status)
@@ -1616,8 +1637,15 @@ func firstNonEmptyCurrency(instances []ec2svc.ConvertibleRI) string {
 }
 
 // validateTargets checks each entry in targets for a non-empty, UUID-shaped
-// offering_id. Extracted so both getExchangeQuote and validateExecuteExchangeBody
-// share the same check without exceeding the gocyclo threshold.
+// offering_id and a positive count. Extracted so both getExchangeQuote and
+// validateExecuteExchangeBody share the same check without exceeding the
+// gocyclo threshold.
+//
+// The count check mirrors pkg/exchange.validateTargets, which applies the same
+// rule but only once ExecuteExchange is already running. Repeating it here
+// moves the refusal ahead of the #1642 submit claim -- a request that can never
+// commit must not leave a claim behind -- and turns what pkg/exchange would
+// surface as an opaque 500 into a 400 naming the offending field.
 func validateTargets(targets []ExchangeTargetBody) error {
 	for i, t := range targets {
 		if t.OfferingID == "" {
@@ -1629,6 +1657,25 @@ func validateTargets(targets []ExchangeTargetBody) error {
 					"expected something like 4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91 -- "+
 					"did you paste an instance type by mistake?",
 				i, t.OfferingID))
+		}
+		if t.Count < 1 {
+			return NewClientError(400, fmt.Sprintf("targets[%d].count must be >= 1, got %d", i, t.Count))
+		}
+	}
+	return nil
+}
+
+// validateExchangeRIIDs checks the source list and each id in it. Each id
+// individually, not just the list length: a blank entry reaches the #1642
+// submit fingerprint as an empty component, so two different blank spellings
+// of one request would claim the same key.
+func validateExchangeRIIDs(riIDs []string) error {
+	if len(riIDs) == 0 {
+		return NewClientError(400, "ri_ids is required")
+	}
+	for i, id := range riIDs {
+		if strings.TrimSpace(id) == "" {
+			return NewClientError(400, fmt.Sprintf("ri_ids[%d] is empty", i))
 		}
 	}
 	return nil
@@ -1684,14 +1731,20 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 // cyclomatic-complexity threshold; every branch here becomes a
 // separate test case so the logic stays inspectable.
 func validateExecuteExchangeBody(body ExchangeExecuteRequestBody) error {
-	if len(body.RIIDs) == 0 {
-		return NewClientError(400, "ri_ids is required")
+	if err := validateExchangeRIIDs(body.RIIDs); err != nil {
+		return err
 	}
 	if len(body.Targets) == 0 && body.TargetOfferingID == "" {
 		return NewClientError(400, "either targets[] or target_offering_id is required")
 	}
 	if err := validateTargets(body.Targets); err != nil {
 		return err
+	}
+	// The legacy singleton's count, which validateTargets above does not see.
+	// Same reasoning as the targets[] count: refuse before the submit claim
+	// rather than inside ExecuteExchange, after it.
+	if len(body.Targets) == 0 && body.TargetCount < 1 {
+		return NewClientError(400, fmt.Sprintf("target_count must be >= 1, got %d", body.TargetCount))
 	}
 	if body.MaxPaymentDueUSD == "" {
 		return NewClientError(400, "max_payment_due_usd is required as a safety guardrail")
@@ -1757,6 +1810,16 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 		Regions:           []string{region},
 		MaxPurchaseAmount: maxPayment,
 	}})
+	if err != nil {
+		return nil, err
+	}
+
+	// Submit-time idempotency (#1642). AcceptReservedInstancesExchangeQuote
+	// carries no ClientToken, so AWS will happily accept the same exchange
+	// twice; a client that times out and retries otherwise double-spends with
+	// each half individually under the cap. Taken last, after every gate, so
+	// no rejected request leaves a claim behind.
+	err = h.claimExchangeSubmit(ctx, awsExchangeIdempotencyKey(cloudAccountID, body))
 	if err != nil {
 		return nil, err
 	}

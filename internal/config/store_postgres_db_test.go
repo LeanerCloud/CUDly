@@ -1437,3 +1437,111 @@ func TestPostgresStoreDB_CleanupOldExecutions_RetainsCanceledInsideHealthWindow(
 	}
 	assert.Equal(t, wantDeleted, deleted, "RowsAffected must match the rows actually purged")
 }
+
+// TestPostgresStoreDB_ClaimRIExchangeIdempotencyKey is the live-database half
+// of the #1642 guard. It runs against a real PostgreSQL rather than pgxmock
+// because what is under test is what the STATEMENT means, not how it is
+// spelled: whether a single INSERT ... ON CONFLICT DO UPDATE ... WHERE really
+// lets exactly one of several racing submits through, and whether the window
+// predicate is evaluated against the database clock.
+//
+// A pgxmock test can only assert that RowsAffected is read correctly; it would
+// pass just as happily against a statement that let both submits win.
+func TestPostgresStoreDB_ClaimRIExchangeIdempotencyKey(t *testing.T) {
+	conn := setupTestContainerDB(t)
+	if conn == nil {
+		return
+	}
+	store := NewPostgresStore(conn)
+	ctx := context.Background()
+
+	const window = 15 * time.Minute
+	_, err := conn.Exec(ctx, "DELETE FROM ri_exchange_idempotency")
+	require.NoError(t, err)
+
+	t.Run("first submit wins and the identical retry loses", func(t *testing.T) {
+		const key = "fingerprint-sequential"
+		claimed, err := store.ClaimRIExchangeIdempotencyKey(ctx, key, window)
+		require.NoError(t, err)
+		require.True(t, claimed, "the first submit of a fingerprint must win the claim")
+
+		claimed, err = store.ClaimRIExchangeIdempotencyKey(ctx, key, window)
+		require.NoError(t, err)
+		assert.False(t, claimed, "the retry that would double-spend must lose")
+	})
+
+	t.Run("a different fingerprint is unaffected", func(t *testing.T) {
+		claimed, err := store.ClaimRIExchangeIdempotencyKey(ctx, "fingerprint-other", window)
+		require.NoError(t, err)
+		assert.True(t, claimed, "one exchange's claim must not suppress a genuinely different one")
+	})
+
+	t.Run("a submit racing an uncommitted claim loses", func(t *testing.T) {
+		const key = "fingerprint-concurrent"
+
+		// Hold a claim on key from a separate, still-open transaction. This
+		// is the race the single-statement claim exists to win: a claimant
+		// that READ the ledger and then wrote would see nothing (the other
+		// transaction has not committed), conclude the fingerprint is free,
+		// and let a second exchange commit.
+		//
+		// Racing N goroutines instead would not test this. They serialize on
+		// connection acquisition, so the first claim commits before the next
+		// one starts and a read-then-write implementation passes too --
+		// verified by mutating this store method into exactly that shape.
+		tx, err := conn.Begin(ctx)
+		require.NoError(t, err)
+		_, err = tx.Exec(ctx,
+			`INSERT INTO ri_exchange_idempotency (idempotency_key, claimed_at) VALUES ($1, now())`, key)
+		require.NoError(t, err)
+
+		type claimResult struct {
+			claimed bool
+			err     error
+		}
+		done := make(chan claimResult, 1)
+		go func() {
+			claimed, err := store.ClaimRIExchangeIdempotencyKey(ctx, key, window)
+			done <- claimResult{claimed, err}
+		}()
+
+		// The claim must contend for the row rather than answer from a read,
+		// so it cannot return while the conflicting write is uncommitted. The
+		// wait is the only way to observe "still blocked"; it is a lower bound
+		// on the observation, not a sleep the assertion depends on.
+		select {
+		case r := <-done:
+			_ = tx.Rollback(ctx)
+			t.Fatalf("the claim answered %v while a conflicting claim was still uncommitted; "+
+				"it read the ledger instead of contending for the row", r.claimed)
+		case <-time.After(300 * time.Millisecond):
+		}
+
+		require.NoError(t, tx.Commit(ctx))
+		r := <-done
+		require.NoError(t, r.err)
+		assert.False(t, r.claimed, "the loser of the race must not also claim the submit")
+	})
+
+	t.Run("a claim older than the window is reclaimable", func(t *testing.T) {
+		const key = "fingerprint-expired"
+		claimed, err := store.ClaimRIExchangeIdempotencyKey(ctx, key, window)
+		require.NoError(t, err)
+		require.True(t, claimed)
+
+		// Back-date the claim past the window rather than sleeping: an
+		// intentional repeat of the same exchange must not be blocked forever.
+		_, err = conn.Exec(ctx,
+			`UPDATE ri_exchange_idempotency SET claimed_at = now() - INTERVAL '16 minutes' WHERE idempotency_key = $1`, key)
+		require.NoError(t, err)
+
+		claimed, err = store.ClaimRIExchangeIdempotencyKey(ctx, key, window)
+		require.NoError(t, err)
+		assert.True(t, claimed, "an expired claim must be reclaimable")
+
+		// ...and taking it over restarts the window.
+		claimed, err = store.ClaimRIExchangeIdempotencyKey(ctx, key, window)
+		require.NoError(t, err)
+		assert.False(t, claimed, "the takeover must refresh claimed_at, not leave the row expired")
+	})
+}

@@ -2498,6 +2498,40 @@ func (s *PostgresStore) GetPurchaseHistoryInFlight(ctx context.Context) ([]*Purc
 // RI EXCHANGE HISTORY
 // ==========================================
 
+// ClaimRIExchangeIdempotencyKey atomically claims an RI exchange submit
+// fingerprint (issue #1642). See the interface doc for the contract.
+//
+// The whole decision is one statement, so two concurrent submits of the same
+// fingerprint cannot both win: the INSERT and the conditional takeover of an
+// expired row are the same atomic row operation, with no read-then-write
+// window between them. RowsAffected() is 1 only when this call inserted the
+// row or took over an expired one; the ON CONFLICT ... WHERE predicate
+// evaluating false leaves it at 0.
+//
+// Both the write and the expiry comparison use now(), the DATABASE clock, so
+// clock skew between concurrent application instances cannot distort the
+// window.
+func (s *PostgresStore) ClaimRIExchangeIdempotencyKey(ctx context.Context, key string, window time.Duration) (bool, error) {
+	if key == "" {
+		return false, fmt.Errorf("refusing to claim an empty RI exchange idempotency key")
+	}
+	if window <= 0 {
+		return false, fmt.Errorf("RI exchange idempotency window must be positive, got %s", window)
+	}
+	query := `
+		INSERT INTO ri_exchange_idempotency (idempotency_key, claimed_at)
+		VALUES ($1, now())
+		ON CONFLICT (idempotency_key) DO UPDATE
+		   SET claimed_at = now()
+		 WHERE ri_exchange_idempotency.claimed_at < now() - make_interval(secs => $2)
+	`
+	tag, err := s.db.Exec(ctx, query, key, window.Seconds())
+	if err != nil {
+		return false, fmt.Errorf("failed to claim RI exchange idempotency key: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // SaveRIExchangeRecord saves an RI exchange record.
 func (s *PostgresStore) SaveRIExchangeRecord(ctx context.Context, record *RIExchangeRecord) error {
 	if record.ID == "" {

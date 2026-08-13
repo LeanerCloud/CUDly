@@ -455,6 +455,10 @@ func (m *mockConfigStore) ClaimMarketplaceListingSlot(_ context.Context, _ strin
 	return true, nil
 }
 
+func (m *mockConfigStore) ClaimRIExchangeIdempotencyKey(_ context.Context, _ string, _ time.Duration) (bool, error) {
+	return true, nil
+}
+
 func (m *mockConfigStore) StampOfferingClass(_ context.Context, _, _ string) error {
 	return nil
 }
