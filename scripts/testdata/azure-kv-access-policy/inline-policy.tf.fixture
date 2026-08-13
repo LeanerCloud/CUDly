@@ -1,0 +1,26 @@
+# Fixture: the nested form of the same inert grant. Must exit 1.
+#
+# An `access_policy { ... }` block declared inside the vault itself expresses
+# exactly what azurerm_key_vault_access_policy does, and Azure ignores it for
+# the same reason: enable_rbac_authorization = true, right above it. A guard
+# that only knew the top-level resource header would report this file clean.
+
+resource "azurerm_key_vault" "main" {
+  name                = "cudly-kv"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  tenant_id           = data.azurerm_client_config.current.tenant_id
+  sku_name            = "standard"
+
+  enable_rbac_authorization = true
+
+  access_policy {
+    tenant_id = data.azurerm_client_config.current.tenant_id
+    object_id = azurerm_user_assigned_identity.workload.principal_id
+
+    secret_permissions = [
+      "Get",
+      "List"
+    ]
+  }
+}

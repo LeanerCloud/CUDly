@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # check-azure-kv-access-policy.sh
 #
-# Fails when any Terraform file declares an `azurerm_key_vault_access_policy`.
+# Fails when any Terraform file declares a Key Vault access-policy grant, in
+# either of the two forms HCL offers: a top-level
+# `azurerm_key_vault_access_policy` resource, or an `access_policy` block nested
+# inside an `azurerm_key_vault` resource (including the `dynamic` form).
 #
 # WHY A BLANKET BAN IS CORRECT HERE. This repo provisions exactly one Key Vault
 # (terraform/modules/secrets/azure/main.tf) and it hardcodes
@@ -32,18 +35,15 @@
 # a matching string in a sibling file is not evidence that a role or an action
 # is real (issue #1794).
 #
-# Exit 0 = no `azurerm_key_vault_access_policy` resource declared.
+# Exit 0 = no access-policy grant declared, in either form.
 # Exit 1 = at least one found; each is printed to stderr.
 # Exit 2 = usage error, or a file this scanner cannot read.
 #
-# LIMITATIONS. This is a textual guard, not a policy engine. It matches a
-# `resource "azurerm_key_vault_access_policy"` block header at any indentation,
-# which is the form the #1621 defect arrived in. It
-# does NOT detect an inline `access_policy { ... }` block nested inside an
-# `azurerm_key_vault` resource, which is a second way to express the same thing.
-# No such block exists in the tree today (the sole vault declares none), and
-# adding one would be a different edit than the copy-paste this ratchets
-# against. The Terraform JSON encoding (`.tf.json`) is not parsed; rather than
+# LIMITATIONS. This is a textual guard, not a policy engine. It matches block
+# headers at any indentation: a `resource "azurerm_key_vault_access_policy"`
+# header (the form the #1621 defect arrived in) and a nested `access_policy` or
+# `dynamic "access_policy"` header (the second way to express the same inert
+# grant). The Terraform JSON encoding (`.tf.json`) is not parsed; rather than
 # report such a file as clean, the guard exits 2. None exist today.
 #
 # Usage:
@@ -66,6 +66,12 @@ SCAN_ROOTS=(
 )
 
 BANNED_RESOURCE='azurerm_key_vault_access_policy'
+
+# The nested form: an `access_policy { ... }` block inside an azurerm_key_vault
+# resource, or its `dynamic "access_policy"` equivalent. `access_policy` is a
+# block name unique to azurerm_key_vault, so anchoring at the start of the line
+# has no false-positive surface in this tree.
+BANNED_BLOCK='access_policy'
 
 files=()
 if [[ $# -gt 0 ]]; then
@@ -115,21 +121,28 @@ if [[ ${#files[@]} -eq 0 ]]; then
   exit 2
 fi
 
-# Match the block header, tolerating leading whitespace. `terraform fmt` puts
-# top-level blocks at column 0, but the fmt gate in CI only covers `terraform/`
-# while this guard also scans `iac/`, so anchoring strictly at column 0 would
-# leave one scan root relying on a normalization the other one enforces.
+# Match both block headers, tolerating leading whitespace and not requiring
+# whitespace between tokens: `resource"azurerm_key_vault_access_policy""x"{` is
+# valid HCL. The nested form is necessarily indented, and the top-level form is
+# normalized to column 0 by the pre-commit `terraform_fmt` hook, which covers
+# every .tf file in the repo (both scan roots) because CI runs `pre-commit run
+# --all-files` in .github/workflows/pre-commit.yml. The guard does not lean on
+# that gate: tolerating indentation means narrowing it cannot open a bypass.
 # Anchoring on `resource` still means a mention of the type inside a comment
 # (this file's own guidance, for one) does not trip the guard.
 violations=$(
-  awk -v pattern="^[[:space:]]*resource[[:space:]]+\"${BANNED_RESOURCE}\"" '
-    $0 ~ pattern { printf "%s:%d: %s\n", FILENAME, FNR, $0 }
+  awk \
+    -v resource_pattern="^[[:space:]]*resource[[:space:]]*\"${BANNED_RESOURCE}\"" \
+    -v block_pattern="^[[:space:]]*(dynamic[[:space:]]*\")?${BANNED_BLOCK}" '
+    $0 ~ resource_pattern || $0 ~ block_pattern {
+      printf "%s:%d: %s\n", FILENAME, FNR, $0
+    }
   ' "${files[@]}"
 )
 
 if [[ -n "$violations" ]]; then
   {
-    echo "FAILED: azurerm_key_vault_access_policy declared."
+    echo "FAILED: Key Vault access-policy grant declared."
     echo ""
     echo "$violations"
     echo ""
@@ -151,6 +164,4 @@ if [[ -n "$violations" ]]; then
   exit 1
 fi
 
-echo "OK: no azurerm_key_vault_access_policy resource declared in ${#files[@]}" \
-     "Terraform file(s). See the LIMITATIONS header: an inline access_policy" \
-     "block nested inside an azurerm_key_vault resource is not covered."
+echo "OK: no Key Vault access-policy grant declared in ${#files[@]} Terraform file(s)."

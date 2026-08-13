@@ -104,9 +104,11 @@ resource "azurerm_linux_function_app" "cleanup" {
 
   tags = var.tags
 
-  # Azure RBAC propagation is asynchronous and takes up to 10 minutes. Without
-  # this edge Terraform may create the function app in parallel with its Key
-  # Vault grant, and the first invocation 403s on db-password.
+  # Nothing in this resource references the Key Vault grant, so without this
+  # edge Terraform is free to create the function app in parallel with it.
+  # Ordering only, not a propagation wait: the role assignment returns as soon
+  # as ARM accepts the write, so an invocation immediately after can still 403
+  # on db-password until the grant propagates.
   depends_on = [azurerm_role_assignment.cleanup_kv_secrets_user]
 }
 

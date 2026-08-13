@@ -1,0 +1,26 @@
+# Fixture: the nested grant generated through a dynamic block. Must exit 1.
+#
+# Same inert grant as inline-policy.tf.fixture, reached through the `dynamic`
+# form so the block name is quoted rather than bare. Asserted separately: a
+# pattern anchored on a bare `access_policy` at the start of the line would
+# catch the inline fixture and still miss this one.
+
+resource "azurerm_key_vault" "main" {
+  name                = "cudly-kv"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  tenant_id           = data.azurerm_client_config.current.tenant_id
+  sku_name            = "standard"
+
+  enable_rbac_authorization = true
+
+  dynamic "access_policy" {
+    for_each = var.reader_object_ids
+
+    content {
+      tenant_id          = data.azurerm_client_config.current.tenant_id
+      object_id          = access_policy.value
+      secret_permissions = ["Get"]
+    }
+  }
+}

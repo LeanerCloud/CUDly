@@ -436,8 +436,11 @@ resource "kubernetes_deployment" "app" {
   # The Key Vault grant is listed here because these pods resolve
   # ADMIN_PASSWORD_SECRET, CREDENTIAL_ENCRYPTION_KEY_SECRET_NAME and the
   # AZURE_SMTP_* secrets from the vault at startup through the workload
-  # identity. Azure RBAC propagation is asynchronous and takes up to 10
-  # minutes, and Terraform's implicit graph does not capture that edge.
+  # identity. Nothing in the deployment references the role assignment, so
+  # Terraform's implicit graph would otherwise be free to create the two in
+  # parallel. This buys ordering only, not a propagation wait: the assignment
+  # returns as soon as ARM accepts the write, so a pod started immediately
+  # after can still 403 until the grant propagates, and recovers on restart.
   depends_on = [
     kubernetes_namespace.app,
     kubernetes_secret.database,

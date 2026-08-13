@@ -1,10 +1,12 @@
 # Fixture: an access policy declared at a non-zero indentation. Must exit 1.
 #
-# `terraform fmt` moves top-level blocks to column 0, but the repo-wide fmt gate
-# in CI only covers `terraform/` while this guard also scans `iac/`. A guard
-# anchored strictly at column 0 would therefore depend, on one of its two scan
-# roots, on a normalization nothing enforces there. This fixture pins the
-# tolerance so that dependency cannot creep back in.
+# `terraform fmt` moves top-level blocks to column 0, and the pre-commit
+# `terraform_fmt` hook (.pre-commit-config.yaml) covers every .tf file in the
+# repo, both of this guard's scan roots included, because CI runs `pre-commit
+# run --all-files` (.github/workflows/pre-commit.yml). The guard does not lean
+# on that: a guard anchored strictly at column 0 would depend on a gate that
+# could be narrowed later, and the nested access_policy form is indented by
+# construction. This fixture pins the tolerance so it cannot be lost.
 
   resource "azurerm_key_vault_access_policy" "indented" {
     key_vault_id = var.key_vault_id
