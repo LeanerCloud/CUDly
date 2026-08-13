@@ -225,6 +225,39 @@ jobs:
     if: |
       needs.validate.outputs.is_safe == 'true' &&
       (inputs.cloud == 'aws' || inputs.cloud == 'all')
+    # Serializes migrations against one database: two dispatches for the same
+    # cloud and environment must not run `migrate` concurrently against the same
+    # schema_migrations table (#1593). Deliberately NOT the `aws-tfstate-*` group
+    # deploy-aws-lambda.yml and rollback.yml use: this job only runs `terraform
+    # init` + `terraform output -raw` to read the DB endpoint, takes no state
+    # lock, and the resource needing protection is the database, not the state
+    # file. Different clouds, and the same cloud in different environments, are
+    # different databases and stay concurrent.
+    #
+    # `inputs.environment` is a required `choice` on `workflow_dispatch`, so that
+    # path is constrained to dev|staging|prod server-side. On the `workflow_call`
+    # path it is a plain `type: string`; `required: true` makes the caller pass
+    # the key but GitHub does not enforce that the value is non-empty, and an
+    # empty suffix would collapse every environment into one group. The fallback
+    # below keeps such a call in its own group instead. `validate` rejects an
+    # environment outside the allowlist before this job runs, so the sentinel
+    # should be unreachable in practice; it is here so the group can never be
+    # silently ambiguous if that ordering ever changes.
+    #
+    # `cancel-in-progress: false` because cancelling mid-`migrate` leaves
+    # schema_migrations dirty, which then needs the CUDLY_FORCE_MIGRATION_VERSION
+    # recovery path in internal/database/postgres/migrations/migrate.go. Two
+    # consequences, both accepted as better than concurrent writers to one
+    # database:
+    #   - GitHub keeps one pending entry per group, so a queued migration can be
+    #     evicted by a later dispatch. Unlike rollback.yml, the `summary` job
+    #     below does not exit 1 on a non-success result, so an evicted migration
+    #     leaves the run green; read the per-cloud results it prints.
+    #   - if the `environment:` binding below carries required reviewers, it is
+    #     undocumented whether a job parked awaiting approval holds its group.
+    concurrency:
+      group: db-migrate-aws-${{ inputs.environment || 'unset' }}
+      cancel-in-progress: false
     permissions:
       id-token: write
       contents: read
@@ -319,6 +352,14 @@ jobs:
     if: |
       needs.validate.outputs.is_safe == 'true' &&
       (inputs.cloud == 'gcp' || inputs.cloud == 'all')
+    # Serializes migrations against the GCP database for one environment
+    # (#1593). A different database from `migrate-aws`'s, so a different group:
+    # `cloud=all` still migrates the three clouds concurrently. The group-key,
+    # empty-suffix and `cancel-in-progress: false` reasoning documented on
+    # `migrate-aws` applies here identically.
+    concurrency:
+      group: db-migrate-gcp-${{ inputs.environment || 'unset' }}
+      cancel-in-progress: false
     permissions:
       id-token: write
       contents: read
@@ -398,6 +439,14 @@ jobs:
     if: |
       needs.validate.outputs.is_safe == 'true' &&
       (inputs.cloud == 'azure' || inputs.cloud == 'all')
+    # Serializes migrations against the Azure database for one environment
+    # (#1593). A different database from `migrate-aws`'s and `migrate-gcp`'s, so
+    # a different group: `cloud=all` still migrates the three clouds
+    # concurrently. The group-key, empty-suffix and `cancel-in-progress: false`
+    # reasoning documented on `migrate-aws` applies here identically.
+    concurrency:
+      group: db-migrate-azure-${{ inputs.environment || 'unset' }}
+      cancel-in-progress: false
     permissions:
       id-token: write
       contents: read
