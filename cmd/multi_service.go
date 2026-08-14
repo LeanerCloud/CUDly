@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -217,11 +219,40 @@ func scoreLimitAndDisplay(recs []common.Recommendation, cfg Config, drops *commo
 		MinCount:           cfg.MinCount,
 	}
 	result := scorer.Score(recs, scorerCfg)
-	result.Passed = applyGlobalInstanceLimit(result.Passed, cfg, drops)
+	result.Passed = applyGlobalInstanceLimit(result.Passed, cfg, rankBySavingsPercentage, drops)
 	fmt.Print(reporter.RenderTable(result))
 	fmt.Print(reporter.RenderExcluded(result))
 	fmt.Print(reporter.RenderSummary(result))
 	return result
+}
+
+// rankingRule names the ordering --max-instances consumes, so the cap can say
+// which rule decided what survived. The two paths rank on different keys
+// because they carry different data, and an operator reading the drop list has
+// to know which one applied. Typed rather than a bare string so the call sites
+// cannot invent a third wording that does not match any implemented ordering.
+type rankingRule string
+
+const (
+	// rankBySavingsPercentage is the recommendation-driven path: scorer.Score
+	// sorts on SavingsPercentage, an intensive rate, before the cap runs.
+	rankBySavingsPercentage rankingRule = "highest savings-percentage recommendations first"
+	// rankBySavingsPerInstance is the --input-csv path: a CSV row carries no
+	// savings percentage, so sortBySavingsPerInstance derives the rate from
+	// the EstimatedSavings and Count columns it does carry.
+	rankBySavingsPerInstance rankingRule = "highest savings-per-instance rows first (a CSV row carries no savings percentage)"
+)
+
+// capBinds reports whether --max-instances will actually remove instances from
+// recs, rather than being unset or already satisfied.
+//
+// applyGlobalInstanceLimit and requireRankingSignal have to agree on this
+// exactly: the second refuses precisely the runs whose outcome the first would
+// otherwise decide on an ordering that carries no information. If the two
+// conditions drift apart, either a run is refused for a cap that changes
+// nothing, or an unrankable run reaches the cap after all.
+func capBinds(recs []common.Recommendation, cfg Config) bool {
+	return cfg.MaxInstances > 0 && CalculateTotalInstances(recs) > int(cfg.MaxInstances)
 }
 
 // applyGlobalInstanceLimit enforces --max-instances once across the entire run.
@@ -232,9 +263,11 @@ func scoreLimitAndDisplay(recs []common.Recommendation, cfg Config, drops *commo
 // each (service, region) pair independently and multiplies the operator's cap
 // by the number of pairs.
 //
-// passed must already be ordered best-first: ApplyInstanceLimit consumes the
-// slice in order and drops the tail, so the ordering decides which commitments
-// survive. scorer.Score guarantees that ordering.
+// passed must already be ordered best-first by rule: ApplyInstanceLimit
+// consumes the slice in order and drops the tail, so the ordering decides
+// which commitments survive. scorer.Score guarantees the
+// rankBySavingsPercentage ordering; scoreAndLimitCSVRecs establishes the
+// rankBySavingsPerInstance one.
 //
 // Truncation can push a recommendation under --min-count, which is a hard
 // floor rather than advice, so dropTruncatedBelowMinCount removes any such
@@ -242,18 +275,15 @@ func scoreLimitAndDisplay(recs []common.Recommendation, cfg Config, drops *commo
 //
 // Nothing is truncated silently. Every reduced or dropped recommendation is
 // named on stdout, and the drops are counted into the end-of-run summary.
-func applyGlobalInstanceLimit(passed []common.Recommendation, cfg Config, drops *common.DropSummary) []common.Recommendation {
-	if cfg.MaxInstances <= 0 {
-		return passed
-	}
-	totalBefore := CalculateTotalInstances(passed)
-	if totalBefore <= int(cfg.MaxInstances) {
+func applyGlobalInstanceLimit(passed []common.Recommendation, cfg Config, rule rankingRule, drops *common.DropSummary) []common.Recommendation {
+	if !capBinds(passed, cfg) {
 		return passed
 	}
 
+	totalBefore := CalculateTotalInstances(passed)
 	limited := ApplyInstanceLimit(passed, cfg.MaxInstances)
 	limited, belowMin := dropTruncatedBelowMinCount(limited, cfg.MinCount)
-	reportInstanceLimit(passed, limited, len(belowMin), totalBefore, cfg.MaxInstances, drops)
+	reportInstanceLimit(passed, limited, len(belowMin), totalBefore, cfg.MaxInstances, rule, drops)
 	reportMinCountDrops(belowMin, cfg.MinCount, drops)
 	return limited
 }
@@ -311,15 +341,19 @@ func reportMinCountDrops(removed []common.Recommendation, minCount int, drops *c
 // after must be the prefix of before produced by ApplyInstanceLimit, so
 // after[i] and before[i] describe the same recommendation.
 //
+// rule is the ordering the caller sorted before by, and is printed verbatim:
+// the drop list is unreadable without knowing which key decided it, and the
+// two paths do not rank on the same key.
+//
 // belowMinCount is how many of the missing entries were removed by the
 // --min-count floor rather than by the budget. They are still listed here as
 // dropped (they were), but they are attributed to --min-count-after-cap by
 // reportMinCountDrops, so excluding them from this tally keeps each dropped
 // recommendation counted exactly once in the end-of-run summary.
-func reportInstanceLimit(before, after []common.Recommendation, belowMinCount, totalBefore int, maxInstances int32, drops *common.DropSummary) {
+func reportInstanceLimit(before, after []common.Recommendation, belowMinCount, totalBefore int, maxInstances int32, rule rankingRule, drops *common.DropSummary) {
 	AppLogger.Printf("\n🔒 --max-instances=%d caps the whole run: the %d recommendations that passed scoring total %d instances.\n",
 		maxInstances, len(before), totalBefore)
-	AppLogger.Printf("   Keeping the highest savings-percentage recommendations first. The following are reduced or dropped:\n")
+	AppLogger.Printf("   Keeping the %s. The following are reduced or dropped:\n", rule)
 
 	reduced, dropped := 0, 0
 	for i := range before {
@@ -454,20 +488,17 @@ func runToolFromCSV(ctx context.Context, cfg Config) error {
 	AppLogger.Printf("✅ Loaded %d recommendations from CSV\n", len(recs))
 
 	// Filter and adjust recommendations
-	recs = filterAndAdjustRecommendations(recs, csvModeCoverage, cfg)
+	recs, err = filterAndAdjustRecommendations(recs, csvModeCoverage, cfg)
+	if err != nil {
+		return err
+	}
 
 	if len(recs) == 0 {
 		AppLogger.Println("⚠️  No recommendations to process after filtering")
 		return nil
 	}
 
-	// Load AWS configuration
-	var configOptions []func(*awsconfig.LoadOptions) error
-	configOptions = append(configOptions, awsconfig.WithRegion("us-east-1"))
-	if cfg.Profile != "" {
-		configOptions = append(configOptions, awsconfig.WithSharedConfigProfile(cfg.Profile))
-	}
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, configOptions...)
+	awsCfg, err := loadAWSConfig(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to load AWS config: %w", err)
 	}
@@ -518,7 +549,13 @@ func runToolFromCSV(ctx context.Context, cfg Config) error {
 				AppLogger.Printf("  ⚠️  Warning: Could not check for existing RIs: %v\n", err)
 				adjustedRecs = recs // Continue with original recommendations if check fails
 			}
-			recs = adjustedRecs
+			// Deducting existing commitments shrinks Count, which can push a
+			// row that cleared the floor in filterAndAdjustRecommendations back
+			// under it (--min-count 5, a row of 6, and 5 matching recent
+			// commitments would otherwise be purchased at 1). --min-count is a
+			// floor on what gets bought, so it is re-applied to whatever the
+			// deduction left, not only to the pre-deduction counts.
+			recs = applyMinCountFloor(adjustedRecs, cfg.MinCount)
 
 			serviceRecs = append(serviceRecs, recs...)
 			allAdjustedRecs = append(allAdjustedRecs, recs...)
@@ -553,8 +590,13 @@ func runToolFromCSV(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-// filterAndAdjustRecommendations applies filters, coverage, count override, and instance limits to recommendations.
-func filterAndAdjustRecommendations(recs []common.Recommendation, csvModeCoverage float64, cfg Config) []common.Recommendation {
+// filterAndAdjustRecommendations applies filters, coverage, count override,
+// the --min-count floor and the run-wide --max-instances cap to
+// recommendations loaded from --input-csv.
+//
+// It returns an error when the cap cannot be enforced honestly; see
+// requireRankingSignal.
+func filterAndAdjustRecommendations(recs []common.Recommendation, csvModeCoverage float64, cfg Config) ([]common.Recommendation, error) {
 	// Query running instances for engine version validation
 	log.Printf("🔍 Querying running RDS instances across all regions to validate engine versions...")
 	instanceVersions, err := queryRunningInstanceEngineVersions(context.Background(), cfg)
@@ -619,29 +661,142 @@ func filterAndAdjustRecommendations(recs []common.Recommendation, csvModeCoverag
 // --min-count was never consulted, so a row the cap truncated below the floor
 // was purchased short.
 //
-// Only MinCount is handed to the scorer. A CSV row carries no savings
-// percentage and no break-even figure (writeMultiServiceCSVReport emits
-// neither column and parseCSVRecord reads neither), so both fields load as
-// zero and gating on them would reject every row of every file.
-// --min-savings-pct and --max-break-even-months therefore remain outside this
-// path's reach; #1819 tracks that gap rather than papering over it here with a
-// gate that would reject everything.
+// Only MinCount is enforced here. A CSV row carries no savings percentage and
+// no break-even figure (writeMultiServiceCSVReport emits neither column and
+// parseCSVRecord reads neither), so both fields load as zero and gating on
+// them would reject every row of every file. --min-savings-pct and
+// --max-break-even-months are therefore refused up front by
+// validateCSVModeFilterFlags rather than accepted and ignored here; #1819
+// tracks teaching the CSV format to carry those columns.
 //
-// Because SavingsPercentage is uniformly zero on loaded rows, scorer.Score's
-// ordering resolves on its secondary key, EstimatedSavings descending, which is
-// the savings signal a CSV does carry, with the Service|Region|ResourceType
-// tie-break keeping it deterministic. applyGlobalInstanceLimit consumes that
-// order, so the cap keeps the highest-savings rows, names every row it reduces
-// or drops, and drops rather than shortens anything truncated below
-// --min-count.
-func scoreAndLimitCSVRecs(recs []common.Recommendation, cfg Config) []common.Recommendation {
-	scored := scorer.Score(recs, scorer.Config{MinCount: cfg.MinCount})
+// scorer.Score's own ordering is useless here: SavingsPercentage is uniformly
+// zero on loaded rows, so it resolves on EstimatedSavings, a whole-row dollar
+// total, while --max-instances is a budget in instances. Ranking a total
+// against a per-instance budget spends the whole budget on whichever row is
+// merely biggest, not on the rows that return the most per instance bought.
+// sortBySavingsPerInstance therefore re-orders the survivors on the rate
+// derived from the two columns a CSV does carry, which is the greedy the flag
+// implies, and applyGlobalInstanceLimit consumes that order: the cap keeps the
+// best-value rows, names every row it reduces or drops, and drops rather than
+// shortens anything truncated below --min-count.
+func scoreAndLimitCSVRecs(recs []common.Recommendation, cfg Config) ([]common.Recommendation, error) {
+	passed := applyMinCountFloor(recs, cfg.MinCount)
+	if err := requireRankingSignal(passed, cfg); err != nil {
+		return nil, err
+	}
+	sortBySavingsPerInstance(passed)
+	return applyGlobalInstanceLimit(passed, cfg, rankBySavingsPerInstance, nil), nil
+}
+
+// applyMinCountFloor drops recommendations below the --min-count floor and
+// names each drop on stdout. A floor of 0 disables the flag, and returns recs
+// untouched rather than re-ordering them for nothing.
+//
+// The floor itself is scorer.Score's, so the CSV path and the
+// recommendation-driven path reject on the identical predicate and reason
+// string. MinCount is the only scorer.Config field this helper ever sets, so
+// the "--min-count dropped" prefix cannot come to describe some other filter.
+func applyMinCountFloor(recs []common.Recommendation, minCount int) []common.Recommendation {
+	if minCount <= 0 {
+		return recs
+	}
+	scored := scorer.Score(recs, scorer.Config{MinCount: minCount})
 	for i := range scored.Filtered {
 		f := scored.Filtered[i]
 		AppLogger.Printf("🔒 --min-count dropped %s %s %s: %s\n",
 			f.Recommendation.Service, f.Recommendation.Region, f.Recommendation.ResourceType, f.FilterReason)
 	}
-	return applyGlobalInstanceLimit(scored.Passed, cfg, nil)
+	return scored.Passed
+}
+
+// savingsPerInstance is the ranking key for CSV rows: the row's monthly
+// savings divided by the instances it would buy. --max-instances is a budget
+// in instances, so the rows worth keeping are the ones returning the most per
+// instance, not the ones whose total happens to be largest.
+//
+// A non-positive Count buys nothing and has no rate, so it ranks last rather
+// than dividing by zero. ApplyInstanceLimit already refuses to credit budget
+// back for such a row.
+func savingsPerInstance(rec common.Recommendation) float64 {
+	if rec.Count <= 0 {
+		return 0
+	}
+	return rec.EstimatedSavings / float64(rec.Count)
+}
+
+// sortBySavingsPerInstance orders recs best-value-first, in place.
+//
+// Rows with equal rates fall back to the same Service|Region|ResourceType key
+// scorer.Score tie-breaks on, so the selection is deterministic whatever order
+// the file listed them in. The tie-break is spelled out here rather than
+// inherited from an upstream sort because --min-count 0 skips the scorer
+// entirely, which would otherwise leave file order deciding between equals on
+// exactly the path #1741 is about.
+//
+// It must run before the cap, never after: ApplyInstanceLimit truncates Count
+// without rescaling EstimatedSavings (#1830), so a post-cap row's rate is
+// inflated by exactly the amount the cap removed.
+func sortBySavingsPerInstance(recs []common.Recommendation) {
+	sort.SliceStable(recs, func(i, j int) bool {
+		a, b := recs[i], recs[j]
+		if rateA, rateB := savingsPerInstance(a), savingsPerInstance(b); rateA != rateB {
+			return rateA > rateB
+		}
+		keyA := string(a.Service) + "|" + a.Region + "|" + a.ResourceType
+		keyB := string(b.Service) + "|" + b.Region + "|" + b.ResourceType
+		return keyA < keyB
+	})
+}
+
+// maxNamedUnrankableRows bounds how many offending rows requireRankingSignal
+// names before summarising the rest, so a large file produces a readable error.
+const maxNamedUnrankableRows = 5
+
+// requireRankingSignal refuses a run whose --max-instances cap has to choose
+// between rows it cannot rank.
+//
+// parseCSVFloat leaves EstimatedSavings at zero for a blank cell, and
+// getCSVField returns "" for a column that is not in the header at all, so a
+// CSV written without an EstimatedSavings column loads every row at zero.
+// Nothing downstream can tell that apart from a row genuinely worth $0: the
+// value is absent, not zero. With every rate equal, sortBySavingsPerInstance
+// and scorer.Score both fall through to the Service|Region|ResourceType
+// tie-break, and the cap silently buys by instance-type name while stdout and
+// docs/cli/filtering.md both promise it is buying by savings.
+//
+// Ranking only decides anything when the cap actually binds, so that is the
+// only case this refuses; a file with no savings column still runs uncapped,
+// and so does one whose total already fits. Money paths in this project fail
+// loud rather than picking a defensible-looking default, and #1741's own
+// framing is that silent partial enforcement of a spend guard is worse than
+// not offering the guard.
+func requireRankingSignal(recs []common.Recommendation, cfg Config) error {
+	if !capBinds(recs, cfg) {
+		return nil
+	}
+
+	unrankable := make([]string, 0)
+	for i := range recs {
+		if recs[i].EstimatedSavings <= 0 {
+			unrankable = append(unrankable, fmt.Sprintf("%s %s %s",
+				recs[i].Service, recs[i].Region, recs[i].ResourceType))
+		}
+	}
+	if len(unrankable) == 0 {
+		return nil
+	}
+
+	named := unrankable
+	suffix := ""
+	if len(named) > maxNamedUnrankableRows {
+		named = named[:maxNamedUnrankableRows]
+		suffix = fmt.Sprintf(" (and %d more)", len(unrankable)-maxNamedUnrankableRows)
+	}
+	return fmt.Errorf(
+		"--max-instances=%d has to choose which of %d recommendations to buy, but %d row(s) of %s carry no usable EstimatedSavings value: %s%s. "+
+			"A blank or missing EstimatedSavings cell is indistinguishable from $0 of savings, so capping on it would pick by instance-type name rather than by value. "+
+			"Populate EstimatedSavings for every row, or drop --max-instances and cap the file itself",
+		cfg.MaxInstances, len(recs), len(unrankable), cfg.CSVInput, strings.Join(named, ", "), suffix)
 }
 
 // processService processes a single service and returns recommendations and results.
