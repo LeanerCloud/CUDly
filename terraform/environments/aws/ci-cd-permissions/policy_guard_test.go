@@ -228,6 +228,29 @@ func extractActionListActions(content string) []string {
 	return actions
 }
 
+// anyQuotedStringPattern matches every quoted string in an Action list,
+// including the forms actionStringPattern deliberately refuses.
+var anyQuotedStringPattern = regexp.MustCompile(`"[^"]*"`)
+
+// countActionListStrings returns how many quoted strings a statement's Action
+// assignments contain, parseable by actionStringPattern or not.
+//
+// It exists so callers can compare it against len(extractActionListActions) and
+// refuse any statement where the two disagree. Widening actionStringPattern
+// until it accepts every form somebody might write is the losing half of that
+// trade: "*:*" and "iam*" are grants that must never appear in a ceiling, so the
+// fix is for the test to REFUSE them loudly, not to learn to parse them.
+// Comparing the counts turns "the pattern did not recognise this entry" into a
+// failure rather than a silent omission, which closes the class instead of the
+// two forms currently known.
+func countActionListStrings(stmt string) int {
+	n := 0
+	for _, m := range actionAssignmentPattern.FindAllStringSubmatch(stmt, -1) {
+		n += len(anyQuotedStringPattern.FindAllString(m[1], -1))
+	}
+	return n
+}
+
 // findAwsModuleFiles returns every *.tf file under modulesDir whose
 // directory path contains an "aws" path segment, i.e. the AWS-specific
 // Terraform modules and not their Azure/GCP siblings.
@@ -537,8 +560,9 @@ func equalStringSets(got, want []string) bool {
 // otherwise would produce a wrong answer in the direction that hides a gap.
 //
 // IT FAILS CLOSED, WHICH IS THE WHOLE DESIGN. Every statement that is not
-// positively identified as a Deny is treated as part of the ceiling and must
-// yield at least one action, and no such statement may use NotAction:
+// positively identified as a Deny is treated as part of the ceiling, must have
+// every one of its action strings parsed, and no such statement may use
+// NotAction:
 //
 //   - NotAction expresses a ceiling as "everything except", which no assertion
 //     in this file can check. It is also the FIRST thing a future author asked
@@ -556,6 +580,18 @@ func equalStringSets(got, want []string) bool {
 //     statement says. Collapsing the two is what makes this closed against
 //     forms nobody has thought of yet, rather than against the three that have
 //     been enumerated.
+//   - a statement whose Action list holds MORE quoted strings than the extractor
+//     parsed is refused for the same reason, one entry at a time rather than one
+//     statement at a time. The zero-action guard above only sees a statement
+//     that parsed to nothing at all, so `Action = ["s3:GetObject", "*:*"]` walks
+//     straight through it: "*:*" fails actionStringPattern's SERVICE half, is
+//     dropped, and a ceiling that grants literally everything is measured as
+//     granting one S3 read. `Action = ["s3:GetObject", "iam*"]` is the same hole
+//     against the iam narrowness check in TestBoundaryCoversWorkloadServices,
+//     which is prefix-based on "iam:" and therefore never sees a colon-less
+//     entry the extractor already threw away. Counting is the check rather than
+//     a wider pattern on purpose: neither form belongs in a ceiling, so the test
+//     must refuse them, not learn to read them.
 //
 // Refusing an unparseable statement outright costs nothing legitimate: every
 // statement in this document is one attribute per line with a literal Action
@@ -577,6 +613,9 @@ func boundaryAllowedActions(t *testing.T) []string {
 			t.Fatalf("%s: statement %q uses NotAction, which caps nothing this test can check: a NotAction ceiling grants every service except the ones it names, so `NotAction = [\"iam:*\"]` on Resource \"*\" reopens every cross-principal escape #1723, #1722 and #1705 closed while every other assertion in this file stays green. Express the ceiling as an allow list. Statement: %q", boundaryFile, statementSid(stmt), stmt)
 		}
 		actions := extractActionListActions(stmt)
+		if parsed, listed := len(actions), countActionListStrings(stmt); parsed != listed {
+			t.Fatalf("%s: statement %q lists %d action strings but this test parsed only %d of them; the unparsed entries are treated as absent from the ceiling, so a form like \"*:*\" or \"iam*\" widens the boundary while every assertion in this file stays green. Statement: %q", boundaryFile, statementSid(stmt), listed, parsed, stmt)
+		}
 		if len(actions) == 0 {
 			t.Fatalf("%s: statement %q is not a Deny and yields zero actions, so it either grants something this test cannot parse or grants nothing at all, and there is no way to tell which. Both are refused: an unparsed grant is a silent widening of the ceiling. Write it as one attribute per line with a literal Action list (an inline one-line statement hides Effect and Action from the ^-anchored patterns above, and `Action = local.x` hides them from the literal extractor). Statement: %q", boundaryFile, statementSid(stmt), stmt)
 		}
