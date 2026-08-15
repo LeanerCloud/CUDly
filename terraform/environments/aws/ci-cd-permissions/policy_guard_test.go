@@ -215,6 +215,13 @@ var conditionAssignmentPattern = regexp.MustCompile(`Condition\s*=\s*\{`)
 // colon and which must therefore not slip past a bare-identifier pattern.
 var conditionOperatorPattern = regexp.MustCompile(`(?m)^[ \t]*"?([A-Za-z0-9]+(?::[A-Za-z0-9]+)?)"?[ \t]*=[ \t]*\{`)
 
+// anyBlockOpenPattern matches every `= {` inside a Condition body, including
+// the ones conditionOperatorPattern refuses because they do not begin a line.
+// It is the condition-block half of the same completeness check
+// countActionListStrings performs on Action lists: see singleConditionOperator
+// for what a dropped operator costs.
+var anyBlockOpenPattern = regexp.MustCompile(`=[ \t]*\{`)
+
 // extractActionListActions returns every "service:Action" literal found
 // strictly inside Action/actions assignments in content, per
 // actionAssignmentPattern above.
@@ -249,6 +256,38 @@ func countActionListStrings(stmt string) int {
 		n += len(anyQuotedStringPattern.FindAllString(m[1], -1))
 	}
 	return n
+}
+
+// listStructurePattern matches the brackets, commas and whitespace an HCL list
+// is built from, i.e. everything in a captured Action or Resource value that is
+// not an element.
+var listStructurePattern = regexp.MustCompile(`[\[\],\s]`)
+
+// unreadListElements returns the elements of the values assignPattern captures
+// in stmt that are not quoted literals: local.x, var.y, a function call,
+// anything whose value this test cannot know. It returns "" when every element
+// is a literal.
+//
+// It is the other half of the completeness check countActionListStrings starts.
+// Counting quoted strings catches an element written as a string the extractor
+// refuses ("*:*", "iam*"); it cannot catch an element that is not a string at
+// all, because such an element contributes to neither count.
+// `Action = ["sts:GetCallerIdentity", var.x]` therefore parses one action out of
+// two elements with both counts reading 1, and whatever var.x resolves to is
+// absent from the derived ceiling. Resource lists have the same hole in the
+// direction that matters more: statementResources reads only the quoted entries,
+// so `Resource = ["arn:aws:iam::*:role/cudly-*", local.y]` compares EQUAL to the
+// one-element set every Resource assertion in this file expects, while the
+// grant it describes is whatever local.y adds. Both forms survive terraform fmt
+// and terraform validate.
+func unreadListElements(stmt string, assignPattern *regexp.Regexp) string {
+	var refs []string
+	for _, m := range assignPattern.FindAllStringSubmatch(stmt, -1) {
+		if r := listStructurePattern.ReplaceAllString(anyQuotedStringPattern.ReplaceAllString(m[1], ""), ""); r != "" {
+			refs = append(refs, r)
+		}
+	}
+	return strings.Join(refs, " ")
 }
 
 // findAwsModuleFiles returns every *.tf file under modulesDir whose
@@ -447,6 +486,17 @@ func statementResources(stmt string) []string {
 	return resources
 }
 
+// statementConditionBody returns a statement's Condition block verbatim,
+// braces included, or "" if it has no Condition.
+func statementConditionBody(stmt string) string {
+	loc := conditionAssignmentPattern.FindStringIndex(stmt)
+	if loc == nil {
+		return ""
+	}
+	open := loc[1] - 1 // the "{" the match ends on
+	return stmt[open:balancedBraceEnd(stmt, open)]
+}
+
 // conditionOperator is one `Operator = { ... }` entry inside a statement's
 // Condition block: its name verbatim (including any ForAllValues:/ForAnyValue:
 // qualifier) and the body it introduces.
@@ -461,12 +511,10 @@ type conditionOperator struct {
 // a check that merely found "StringEquals" somewhere would stay green if a
 // second, permissive operator were added beside it.
 func statementConditionOperators(stmt string) []conditionOperator {
-	loc := conditionAssignmentPattern.FindStringIndex(stmt)
-	if loc == nil {
+	body := statementConditionBody(stmt)
+	if body == "" {
 		return nil
 	}
-	open := loc[1] - 1 // the "{" the match ends on
-	body := stmt[open:balancedBraceEnd(stmt, open)]
 
 	var ops []conditionOperator
 	for _, m := range conditionOperatorPattern.FindAllStringSubmatchIndex(body, -1) {
@@ -484,10 +532,26 @@ func statementConditionOperators(stmt string) []conditionOperator {
 // is not want. want is compared verbatim, so StringEqualsIfExists,
 // ForAllValues:StringEquals and ArnEquals are all rejected against a want of
 // StringEquals / ArnNotEquals respectively.
+//
+// "Exactly one" is only worth as much as the extractor's completeness, so this
+// also refuses a Condition body holding more `= {` openings than
+// conditionOperatorPattern turned into operators. That pattern is ^-anchored,
+// so an operator written on a line that starts with the previous operator's
+// closing brace is dropped, and dropping one is a fail-open on a DENY: IAM ANDs
+// the operators inside a Condition, so a second one the extractor cannot see
+// narrows when the Deny fires without changing what this test measures.
+// `}, StringEquals = { "aws:username" = "nobody-ever" }` appended to
+// IAMDenyAttachUnapprovedManagedPolicy stops that Deny ever firing, which
+// re-admits AdministratorAccess onto any cudly-* role (#1705 verbatim), and it
+// survives terraform fmt, terraform validate and every assertion in this file.
 func singleConditionOperator(t *testing.T, stmt, want, why string) conditionOperator {
 	t.Helper()
 
 	ops := statementConditionOperators(stmt)
+	body := statementConditionBody(stmt)
+	if opens := len(anyBlockOpenPattern.FindAllString(body, -1)); opens != len(ops) {
+		t.Fatalf("%s: statement %q has a Condition block opening %d nested objects but this test parsed only %d of them as operators; an operator it cannot see is still ANDed into the condition by IAM, so it changes when this statement applies while every assertion here stays green. Write one operator per line. Condition: %q", iamFile, statementSid(stmt), opens, len(ops), body)
+	}
 	if len(ops) != 1 {
 		names := make([]string, 0, len(ops))
 		for _, op := range ops {
@@ -591,7 +655,10 @@ func equalStringSets(got, want []string) bool {
 //     which is prefix-based on "iam:" and therefore never sees a colon-less
 //     entry the extractor already threw away. Counting is the check rather than
 //     a wider pattern on purpose: neither form belongs in a ceiling, so the test
-//     must refuse them, not learn to read them.
+//     must refuse them, not learn to read them. An element that is not a quoted
+//     string at all (`Action = ["s3:GetObject", local.x]`) escapes both counts,
+//     since it contributes to neither, and is refused separately by
+//     unreadListElements.
 //
 // Refusing an unparseable statement outright costs nothing legitimate: every
 // statement in this document is one attribute per line with a literal Action
@@ -613,6 +680,9 @@ func boundaryAllowedActions(t *testing.T) []string {
 			t.Fatalf("%s: statement %q uses NotAction, which caps nothing this test can check: a NotAction ceiling grants every service except the ones it names, so `NotAction = [\"iam:*\"]` on Resource \"*\" reopens every cross-principal escape #1723, #1722 and #1705 closed while every other assertion in this file stays green. Express the ceiling as an allow list. Statement: %q", boundaryFile, statementSid(stmt), stmt)
 		}
 		actions := extractActionListActions(stmt)
+		if refs := unreadListElements(stmt, actionAssignmentPattern); refs != "" {
+			t.Fatalf("%s: statement %q has Action list elements that are not literal strings (%s); this test cannot know what they resolve to, so they are absent from the derived ceiling and every coverage and escape assertion below measures a narrower document than the one AWS will enforce. Write the ceiling as literal actions. Statement: %q", boundaryFile, statementSid(stmt), refs, stmt)
+		}
 		if parsed, listed := len(actions), countActionListStrings(stmt); parsed != listed {
 			t.Fatalf("%s: statement %q lists %d action strings but this test parsed only %d of them; the unparsed entries are treated as absent from the ceiling, so a form like \"*:*\" or \"iam*\" widens the boundary while every assertion in this file stays green. Statement: %q", boundaryFile, statementSid(stmt), listed, parsed, stmt)
 		}
@@ -1469,5 +1539,54 @@ func TestBoundaryDeniesPassingTheDeployRole(t *testing.T) {
 
 	if effect := statementEffect(denies[0]); effect != "Deny" {
 		t.Errorf("%s: statement %q has Effect %q, want \"Deny\". As an Allow it is not merely inert, it is redundant with PassRoleCeiling and removes the one thing stopping a workload -> deploy escalation; an explicit Deny is what beats the cudly-* Allow", boundaryFile, statementSid(denies[0]), effect)
+	}
+}
+
+// TestPolicyDocumentsUseLiteralActionAndResourceLists is the precondition every
+// other assertion in this file rests on: that reading the quoted strings out of
+// an Action or Resource list reads the whole list.
+//
+// It exists because the assertions above are all EQUALITY checks against a set
+// this file extracts, and an element expressed as a reference rather than a
+// literal is invisible to that extraction. It does not make an assertion fail,
+// it makes it measure a smaller document:
+// `Resource = ["arn:aws:iam::*:role/cudly-*", local.x]` compares equal to
+// [passRoleCeilingResource], so TestBoundaryScopesPassRoleToCudlyRoles reports
+// PassRole as capped at cudly-* while the grant reaches local.x as well. There
+// is no per-assertion fix for that, because every one of them consumes the same
+// blind extraction, so the invariant is asserted once here over every statement
+// in every document rather than at each call site.
+//
+// Scanning both the guarded documents and policy_iam.tf is deliberate: the two
+// halves of the #1705 fix (the ceiling and the delegation that enforces it) are
+// equally undermined by a Resource this test cannot read.
+func TestPolicyDocumentsUseLiteralActionAndResourceLists(t *testing.T) {
+	files := append(guardedPolicyFiles(t), iamFile)
+
+	scanned := 0
+	for _, file := range files {
+		stmts := extractStatementBlocks(readPolicySource(t, file))
+		if len(stmts) == 0 {
+			t.Errorf("%s: found zero Statement objects; the statement splitter in this test is broken and would otherwise pass vacuously", file)
+			continue
+		}
+		for _, stmt := range stmts {
+			scanned++
+			for _, list := range []struct {
+				what    string
+				pattern *regexp.Regexp
+			}{
+				{"Action", actionAssignmentPattern},
+				{"Resource", resourceAssignmentPattern},
+			} {
+				if refs := unreadListElements(stmt, list.pattern); refs != "" {
+					t.Errorf("%s: statement %q has %s list elements that are not literal strings (%s). Every assertion in this file reads these lists by pulling the quoted strings out of them, so a referenced element is not read at all: the statement is measured as if it granted only its literal entries, and the assertion that pins it passes against a document narrower than the one AWS enforces. Write literals, or teach this file to resolve the reference before using one", file, statementSid(stmt), list.what, refs)
+				}
+			}
+		}
+	}
+
+	if scanned == 0 {
+		t.Fatalf("scanned zero statements across %v; this guard would pass vacuously", files)
 	}
 }
