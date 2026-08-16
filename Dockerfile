@@ -33,25 +33,27 @@ ARG BUILD_DATE
 RUN apk add --no-cache \
     git \
     ca-certificates \
-    postgresql-client \
-    curl
+    postgresql-client
 
 # Set shell with pipefail for safer pipe operations
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
-# Install golang-migrate for database migrations (architecture-aware, checksum-verified)
-RUN MIGRATE_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "amd64") && \
-    if [ "$MIGRATE_ARCH" = "arm64" ]; then \
-      MIGRATE_SHA256="2fea2455c0f3f07cc3f4b98471c951ad1a716059574b20b6416bd1e9058751c5"; \
-    else \
-      MIGRATE_SHA256="2ac648fbd1b127b69ab5a7b33cf96212178f71e22379fc50573630c6f4c7ce18"; \
-    fi && \
-    curl -Lo migrate.tar.gz "https://github.com/golang-migrate/migrate/releases/download/v4.19.1/migrate.linux-${MIGRATE_ARCH}.tar.gz" && \
-    echo "${MIGRATE_SHA256}  migrate.tar.gz" | sha256sum -c - && \
-    tar xzf migrate.tar.gz && \
-    mv migrate /usr/local/bin/migrate && \
-    chmod +x /usr/local/bin/migrate && \
-    rm migrate.tar.gz
+# Build golang-migrate from source on this stage's pinned Go toolchain, the same
+# way `make install-tools` does. Upstream's prebuilt release tarballs carry
+# whatever toolchain upstream built them with (v4.19.1 ships go1.25.4), which is
+# how issue #1833's stdlib CVEs reached the runtime image, where entrypoint.sh
+# runs `migrate up` against the database on every container start.
+# `go install` refuses GOBIN when cross-compiling and writes to
+# bin/${GOOS}_${GOARCH}/ instead, so resolve both layouts; the final `mv` fails
+# the build if neither produced a binary.
+# Keep this version in step with MIGRATE_VERSION in the Makefile.
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+      go install -tags=postgres -ldflags="-s -w -X main.Version=v4.19.1" \
+      github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.1 && \
+    GOPATH_BIN="$(go env GOPATH)/bin" && \
+    MIGRATE_BIN="${GOPATH_BIN}/${TARGETOS}_${TARGETARCH}/migrate" && \
+    { [ -x "${MIGRATE_BIN}" ] || MIGRATE_BIN="${GOPATH_BIN}/migrate"; } && \
+    mv "${MIGRATE_BIN}" /usr/local/bin/migrate
 
 WORKDIR /app
 
