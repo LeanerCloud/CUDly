@@ -168,7 +168,28 @@ var actionAssignmentPattern = regexp.MustCompile(`(?m)^[ \t]*(?:Action|actions)\
 
 // actionStringPattern extracts individual "service:Action" literals from the
 // value captured by actionAssignmentPattern.
-var actionStringPattern = regexp.MustCompile(`"([A-Za-z0-9]+:[A-Za-z0-9_*]+)"`)
+//
+// The lone `"*"` alternative is load-bearing and not a stylistic nicety. A
+// service:Action-only pattern cannot see a bare "*", which is the single widest
+// grant IAM has, so it went missing from every derived action set: the "no bare
+// star" guard in TestBoundaryCoversWorkloadServices could never fire, and
+// TestBoundaryDeniesCrossPrincipalEscapes reported a ceiling of
+// `Action = ["*"]` as permitting none of the escapes, because none of them was
+// in a set the star never entered. Both read exactly like a clean ceiling.
+// Mutation M6 in the #1723 verification caught this; it is the reason the
+// pattern is an alternation rather than one branch.
+//
+// The hyphen in the SERVICE half is load-bearing for the same reason, in the
+// same direction. AWS service prefixes are not all alphanumeric:
+// application-autoscaling (the ECS service auto-scaling grant, on the Fargate
+// deploy path), execute-api, aws-marketplace, s3-object-lambda,
+// network-firewall and resource-groups all carry one. Without it, a module
+// granting application-autoscaling:RegisterScalableTarget to a workload role
+// contributes nothing to TestBoundaryCoversWorkloadServices' derived set, so
+// the ceiling is never required to cover it and the role 403s at RUNTIME with
+// the apply green: the under-reporting direction, which is the failure mode
+// this file is organized to avoid.
+var actionStringPattern = regexp.MustCompile(`"([A-Za-z0-9-]+:[A-Za-z0-9_*]+|\*)"`)
 
 // resourceAssignmentPattern matches a `Resource = [...]` or `Resource = "..."`
 // assignment inside a single statement block and captures the value.
@@ -194,6 +215,13 @@ var conditionAssignmentPattern = regexp.MustCompile(`Condition\s*=\s*\{`)
 // colon and which must therefore not slip past a bare-identifier pattern.
 var conditionOperatorPattern = regexp.MustCompile(`(?m)^[ \t]*"?([A-Za-z0-9]+(?::[A-Za-z0-9]+)?)"?[ \t]*=[ \t]*\{`)
 
+// anyBlockOpenPattern matches every `= {` inside a Condition body, including
+// the ones conditionOperatorPattern refuses because they do not begin a line.
+// It is the condition-block half of the same completeness check
+// countActionListStrings performs on Action lists: see singleConditionOperator
+// for what a dropped operator costs.
+var anyBlockOpenPattern = regexp.MustCompile(`=[ \t]*\{`)
+
 // extractActionListActions returns every "service:Action" literal found
 // strictly inside Action/actions assignments in content, per
 // actionAssignmentPattern above.
@@ -205,6 +233,81 @@ func extractActionListActions(content string) []string {
 		}
 	}
 	return actions
+}
+
+// anyQuotedStringPattern matches every quoted string in an Action list,
+// including the forms actionStringPattern deliberately refuses.
+var anyQuotedStringPattern = regexp.MustCompile(`"[^"]*"`)
+
+// countActionListStrings returns how many quoted strings a statement's Action
+// assignments contain, parseable by actionStringPattern or not.
+//
+// It exists so callers can compare it against len(extractActionListActions) and
+// refuse any statement where the two disagree. Widening actionStringPattern
+// until it accepts every form somebody might write is the losing half of that
+// trade: "*:*" and "iam*" are grants that must never appear in a ceiling, so the
+// fix is for the test to REFUSE them loudly, not to learn to parse them.
+// Comparing the counts turns "the pattern did not recognize this entry" into a
+// failure rather than a silent omission, which closes the class instead of the
+// two forms currently known.
+func countActionListStrings(stmt string) int {
+	n := 0
+	for _, m := range actionAssignmentPattern.FindAllStringSubmatch(stmt, -1) {
+		n += len(anyQuotedStringPattern.FindAllString(m[1], -1))
+	}
+	return n
+}
+
+// listStructurePattern matches the brackets, commas and whitespace an HCL list
+// is built from, i.e. everything in a captured Action or Resource value that is
+// not an element.
+var listStructurePattern = regexp.MustCompile(`[\[\],\s]`)
+
+// interpolatedStringPattern matches a quoted list element that contains a
+// Terraform interpolation, i.e. one whose value is decided at plan time and is
+// therefore not the text this file reads out of the source. Matching it
+// separately is what keeps anyQuotedStringPattern from stripping it as a
+// literal: see unreadListElements.
+var interpolatedStringPattern = regexp.MustCompile(`"[^"]*\$\{[^"]*"`)
+
+// unreadListElements returns the elements of the values assignPattern captures
+// in stmt that are not quoted literals: local.x, var.y, a function call,
+// anything whose value this test cannot know. It returns "" when every element
+// is a literal.
+//
+// It is the other half of the completeness check countActionListStrings starts.
+// Counting quoted strings catches an element written as a string the extractor
+// refuses ("*:*", "iam*"); it cannot catch an element that is not a string at
+// all, because such an element contributes to neither count.
+// `Action = ["sts:GetCallerIdentity", var.x]` therefore parses one action out of
+// two elements with both counts reading 1, and whatever var.x resolves to is
+// absent from the derived ceiling. Resource lists have the same hole in the
+// direction that matters more: statementResources reads only the quoted entries,
+// so `Resource = ["arn:aws:iam::*:role/cudly-*", local.y]` compares EQUAL to the
+// one-element set every Resource assertion in this file expects, while the
+// grant it describes is whatever local.y adds. Both forms survive terraform fmt
+// and terraform validate.
+//
+// A quoted element holding an interpolation counts as unread for the same
+// reason, and is the third form of the same hole rather than a fourth kind of
+// element. `"${local.y}"` IS a quoted string, so anyQuotedStringPattern strips
+// it and the residue is empty, but the text between the quotes is a reference
+// whose value this test no more knows than it knows a bare local.y's. The two
+// counts do not catch it either: it is one quoted string that parses to one
+// action, so `Action = ["${local.y}"]` reads parsed == listed == 1. For Resource
+// lists there is no count at all, so `Resource = ["${local.y}"]` reaches
+// statementResources, which hands back the literal text `${local.y}` as if that
+// were the ARN AWS will enforce, and every Resource equality in this file is
+// then made against a string that is not a grant.
+func unreadListElements(stmt string, assignPattern *regexp.Regexp) string {
+	var refs []string
+	for _, m := range assignPattern.FindAllStringSubmatch(stmt, -1) {
+		refs = append(refs, interpolatedStringPattern.FindAllString(m[1], -1)...)
+		if r := listStructurePattern.ReplaceAllString(anyQuotedStringPattern.ReplaceAllString(m[1], ""), ""); r != "" {
+			refs = append(refs, r)
+		}
+	}
+	return strings.Join(refs, " ")
 }
 
 // findAwsModuleFiles returns every *.tf file under modulesDir whose
@@ -403,6 +506,17 @@ func statementResources(stmt string) []string {
 	return resources
 }
 
+// statementConditionBody returns a statement's Condition block verbatim,
+// braces included, or "" if it has no Condition.
+func statementConditionBody(stmt string) string {
+	loc := conditionAssignmentPattern.FindStringIndex(stmt)
+	if loc == nil {
+		return ""
+	}
+	open := loc[1] - 1 // the "{" the match ends on
+	return stmt[open:balancedBraceEnd(stmt, open)]
+}
+
 // conditionOperator is one `Operator = { ... }` entry inside a statement's
 // Condition block: its name verbatim (including any ForAllValues:/ForAnyValue:
 // qualifier) and the body it introduces.
@@ -417,12 +531,10 @@ type conditionOperator struct {
 // a check that merely found "StringEquals" somewhere would stay green if a
 // second, permissive operator were added beside it.
 func statementConditionOperators(stmt string) []conditionOperator {
-	loc := conditionAssignmentPattern.FindStringIndex(stmt)
-	if loc == nil {
+	body := statementConditionBody(stmt)
+	if body == "" {
 		return nil
 	}
-	open := loc[1] - 1 // the "{" the match ends on
-	body := stmt[open:balancedBraceEnd(stmt, open)]
 
 	var ops []conditionOperator
 	for _, m := range conditionOperatorPattern.FindAllStringSubmatchIndex(body, -1) {
@@ -440,10 +552,26 @@ func statementConditionOperators(stmt string) []conditionOperator {
 // is not want. want is compared verbatim, so StringEqualsIfExists,
 // ForAllValues:StringEquals and ArnEquals are all rejected against a want of
 // StringEquals / ArnNotEquals respectively.
+//
+// "Exactly one" is only worth as much as the extractor's completeness, so this
+// also refuses a Condition body holding more `= {` openings than
+// conditionOperatorPattern turned into operators. That pattern is ^-anchored,
+// so an operator written on a line that starts with the previous operator's
+// closing brace is dropped, and dropping one is a fail-open on a DENY: IAM ANDs
+// the operators inside a Condition, so a second one the extractor cannot see
+// narrows when the Deny fires without changing what this test measures.
+// `}, StringEquals = { "aws:username" = "nobody-ever" }` appended to
+// IAMDenyAttachUnapprovedManagedPolicy stops that Deny ever firing, which
+// re-admits AdministratorAccess onto any cudly-* role (#1705 verbatim), and it
+// survives terraform fmt, terraform validate and every assertion in this file.
 func singleConditionOperator(t *testing.T, stmt, want, why string) conditionOperator {
 	t.Helper()
 
 	ops := statementConditionOperators(stmt)
+	body := statementConditionBody(stmt)
+	if opens := len(anyBlockOpenPattern.FindAllString(body, -1)); opens != len(ops) {
+		t.Fatalf("%s: statement %q has a Condition block opening %d nested objects but this test parsed only %d of them as operators; an operator it cannot see is still ANDed into the condition by IAM, so it changes when this statement applies while every assertion here stays green. Write one operator per line. Condition: %q", iamFile, statementSid(stmt), opens, len(ops), body)
+	}
 	if len(ops) != 1 {
 		names := make([]string, 0, len(ops))
 		for _, op := range ops {
@@ -498,6 +626,291 @@ func equalStringSets(got, want []string) bool {
 	return true
 }
 
+// boundaryAllowedActions returns every action named by an Allow statement in
+// policy_boundary.tf, comments stripped.
+//
+// Callers ask "does this document permit X" through actionPermitted rather than
+// by substring-searching the file, which is what the coverage check used to do.
+// A substring check answers a weaker question than it looks like it does: an
+// action named inside a DENY statement satisfies it just as well as a real
+// grant, so a boundary that had moved ecs:RunTask from its Allow list into a
+// Deny would still have read as "covered". Splitting into statement objects and
+// keeping only the Allow ones is what makes the answer mean what the caller
+// needs it to mean.
+//
+// Deny statements are deliberately NOT subtracted here. The one Deny this
+// document carries (DenyPassDeployRole) is resource-scoped, so "the action
+// appears in a Deny" does not imply the action is unreachable, and pretending
+// otherwise would produce a wrong answer in the direction that hides a gap.
+//
+// IT FAILS CLOSED, WHICH IS THE WHOLE DESIGN. Every statement that is not
+// positively identified as a Deny is treated as part of the ceiling, must have
+// every one of its action strings parsed, and no such statement may use
+// NotAction:
+//
+//   - NotAction expresses a ceiling as "everything except", which no assertion
+//     in this file can check. It is also the FIRST thing a future author asked
+//     to stop maintaining a 34-entry allow list would reach for, and
+//     `NotAction = ["iam:*"]` with `Resource = "*"` grants every service AWS
+//     has. terraform fmt and terraform validate both accept it (inside
+//     jsonencode these are ordinary map keys) and AWS treats it as a
+//     first-class IAM element, so CI is the only place it can be refused.
+//   - a statement yielding zero actions is either a real grant this file's
+//     patterns could not parse (a whole statement written on one line, past the
+//     ^-anchored Action/Effect patterns; `Action = local.something`, past the
+//     literal-only extractor) or a statement that grants nothing. Both must be
+//     the same loud failure, because the parser cannot tell them apart and the
+//     "could not parse" half silently widens the ceiling to whatever the
+//     statement says. Collapsing the two is what makes this closed against
+//     forms nobody has thought of yet, rather than against the three that have
+//     been enumerated.
+//   - a statement whose Action list holds MORE quoted strings than the extractor
+//     parsed is refused for the same reason, one entry at a time rather than one
+//     statement at a time. The zero-action guard above only sees a statement
+//     that parsed to nothing at all, so `Action = ["s3:GetObject", "*:*"]` walks
+//     straight through it: "*:*" fails actionStringPattern's SERVICE half, is
+//     dropped, and a ceiling that grants literally everything is measured as
+//     granting one S3 read. `Action = ["s3:GetObject", "iam*"]` is the same hole
+//     against the iam narrowness check in TestBoundaryCoversWorkloadServices,
+//     which is prefix-based on "iam:" and therefore never sees a colon-less
+//     entry the extractor already threw away. Counting is the check rather than
+//     a wider pattern on purpose: neither form belongs in a ceiling, so the test
+//     must refuse them, not learn to read them. An element that is not a quoted
+//     string at all (`Action = ["s3:GetObject", local.x]`) escapes both counts,
+//     since it contributes to neither, and is refused separately by
+//     unreadListElements.
+//
+// Refusing an unparseable statement outright costs nothing legitimate: every
+// statement in this document is one attribute per line with a literal Action
+// list, which is the form terraform fmt produces.
+func boundaryAllowedActions(t *testing.T) []string {
+	t.Helper()
+
+	stmts := extractStatementBlocks(readPolicySource(t, boundaryFile))
+	if len(stmts) == 0 {
+		t.Fatalf("%s: found zero Statement objects; the statement splitter in this test is broken and would otherwise pass vacuously", boundaryFile)
+	}
+
+	var allowed []string
+	for _, stmt := range stmts {
+		if statementEffect(stmt) == "Deny" {
+			continue
+		}
+		if strings.Contains(stmt, "NotAction") {
+			t.Fatalf("%s: statement %q uses NotAction, which caps nothing this test can check: a NotAction ceiling grants every service except the ones it names, so `NotAction = [\"iam:*\"]` on Resource \"*\" reopens every cross-principal escape #1723, #1722 and #1705 closed while every other assertion in this file stays green. Express the ceiling as an allow list. Statement: %q", boundaryFile, statementSid(stmt), stmt)
+		}
+		actions := extractActionListActions(stmt)
+		if refs := unreadListElements(stmt, actionAssignmentPattern); refs != "" {
+			t.Fatalf("%s: statement %q has Action list elements that are not literal strings (%s); this test cannot know what they resolve to, so they are absent from the derived ceiling and every coverage and escape assertion below measures a narrower document than the one AWS will enforce. Write the ceiling as literal actions. Statement: %q", boundaryFile, statementSid(stmt), refs, stmt)
+		}
+		if parsed, listed := len(actions), countActionListStrings(stmt); parsed != listed {
+			t.Fatalf("%s: statement %q lists %d action strings but this test parsed only %d of them; the unparsed entries are treated as absent from the ceiling, so a form like \"*:*\" or \"iam*\" widens the boundary while every assertion in this file stays green. Statement: %q", boundaryFile, statementSid(stmt), listed, parsed, stmt)
+		}
+		if len(actions) == 0 {
+			t.Fatalf("%s: statement %q is not a Deny and yields zero actions, so it either grants something this test cannot parse or grants nothing at all, and there is no way to tell which. Both are refused: an unparsed grant is a silent widening of the ceiling. Write it as one attribute per line with a literal Action list (an inline one-line statement hides Effect and Action from the ^-anchored patterns above, and `Action = local.x` hides them from the literal extractor). Statement: %q", boundaryFile, statementSid(stmt), stmt)
+		}
+		allowed = append(allowed, actions...)
+	}
+	if len(allowed) == 0 {
+		t.Fatalf("%s: every statement in it is a Deny, so it grants nothing and is not a ceiling; every coverage assertion below would otherwise report the whole ceiling as missing, or (in the escape direction) report every escape as closed", boundaryFile)
+	}
+	sort.Strings(allowed)
+	return allowed
+}
+
+// actionPermitted reports whether any entry in allowed matches action, treating
+// "*" in an entry as a wildcard over any run of characters. Matching is a whole
+// -string anchored comparison, never a substring or prefix test: "ecs:Run" must
+// not match "ecs:RunTask", and "ecs:*" must match "ecs:RunTask" but not
+// "ecsx:RunTask".
+//
+// Matching is case-INSENSITIVE because IAM action matching is, and the direction
+// that matters is the one that hides a hole rather than the one that invents
+// one. A ceiling entry spelled "ecs:updateservice" grants the escape exactly as
+// "ecs:UpdateService" does, so a case-sensitive comparison here would let
+// TestBoundaryDeniesCrossPrincipalEscapes report a wide-open ceiling as closed.
+// TestActionPermittedMatchesWholeActionCaseInsensitively pins both halves.
+func actionPermitted(allowed []string, action string) bool {
+	for _, entry := range allowed {
+		parts := strings.Split(entry, "*")
+		for i, p := range parts {
+			parts[i] = regexp.QuoteMeta(p)
+		}
+		if regexp.MustCompile(`(?i)^` + strings.Join(parts, `.*`) + `$`).MatchString(action) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestActionPermittedMatchesWholeActionCaseInsensitively pins the matcher every
+// other assertion in this file delegates to. It is worth its own test because
+// its failure modes are silent in the dangerous direction: a matcher that is too
+// STRICT (an == comparison, or a case-sensitive one) leaves
+// TestBoundaryDeniesCrossPrincipalEscapes passing against a ceiling that grants
+// every escape, which reads exactly like a ceiling that grants none.
+func TestActionPermittedMatchesWholeActionCaseInsensitively(t *testing.T) {
+	cases := []struct {
+		name    string
+		allowed []string
+		action  string
+		want    bool
+	}{
+		{"exact match", []string{"ecs:RunTask"}, "ecs:RunTask", true},
+		{"different action in the same service", []string{"ecs:RunTask"}, "ecs:UpdateService", false},
+		{"entry is a prefix of the action", []string{"ecs:Run"}, "ecs:RunTask", false},
+		{"action is a prefix of the entry", []string{"ssm:GetParameters"}, "ssm:GetParameter", false},
+		{"service wildcard covers the service", []string{"ecs:*"}, "ecs:RunTask", true},
+		{"service wildcard does not bleed into a longer service", []string{"ecs:*"}, "ecsx:RunTask", false},
+		{"service wildcard does not bleed into a shorter service", []string{"ecs:*"}, "ec:RunTask", false},
+		{"verb wildcard covers the verb", []string{"lambda:Update*"}, "lambda:UpdateFunctionCode", true},
+		{"verb wildcard does not cover another verb", []string{"lambda:Update*"}, "lambda:InvokeFunction", false},
+		{"bare star covers everything", []string{"*"}, "ecs:UpdateService", true},
+		{"lowercased entry still permits the action", []string{"ecs:updateservice"}, "ecs:UpdateService", true},
+		{"uppercased entry still permits the action", []string{"ECS:UPDATESERVICE"}, "ecs:UpdateService", true},
+		{"empty ceiling permits nothing", nil, "ecs:RunTask", false},
+		{"match is found anywhere in the list", []string{"s3:*", "ecs:RunTask"}, "ecs:RunTask", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := actionPermitted(tc.allowed, tc.action); got != tc.want {
+				t.Errorf("actionPermitted(%q, %q) = %v, want %v", tc.allowed, tc.action, got, tc.want)
+			}
+		})
+	}
+}
+
+// crossPrincipalEscapeActions are actions that let whoever holds them execute
+// code as a DIFFERENT principal, which is a complete exit from this boundary
+// rather than a widening within it: a permissions boundary constrains the
+// principal it is attached to and does not follow the principal the code ends
+// up running as (#1723).
+//
+// All but one need no iam:PassRole, so PassRoleCeiling's cudly-* scoping does
+// not constrain them at all. ecs:RegisterTaskDefinition is the exception: a
+// revision naming a task or execution role needs PassRole for it, which is why
+// the deploy role's own iam:PassRole is scoped to ecs-tasks.amazonaws.com in
+// policy_data.tf beside its ecs:RegisterTaskDefinition grant in
+// policy_compute.tf. So PassRoleCeiling confines that one to cudly-* rather
+// than closing it, and a cudly-* role created by hand or from the console
+// carries no boundary (the residual PassRoleCeiling's own comment admits). It
+// is on this list because policy_boundary.tf states outright that it is
+// absent, and a stated invariant with no guard is one edit from being untrue.
+//
+// The value is the principal the escape lands on, quoted in the failure so the
+// next reader does not have to rediscover why the entry is here.
+var crossPrincipalEscapeActions = map[string]string{
+	"ecs:ExecuteCommand":                 "the task role of the running task the command lands in",
+	"ecs:RegisterTaskDefinition":         "the task role named by the new revision, which the ceiling's own ecs:RunTask then runs",
+	"ecs:UpdateService":                  "the task role of the task definition revision the service is pointed at",
+	"lambda:UpdateFunctionCode":          "the execution role of the function whose code is replaced",
+	"lambda:UpdateFunctionConfiguration": "the execution role of the function whose handler, layers or environment is replaced",
+	"ssm:CreateAssociation":              "the instance profile of every instance the association binds its document to",
+	"ssm:SendCommand":                    "the instance profile of the SSM-managed instance the command runs on",
+	"ssm:StartAutomationExecution":       "the instance profile of the instances the automation document targets",
+	"ssm:StartSession":                   "the instance profile of the SSM-managed instance the session opens on",
+	"ssm:UpdateAssociation":              "the instance profile of every instance the retargeted association now runs on",
+}
+
+// TestBoundaryDeniesCrossPrincipalEscapes asserts policy_boundary.tf permits
+// none of crossPrincipalEscapeActions. It is the negative half of the coverage
+// check above: that one fails when the ceiling is too narrow for what the
+// modules need, this one fails when it is wide enough to leave the boundary.
+//
+// It keys off actionPermitted rather than off the literal strings "ecs:*",
+// "lambda:*" and "ssm:*", because the ways to reopen this are not limited to
+// restoring those three tokens: "*", "lambda:Update*" and a plain
+// "ssm:SendCommand" entry all permit an escape while leaving a check written
+// against the wildcard spellings green.
+func TestBoundaryDeniesCrossPrincipalEscapes(t *testing.T) {
+	allowed := boundaryAllowedActions(t)
+
+	escapes := make([]string, 0, len(crossPrincipalEscapeActions))
+	for action := range crossPrincipalEscapeActions {
+		escapes = append(escapes, action)
+	}
+	sort.Strings(escapes)
+
+	for _, action := range escapes {
+		if actionPermitted(allowed, action) {
+			t.Errorf("%s permits %s, which runs code as %s. A permissions boundary caps the principal it is attached to and does not follow a different one, so this is not a widening of the ceiling but an exit from it, and PassRoleCeiling does not close it (see crossPrincipalEscapeActions above for which entries need no iam:PassRole at all and which one it merely confines). The ceiling currently allows %v (#1723)", boundaryFile, action, crossPrincipalEscapeActions[action], allowed)
+		}
+	}
+}
+
+// ssmManagedInstanceCorePolicyARN is the one AWS managed policy whose contents
+// policy_boundary.tf enumerates action by action instead of covering with a
+// service wildcard, because ssm at service width is a cross-principal escape
+// (see crossPrincipalEscapeActions). It is attached to the fck-nat instance
+// role in terraform/modules/networking/aws.
+const ssmManagedInstanceCorePolicyARN = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+
+// ssmManagedInstanceCoreActions is AmazonSSMManagedInstanceCore v2 (the current
+// default version; created 2019-03-15, last edited 2019-05-23) verbatim, per
+// https://docs.aws.amazon.com/aws-managed-policy/latest/reference/AmazonSSMManagedInstanceCore.html
+//
+// This list is hardcoded because its source of truth is AWS, not this repo, so
+// unlike every other assertion in this file it cannot be re-derived from the
+// tree. That makes it the one thing here that can go stale without any local
+// edit: if AWS adds an action to the policy, the SSM agent on the fck-nat
+// instance calls it, the boundary does not cover it, and the call 403s at
+// RUNTIME with `terraform apply` still green. Re-check the document above when
+// touching this.
+var ssmManagedInstanceCoreActions = []string{
+	"ec2messages:AcknowledgeMessage",
+	"ec2messages:DeleteMessage",
+	"ec2messages:FailMessage",
+	"ec2messages:GetEndpoint",
+	"ec2messages:GetMessages",
+	"ec2messages:SendReply",
+	"ssm:DescribeAssociation",
+	"ssm:DescribeDocument",
+	"ssm:GetDeployablePatchSnapshotForInstance",
+	"ssm:GetDocument",
+	"ssm:GetManifest",
+	"ssm:GetParameter",
+	"ssm:GetParameters",
+	"ssm:ListAssociations",
+	"ssm:ListInstanceAssociations",
+	"ssm:PutComplianceItems",
+	"ssm:PutConfigurePackageResult",
+	"ssm:PutInventory",
+	"ssm:UpdateAssociationStatus",
+	"ssm:UpdateInstanceAssociationStatus",
+	"ssm:UpdateInstanceInformation",
+	"ssmmessages:CreateControlChannel",
+	"ssmmessages:CreateDataChannel",
+	"ssmmessages:OpenControlChannel",
+	"ssmmessages:OpenDataChannel",
+}
+
+// TestBoundaryCoversSSMManagedInstanceCore closes the one hole
+// TestBoundaryCoversWorkloadServices cannot see. That test derives what the
+// ceiling must cover from the Action lists in terraform/modules, but a role's
+// identity policy is the union of its inline policies AND the AWS managed
+// policies attached to it, and a managed policy's actions appear nowhere in
+// this tree. ssm is the only service where that matters, because it is the only
+// one whose entire need comes from a managed policy and which is pinned per
+// action rather than covered by a wildcard.
+func TestBoundaryCoversSSMManagedInstanceCore(t *testing.T) {
+	if attached := moduleAttachedManagedPolicyARNs(t); !attached[ssmManagedInstanceCorePolicyARN] {
+		t.Fatalf("no module under %s attaches %s any more, so the ssm: entries pinned in %s and the list in this test are now a grant nothing needs. Drop both in the same change as the attachment", modulesDir, ssmManagedInstanceCorePolicyARN, boundaryFile)
+	}
+
+	allowed := boundaryAllowedActions(t)
+
+	var missing []string
+	for _, action := range ssmManagedInstanceCoreActions {
+		if !actionPermitted(allowed, action) {
+			missing = append(missing, action)
+		}
+	}
+	if len(missing) > 0 {
+		t.Errorf("%s does not cover %v, granted by %s which %s/networking/aws attaches to the fck-nat instance role. A permissions boundary caps effective permissions to the intersection of the role's identity policy and this ceiling, so `terraform apply` stays green and the SSM agent 403s at RUNTIME, taking Session Manager access to the NAT instance with it. The ceiling currently allows %v", boundaryFile, missing, ssmManagedInstanceCorePolicyARN, modulesDir, allowed)
+	}
+}
+
 // sortedKeys returns the keys of set, sorted, for stable failure messages.
 func sortedKeys(set map[string]bool) []string {
 	out := make([]string, 0, len(set))
@@ -508,15 +921,19 @@ func sortedKeys(set map[string]bool) []string {
 	return out
 }
 
-// TestBoundaryCoversWorkloadServices re-derives the set of AWS service
-// prefixes granted to workload roles by the Terraform modules under
-// terraform/modules/**/aws and asserts policy_boundary.tf's
-// WorkloadServiceCeiling covers every one of them (via a "<svc>:*" wildcard
-// or an explicit "<svc>:<Action>" grant for that exact action), except iam
-// (see iamServiceExemption). A service missing here deploys cleanly and then
+// TestBoundaryCoversWorkloadServices re-derives every action granted to a
+// workload role by the Terraform modules under terraform/modules/**/aws and
+// asserts policy_boundary.tf's Allow statements permit each one, whether
+// through a "<svc>:*" wildcard or an entry for that exact action, except iam
+// (see iamServiceExemption). An action missing here deploys cleanly and then
 // 403s the first time the workload role calls it, because a permissions
 // boundary caps effective permissions to the intersection of the role's
 // identity policy and this ceiling (#1705).
+//
+// It sees only what this tree declares. The other half of a workload role's
+// identity policy is the AWS managed policies the modules attach, whose actions
+// appear nowhere in the tree; TestBoundaryCoversSSMManagedInstanceCore covers
+// the one of those the ceiling enumerates rather than wildcards.
 func TestBoundaryCoversWorkloadServices(t *testing.T) {
 	files := findAwsModuleFiles(t)
 	if len(files) == 0 {
@@ -540,15 +957,27 @@ func TestBoundaryCoversWorkloadServices(t *testing.T) {
 		t.Fatalf("parsed zero IAM actions out of %d aws module files; the Action/actions extraction in this test is broken and would otherwise pass vacuously", len(files))
 	}
 
-	boundaryContent := readPolicySource(t, boundaryFile)
+	allowed := boundaryAllowedActions(t)
 
-	// iam is exempt from the loop below (see iamServiceExemption), but
-	// granting "iam:*" in the ceiling would silently defeat the entire
-	// boundary: a boundaried role's effective IAM permissions would then be
-	// whatever its identity policy allows, with no cap at all. Assert the
-	// exemption stays narrow (PassRoleCeiling only), not wide open.
-	if strings.Contains(boundaryContent, `"iam:*"`) {
-		t.Errorf("%s grants \"iam:*\" in the WorkloadServiceCeiling statement; that defeats the boundary entirely, because iam is otherwise deliberately omitted from the ceiling so no workload role can create a role, attach a policy, or touch a permissions boundary, no matter what its identity policy says. iam:PassRole is meant to be covered only by the scoped PassRoleCeiling statement", boundaryFile)
+	// iam is exempt from the loop below (see iamServiceExemption), but an
+	// iam grant wider than iam:PassRole in the ceiling would silently defeat
+	// the entire boundary: a boundaried role's effective IAM permissions
+	// would then be whatever its identity policy allows, with no cap at all.
+	// Assert the exemption stays narrow (PassRoleCeiling only), not wide
+	// open. A bare "*" is checked with it because it is the same hole
+	// spelled shorter, and it would also make every other assertion in this
+	// file pass vacuously.
+	for _, action := range allowed {
+		if action == "*" {
+			t.Errorf("%s grants \"*\" in an Allow statement; that is not a ceiling at all, it caps nothing and makes every other coverage and escape assertion in this file pass vacuously", boundaryFile)
+			continue
+		}
+		// Case-folded for the reason actionPermitted is: IAM action
+		// matching is case-insensitive, so "IAM:CreateRole" is the same
+		// grant as "iam:CreateRole" and must not slip past this check.
+		if strings.HasPrefix(strings.ToLower(action), iamServiceExemption+":") && !strings.EqualFold(action, "iam:PassRole") {
+			t.Errorf("%s grants %s; iam is deliberately omitted from the ceiling so no workload role can create a role, attach a policy, or touch a permissions boundary, no matter what its identity policy says. iam:PassRole is the one exception and is meant to be covered only by the scoped PassRoleCeiling statement", boundaryFile, action)
+		}
 	}
 
 	services := make([]string, 0, len(serviceActions))
@@ -562,21 +991,15 @@ func TestBoundaryCoversWorkloadServices(t *testing.T) {
 			continue
 		}
 
-		wildcard := `"` + svc + `:*"`
-		if strings.Contains(boundaryContent, wildcard) {
-			continue
-		}
-
 		var missing []string
 		for action := range serviceActions[svc] {
-			literal := `"` + action + `"`
-			if !strings.Contains(boundaryContent, literal) {
+			if !actionPermitted(allowed, action) {
 				missing = append(missing, action)
 			}
 		}
 		if len(missing) > 0 {
 			sort.Strings(missing)
-			t.Errorf("policy_boundary.tf's WorkloadServiceCeiling does not cover service %q: found neither %s nor an explicit grant for %v (used by terraform/modules). Add the service to WorkloadServiceCeiling in %s in the same change, or the workload role that calls one of these actions will deploy cleanly and then 403 at runtime, because a permissions boundary caps effective permissions to the intersection of the role's identity policy and this ceiling", svc, wildcard, missing, boundaryFile)
+			t.Errorf("%s does not cover %v (granted to a workload role by terraform/modules): its Allow statements permit %v, which matches neither %q:* nor those actions individually. Add them to WorkloadServiceCeiling in the same change, or the workload role that calls one will deploy cleanly and then 403 at runtime, because a permissions boundary caps effective permissions to the intersection of the role's identity policy and this ceiling", boundaryFile, missing, allowed, svc)
 		}
 	}
 }
@@ -743,6 +1166,16 @@ func TestDeployPolicyDeniesUnapprovedManagedPolicyAttachment(t *testing.T) {
 		t.Fatalf("%s: statement %q has no %q list under %s; without it the Deny applies to every iam:AttachRolePolicy call and takes the deploy pipeline down", iamFile, statementSid(stmt), attachDenyConditionKey, attachDenyConditionOperator)
 	}
 
+	// This list is read the same blind way an Action or Resource list is, and
+	// carries the same hole in the fail-open direction: an element expressed as
+	// a reference is invisible to quotedStringPattern, so the set equality below
+	// compares only the literals and passes while the Deny exempts whatever the
+	// reference adds. It is an ArnNotEquals allowlist on a Deny, so an entry this
+	// test cannot see is an extra managed policy attachable to any cudly-* role.
+	if refs := unreadListElements(op.body, valuePattern); refs != "" {
+		t.Fatalf("%s: statement %q has %q entries that are not literal strings (%s); this test cannot know what they resolve to, so they are absent from the set compared against terraform/modules below and the Deny exempts them silently. Write literal ARNs", iamFile, statementSid(stmt), attachDenyConditionKey, refs)
+	}
+
 	allowedMatches := quotedStringPattern.FindAllStringSubmatch(m[1], -1)
 	allowed := make([]string, 0, len(allowedMatches))
 	for _, q := range allowedMatches {
@@ -850,7 +1283,13 @@ func TestBoundaryPolicyNameStaysInProtectedNamespace(t *testing.T) {
 
 // iamRoleResourcePattern matches an `resource "aws_iam_role" "<name>" {`
 // block header and captures the role's local name.
-var iamRoleResourcePattern = regexp.MustCompile(`resource\s+"aws_iam_role"\s+"([A-Za-z0-9_]+)"\s*\{`)
+//
+// The name class includes "-" because Terraform resource names permit it. The
+// repo happens to use underscores everywhere today, which is exactly why the
+// omission never fired: a role named "sneaky-role" with no permissions_boundary
+// was invisible to TestEveryModuleRoleHasPermissionsBoundary, and the
+// roleCount vacuity guard could not help because the other roles still counted.
+var iamRoleResourcePattern = regexp.MustCompile(`resource\s+"aws_iam_role"\s+"([A-Za-z0-9_-]+)"\s*\{`)
 
 // permissionsBoundaryArgumentPattern matches the exact
 // `permissions_boundary = var.permissions_boundary_arn` argument a module role
@@ -1052,5 +1491,132 @@ func TestBoundaryMatchesCrossAccountRolePrefix(t *testing.T) {
 
 	if got := statementResources(stmts[0]); !equalStringSets(got, []string{want}) {
 		t.Errorf("%s: CrossAccountAssumeRoleCeiling caps sts:AssumeRole at %v, but %s defaults to %q in %v, so the modules grant %q. A permissions boundary caps by intersection: this mismatch is INVISIBLE at `terraform apply` (both documents are written exactly as configured, the apply is green) and surfaces as a RUNTIME AccessDenied the first time CUDly assumes a role in a linked account, i.e. cross-account cost collection silently stops working in the deployed environment. Change both in the same commit", boundaryFile, got, crossAccountPrefixVariable, prefix, crossAccountModuleVariableFiles, want)
+	}
+}
+
+// passRoleAction is the one IAM action policy_boundary.tf grants, in
+// PassRoleCeiling, and the one it denies, in DenyPassDeployRole. Both
+// statements are located by their Action set rather than by their Sid, for the
+// reason boundaryGatedRoleMutationActions gives: a Sid is free text and
+// renaming one must not silently skip the check.
+const passRoleAction = "iam:PassRole"
+
+// passRoleCeilingResource is the Resource PassRoleCeiling must be scoped to.
+// It is spelled out here rather than shared with boundaryGatedRoleMutationResource
+// (which happens to be the same string) because they are separate invariants in
+// separate documents: one is what the deploy role may mutate, this one is what
+// a boundaried workload role may pass.
+const passRoleCeilingResource = "arn:aws:iam::*:role/cudly-*"
+
+// deployRoleResource is the exact ARN of the deploy role DenyPassDeployRole
+// protects. Unlike passRoleCeilingResource it carries no wildcard, which is
+// what stops the IAM-path trick (arn:aws:iam::123:role/cudly-x/EvilRole
+// satisfies cudly-*) from evading the Deny.
+const deployRoleResource = "arn:aws:iam::*:role/cudly-terraform-deploy"
+
+// TestBoundaryScopesPassRoleToCudlyRoles pins the Resource of PassRoleCeiling,
+// which is the premise the rest of this boundary reasons from rather than an
+// ordinary drift check.
+//
+// Three separate arguments in policy_boundary.tf and policy_iam.tf are only
+// valid while iam:PassRole is capped at cudly-*: that the ecs:RunTask residual
+// reaches only task definitions whose roles are already boundaried; that the
+// three services narrowed in #1723 are the ones PassRole scoping does NOT
+// constrain (implying it constrains the others); and that
+// iam:AddRoleToInstanceProfile is safe unconditioned because reaching an
+// instance needs a scoped PassRole. Widening this Resource to "*" invalidates
+// all three at once and re-opens the escalation the boundary exists to close:
+// a boundaried role could hand an unrelated administrator role to a new Lambda
+// and run as it. Every other test in this file stays green while that happens,
+// because they are action-set guards.
+func TestBoundaryScopesPassRoleToCudlyRoles(t *testing.T) {
+	allows := findStatements(t, boundaryFile, func(stmt string) bool {
+		return statementEffect(stmt) == "Allow" && equalStringSets(statementActions(stmt), []string{passRoleAction})
+	})
+	if len(allows) != 1 {
+		t.Fatalf("%s: found %d Allow statements whose Action set is exactly [%q], want exactly 1 (PassRoleCeiling). A second one widens the cap by union, and none at all takes down the four EventBridge invoker roles that pass the task and task-execution roles to ecs:RunTask", boundaryFile, len(allows), passRoleAction)
+	}
+
+	if got := statementResources(allows[0]); !equalStringSets(got, []string{passRoleCeilingResource}) {
+		t.Errorf("%s: statement %q caps %s at Resource %v, want exactly [%q]. Widening it (to \"*\" above all) lets a boundaried workload role pass ANY role in the account to a new Lambda or task and run as it, which is a complete exit from this boundary and not a widening within it; narrowing it 403s the EventBridge invoker roles at RUNTIME with `terraform apply` still green", boundaryFile, statementSid(allows[0]), passRoleAction, got, passRoleCeilingResource)
+	}
+}
+
+// TestBoundaryDeniesPassingTheDeployRole pins the Deny that stops PassRoleCeiling
+// covering cudly-terraform-deploy itself, which is a cudly-* role and therefore
+// matches the Allow above. Without it a boundaried workload role could pass the
+// deploy role to a Lambda and inherit it: a workload -> deploy escalation, the
+// same shape as the #542 self-pass loop.
+//
+// It locates the statement by Action set AND Resource rather than by Effect, so
+// flipping Deny to Allow leaves it matched and fails on the Effect assertion
+// instead of quietly matching nothing.
+func TestBoundaryDeniesPassingTheDeployRole(t *testing.T) {
+	denies := findStatements(t, boundaryFile, func(stmt string) bool {
+		if !equalStringSets(statementActions(stmt), []string{passRoleAction}) {
+			return false
+		}
+		for _, r := range statementResources(stmt) {
+			if r == deployRoleResource {
+				return true
+			}
+		}
+		return false
+	})
+	if len(denies) != 1 {
+		t.Fatalf("%s: found %d statements covering %s on %q, want exactly 1 (DenyPassDeployRole). PassRoleCeiling allows cudly-*, and the deploy role is a cudly-* role, so without this statement a boundaried workload role may pass cudly-terraform-deploy to a Lambda and run as it", boundaryFile, len(denies), passRoleAction, deployRoleResource)
+	}
+
+	if effect := statementEffect(denies[0]); effect != "Deny" {
+		t.Errorf("%s: statement %q has Effect %q, want \"Deny\". As an Allow it is not merely inert, it is redundant with PassRoleCeiling and removes the one thing stopping a workload -> deploy escalation; an explicit Deny is what beats the cudly-* Allow", boundaryFile, statementSid(denies[0]), effect)
+	}
+}
+
+// TestPolicyDocumentsUseLiteralActionAndResourceLists is the precondition every
+// other assertion in this file rests on: that reading the quoted strings out of
+// an Action or Resource list reads the whole list.
+//
+// It exists because the assertions above are all EQUALITY checks against a set
+// this file extracts, and an element expressed as a reference rather than a
+// literal is invisible to that extraction. It does not make an assertion fail,
+// it makes it measure a smaller document:
+// `Resource = ["arn:aws:iam::*:role/cudly-*", local.x]` compares equal to
+// [passRoleCeilingResource], so TestBoundaryScopesPassRoleToCudlyRoles reports
+// PassRole as capped at cudly-* while the grant reaches local.x as well. There
+// is no per-assertion fix for that, because every one of them consumes the same
+// blind extraction, so the invariant is asserted once here over every statement
+// in every document rather than at each call site.
+//
+// Scanning both the guarded documents and policy_iam.tf is deliberate: the two
+// halves of the #1705 fix (the ceiling and the delegation that enforces it) are
+// equally undermined by a Resource this test cannot read.
+func TestPolicyDocumentsUseLiteralActionAndResourceLists(t *testing.T) {
+	files := append(guardedPolicyFiles(t), iamFile)
+
+	scanned := 0
+	for _, file := range files {
+		stmts := extractStatementBlocks(readPolicySource(t, file))
+		if len(stmts) == 0 {
+			t.Errorf("%s: found zero Statement objects; the statement splitter in this test is broken and would otherwise pass vacuously", file)
+			continue
+		}
+		for _, stmt := range stmts {
+			scanned++
+			for _, list := range []struct {
+				what    string
+				pattern *regexp.Regexp
+			}{
+				{"Action", actionAssignmentPattern},
+				{"Resource", resourceAssignmentPattern},
+			} {
+				if refs := unreadListElements(stmt, list.pattern); refs != "" {
+					t.Errorf("%s: statement %q has %s list elements that are not literal strings (%s). Every assertion in this file reads these lists by pulling the quoted strings out of them, so a referenced element is not read at all: the statement is measured as if it granted only its literal entries, and the assertion that pins it passes against a document narrower than the one AWS enforces. Write literals, or teach this file to resolve the reference before using one", file, statementSid(stmt), list.what, refs)
+				}
+			}
+		}
+	}
+
+	if scanned == 0 {
+		t.Fatalf("scanned zero statements across %v; this guard would pass vacuously", files)
 	}
 }
