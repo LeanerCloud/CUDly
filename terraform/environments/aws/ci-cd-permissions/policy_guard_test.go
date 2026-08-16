@@ -188,7 +188,7 @@ var actionAssignmentPattern = regexp.MustCompile(`(?m)^[ \t]*(?:Action|actions)\
 // contributes nothing to TestBoundaryCoversWorkloadServices' derived set, so
 // the ceiling is never required to cover it and the role 403s at RUNTIME with
 // the apply green: the under-reporting direction, which is the failure mode
-// this file is organised to avoid.
+// this file is organized to avoid.
 var actionStringPattern = regexp.MustCompile(`"([A-Za-z0-9-]+:[A-Za-z0-9_*]+|\*)"`)
 
 // resourceAssignmentPattern matches a `Resource = [...]` or `Resource = "..."`
@@ -247,7 +247,7 @@ var anyQuotedStringPattern = regexp.MustCompile(`"[^"]*"`)
 // until it accepts every form somebody might write is the losing half of that
 // trade: "*:*" and "iam*" are grants that must never appear in a ceiling, so the
 // fix is for the test to REFUSE them loudly, not to learn to parse them.
-// Comparing the counts turns "the pattern did not recognise this entry" into a
+// Comparing the counts turns "the pattern did not recognize this entry" into a
 // failure rather than a silent omission, which closes the class instead of the
 // two forms currently known.
 func countActionListStrings(stmt string) int {
@@ -262,6 +262,13 @@ func countActionListStrings(stmt string) int {
 // is built from, i.e. everything in a captured Action or Resource value that is
 // not an element.
 var listStructurePattern = regexp.MustCompile(`[\[\],\s]`)
+
+// interpolatedStringPattern matches a quoted list element that contains a
+// Terraform interpolation, i.e. one whose value is decided at plan time and is
+// therefore not the text this file reads out of the source. Matching it
+// separately is what keeps anyQuotedStringPattern from stripping it as a
+// literal: see unreadListElements.
+var interpolatedStringPattern = regexp.MustCompile(`"[^"]*\$\{[^"]*"`)
 
 // unreadListElements returns the elements of the values assignPattern captures
 // in stmt that are not quoted literals: local.x, var.y, a function call,
@@ -280,9 +287,22 @@ var listStructurePattern = regexp.MustCompile(`[\[\],\s]`)
 // one-element set every Resource assertion in this file expects, while the
 // grant it describes is whatever local.y adds. Both forms survive terraform fmt
 // and terraform validate.
+//
+// A quoted element holding an interpolation counts as unread for the same
+// reason, and is the third form of the same hole rather than a fourth kind of
+// element. `"${local.y}"` IS a quoted string, so anyQuotedStringPattern strips
+// it and the residue is empty, but the text between the quotes is a reference
+// whose value this test no more knows than it knows a bare local.y's. The two
+// counts do not catch it either: it is one quoted string that parses to one
+// action, so `Action = ["${local.y}"]` reads parsed == listed == 1. For Resource
+// lists there is no count at all, so `Resource = ["${local.y}"]` reaches
+// statementResources, which hands back the literal text `${local.y}` as if that
+// were the ARN AWS will enforce, and every Resource equality in this file is
+// then made against a string that is not a grant.
 func unreadListElements(stmt string, assignPattern *regexp.Regexp) string {
 	var refs []string
 	for _, m := range assignPattern.FindAllStringSubmatch(stmt, -1) {
+		refs = append(refs, interpolatedStringPattern.FindAllString(m[1], -1)...)
 		if r := listStructurePattern.ReplaceAllString(anyQuotedStringPattern.ReplaceAllString(m[1], ""), ""); r != "" {
 			refs = append(refs, r)
 		}
@@ -1144,6 +1164,16 @@ func TestDeployPolicyDeniesUnapprovedManagedPolicyAttachment(t *testing.T) {
 	m := valuePattern.FindStringSubmatch(op.body)
 	if m == nil {
 		t.Fatalf("%s: statement %q has no %q list under %s; without it the Deny applies to every iam:AttachRolePolicy call and takes the deploy pipeline down", iamFile, statementSid(stmt), attachDenyConditionKey, attachDenyConditionOperator)
+	}
+
+	// This list is read the same blind way an Action or Resource list is, and
+	// carries the same hole in the fail-open direction: an element expressed as
+	// a reference is invisible to quotedStringPattern, so the set equality below
+	// compares only the literals and passes while the Deny exempts whatever the
+	// reference adds. It is an ArnNotEquals allowlist on a Deny, so an entry this
+	// test cannot see is an extra managed policy attachable to any cudly-* role.
+	if refs := unreadListElements(op.body, valuePattern); refs != "" {
+		t.Fatalf("%s: statement %q has %q entries that are not literal strings (%s); this test cannot know what they resolve to, so they are absent from the set compared against terraform/modules below and the Deny exempts them silently. Write literal ARNs", iamFile, statementSid(stmt), attachDenyConditionKey, refs)
 	}
 
 	allowedMatches := quotedStringPattern.FindAllStringSubmatch(m[1], -1)
