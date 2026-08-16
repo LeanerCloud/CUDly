@@ -1,6 +1,6 @@
 module github.com/LeanerCloud/CUDly/pkg
 
-go 1.26.5
+go 1.26.6
 
 // This module contains shared types, provider interfaces, and the exchange package.
 // The exchange package has AWS SDK dependencies for RI exchange operations.
