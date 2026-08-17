@@ -41,6 +41,12 @@ run_case() {
 run_case "role assignments and a prose mention exit 0" 0 \
   "${FIXTURES}/clean.tf.fixture"
 
+# The other half of the negative direction, and the reason the nested-block axis
+# cannot be a prefix match: `access_policy_enabled`, `access_policy = ...` and
+# `access_policy.value` all start with the block name and grant nothing.
+run_case "identifiers that only share the access_policy prefix exit 0" 0 \
+  "${FIXTURES}/prefix-only.tf.fixture"
+
 # Positive direction: the anti-pattern must be caught.
 run_case "secret_permissions access policy exits 1" 1 \
   "${FIXTURES}/access-policy.tf.fixture"
@@ -105,21 +111,39 @@ run_case "aks module declares no access policy" 0 \
 # runs over every real Terraform file in the tree, none of which may trip it.
 run_case "default scan roots declare no access-policy grant" 0
 
-# Every case above compares exit codes only, so a guard that exited 1 with a
+# Every run_case above compares exit codes only, so a guard that exited 1 with a
 # blank or wrong message would pass all of them while telling a developer
-# nothing. Pin the report for the #1621 shape: it must name the file and the
-# line, which is what makes a CI failure actionable.
-expected_report='access-policy\.tf\.fixture:9: resource "azurerm_key_vault_access_policy"'
-report_stderr="$("$CHECK" "${FIXTURES}/access-policy.tf.fixture" 2>&1 >/dev/null || true)"
-if [[ "$report_stderr" =~ $expected_report ]]; then
-  echo "PASS: violation report names the file and line"
-  (( pass++ )) || true
-else
-  echo "FAIL: violation report names the file and line"
-  printf '  expected to match: %s\n' "$expected_report"
-  printf '  stderr was:\n%s\n' "$report_stderr"
-  (( fail++ )) || true
-fi
+# nothing. Pin the report itself: it must name the file and the line, which is
+# what makes a CI failure actionable.
+run_report_case() {
+  local label="$1"
+  local expected="$2"
+  shift 2
+
+  local report_stderr
+  report_stderr="$("$CHECK" "$@" 2>&1 >/dev/null || true)"
+
+  if [[ "$report_stderr" =~ $expected ]]; then
+    echo "PASS: $label"
+    (( pass++ )) || true
+  else
+    echo "FAIL: $label"
+    printf '  expected to match: %s\n' "$expected"
+    printf '  stderr was:\n%s\n' "$report_stderr"
+    (( fail++ )) || true
+  fi
+}
+
+# The #1621 shape, on the top-level resource axis.
+run_report_case "top-level violation report names the file and line" \
+  'access-policy\.tf\.fixture:9: resource "azurerm_key_vault_access_policy"' \
+  "${FIXTURES}/access-policy.tf.fixture"
+
+# The nested axis, pinned separately: it must report the block header line, not
+# some other line in the file that happens to contain the token.
+run_report_case "nested violation report names the block header line" \
+  'inline-policy\.tf\.fixture:17:[[:space:]]+access_policy[[:space:]]*[{]' \
+  "${FIXTURES}/inline-policy.tf.fixture"
 
 echo ""
 echo "Results: ${pass} passed, ${fail} failed."
