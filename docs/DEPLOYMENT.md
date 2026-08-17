@@ -56,7 +56,7 @@ Terraform automatically handles: Docker image build/push (via build module), fro
 
 - Docker with buildx support
 - Terraform >= 1.6.0
-- Go 1.25+
+- Go 1.26.6+
 - Cloud CLI configured: `aws`, `az`, or `gcloud`
 
 ---

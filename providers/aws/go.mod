@@ -1,6 +1,6 @@
 module github.com/LeanerCloud/CUDly/providers/aws
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/LeanerCloud/CUDly/pkg v0.0.0
