@@ -108,7 +108,7 @@ func sortBySavingsPerInstance(recs []common.Recommendation) {
 }
 
 // maxNamedUnrankableRows bounds how many offending rows requireRankingSignal
-// names before summarising the rest, so a large file produces a readable error.
+// names before summarizing the rest, so a large file produces a readable error.
 const maxNamedUnrankableRows = 5
 
 // requireRankingSignal refuses a run whose --max-instances cap has to choose
