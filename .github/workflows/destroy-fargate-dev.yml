@@ -128,15 +128,43 @@ jobs:
           cd terraform/environments/aws
           terraform init -backend-config=/tmp/backend.tfbackend
 
+      # Runs before `terraform destroy` because the repository is created with
+      # force_delete = false (terraform/modules/registry/aws/main.tf), so the
+      # destroy fails while images remain.
+      #
+      # Deletes only the repository this state owns, read from `terraform
+      # output` and compared by exact equality against every repository in the
+      # account. The `contains(repositoryName,'cudly-dev')` filter this step
+      # used to run also force-deleted `backup-cudly-dev` and
+      # `cudly-dev-prod-mirror`, with every image in them (#1592).
+      # scripts/select-ecr-repos-to-delete.sh holds the comparison and the name
+      # table pinning it, including why a `cudly-dev*` prefix is not enough.
+      # Reads the name through `output -json`, not `output -raw`: on a state
+      # with no outputs at all, `output -raw <name>` exits 0 and writes its "No
+      # outputs found" warning to STDOUT, so the name became that warning text
+      # and re-dispatching the destroy after a completed one failed here before
+      # `terraform destroy` ever ran. `output -json` returns `{}` for that state
+      # and the two cases separate cleanly:
+      #   no outputs at all      -> already destroyed, skip the ECR cleanup
+      #   outputs but not this one -> `jq -e` exits 1, the step fails loudly
+      # `exit 0` ends this step only; the steps after it still run.
       - name: Force-delete ECR repo
         run: |
-          for REPO in $(aws ecr describe-repositories \
-            --query "repositories[?contains(repositoryName,'cudly-dev')].repositoryName" \
-            --output text 2>/dev/null); do
-            echo "Force-deleting ECR repo $REPO..."
-            aws ecr delete-repository --repository-name "$REPO" --force 2>/dev/null \
-              || echo "  Failed to delete $REPO (may already be gone)"
-          done
+          set -euo pipefail
+          OUTPUTS_JSON="$(terraform -chdir=terraform/environments/aws output -json)"
+          if [ "$(jq -r 'length' <<<"$OUTPUTS_JSON")" -eq 0 ]; then
+            echo "State has no outputs; the stack is already destroyed and there is no ECR repository to clean up."
+            exit 0
+          fi
+          OWNED_REPO="$(jq -er '.ecr_repository_name.value' <<<"$OUTPUTS_JSON")"
+          echo "This state owns ECR repository '$OWNED_REPO'"
+          aws ecr describe-repositories --query 'repositories[].repositoryName' --output text \
+            | tr '\t' '\n' \
+            | ./scripts/select-ecr-repos-to-delete.sh "$OWNED_REPO" \
+            | while IFS= read -r REPO; do
+                echo "Force-deleting ECR repo $REPO..."
+                aws ecr delete-repository --repository-name "$REPO" --force
+              done
 
       - name: Disable RDS deletion protection
         run: |
