@@ -830,6 +830,11 @@ func TestApplyMinCountFloorAfterDuplicateAdjustment(t *testing.T) {
 		{Service: common.ServiceRDS, Region: "us-east-1", ResourceType: "db.t3.medium", Count: 6, EstimatedSavings: 100},
 	}
 
+	// Snapshot before the first call. applyMinCountFloor returns its input slice
+	// untouched at a floor of 0, and scorer.Score may reorder adjusted below, so
+	// asserting against adjusted itself would compare the result to itself.
+	original := append([]common.Recommendation(nil), adjusted...)
+
 	var got []common.Recommendation
 	out := captureAppOutput(t, func() {
 		got = applyMinCountFloor(adjusted, minCount)
@@ -846,7 +851,7 @@ func TestApplyMinCountFloorAfterDuplicateAdjustment(t *testing.T) {
 	quiet := captureAppOutput(t, func() {
 		unfiltered = applyMinCountFloor(adjusted, 0)
 	})
-	assert.Equal(t, adjusted, unfiltered, "--min-count 0 must not drop or reorder anything")
+	assert.Equal(t, original, unfiltered, "--min-count 0 must not drop or reorder anything")
 	assert.Empty(t, quiet)
 }
 
