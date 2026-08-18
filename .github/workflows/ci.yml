@@ -764,6 +764,13 @@ jobs:
   ecr-delete-selection:
     name: ECR delete selection scope
     runs-on: ubuntu-latest
+    # ci.yml declares no workflow-level `permissions`, so a job without its own
+    # block gets the repository default, which is read/write on this repo. This
+    # job checks out the tree and runs a shell script against it; `contents:
+    # read` is all of that needs, and it is the same shape security-scan above
+    # uses (which adds `security-events: write` only because it uploads SARIF).
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
