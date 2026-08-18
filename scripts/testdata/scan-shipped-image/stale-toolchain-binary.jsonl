@@ -1,3 +1,4 @@
+{"config":{"protocol_version":"v1.0.0","scanner_name":"govulncheck","scanner_version":"v1.1.4","db":"https://vuln.go.dev","db_last_modified":"2026-08-14T16:22:54Z","scan_level":"symbol","scan_mode":"binary"}}
 {"finding":{"osv":"GO-2022-0635","trace":[{"module":"github.com/aws/aws-sdk-go","version":"v1.49.6"}]}}
 {"finding":{"osv":"GO-2026-4518","trace":[{"module":"github.com/jackc/pgproto3/v2","version":"v2.3.3"}]}}
 {"finding":{"osv":"GO-2026-4771","fixed_version":"v5.9.0","trace":[{"module":"github.com/jackc/pgx/v5","version":"v5.5.4"}]}}

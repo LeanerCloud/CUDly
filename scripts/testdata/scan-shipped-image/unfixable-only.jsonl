@@ -1,3 +1,4 @@
+{"config":{"protocol_version":"v1.0.0","scanner_name":"govulncheck","scanner_version":"v1.1.4","db":"https://vuln.go.dev","db_last_modified":"2026-08-14T16:22:54Z","scan_level":"symbol","scan_mode":"binary"}}
 {"finding":{"osv":"GO-2026-5932","trace":[{"module":"golang.org/x/crypto","version":"v0.53.0"}]}}
 {"finding":{"osv":"GO-2026-5932","trace":[{"module":"golang.org/x/crypto","version":"v0.53.0","package":"golang.org/x/crypto/openpgp/clearsign"}]}}
 {"finding":{"osv":"GO-2026-5932","trace":[{"module":"golang.org/x/crypto","version":"v0.53.0","package":"golang.org/x/crypto/openpgp/errors"}]}}

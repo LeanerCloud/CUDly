@@ -20,10 +20,17 @@
 #   unfixable-only.jsonl          /app/cudly as built on main: one advisory,
 #                                 GO-2026-5932, with no fixed version.
 #   no-findings.jsonl             /usr/local/bin/migrate as built on main:
-#                                 nothing at all.
+#                                 nothing beyond the config message, which is
+#                                 what a genuinely clean run looks like.
 #
-# malformed.jsonl is the one hand-written fixture: it stands in for output that
-# exists but cannot be parsed, which must not read as a clean binary.
+# Each of those opens with the config message govulncheck really emitted.
+#
+# The remaining three are hand-written and stand in for output that exists but
+# cannot be drawn a verdict from: malformed.jsonl is unparseable, while
+# not-a-report.jsonl and empty-stream.jsonl are well-formed JSON carrying zero
+# findings. The last two are the ones that matter: they used to classify as a
+# clean binary, so a govulncheck invocation that silently produced nothing
+# certified the image.
 #
 # Exits 0 when all cases pass; exits 1 on any failure.
 
@@ -99,7 +106,7 @@ run_case "an advisory with no published fix does not fail the scan" 0 \
   "clean (1 advisory/advisories without a published fix)" \
   "no fix   GO-2026-5932  in golang.org/x/crypto"
 
-run_case "a binary with no findings passes" 0 \
+run_case "a real run that found nothing passes" 0 \
   "${FIXTURES}/no-findings.jsonl" \
   "clean (0 advisory/advisories without a published fix)"
 
@@ -115,6 +122,18 @@ run_case "a missing govulncheck output is exit 2, not a clean verdict" 2 \
 # the "no fixable advisories" branch with empty counts.
 run_case "unparseable govulncheck output is exit 2, not a clean verdict" 2 \
   "${FIXTURES}/malformed.jsonl"
+
+# The two cases a parse-error check does NOT cover. Both are valid JSON that
+# yields zero findings, so both used to be indistinguishable from a clean
+# binary. Distinguishing them from no-findings.jsonl above is the entire point:
+# a clean run still carries the config message, these do not.
+run_case "a well-formed stream that is not a report is exit 2" 2 \
+  "${FIXTURES}/not-a-report.jsonl" \
+  "no config.protocol_version"
+
+run_case "an empty stream is exit 2, not a clean verdict" 2 \
+  "${FIXTURES}/empty-stream.jsonl" \
+  "no config.protocol_version"
 
 echo ""
 echo "Results: ${pass} passed, ${fail} failed."

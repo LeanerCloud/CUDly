@@ -64,7 +64,8 @@ readonly REQUIRED_BINARY="/app/cudly"
 #
 # Reads a `govulncheck -format json` stream and reports one line per advisory,
 # split by whether upstream has published a fix. Returns 0 when every advisory
-# is unfixable (including when there are none), 1 when at least one is fixable.
+# is unfixable (including when there are none), 1 when at least one is fixable,
+# and 2 when the stream is not a govulncheck report it can draw a verdict from.
 #
 # Sourceable so scripts/test-scan-shipped-image.sh can exercise the verdict
 # against recorded govulncheck output without docker or a built image.
@@ -77,6 +78,31 @@ classify_findings() {
 
   if [[ ! -f "$json" ]]; then
     echo "ERROR: no govulncheck output at $json" >&2
+    return 2
+  fi
+
+  # Establish that this is a govulncheck report at all, before reading a
+  # verdict out of it. An empty stream, a lone `{}`, or a stream carrying no
+  # finding records is well-formed JSON that yields zero findings, which the
+  # summary below would classify as a clean binary: a govulncheck invocation
+  # that silently produced nothing would certify the image. Checking for a
+  # parse error does not cover it, because none of those IS a parse error.
+  #
+  # Every real run opens with a config message, so require its
+  # protocol_version. The chain is total (`objects`/`strings` yield nothing
+  # rather than erroring on the wrong type), so a stream whose first message is
+  # some other shape lands on "" and is rejected rather than throwing.
+  local protocol
+  if ! protocol="$(jq -s -r '
+    (.[0] | objects | .config | objects | .protocol_version | strings) // ""
+  ' "$json")"; then
+    echo "ERROR: could not parse govulncheck output at $json" >&2
+    return 2
+  fi
+  if [[ -z "$protocol" ]]; then
+    echo "ERROR: $json is not a govulncheck report: its first message carries" >&2
+    echo "       no config.protocol_version. An empty, truncated or otherwise" >&2
+    echo "       degenerate stream must not read as a binary with no findings." >&2
     return 2
   fi
 
