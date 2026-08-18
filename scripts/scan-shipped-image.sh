@@ -39,9 +39,11 @@
 # WHAT IT DOES NOT COVER. OS package CVEs in the base image (musl, openssl,
 # zlib, curl). govulncheck only knows about Go modules and the Go standard
 # library. A Trivy scan-type: image step would cover those; it is not added
-# here because the pinned alpine:3.21.3 runtime base already carries fixable
-# CRITICAL/HIGH openssl, musl and zlib advisories, so such a gate would land
-# red. Tracked separately.
+# here, and is tracked separately. The reason it was originally deferred is
+# gone: the runtime base was alpine:3.21.3, which carried fixable CRITICAL/HIGH
+# openssl, musl and zlib advisories that would have landed such a gate red on
+# day one. The base is now alpine:3.24.1, measured clean of fixable
+# CRITICAL/HIGH OS advisories, so adding that gate is unblocked.
 #
 # Exit 0 = every Go binary found, and no advisory with a published fix.
 # Exit 1 = at least one fixable advisory, or the enumeration came back empty.
