@@ -19,7 +19,9 @@ github.com/aws/aws-sdk-go-v2/service/ec2 v1.251.2/go.mod h1:MXJiLJZtMqb2dVXgEIn3
 github.com/aws/aws-sdk-go-v2/service/elasticache v1.50.3 h1:uiWSUtTWqpvhP7KSEpVpIm0LqOtXtzOx049rmukP/gI=
 github.com/aws/aws-sdk-go-v2/service/elasticache v1.50.3/go.mod h1:igTRxVYuxplMPKS5J1AEThtbeFJQhUz845YtDRDzJhY=
 github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.7 h1:5EniKhLZe4xzL7a+fU3C2tfUN4nWIqlLesfrjkuPFTY=
+github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.7/go.mod h1:x0nZssQ3qZSnIcePWLvcoFisRXJzcTVvYpAAdYX8+GI=
 github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.21 h1:c31//R3xgIJMSC8S6hEVq+38DcvUlgFY0FM6mSI5oto=
+github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.21/go.mod h1:r6+pf23ouCB718FUxaqzZdbpYFyDtehyZcmP5KL9FkA=
 github.com/aws/aws-sdk-go-v2/service/memorydb v1.31.4 h1:MUW9N/0Y/Wkl4Jt5l9xDWB+nZjaEUwUm56ViraOiBks=
 github.com/aws/aws-sdk-go-v2/service/memorydb v1.31.4/go.mod h1:xTkekmoJ/62dew9BDNBsl3DPrDZh4eOZtxiJsi+ocas=
 github.com/aws/aws-sdk-go-v2/service/opensearch v1.52.3 h1:lHnod6e9i7gBkixiA3Wqoj3hX3a/NQELZl1/yPpPXpE=
