@@ -138,55 +138,18 @@ jobs:
           cd terraform/environments/aws
           terraform init -backend-config=/tmp/backend.tfbackend
 
-      # Runs before `terraform destroy` because the repository is created with
-      # force_delete = false (terraform/modules/registry/aws/main.tf), so the
-      # destroy fails while images remain.
-      #
-      # Deletes only the repository THIS job's state owns, read from `terraform
-      # output` and compared by exact equality against every repository in the
-      # account. This step used to select by the `cudly-staging*` prefix, which
-      # also matches `cudly-staging-prod-mirror` and `cudly-staging-<hex>-backup`
-      # and force-deleted every image in them (#1820). The prefix also spans
-      # both staging states: the lambda and fargate jobs each create their own
-      # `cudly-staging-<random_id.suffix.hex>` repository (main.tf:55), so
-      # either job deleted the other's. scripts/select-ecr-repos-to-delete.sh
-      # holds the comparison and the name table pinning it, including why no
-      # prefix describes the owned repository uniquely.
-      #
-      # Reads the name through `output -json`, not `output -raw`: on a state
-      # with no outputs at all, `output -raw <name>` exits 0 and writes its "No
-      # outputs found" warning to STDOUT, so the name would become that warning
-      # text and re-dispatching the cleanup after a completed one would fail
-      # here before `terraform destroy` ever ran. `output -json` returns `{}`
-      # for that state and the two cases separate cleanly:
-      #   no outputs at all        -> already destroyed, skip the ECR cleanup
-      #   outputs but not this one -> `jq -e` exits 1, the step fails loudly
-      # `exit 0` ends this step only; the steps after it still run.
-      #
-      # Nothing is swallowed here. The `2>/dev/null || echo "may already be
-      # gone"` this step used to carry reported success after a failed listing
-      # or a failed delete, and a failed listing is indistinguishable from an
-      # empty account, so the cleanup did nothing and `terraform destroy` then
-      # failed on the images still in the repository. "Already gone" needs no
-      # swallowing: the repository is simply absent from the listing, the
-      # selector prints nothing and exits 0, and the loop body never runs.
+      # Runs before `terraform destroy`: the repository is created with
+      # force_delete = false, so the destroy fails while images remain. Deletes
+      # only the repository THIS state owns, by exact name. The `cudly-staging*`
+      # prefix this used to select by also matched `cudly-staging-prod-mirror`,
+      # `cudly-staging-<hex>-backup` and the sibling staging state's repository,
+      # and force-deleted every image in them (#1820). Rationale, the
+      # `output -json` handling and why nothing here is swallowed: the script's
+      # header. Both staging jobs and destroy-fargate-dev.yml call the same
+      # script, so the guard cannot land in one workflow and not its sibling --
+      # which is how #1592 became #1820.
       - name: Force-delete the ECR repo this state owns
-        run: |
-          set -euo pipefail
-          OUTPUTS_JSON="$(terraform -chdir=terraform/environments/aws output -json)"
-          if [ "$(jq -r 'length' <<<"$OUTPUTS_JSON")" -eq 0 ]; then
-            echo "State has no outputs; the stack is already destroyed and there is no ECR repository to clean up."
-            exit 0
-          fi
-          OWNED_REPO="$(jq -er '.ecr_repository_name.value' <<<"$OUTPUTS_JSON")"
-          echo "This state owns ECR repository '$OWNED_REPO'"
-          aws ecr describe-repositories --query 'repositories[].repositoryName' --output text \
-            | tr '\t' '\n' \
-            | ./scripts/select-ecr-repos-to-delete.sh "$OWNED_REPO" \
-            | while IFS= read -r REPO; do
-                echo "Force-deleting ECR repo $REPO..."
-                aws ecr delete-repository --repository-name "$REPO" --force
-              done
+        run: ./scripts/force-delete-owned-ecr-repo.sh terraform/environments/aws
 
       - name: Disable RDS deletion protection before destroy
         run: |
@@ -253,55 +216,18 @@ jobs:
           cd terraform/environments/aws
           terraform init -backend-config=/tmp/backend.tfbackend
 
-      # Runs before `terraform destroy` because the repository is created with
-      # force_delete = false (terraform/modules/registry/aws/main.tf), so the
-      # destroy fails while images remain.
-      #
-      # Deletes only the repository THIS job's state owns, read from `terraform
-      # output` and compared by exact equality against every repository in the
-      # account. This step used to select by the `cudly-staging*` prefix, which
-      # also matches `cudly-staging-prod-mirror` and `cudly-staging-<hex>-backup`
-      # and force-deleted every image in them (#1820). The prefix also spans
-      # both staging states: the lambda and fargate jobs each create their own
-      # `cudly-staging-<random_id.suffix.hex>` repository (main.tf:55), so
-      # either job deleted the other's. scripts/select-ecr-repos-to-delete.sh
-      # holds the comparison and the name table pinning it, including why no
-      # prefix describes the owned repository uniquely.
-      #
-      # Reads the name through `output -json`, not `output -raw`: on a state
-      # with no outputs at all, `output -raw <name>` exits 0 and writes its "No
-      # outputs found" warning to STDOUT, so the name would become that warning
-      # text and re-dispatching the cleanup after a completed one would fail
-      # here before `terraform destroy` ever ran. `output -json` returns `{}`
-      # for that state and the two cases separate cleanly:
-      #   no outputs at all        -> already destroyed, skip the ECR cleanup
-      #   outputs but not this one -> `jq -e` exits 1, the step fails loudly
-      # `exit 0` ends this step only; the steps after it still run.
-      #
-      # Nothing is swallowed here. The `2>/dev/null || echo "may already be
-      # gone"` this step used to carry reported success after a failed listing
-      # or a failed delete, and a failed listing is indistinguishable from an
-      # empty account, so the cleanup did nothing and `terraform destroy` then
-      # failed on the images still in the repository. "Already gone" needs no
-      # swallowing: the repository is simply absent from the listing, the
-      # selector prints nothing and exits 0, and the loop body never runs.
+      # Runs before `terraform destroy`: the repository is created with
+      # force_delete = false, so the destroy fails while images remain. Deletes
+      # only the repository THIS state owns, by exact name. The `cudly-staging*`
+      # prefix this used to select by also matched `cudly-staging-prod-mirror`,
+      # `cudly-staging-<hex>-backup` and the sibling staging state's repository,
+      # and force-deleted every image in them (#1820). Rationale, the
+      # `output -json` handling and why nothing here is swallowed: the script's
+      # header. Both staging jobs and destroy-fargate-dev.yml call the same
+      # script, so the guard cannot land in one workflow and not its sibling --
+      # which is how #1592 became #1820.
       - name: Force-delete the ECR repo this state owns
-        run: |
-          set -euo pipefail
-          OUTPUTS_JSON="$(terraform -chdir=terraform/environments/aws output -json)"
-          if [ "$(jq -r 'length' <<<"$OUTPUTS_JSON")" -eq 0 ]; then
-            echo "State has no outputs; the stack is already destroyed and there is no ECR repository to clean up."
-            exit 0
-          fi
-          OWNED_REPO="$(jq -er '.ecr_repository_name.value' <<<"$OUTPUTS_JSON")"
-          echo "This state owns ECR repository '$OWNED_REPO'"
-          aws ecr describe-repositories --query 'repositories[].repositoryName' --output text \
-            | tr '\t' '\n' \
-            | ./scripts/select-ecr-repos-to-delete.sh "$OWNED_REPO" \
-            | while IFS= read -r REPO; do
-                echo "Force-deleting ECR repo $REPO..."
-                aws ecr delete-repository --repository-name "$REPO" --force
-              done
+        run: ./scripts/force-delete-owned-ecr-repo.sh terraform/environments/aws
 
       - name: Disable RDS deletion protection before destroy
         run: |

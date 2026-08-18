@@ -229,32 +229,40 @@ run_case "more than one argument exits 2" 2 "" "$ACCOUNT_LISTING" "$OWNED" "cudl
 
 # --- Wiring: the consumers still route ECR deletion through this selector ----
 #
-# Every case above exercises the script standalone. Delete the
-# `| ./scripts/select-ecr-repos-to-delete.sh "$OWNED_REPO"` stage from a
-# consumer and all of them stay green while that workflow goes back to
+# Every case above exercises the script standalone. Drop the selector stage from
+# the code that deletes and all of them stay green while that code goes back to
 # force-deleting whatever the replacement filter matches. The recurrence mode
 # that produced #1592 and then #1820 was exactly that: the guard landed in one
 # workflow and not in its sibling.
 #
-# Scoped to the steps that delete: the selector invocation, its "$OWNED_REPO"
-# argument and `aws ecr delete-repository` must all appear inside one and the
-# same step. Asserting them anywhere in the file would let an unrelated line
-# keep this green after a delete step lost its selector stage or its argument
-# -- the same "the string is present somewhere" mistake the selector itself
-# exists to remove. Step names are variables so the regexes and the messages
-# cannot drift apart.
+# The deletion body used to be inlined in each consumer step. It now lives once
+# in scripts/force-delete-owned-ecr-repo.sh, which all three destroy steps call,
+# so the wiring splits into two halves that are asserted separately:
+#
+#   assert_step_wiring    each named step still calls the shared script, against
+#                         the state directory whose repository it may delete
+#   assert_script_wiring  the shared script still derives the owned name from
+#                         `terraform output`, still feeds it to the exact-match
+#                         selector, and still deletes only what that pipeline
+#                         yields
+#
+# Asserting only the first would pass a shared script that had quietly gone back
+# to a prefix filter; asserting only the second would pass a workflow that had
+# stopped calling it. The sweep further down is the backstop for delete sites
+# neither names.
 #
 # `[|]` and `[$]` rather than `\|` and `\$`: escaping those is undefined in
 # POSIX ERE, and CI's awk is mawk rather than the awk this was written on.
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 WORKFLOW_DIR="${REPO_ROOT}/.github/workflows"
+CLEANUP_SCRIPT="${SCRIPT_DIR}/force-delete-owned-ecr-repo.sh"
 
-# Both wiring assertions below have to tell a step that RUNS `aws ecr
-# delete-repository` apart from one that only mentions it. ci.yml's own comment
-# describing this assertion names the command in prose, and an `echo` may quote
-# it; neither deletes anything. A guard that fired on those would constrain what
-# may be written ABOUT the command, which is the same "the string is present
-# somewhere" mistake the selector itself exists to remove, one level up.
+# The assertions below have to tell code that RUNS `aws ecr delete-repository`
+# apart from prose that only mentions it. ci.yml's comment describing this
+# assertion names the command, and an `echo` may quote it; neither deletes
+# anything. A guard that fired on those would constrain what may be written
+# ABOUT the command, which is the same "the string is present somewhere" mistake
+# the selector itself exists to remove, one level up.
 #
 # So the awk programs match the shell code on a line rather than the raw line:
 #
@@ -265,10 +273,17 @@ WORKFLOW_DIR="${REPO_ROOT}/.github/workflows"
 #   invokes_delete() additionally empties quoted string literals, so a command
 #                    named inside `"..."` or `'...'` is prose, not an invocation.
 #
-# The selector match runs on code_of() alone, because it asserts the literal
-# text of the `"$OWNED_REPO"` argument and emptying literals would erase it.
+# pipes_to_selector() runs on code_of() alone, because it asserts the literal
+# text of the selector's quoted argument and emptying literals would erase it.
 # Running it on the raw line instead would let a commented-out selector stage
 # mask an unguarded delete in the same step, which fails open.
+#
+# Its path is matched as "anything with no pipe or space in it, ending in a
+# slash" so both call forms are recognised: the workflow fixtures' relative
+# `./scripts/select-...` and the shared script's `"${SCRIPT_DIR}/select-..."`,
+# which resolves the sibling script from BASH_SOURCE rather than from the
+# caller's working directory. Requiring the slash immediately before the file
+# name keeps `| cat select-ecr-repos-to-delete.sh "$X"` from counting.
 #
 # `^#` and ` #` as two subs rather than one `(^|[[:space:]])#` alternation:
 # anchors inside a group are not portable across awk implementations, and CI's
@@ -286,16 +301,24 @@ AWK_CODE_FUNCS='
     gsub(SQ "[^" SQ "]*" SQ, "", line)
     return line ~ /aws[[:space:]]+ecr[[:space:]]+delete-repository/
   }
+  function pipes_to_selector(line, argre) {
+    return code_of(line) ~ ("[|][[:space:]]*\"?[^|[:space:]]*/select-ecr-repos-to-delete\\.sh\"?[[:space:]]+" argre)
+  }
 '
 
 # assert_step_wiring WORKFLOW_FILE STEP_NAME EXPECTED_STEPS
 #
 # Asserts that WORKFLOW_FILE contains exactly EXPECTED_STEPS steps named
-# STEP_NAME and that EVERY one of them pipes through the selector alongside its
-# `aws ecr delete-repository` call. The count matters where a file holds more
-# than one such step (cleanup-staging.yml destroys two AWS states): without it,
-# a run where one step keeps the selector and the other drops it satisfies
-# per-file flags and passes.
+# STEP_NAME and that EVERY one of them runs the shared cleanup script against
+# terraform/environments/aws. The count matters where a file holds more than one
+# such step (cleanup-staging.yml destroys two AWS states): without it, a run
+# where one step keeps the call and the other drops it satisfies per-file flags
+# and passes.
+#
+# The state directory is pinned rather than accepted as any argument because it
+# is what decides which repository the call may delete. A step that called the
+# script against a different state would delete a different repository, and that
+# is a change this assertion should make someone state out loud.
 assert_step_wiring() {
   local workflow="$1"
   local step="$2"
@@ -311,27 +334,26 @@ assert_step_wiring() {
       function finish() {
         if (in_step) {
           steps++
-          if (!(has_selector && has_delete)) unwired++
+          if (!has_call) unwired++
         }
-        in_step = 0; has_selector = 0; has_delete = 0
+        in_step = 0; has_call = 0
       }
       $0 ~ ("^[[:space:]]*-[[:space:]]+name:[[:space:]]*" step "[[:space:]]*$") {
         finish(); in_step = 1; next
       }
       /^[[:space:]]*-[[:space:]]+name:/ { finish() }
-      in_step && code_of($0) ~ /[|][[:space:]]*\.\/scripts\/select-ecr-repos-to-delete\.sh[[:space:]]+"[$]OWNED_REPO"/ { has_selector = 1 }
-      in_step && invokes_delete($0) { has_delete = 1 }
+      in_step && code_of($0) ~ /[[:space:]]\.\/scripts\/force-delete-owned-ecr-repo\.sh[[:space:]]+terraform\/environments\/aws[[:space:]]*$/ { has_call = 1 }
       END { finish(); exit !(steps == expected && unwired == 0) }
     ' "$workflow"; then
-    echo "PASS: all ${expected} '${step}' step(s) in $(basename "$workflow") pipe ECR deletion through the selector"
+    echo "PASS: all ${expected} '${step}' step(s) in $(basename "$workflow") call the shared cleanup script"
     ((pass++)) || true
   else
     echo "FAIL: $(basename "$workflow") does not have exactly ${expected} step(s) named"
-    echo "      '${step}' that each pipe ./scripts/select-ecr-repos-to-delete.sh"
-    echo "      \"\$OWNED_REPO\" alongside their 'aws ecr delete-repository' call (stage"
-    echo "      removed, argument dropped, step renamed, or a step added/deleted). The"
-    echo "      cases above only exercise the script standalone, so they stay green"
-    echo "      while the #1592/#1820 over-match returns"
+    echo "      '${step}' that each run"
+    echo "      './scripts/force-delete-owned-ecr-repo.sh terraform/environments/aws'"
+    echo "      (call removed, state directory changed, step renamed, or a step"
+    echo "      added/deleted). The cases above only exercise the selector standalone,"
+    echo "      so they stay green while the #1592/#1820 over-match returns"
     ((fail++)) || true
   fi
 }
@@ -339,28 +361,96 @@ assert_step_wiring() {
 assert_step_wiring "${WORKFLOW_DIR}/destroy-fargate-dev.yml" "Force-delete ECR repo" 1
 assert_step_wiring "${WORKFLOW_DIR}/cleanup-staging.yml" "Force-delete the ECR repo this state owns" 2
 
-# The assertions above name the steps they know about, so a NEW delete site in
-# a new step or a new workflow is invisible to them -- which is how #1820
-# outlived #1592. This sweep is keyed on the dangerous call instead of on a
-# name: every step anywhere in .github/workflows that runs `aws ecr
-# delete-repository` must pipe through the selector, whatever it or its
-# workflow is called. The argument only has to be a quoted variable here; the
-# named assertions pin it to "$OWNED_REPO".
+# assert_script_wiring SCRIPT
 #
-# It also reports when it finds no delete step at all, because that is what a
+# The other half: the shared script the steps above call must still delete only
+# what the exact-match selector yields. Five counts, each of which must be
+# exactly one, so a second unguarded delete added beside the guarded one is
+# caught and so is a guard that has been removed entirely:
+#
+#   owned       the owned name is read from `terraform output`, not hardcoded
+#               and not derived from a prefix
+#   piped       that name reaches the selector
+#   fed         the delete loop reads the selector's output, so the selector
+#               cannot be reduced to a no-op stage beside a delete driven by
+#               some other listing
+#   deletes     there is exactly one `aws ecr delete-repository`
+#   by_loop_var the repository it deletes is the one the loop read, not some
+#               other name that happened to be in scope
+#
+# `deletes` is also what keeps the rest from passing vacuously: a script that
+# deletes nothing at all satisfies every "is guarded" reading of them.
+assert_script_wiring() {
+  local script="$1"
+
+  if [[ ! -f "$script" ]]; then
+    echo "FAIL: shared cleanup script not found at ${script}"
+    ((fail++)) || true
+    return
+  fi
+
+  if awk -v SQ="'" "$AWK_CODE_FUNCS"'
+      code_of($0) ~ /OWNED_REPO=.*jq[[:space:]]+-er[[:space:]]+.*\.ecr_repository_name\.value/ { owned++ }
+      pipes_to_selector($0, "\"[$]OWNED_REPO\"") { piped++ }
+      code_of($0) ~ /[|][[:space:]]*while[[:space:]]+IFS=[[:space:]]*read[[:space:]]+-r[[:space:]]+REPO/ {
+        if (pipes_to_selector(prev, "\"[$]OWNED_REPO\"")) fed++
+      }
+      invokes_delete($0) { deletes++ }
+      code_of($0) ~ /aws[[:space:]]+ecr[[:space:]]+delete-repository[[:space:]]+--repository-name[[:space:]]+"[$]REPO"/ { by_loop_var++ }
+      { prev = $0 }
+      END { exit !(owned == 1 && piped == 1 && fed == 1 && deletes == 1 && by_loop_var == 1) }
+    ' "$script"; then
+    echo "PASS: $(basename "$script") deletes only what the exact-match selector yields"
+    ((pass++)) || true
+  else
+    echo "FAIL: $(basename "$script") no longer reads the owned name from 'terraform"
+    echo "      output', pipes it to scripts/select-ecr-repos-to-delete.sh, and"
+    echo "      force-deletes exactly the repositories that pipeline yields -- expected"
+    echo "      one of each. This is where the deletion body lives now, so a prefix"
+    echo "      filter reintroduced here is the #1592/#1820 over-match, whatever the"
+    echo "      call sites look like"
+    ((fail++)) || true
+  fi
+}
+
+assert_script_wiring "$CLEANUP_SCRIPT"
+
+# The assertions above name the files and steps they know about, so a NEW delete
+# site in a new step, a new workflow or a new script is invisible to them --
+# which is how #1820 outlived #1592. This sweep is keyed on the dangerous call
+# instead of on a name: everything anywhere in the swept set that runs `aws ecr
+# delete-repository` must pipe through the selector, whatever it is called. The
+# argument only has to be a quoted variable here; the named assertions pin it to
+# "$OWNED_REPO".
+#
+# The swept set is .github/workflows plus the two production scripts. Extracting
+# the deletion body out of the workflow steps moved the only real delete call
+# into scripts/, so a sweep that still looked only at .github/workflows would
+# report a clean result for a directory that no longer contains the thing it is
+# looking for. scripts/ is named file by file rather than globbed because this
+# suite itself lives there and quotes both the command and the selector, in
+# fixtures and in awk programs, as data.
+#
+# It also reports when it finds no delete site at all, because that is what a
 # wrong directory or an unmatched glob looks like, and an empty sweep would
 # otherwise read as a clean result for files it never opened. Both workflow
 # extensions GitHub accepts are swept, so a new `.yaml` file cannot slip past.
 
-# sweep_unwired DIR
+# sweep_unwired DIR [FILE...]
 #
-# Prints one line per delete step in DIR that does not pipe through the
-# selector, plus a line of its own when DIR holds no delete step at all. No
-# output means the directory is clean. Kept separate from the pass/fail
-# reporting so the sweep itself can be exercised over fixtures below.
+# Prints one line per delete site in DIR (plus each named FILE) that does not
+# pipe through the selector, plus a line of its own when the swept set holds no
+# delete site at all. No output means the swept set is clean. Kept separate from
+# the pass/fail reporting so the sweep itself can be exercised over fixtures
+# below.
+#
+# Sites are delimited by workflow `- name:` lines. A shell script has none, so
+# it is swept as a single site and reported as "whole file".
 sweep_unwired() {
   local dir="$1"
+  shift
   local files=()
+  local extra
 
   shopt -s nullglob
   files=("${dir}"/*.yml "${dir}"/*.yaml)
@@ -371,38 +461,52 @@ sweep_unwired() {
     return
   fi
 
+  for extra in "$@"; do
+    if [[ ! -f "$extra" ]]; then
+      echo "swept file not found: ${extra}"
+      return
+    fi
+    files+=("$extra")
+  done
+
+  # The site is reported from site_file, not FILENAME: a site that ends at a
+  # file boundary is flushed by the next file's first line, by which point
+  # FILENAME has already advanced and the report would send the reader to an
+  # innocent file. Pinned by the two-file fixture below.
   awk -v SQ="'" "$AWK_CODE_FUNCS"'
     function finish() {
       if (has_delete && !has_selector) {
-        printf "%s: step \"%s\"\n", FILENAME, step_name
+        if (step_name == "") printf "%s: whole file\n", site_file
+        else printf "%s: step \"%s\"\n", site_file, step_name
       }
       if (has_delete) total++
       has_delete = 0; has_selector = 0; step_name = ""
     }
-    FNR == 1 && NR > 1 { finish() }
+    FNR == 1 { if (NR > 1) finish(); site_file = FILENAME }
     /^[[:space:]]*-[[:space:]]+name:/ {
       finish()
       step_name = $0
       sub(/^[[:space:]]*-[[:space:]]+name:[[:space:]]*/, "", step_name)
     }
-    code_of($0) ~ /[|][[:space:]]*\.\/scripts\/select-ecr-repos-to-delete\.sh[[:space:]]+"[$][A-Za-z_][A-Za-z0-9_]*"/ { has_selector = 1 }
+    pipes_to_selector($0, "\"[$][A-Za-z_][A-Za-z0-9_]*\"") { has_selector = 1 }
     invokes_delete($0) { has_delete = 1 }
     END { finish(); if (total == 0) print "no `aws ecr delete-repository` step found at all" }
   ' "${files[@]}"
 }
 
-# assert_sweep LABEL DIR EXPECTED
+# assert_sweep LABEL DIR EXPECTED [FILE...]
 #
 # EXPECTED empty asserts the sweep finds nothing; otherwise it asserts EXPECTED
-# appears in the report, so a fixture pins which step was flagged rather than
+# appears in the report, so a fixture pins which site was flagged rather than
 # only that something was.
 assert_sweep() {
   local label="$1"
   local dir="$2"
   local expected="$3"
+  shift 3
   local report
 
-  report="$(sweep_unwired "$dir")"
+  report="$(sweep_unwired "$dir" "$@")"
 
   if [[ -z "$expected" && -z "$report" ]] || [[ -n "$expected" && "$report" == *"$expected"* ]]; then
     echo "PASS: $label"
@@ -425,8 +529,8 @@ assert_sweep() {
   fi
 }
 
-assert_sweep "every 'aws ecr delete-repository' step in .github/workflows pipes through the selector" \
-  "$WORKFLOW_DIR" ""
+assert_sweep "every 'aws ecr delete-repository' site in .github/workflows and scripts/ pipes through the selector" \
+  "$WORKFLOW_DIR" "" "$CLEANUP_SCRIPT" "$SELECT"
 
 # --- The sweep itself, in both directions, over fixtures ---------------------
 #
@@ -493,6 +597,64 @@ assert_sweep "an unwired delete step is flagged, past a commented-out selector s
 
 assert_sweep "a directory holding no workflow file is reported, not passed" \
   "${FIXTURE_DIR}/empty-does-not-exist" 'no workflow files found under'
+
+# The deletion body now lives in a shell script rather than a workflow step, so
+# the sweep has to recognise a delete site in a file with no `- name:` lines at
+# all, and has to accept the sibling-script call form that resolves the selector
+# from BASH_SOURCE instead of from the caller's working directory. Both
+# directions, over a file swept by name the way the real one is. The `prose` dir
+# supplies the workflow half of the swept set and contributes no delete site.
+mkdir -p "${FIXTURE_DIR}/scripts"
+
+cat >"${FIXTURE_DIR}/scripts/wired.sh" <<'EOF'
+aws ecr describe-repositories --query 'repositories[].repositoryName' --output text \
+  | tr '\t' '\n' \
+  | "${SCRIPT_DIR}/select-ecr-repos-to-delete.sh" "$OWNED_REPO" \
+  | while IFS= read -r REPO; do
+      aws ecr delete-repository --repository-name "$REPO" --force
+    done
+EOF
+
+cat >"${FIXTURE_DIR}/scripts/unwired.sh" <<'EOF'
+aws ecr describe-repositories \
+  --query "repositories[?starts_with(repositoryName,'cudly-staging')].repositoryName" \
+  --output text \
+  | while IFS= read -r REPO; do
+      aws ecr delete-repository --repository-name "$REPO" --force
+    done
+EOF
+
+assert_sweep "a script calling the selector through \${SCRIPT_DIR} is not flagged" \
+  "${FIXTURE_DIR}/prose" "" "${FIXTURE_DIR}/scripts/wired.sh"
+
+assert_sweep "an unwired script is flagged as a whole-file delete site" \
+  "${FIXTURE_DIR}/prose" 'unwired.sh: whole file' "${FIXTURE_DIR}/scripts/unwired.sh"
+
+assert_sweep "a swept file that does not exist is reported, not passed" \
+  "${FIXTURE_DIR}/prose" 'swept file not found' "${FIXTURE_DIR}/scripts/does-not-exist.sh"
+
+# A site that runs to the end of its file is only flushed once the next file
+# starts, so the report has to remember which file the site came from. Reported
+# from FILENAME it named the innocent file that happened to be swept next, which
+# points whoever reads the failure at the wrong place -- and every fixture above
+# sweeps one file at a time, so none of them can catch it. Two files, the unwired
+# one first.
+mkdir -p "${FIXTURE_DIR}/misattrib"
+
+cat >"${FIXTURE_DIR}/misattrib/a-unwired.yml" <<'EOF'
+      - name: Force-delete all staging ECR repos
+        run: |
+          aws ecr delete-repository --repository-name "$REPO" --force
+EOF
+
+cat >"${FIXTURE_DIR}/misattrib/b-innocent.yml" <<'EOF'
+      - name: Deletes nothing
+        run: |
+          echo "clean"
+EOF
+
+assert_sweep "a finding names the file it came from, not the file swept after it" \
+  "${FIXTURE_DIR}/misattrib" 'a-unwired.yml: step "Force-delete all staging ECR repos"'
 
 echo
 echo "passed: ${pass}, failed: ${fail}"

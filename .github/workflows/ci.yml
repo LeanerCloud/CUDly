@@ -758,8 +758,10 @@ jobs:
   # The consumers force-delete what the selector prints, so both directions are
   # asserted: over-matching deletes images the workflow does not own, and
   # matching nothing leaves that state's repository behind. The suite also
-  # asserts every `aws ecr delete-repository` step in .github/workflows still
-  # pipes through the selector, which is what #1592 and #1820 each escaped.
+  # asserts the wiring, which is what #1592 and #1820 each escaped: all three
+  # destroy steps still call scripts/force-delete-owned-ecr-repo.sh, that script
+  # still deletes only what the selector yields, and nothing else under
+  # .github/workflows or scripts/ runs `aws ecr delete-repository` unguarded.
   # Fast (shell only), so it always runs.
   ecr-delete-selection:
     name: ECR delete selection scope
