@@ -109,10 +109,7 @@ func TestMigration095_PurchaseHistoryAccountIDWidth(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	if err != nil {
-		t.Skipf("Skipping test: could not setup postgres container: %v", err)
-	}
+	container := testhelpers.RequirePostgresContainer(ctx, t)
 	defer container.Cleanup(ctx)
 
 	pool := container.DB.Pool()
@@ -201,10 +198,7 @@ func TestMigration095_DownNarrowsWhenSafe(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	if err != nil {
-		t.Skipf("Skipping test: could not setup postgres container: %v", err)
-	}
+	container := testhelpers.RequirePostgresContainer(ctx, t)
 	defer container.Cleanup(ctx)
 
 	pool := container.DB.Pool()
@@ -240,10 +234,7 @@ func TestMigration095_DownRefusesToTruncate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	if err != nil {
-		t.Skipf("Skipping test: could not setup postgres container: %v", err)
-	}
+	container := testhelpers.RequirePostgresContainer(ctx, t)
 	defer container.Cleanup(ctx)
 
 	pool := container.DB.Pool()
@@ -256,7 +247,7 @@ func TestMigration095_DownRefusesToTruncate(t *testing.T) {
 		"setup: an Azure audit row must be insertable after 000095")
 
 	// One step, so exactly 000095's down migration runs (see the sibling test).
-	err = migrations.RollbackMigrations(ctx, pool, getMigrationsPath(), 1)
+	err := migrations.RollbackMigrations(ctx, pool, getMigrationsPath(), 1)
 	require.Error(t, err,
 		"rolling back 000095 with an over-long account_id present must fail rather than truncate")
 	assert.Contains(t, err.Error(), "refusing to narrow purchase_history.account_id",

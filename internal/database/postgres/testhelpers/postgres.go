@@ -9,6 +9,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/database"
 	"github.com/jackc/pgx/v5"
+	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -43,11 +44,13 @@ func SetupPostgresContainer(ctx context.Context, t *testing.T) (*PostgresContain
 	// Get connection details
 	host, err := postgresContainer.Host(ctx)
 	if err != nil {
+		terminateAfterError(ctx, postgresContainer, "container host lookup")
 		return nil, fmt.Errorf("failed to get container host: %w", err)
 	}
 
 	port, err := postgresContainer.MappedPort(ctx, "5432")
 	if err != nil {
+		terminateAfterError(ctx, postgresContainer, "container port lookup")
 		return nil, fmt.Errorf("failed to get container port: %w", err)
 	}
 
@@ -73,9 +76,7 @@ func SetupPostgresContainer(ctx context.Context, t *testing.T) (*PostgresContain
 	// Create database connection
 	db, err := database.NewConnection(ctx, config, nil)
 	if err != nil {
-		if termErr := postgresContainer.Terminate(ctx); termErr != nil {
-			log.Printf("testhelpers: failed to terminate postgres container after DB connect error: %v", termErr)
-		}
+		terminateAfterError(ctx, postgresContainer, "database connect")
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
@@ -84,6 +85,55 @@ func SetupPostgresContainer(ctx context.Context, t *testing.T) (*PostgresContain
 		Config:    config,
 		DB:        db,
 	}, nil
+}
+
+// terminateAfterError stops a container that started but will not be returned
+// to the caller, so nothing is left to call Cleanup on it. Every error path
+// after postgres.Run needs this: #1597 turned them from skips into failures, so
+// a bad run now accumulates live containers where it used to accumulate skips.
+// Ryuk would reap them eventually; not relying on that is cheaper than the bug.
+func terminateAfterError(ctx context.Context, c testcontainers.Container, stage string) {
+	// Detached deliberately. The error that brought us here is very often the
+	// context expiring, and Terminate on an already-dead context returns
+	// immediately without stopping anything, so passing ctx straight through
+	// would leave exactly the leak this function exists to prevent.
+	termCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+
+	if err := c.Terminate(termCtx); err != nil {
+		log.Printf("testhelpers: failed to terminate postgres container after %s failed: %v", stage, err)
+	}
+}
+
+// RequirePostgresContainer starts a PostgreSQL test container for t, skipping
+// the test only when this environment has no usable Docker provider and failing
+// loudly for every other error.
+//
+// Drawing that line is the whole point (issue #1597). "No usable Docker daemon"
+// is an environment fact and the one legitimate reason to skip, so it is probed
+// explicitly before anything is started. Past that probe the daemon answered a
+// health check, which makes a container that still refuses to come up -- a
+// missing image, a database that never accepts connections -- a real failure.
+// Reporting it as a skip would turn a broken run green, which is
+// indistinguishable from a run that had nothing to say.
+//
+// The probe owns the whole environment side of that line, so a daemon that is
+// present but unhealthy skips too, rather than failing.
+//
+// Callers remain responsible for Cleanup, matching SetupPostgresContainer.
+func RequirePostgresContainer(ctx context.Context, t *testing.T) *PostgresContainer {
+	t.Helper()
+
+	// Probes the Docker provider and skips with its own diagnostic when the
+	// daemon is unreachable or unhealthy.
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	container, err := SetupPostgresContainer(ctx, t)
+	require.NoError(t, err,
+		"Docker is healthy but the PostgreSQL test container did not come up; "+
+			"this is a real failure, not an environment without Docker")
+
+	return container
 }
 
 // Cleanup terminates the test container and closes database connection.

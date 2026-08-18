@@ -19,14 +19,24 @@ import (
 )
 
 // These tests run against a real PostgreSQL database using testcontainers.
-// They will be skipped if Docker is not available or if SKIP_DB_TESTS is set.
 // To run these tests: go test ./internal/analytics/ -v
 // To skip these tests: SKIP_DB_TESTS=1 go test ./internal/analytics/
 
-func skipIfNoDocker(t *testing.T) {
+// skipIfDBTestsOptedOut honors the SKIP_DB_TESTS opt-out. It was called
+// skipIfNoDocker, which is what a reader of #1597 would flag: the name promised
+// a Docker probe, so a suite that silently reported nothing looked accounted
+// for. It never probed anything. Docker is probed by RequirePostgresContainer,
+// which each of these tests calls, and which fails rather than skips once the
+// daemon answers a health check.
+//
+// The remaining exposure is the opt-out itself: setting SKIP_DB_TESTS zeroes
+// this suite without failing. That is deliberate and it is the caller's
+// decision, not an error answered with a skip, so the #1597 guard does not
+// treat it as a finding. Nothing under .github/ sets the variable, so the suite
+// really runs in CI today.
+func skipIfDBTestsOptedOut(t *testing.T) {
 	t.Helper()
 
-	// Skip if SKIP_DB_TESTS is set (CI without a live DB, or local opt-out).
 	if os.Getenv("SKIP_DB_TESTS") != "" {
 		t.Skip("Skipping database tests (SKIP_DB_TESTS is set)")
 	}
@@ -42,20 +52,17 @@ func getMigrationsPath() string {
 func f64ptr(v float64) *float64 { return &v }
 
 func TestPostgresAnalyticsStore_SaveSnapshot_DB(t *testing.T) {
-	skipIfNoDocker(t)
+	skipIfDBTestsOptedOut(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	// Setup test container
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	if err != nil {
-		t.Skipf("Skipping test: could not setup postgres container: %v", err)
-	}
+	container := testhelpers.RequirePostgresContainer(ctx, t)
 	defer container.Cleanup(ctx)
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
+	err := migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
 	require.NoError(t, err)
 
 	// Create store
@@ -126,20 +133,17 @@ func TestPostgresAnalyticsStore_SaveSnapshot_DB(t *testing.T) {
 }
 
 func TestPostgresAnalyticsStore_QuerySavings_DB(t *testing.T) {
-	skipIfNoDocker(t)
+	skipIfDBTestsOptedOut(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	// Setup test container
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	if err != nil {
-		t.Skipf("Skipping test: could not setup postgres container: %v", err)
-	}
+	container := testhelpers.RequirePostgresContainer(ctx, t)
 	defer container.Cleanup(ctx)
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
+	err := migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
 	require.NoError(t, err)
 
 	// Create store
@@ -260,20 +264,17 @@ func TestPostgresAnalyticsStore_QuerySavings_DB(t *testing.T) {
 }
 
 func TestPostgresAnalyticsStore_QueryByProvider_DB(t *testing.T) {
-	skipIfNoDocker(t)
+	skipIfDBTestsOptedOut(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	// Setup test container
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	if err != nil {
-		t.Skipf("Skipping test: could not setup postgres container: %v", err)
-	}
+	container := testhelpers.RequirePostgresContainer(ctx, t)
 	defer container.Cleanup(ctx)
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
+	err := migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
 	require.NoError(t, err)
 
 	// Create store
@@ -341,20 +342,17 @@ func TestPostgresAnalyticsStore_QueryByProvider_DB(t *testing.T) {
 }
 
 func TestPostgresAnalyticsStore_QueryByService_DB(t *testing.T) {
-	skipIfNoDocker(t)
+	skipIfDBTestsOptedOut(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	// Setup test container
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	if err != nil {
-		t.Skipf("Skipping test: could not setup postgres container: %v", err)
-	}
+	container := testhelpers.RequirePostgresContainer(ctx, t)
 	defer container.Cleanup(ctx)
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
+	err := migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
 	require.NoError(t, err)
 
 	// Create store
@@ -406,20 +404,17 @@ func TestPostgresAnalyticsStore_QueryByService_DB(t *testing.T) {
 }
 
 func TestPostgresAnalyticsStore_BulkInsertSnapshots_DB(t *testing.T) {
-	skipIfNoDocker(t)
+	skipIfDBTestsOptedOut(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	// Setup test container
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	if err != nil {
-		t.Skipf("Skipping test: could not setup postgres container: %v", err)
-	}
+	container := testhelpers.RequirePostgresContainer(ctx, t)
 	defer container.Cleanup(ctx)
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
+	err := migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
 	require.NoError(t, err)
 
 	// Create store
@@ -469,20 +464,17 @@ func TestPostgresAnalyticsStore_BulkInsertSnapshots_DB(t *testing.T) {
 }
 
 func TestPostgresAnalyticsStore_PartitionManagement_DB(t *testing.T) {
-	skipIfNoDocker(t)
+	skipIfDBTestsOptedOut(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	// Setup test container
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	if err != nil {
-		t.Skipf("Skipping test: could not setup postgres container: %v", err)
-	}
+	container := testhelpers.RequirePostgresContainer(ctx, t)
 	defer container.Cleanup(ctx)
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
+	err := migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
 	require.NoError(t, err)
 
 	// Create store
@@ -515,20 +507,17 @@ func TestPostgresAnalyticsStore_PartitionManagement_DB(t *testing.T) {
 }
 
 func TestPostgresAnalyticsStore_QueryMonthlyTotals_DB(t *testing.T) {
-	skipIfNoDocker(t)
+	skipIfDBTestsOptedOut(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	// Setup test container
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	if err != nil {
-		t.Skipf("Skipping test: could not setup postgres container: %v", err)
-	}
+	container := testhelpers.RequirePostgresContainer(ctx, t)
 	defer container.Cleanup(ctx)
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
+	err := migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
 	require.NoError(t, err)
 
 	// Create store
@@ -575,20 +564,17 @@ func TestPostgresAnalyticsStore_QueryMonthlyTotals_DB(t *testing.T) {
 }
 
 func TestPostgresAnalyticsStore_RefreshMaterializedViews_DB(t *testing.T) {
-	skipIfNoDocker(t)
+	skipIfDBTestsOptedOut(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	// Setup test container
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	if err != nil {
-		t.Skipf("Skipping test: could not setup postgres container: %v", err)
-	}
+	container := testhelpers.RequirePostgresContainer(ctx, t)
 	defer container.Cleanup(ctx)
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
+	err := migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
 	require.NoError(t, err)
 
 	// Create store
@@ -601,16 +587,13 @@ func TestPostgresAnalyticsStore_RefreshMaterializedViews_DB(t *testing.T) {
 }
 
 func TestPostgresAnalyticsStore_Close_DB(t *testing.T) {
-	skipIfNoDocker(t)
+	skipIfDBTestsOptedOut(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	// Setup test container
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	if err != nil {
-		t.Skipf("Skipping test: could not setup postgres container: %v", err)
-	}
+	container := testhelpers.RequirePostgresContainer(ctx, t)
 	defer container.Cleanup(ctx)
 
 	// Create store

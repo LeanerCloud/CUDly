@@ -258,14 +258,16 @@ func newLazyPool(t *testing.T) *pgxpool.Pool {
 		ConnectTimeout:    time.Second,
 		LogLevel:          "error",
 	}
+	// Neither of these touches the network: buildPoolConfig only parses and
+	// validates the DSN, and NewWithConfig with MinConnections 0 builds a lazy
+	// pool. A failure is therefore a code defect, not an absent database, and
+	// skipping on it would report the suite green on exactly that defect
+	// (issue #1597).
 	poolConfig, err := buildPoolConfig(cfg, "testpass")
-	if err != nil {
-		t.Skipf("cannot build pool config: %v", err)
-	}
+	require.NoError(t, err, "buildPoolConfig does no I/O; a failure here is a code defect")
+
 	pool, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
-	if err != nil {
-		t.Skipf("cannot create lazy pool: %v", err)
-	}
+	require.NoError(t, err, "NewWithConfig builds a lazy pool; a failure here is a code defect")
 	return pool
 }
 
