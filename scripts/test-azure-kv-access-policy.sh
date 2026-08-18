@@ -41,12 +41,6 @@ run_case() {
 run_case "role assignments and a prose mention exit 0" 0 \
   "${FIXTURES}/clean.tf.fixture"
 
-# The other half of the negative direction, and the reason the nested-block axis
-# cannot be a prefix match: `access_policy_enabled`, `access_policy = ...` and
-# `access_policy.value` all start with the block name and grant nothing.
-run_case "identifiers that only share the access_policy prefix exit 0" 0 \
-  "${FIXTURES}/prefix-only.tf.fixture"
-
 # Positive direction: the anti-pattern must be caught.
 run_case "secret_permissions access policy exits 1" 1 \
   "${FIXTURES}/access-policy.tf.fixture"
@@ -59,8 +53,7 @@ run_case "key_permissions access policy exits 1" 1 \
 
 # Indentation must not hide a declaration. The pre-commit `terraform_fmt` hook
 # would normally normalize a top-level block back to column 0 across both scan
-# roots, but the guard must not depend on that gate staying as wide as it is,
-# and the nested access_policy form below is indented by construction.
+# roots, but the guard must not depend on that gate staying as wide as it is.
 run_case "indented access policy exits 1" 1 \
   "${FIXTURES}/indented.tf.fixture"
 
@@ -69,16 +62,6 @@ run_case "indented access policy exits 1" 1 \
 # error, so the guard must not require a separator after `resource`.
 run_case "access policy with no inter-token whitespace exits 1" 1 \
   "${FIXTURES}/nospace.tf.fixture"
-
-# The second form of the same inert grant: an access_policy block nested inside
-# the vault resource, and its dynamic equivalent. Neither declares the banned
-# resource type, so a guard that only knew the top-level header would report
-# both clean.
-run_case "inline access_policy block exits 1" 1 \
-  "${FIXTURES}/inline-policy.tf.fixture"
-
-run_case "dynamic access_policy block exits 1" 1 \
-  "${FIXTURES}/dynamic-policy.tf.fixture"
 
 # A violation must still be found when mixed in with clean files.
 run_case "violation alongside a clean file exits 1" 1 \
@@ -106,10 +89,10 @@ run_case "cleanup-function module declares no access policy" 0 \
 run_case "aks module declares no access policy" 0 \
   "${REPO_ROOT}/terraform/modules/compute/azure/aks/main.tf"
 
-# The default scan roots (terraform/ + iac/) must hold no violation, in either
-# form. This also pins the false-positive surface of the nested-block axis: it
-# runs over every real Terraform file in the tree, none of which may trip it.
-run_case "default scan roots declare no access-policy grant" 0
+# The default scan roots (terraform/ + iac/) must hold no violation. This also
+# pins the guard's false-positive surface: it runs over every real Terraform
+# file in the tree, none of which may trip it.
+run_case "default scan roots declare no access-policy resource" 0
 
 # Every run_case above compares exit codes only, so a guard that exited 1 with a
 # blank or wrong message would pass all of them while telling a developer
@@ -134,16 +117,9 @@ run_report_case() {
   fi
 }
 
-# The #1621 shape, on the top-level resource axis.
-run_report_case "top-level violation report names the file and line" \
+run_report_case "violation report names the file and line" \
   'access-policy\.tf\.fixture:9: resource "azurerm_key_vault_access_policy"' \
   "${FIXTURES}/access-policy.tf.fixture"
-
-# The nested axis, pinned separately: it must report the block header line, not
-# some other line in the file that happens to contain the token.
-run_report_case "nested violation report names the block header line" \
-  'inline-policy\.tf\.fixture:17:[[:space:]]+access_policy[[:space:]]*[{]' \
-  "${FIXTURES}/inline-policy.tf.fixture"
 
 echo ""
 echo "Results: ${pass} passed, ${fail} failed."

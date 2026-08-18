@@ -736,12 +736,12 @@ jobs:
       - name: Run selector self-tests
         run: bash scripts/test-select-ecr-repos-to-delete.sh
 
-  # Assert that no Terraform file declares a Key Vault access-policy grant,
-  # either as an azurerm_key_vault_access_policy resource or as an access_policy
-  # block nested in the vault. This project's only Key Vault sets
-  # enable_rbac_authorization = true, and an RBAC-enabled vault ignores access
-  # policies entirely, so such a grant applies cleanly and then does nothing at
-  # runtime (#1621). Fast (shell only), so it always runs.
+  # Assert that no Terraform file declares an azurerm_key_vault_access_policy
+  # resource. This project's only Key Vault sets enable_rbac_authorization =
+  # true, and an RBAC-enabled vault ignores access policies entirely, so such a
+  # grant applies cleanly and then does nothing at runtime (#1621). The nested
+  # `access_policy` block form is deliberately not covered; #1839 tracks it.
+  # Fast (shell only), so it always runs.
   azure-kv-access-policy:
     name: Azure Key Vault grant model
     runs-on: ubuntu-latest

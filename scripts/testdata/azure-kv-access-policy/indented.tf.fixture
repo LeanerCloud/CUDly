@@ -5,8 +5,7 @@
 # repo, both of this guard's scan roots included, because CI runs `pre-commit
 # run --all-files` (.github/workflows/pre-commit.yml). The guard does not lean
 # on that: a guard anchored strictly at column 0 would depend on a gate that
-# could be narrowed later, and the nested access_policy form is indented by
-# construction. This fixture pins the tolerance so it cannot be lost.
+# could be narrowed later. This fixture pins the tolerance so it cannot be lost.
 
   resource "azurerm_key_vault_access_policy" "indented" {
     key_vault_id = var.key_vault_id
