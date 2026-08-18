@@ -1,0 +1,16 @@
+{"config":{"protocol_version":"v1.0.0","scanner_name":"govulncheck","scanner_version":"v1.1.4","db":"https://vuln.go.dev","db_last_modified":"2026-08-14T16:22:54Z","scan_level":"symbol","scan_mode":"binary"}}
+{"finding":{"osv":"GO-2026-5932","trace":[{"module":"golang.org/x/crypto","version":"v0.53.0"}]}}
+{"finding":{"osv":"GO-2026-5932","trace":[{"module":"golang.org/x/crypto","version":"v0.53.0","package":"golang.org/x/crypto/openpgp/clearsign"}]}}
+{"finding":{"osv":"GO-2026-5932","trace":[{"module":"golang.org/x/crypto","version":"v0.53.0","package":"golang.org/x/crypto/openpgp/errors"}]}}
+{"finding":{"osv":"GO-2026-5932","trace":[{"module":"golang.org/x/crypto","version":"v0.53.0","package":"golang.org/x/crypto/openpgp/elgamal"}]}}
+{"finding":{"osv":"GO-2026-5932","trace":[{"module":"golang.org/x/crypto","version":"v0.53.0","package":"golang.org/x/crypto/openpgp/s2k"}]}}
+{"finding":{"osv":"GO-2026-5932","trace":[{"module":"golang.org/x/crypto","version":"v0.53.0","package":"golang.org/x/crypto/openpgp"}]}}
+{"finding":{"osv":"GO-2026-5932","trace":[{"module":"golang.org/x/crypto","version":"v0.53.0","package":"golang.org/x/crypto/openpgp/packet"}]}}
+{"finding":{"osv":"GO-2026-5932","trace":[{"module":"golang.org/x/crypto","version":"v0.53.0","package":"golang.org/x/crypto/openpgp/armor"}]}}
+{"finding":{"osv":"GO-2026-5932","trace":[{"module":"golang.org/x/crypto","version":"v0.53.0","package":"golang.org/x/crypto/openpgp/packet","function":"org/x/crypto/openpgp/packet/*","receiver":"golang"}]}}
+{"finding":{"osv":"GO-2026-5932","trace":[{"module":"golang.org/x/crypto","version":"v0.53.0","package":"golang.org/x/crypto/openpgp/armor","function":"org/x/crypto/openpgp/armor/*","receiver":"golang"}]}}
+{"finding":{"osv":"GO-2026-5932","trace":[{"module":"golang.org/x/crypto","version":"v0.53.0","package":"golang.org/x/crypto/openpgp/clearsign","function":"org/x/crypto/openpgp/clearsign/*","receiver":"golang"}]}}
+{"finding":{"osv":"GO-2026-5932","trace":[{"module":"golang.org/x/crypto","version":"v0.53.0","package":"golang.org/x/crypto/openpgp/errors","function":"org/x/crypto/openpgp/errors/*","receiver":"golang"}]}}
+{"finding":{"osv":"GO-2026-5932","trace":[{"module":"golang.org/x/crypto","version":"v0.53.0","package":"golang.org/x/crypto/openpgp/elgamal","function":"org/x/crypto/openpgp/elgamal/*","receiver":"golang"}]}}
+{"finding":{"osv":"GO-2026-5932","trace":[{"module":"golang.org/x/crypto","version":"v0.53.0","package":"golang.org/x/crypto/openpgp/s2k","function":"org/x/crypto/openpgp/s2k/*","receiver":"golang"}]}}
+{"finding":{"osv":"GO-2026-5932","trace":[{"module":"golang.org/x/crypto","version":"v0.53.0","package":"golang.org/x/crypto/openpgp","function":"org/x/crypto/openpgp/*","receiver":"golang"}]}}
