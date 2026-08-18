@@ -753,12 +753,14 @@ jobs:
       - name: Run guard script self-tests
         run: bash scripts/test-gcp-secret-scope.sh
 
-  # Assert that the ECR repository selector used by destroy-fargate-dev.yml
-  # picks the repository that state owns and nothing else. The consumer
-  # force-deletes what the selector prints, so both directions are asserted:
-  # over-matching deletes images the workflow does not own, and matching
-  # nothing leaves the dev repository behind. Fast (shell only), so it always
-  # runs.
+  # Assert that the ECR repository selector used by destroy-fargate-dev.yml and
+  # cleanup-staging.yml picks the repository each state owns and nothing else.
+  # The consumers force-delete what the selector prints, so both directions are
+  # asserted: over-matching deletes images the workflow does not own, and
+  # matching nothing leaves that state's repository behind. The suite also
+  # asserts every `aws ecr delete-repository` step in .github/workflows still
+  # pipes through the selector, which is what #1592 and #1820 each escaped.
+  # Fast (shell only), so it always runs.
   ecr-delete-selection:
     name: ECR delete selection scope
     runs-on: ubuntu-latest
