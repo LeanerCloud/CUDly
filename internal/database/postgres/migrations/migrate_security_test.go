@@ -178,10 +178,11 @@ func TestBuildMigrateDSN_SchemeMatchesRegisteredDriver(t *testing.T) {
 }
 
 // TestLibPqDriverNotRegistered asserts the lib/pq-backed golang-migrate driver
-// is not linked into this package. lib/pq carries three advisories with no
-// fixed version in any release (GO-2026-6170/6171/6172, CVE-2026-56871/2/3),
-// reached through Driver.Open and conn.Exec, so importing it fails the
-// repo-wide govulncheck gate with no bump available to clear it (issue #1849).
+// is not linked into this package. lib/pq carries five advisories with no fixed
+// version in any release (GO-2026-6166, 6168, 6170, 6171 and 6172; the issue
+// was filed when only the last three existed), reached through Driver.Open and
+// conn.Exec, so importing it fails the repo-wide govulncheck gate with no bump
+// available to clear it (issue #1849).
 // Re-adding the import is a one-line change that would otherwise only surface
 // as a red CI run on an unrelated pull request.
 func TestLibPqDriverNotRegistered(t *testing.T) {
