@@ -247,7 +247,7 @@ install-dev-tools:
 	@echo "Installing gocyclo $(GOCYCLO_VERSION)..."
 	@go install github.com/fzipp/gocyclo/cmd/gocyclo@$(GOCYCLO_VERSION)
 	@echo "Installing golang-migrate $(MIGRATE_VERSION)..."
-	@go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@$(MIGRATE_VERSION)
+	@go install -tags 'pgx5' github.com/golang-migrate/migrate/v4/cmd/migrate@$(MIGRATE_VERSION)
 	@echo "✓ Development tools installed"
 	@echo ""
 	@echo "Additional tools to install manually:"

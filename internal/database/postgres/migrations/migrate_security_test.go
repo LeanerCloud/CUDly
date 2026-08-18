@@ -5,9 +5,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"testing"
 
+	"github.com/golang-migrate/migrate/v4/database"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -150,6 +152,43 @@ func TestBuildMigrateDSN_PreservesSSLMode(t *testing.T) {
 			assert.Contains(t, result, "sslmode="+mode,
 				"buildMigrateDSN must preserve the configured sslmode, not downgrade it")
 		})
+	}
+}
+
+// TestBuildMigrateDSN_SchemeMatchesRegisteredDriver pins the migration DSN's
+// URL scheme to a driver this package actually imports. golang-migrate resolves
+// the driver by scheme at Open() time, so a scheme naming no registered driver
+// fails at migration time -- on every container start, since entrypoint.sh runs
+// migrations with DB_AUTO_MIGRATE=true -- and not at compile time. Swapping the
+// driver import without swapping the scheme (or the reverse) is exactly the
+// mistake this guards: the pgx/v5 driver registers "pgx5" only, where the
+// lib/pq-backed driver registered "postgres"/"postgresql".
+func TestBuildMigrateDSN_SchemeMatchesRegisteredDriver(t *testing.T) {
+	poolCfg, err := pgxpool.ParseConfig("postgres://user:pass@localhost:5432/db?sslmode=require")
+	require.NoError(t, err, "pgxpool.ParseConfig must accept the fixture DSN")
+
+	parsed, err := url.Parse(buildMigrateDSN(poolCfg))
+	require.NoError(t, err, "buildMigrateDSN must return a parseable URL")
+
+	assert.Equal(t, migrateURLScheme, parsed.Scheme,
+		"buildMigrateDSN must emit the scheme named by migrateURLScheme")
+	assert.Contains(t, database.List(), migrateURLScheme,
+		"migrateURLScheme must name a golang-migrate driver this package imports; "+
+			"registered drivers: %v", database.List())
+}
+
+// TestLibPqDriverNotRegistered asserts the lib/pq-backed golang-migrate driver
+// is not linked into this package. lib/pq carries three advisories with no
+// fixed version in any release (GO-2026-6170/6171/6172, CVE-2026-56871/2/3),
+// reached through Driver.Open and conn.Exec, so importing it fails the
+// repo-wide govulncheck gate with no bump available to clear it (issue #1849).
+// Re-adding the import is a one-line change that would otherwise only surface
+// as a red CI run on an unrelated pull request.
+func TestLibPqDriverNotRegistered(t *testing.T) {
+	for _, scheme := range []string{"postgres", "postgresql"} {
+		assert.NotContains(t, database.List(), scheme,
+			"golang-migrate driver %q is registered, which means the lib/pq-backed "+
+				"database/postgres driver was imported somewhere in this package", scheme)
 	}
 }
 

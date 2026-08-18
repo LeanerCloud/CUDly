@@ -11,8 +11,8 @@ import (
 	"strconv"
 
 	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres" // postgres driver
-	_ "github.com/golang-migrate/migrate/v4/source/file"       // file source
+	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5" // postgres driver (pgx/v5)
+	_ "github.com/golang-migrate/migrate/v4/source/file"     // file source
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -540,6 +540,15 @@ func GetMigrationVersion(ctx context.Context, pool *pgxpool.Pool, migrationsPath
 	return version, dirty, nil
 }
 
+// migrateURLScheme selects which golang-migrate database driver handles the
+// DSN. golang-migrate dispatches purely on the URL scheme, and the pgx/v5
+// driver registers itself as "pgx5" only - "postgres"/"postgresql" belong to
+// the lib/pq-backed driver this package deliberately does not import (issue
+// #1849). A mismatch between this constant and the imported driver fails at
+// migration time, not at compile time, which is why
+// TestBuildMigrateDSN_SchemeMatchesRegisteredDriver pins the two together.
+const migrateURLScheme = "pgx5"
+
 // buildMigrateDSN builds a connection string for golang-migrate from pgx config.
 // The SSL mode is recovered from the parsed TLSConfig so strict modes
 // (verify-ca / verify-full) are preserved rather than silently downgraded to
@@ -558,10 +567,10 @@ func buildMigrateDSN(config *pgxpool.Config) string {
 
 	sslMode := sslModeFromTLSConfig(config.ConnConfig.TLSConfig)
 
-	// Build DSN (golang-migrate uses postgres:// format)
 	// Don't add connection options - RDS Proxy doesn't support them
 	return fmt.Sprintf(
-		"postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		"%s://%s:%s@%s:%d/%s?sslmode=%s",
+		migrateURLScheme,
 		encodedUser,
 		encodedPassword,
 		host,

@@ -47,8 +47,16 @@ SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 # bin/${GOOS}_${GOARCH}/ instead, so resolve both layouts; the final `mv` fails
 # the build if neither produced a binary.
 # Keep this version in step with MIGRATE_VERSION in the Makefile.
+# -tags=pgx5, not postgres: the postgres tag links the lib/pq driver, which
+# carries three unfixable advisories (GO-2026-6170/6171/6172, no fixed version
+# in any release) reached through Driver.Open and conn.Exec on every container
+# start. The pgx5 tag builds the same driver on jackc/pgx v5, which the
+# application already uses. It registers the "pgx5" URL scheme only, so
+# scripts/entrypoint.sh and .github/workflows/database-migration.yml must build
+# pgx5:// URLs - a postgres:// URL against this binary fails at runtime with
+# "unknown driver". See issue #1849.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-      go install -tags=postgres -ldflags="-s -w -X main.Version=v4.19.1" \
+      go install -tags=pgx5 -ldflags="-s -w -X main.Version=v4.19.1" \
       github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.1 && \
     GOPATH_BIN="$(go env GOPATH)/bin" && \
     MIGRATE_BIN="${GOPATH_BIN}/${TARGETOS}_${TARGETARCH}/migrate" && \
