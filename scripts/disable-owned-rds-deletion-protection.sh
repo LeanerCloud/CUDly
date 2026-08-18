@@ -35,10 +35,33 @@
 # Reads the identifier through `output -json`, not `output -raw`: on a state
 # with no outputs at all, `output -raw <name>` exits 0 and writes its "No
 # outputs found" warning to STDOUT, so the identifier would become that warning
-# text. `output -json` returns `{}` for that state and the cases separate
-# cleanly:
-#   no outputs at all        -> already destroyed, skip
-#   outputs but not this one -> fail loudly, with the remedy named
+# text.
+#
+# The five states `terraform output -json` can be in were measured rather than
+# reasoned about, because they do not behave alike and only one of them is loud
+# by default. Measured on terraform 1.10.0, the version TF_VERSION pins in the
+# workflows that call this, and on 1.14.4; identical on both. `output -json`
+# exits 0 in ALL five, so the exit code carries no information here and every
+# branch below is driven by the payload:
+#
+#   state              | -json         | jq length | jq -er .value | handled as
+#   -------------------|---------------|-----------|---------------|------------
+#   no state file      | {}            | 0         | exit 1        | skip, exit 0
+#   state, no outputs  | {}            | 0         | exit 1        | skip, exit 0
+#   key absent         | {...} w/o key | >=1       | exit 1        | exit 1, remedy
+#   key present, null  | {"value":null}| 1         | exit 1        | exit 1, remedy
+#   key present, ""    | {"value":""}  | 1         | exit 0, ""    | exit 1, remedy
+#
+# The last row is the trap: an empty string is neither null nor false, so `jq
+# -er` accepts it and hands the caller a valid-looking empty identifier. It is
+# caught by its own check rather than left to the selector, for two reasons. The
+# selector does refuse it (exit 2, so nothing is ever unprotected), but only
+# after `describe-db-instances` has already run, and its message names the
+# selector's contract rather than the operator's actual problem. The two causes
+# also need different fixes, so they get different messages: "key absent" means
+# the state predates the output and wants an apply, while "empty" means the
+# state HAS the output and it resolved to nothing, which is a real defect in the
+# state or the module and an apply will not fix it.
 #
 # Nothing is swallowed. The `2>/dev/null || true` the callers used to carry
 # reported success after a failed listing or a failed modify, and a failed
@@ -51,7 +74,9 @@
 # Exit codes:
 #   0  completed, including the "state already destroyed" and "instance already
 #      gone" cases, which are normal outcomes and not errors
-#   1  the state publishes outputs but not the owned identifier
+#   1  the owned identifier cannot be resolved from a state that has outputs:
+#      the key is absent or null (state predates the output), or it is present
+#      and empty (state or module defect). Distinct messages, distinct remedies.
 #   2  usage error (wrong arity, or a state directory that does not exist)
 #   *  anything the AWS CLI, terraform, jq or the selector fails with, unmasked
 
@@ -82,13 +107,34 @@ fi
 # rather than a fallback: the only fallback available is the identifier prefix
 # this script exists to remove.
 if ! OWNED_INSTANCE="$(jq -er '.database_instance_identifier.value' <<<"$OUTPUTS_JSON")"; then
-  echo "error: state '${STATE_DIR}' publishes outputs but not 'database_instance_identifier'," >&2
-  echo "       so the instance this state owns cannot be identified. Re-apply the state to" >&2
-  echo "       publish the output, or remove deletion protection on that one instance by" >&2
-  echo "       hand, then re-run the destroy. Refusing to fall back to an identifier" >&2
-  echo "       prefix, which strips protection from instances this state does not own." >&2
+  echo "error: state '${STATE_DIR}' has outputs, but 'database_instance_identifier' is" >&2
+  echo "       absent or null, so the instance this state owns cannot be identified." >&2
+  echo "       This state was last applied before that output existed (#1821)." >&2
+  echo "       Fix: re-apply this state to publish the output, or remove deletion" >&2
+  echo "       protection on that one instance by hand, then re-run the destroy." >&2
+  echo "       Refusing to fall back to an identifier prefix, which strips protection" >&2
+  echo "       from instances this state does not own." >&2
   exit 1
 fi
+
+# An empty string is neither null nor false, so `jq -er` above accepts it. Its
+# own check, before anything is echoed as owned and before any AWS call, because
+# it means something different from the branch above and an apply will not fix
+# it. Whitespace is refused for the same reason the selector refuses it: no
+# DBInstanceIdentifier contains any, so it is not a value this was handed on
+# purpose.
+case "$OWNED_INSTANCE" in
+  '' | *[![:graph:]]*)
+    echo "error: state '${STATE_DIR}' publishes 'database_instance_identifier', but it" >&2
+    echo "       resolved to '${OWNED_INSTANCE}', which is not an instance identifier." >&2
+    echo "       Unlike an absent output, re-applying will NOT fix this: the output is" >&2
+    echo "       there and empty, so either the state is corrupt or the module stopped" >&2
+    echo "       populating it. Inspect 'terraform -chdir=${STATE_DIR} output -json'" >&2
+    echo "       before destroying anything. Refusing to fall back to an identifier" >&2
+    echo "       prefix, which strips protection from instances this state does not own." >&2
+    exit 1
+    ;;
+esac
 
 echo "This state owns RDS instance '$OWNED_INSTANCE'"
 

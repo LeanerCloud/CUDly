@@ -394,6 +394,175 @@ assert_nothing_swallowed() {
 
 assert_nothing_swallowed "$UNPROTECT_SCRIPT"
 
+# --- Behaviour: the script run end to end against stubbed terraform and aws ---
+#
+# Everything above is static. None of it can show that the pipeline actually
+# unprotects the right instance, that a failed call is really not swallowed, or
+# that the `terraform output` branches behave as their table claims -- a script
+# can satisfy every text assertion and still do the wrong thing at runtime.
+#
+# `terraform` and `aws` are stubbed on PATH, and every aws invocation is logged
+# so the assertions can be made about WHICH instance was unprotected rather than
+# only about the exit code. The stub ends in an explicit `exit 0`: written as a
+# trailing `[[ guard ]] && { ... }` it returns 1 whenever the guard is false, so
+# every modify "failed" and the golden path looked like a script bug.
+#
+# The five `terraform output -json` payloads are the measured ones from the
+# script's header table. The empty-string row is the one that matters: it is
+# neither null nor false, so `jq -er` accepts it, and without its own check the
+# script would announce an empty identifier as owned and call AWS before the
+# selector refused it.
+STUB_DIR="$(mktemp -d)"
+STUB_STATE="$(mktemp -d)"
+STUB_CALLS="$(mktemp)"
+trap 'rm -rf "$STUB_DIR" "$STUB_STATE" "$STUB_CALLS"' EXIT
+
+cat >"${STUB_DIR}/terraform" <<'EOF'
+#!/usr/bin/env bash
+printf '%s' "$TF_OUTPUT_JSON"
+EOF
+
+cat >"${STUB_DIR}/aws" <<'EOF'
+#!/usr/bin/env bash
+echo "aws $*" >>"$AWS_CALLS"
+case "$2" in
+  describe-db-instances)
+    [[ "${DESCRIBE_FAILS:-0}" == "1" ]] && { echo "describe failed" >&2; exit 255; }
+    printf '%s\n' "$LISTING"
+    ;;
+  modify-db-instance)
+    [[ "${MODIFY_FAILS:-0}" == "1" ]] && { echo "modify failed" >&2; exit 254; }
+    ;;
+esac
+exit 0
+EOF
+chmod +x "${STUB_DIR}/terraform" "${STUB_DIR}/aws"
+
+export AWS_CALLS="$STUB_CALLS"
+
+# The real `--output text` shape: one tab-separated line. The neighbours are the
+# ones the prefix filter used to match.
+STUB_LISTING=$'cudly-dev\tcudly-dev-1a2b3c4d-postgres\tcudly-dev-1a2b3c4d-postgres-replica\tcudly-dev-prod-mirror\tcudly-dev-dba-scratch\tcudly-staging-9f8e7d6c-postgres'
+
+# run_script -> STUB_EXIT, STUB_ERR, and a truncated call log
+run_script() {
+  : >"$STUB_CALLS"
+  local errfile
+  errfile="$(mktemp)"
+  STUB_EXIT=0
+  PATH="${STUB_DIR}:${PATH}" "$UNPROTECT_SCRIPT" "$@" >/dev/null 2>"$errfile" || STUB_EXIT=$?
+  STUB_ERR="$(cat "$errfile")"
+  rm -f "$errfile"
+}
+
+# assert_behaviour LABEL CONDITION_RESULT DETAIL
+assert_behaviour() {
+  if [[ "$2" == "0" ]]; then
+    echo "PASS: $1"
+    ((pass++)) || true
+  else
+    echo "FAIL: $1"
+    echo "      $3"
+    ((fail++)) || true
+  fi
+}
+
+count_calls() { grep -c "$1" "$STUB_CALLS" 2>/dev/null || true; }
+
+export LISTING="$STUB_LISTING"
+
+# A state that is already destroyed is a normal outcome, not an error, and must
+# not reach AWS at all.
+export TF_OUTPUT_JSON='{}'
+run_script "$STUB_STATE"
+assert_behaviour "behaviour: a state with no outputs exits 0 without calling aws" \
+  "$([[ "$STUB_EXIT" -eq 0 && ! -s "$STUB_CALLS" ]] && echo 0 || echo 1)" \
+  "exit ${STUB_EXIT}, calls: $(cat "$STUB_CALLS")"
+
+# A state that predates the output. Distinct from the empty case below, because
+# the remedies differ: this one wants an apply.
+export TF_OUTPUT_JSON='{"ecr_repository_name":{"value":"cudly-dev-1a2b3c4d"}}'
+run_script "$STUB_STATE"
+assert_behaviour "behaviour: a state missing the output exits 1 without calling aws" \
+  "$([[ "$STUB_EXIT" -eq 1 && ! -s "$STUB_CALLS" ]] && echo 0 || echo 1)" \
+  "exit ${STUB_EXIT}, calls: $(cat "$STUB_CALLS")"
+assert_behaviour "behaviour: the missing-output error tells the operator to re-apply" \
+  "$([[ "$STUB_ERR" == *"absent or null"* && "$STUB_ERR" == *"re-apply this state"* ]] && echo 0 || echo 1)" \
+  "stderr: ${STUB_ERR}"
+
+# `jq -er` accepts an empty string, so without its own check this reaches AWS.
+export TF_OUTPUT_JSON='{"database_instance_identifier":{"value":""}}'
+run_script "$STUB_STATE"
+assert_behaviour "behaviour: an empty identifier exits 1 without calling aws" \
+  "$([[ "$STUB_EXIT" -eq 1 && ! -s "$STUB_CALLS" ]] && echo 0 || echo 1)" \
+  "exit ${STUB_EXIT}, calls: $(cat "$STUB_CALLS")"
+assert_behaviour "behaviour: the empty-identifier error is distinct and says an apply will not fix it" \
+  "$([[ "$STUB_ERR" == *"will NOT fix this"* && "$STUB_ERR" != *"re-apply this state"* ]] && echo 0 || echo 1)" \
+  "stderr: ${STUB_ERR}"
+
+# A null value takes the jq branch, not the empty branch.
+export TF_OUTPUT_JSON='{"database_instance_identifier":{"value":null}}'
+run_script "$STUB_STATE"
+assert_behaviour "behaviour: a null identifier exits 1 without calling aws" \
+  "$([[ "$STUB_EXIT" -eq 1 && ! -s "$STUB_CALLS" ]] && echo 0 || echo 1)" \
+  "exit ${STUB_EXIT}, calls: $(cat "$STUB_CALLS")"
+
+# The golden path, against the hostile listing.
+export TF_OUTPUT_JSON='{"database_instance_identifier":{"value":"cudly-dev-1a2b3c4d-postgres"}}'
+run_script "$STUB_STATE"
+assert_behaviour "behaviour: the golden path exits 0" \
+  "$([[ "$STUB_EXIT" -eq 0 ]] && echo 0 || echo 1)" "exit ${STUB_EXIT}"
+assert_behaviour "behaviour: exactly one instance is unprotected out of the hostile listing" \
+  "$([[ "$(count_calls 'modify-db-instance')" -eq 1 ]] && echo 0 || echo 1)" \
+  "modify calls: $(count_calls 'modify-db-instance')"
+assert_behaviour "behaviour: the unprotected instance is the one the state owns" \
+  "$(grep -q 'modify-db-instance --db-instance-identifier cudly-dev-1a2b3c4d-postgres --no-deletion-protection --apply-immediately' "$STUB_CALLS" && echo 0 || echo 1)" \
+  "calls: $(grep modify "$STUB_CALLS" || echo none)"
+
+# Asserted per neighbour so a failure names the database that would have lost
+# its protection.
+while IFS= read -r neighbour; do
+  [[ -n "$neighbour" ]] || continue
+  assert_behaviour "behaviour: neighbour ${neighbour} keeps its deletion protection" \
+    "$(grep -q -- "--db-instance-identifier ${neighbour} " "$STUB_CALLS" && echo 1 || echo 0)" \
+    "calls: $(grep modify "$STUB_CALLS" || echo none)"
+done <<'EOF'
+cudly-dev-1a2b3c4d-postgres-replica
+cudly-dev-prod-mirror
+cudly-dev-dba-scratch
+cudly-staging-9f8e7d6c-postgres
+EOF
+
+# Re-running a cleanup after a completed one is normal, not an error.
+export LISTING=$'cudly-staging-9f8e7d6c-postgres\tcudly-prod-0badc0de-postgres'
+run_script "$STUB_STATE"
+assert_behaviour "behaviour: an instance already gone exits 0 and modifies nothing" \
+  "$([[ "$STUB_EXIT" -eq 0 && "$(count_calls 'modify-db-instance')" -eq 0 ]] && echo 0 || echo 1)" \
+  "exit ${STUB_EXIT}, calls: $(cat "$STUB_CALLS")"
+
+# The two halves of the swallowing bug, as behaviour rather than as text. A
+# failed listing is what `2>/dev/null` made indistinguishable from an empty
+# account; a failed modify is what `|| true` reported as success.
+export LISTING="$STUB_LISTING" MODIFY_FAILS=1
+run_script "$STUB_STATE"
+assert_behaviour "behaviour: a failed modify fails the step" \
+  "$([[ "$STUB_EXIT" -ne 0 ]] && echo 0 || echo 1)" "exit ${STUB_EXIT}"
+unset MODIFY_FAILS
+
+export DESCRIBE_FAILS=1
+run_script "$STUB_STATE"
+assert_behaviour "behaviour: a failed listing fails the step" \
+  "$([[ "$STUB_EXIT" -ne 0 ]] && echo 0 || echo 1)" "exit ${STUB_EXIT}"
+unset DESCRIBE_FAILS
+
+run_script
+assert_behaviour "behaviour: no argument exits 2" \
+  "$([[ "$STUB_EXIT" -eq 2 ]] && echo 0 || echo 1)" "exit ${STUB_EXIT}"
+
+run_script "${STUB_STATE}/does-not-exist"
+assert_behaviour "behaviour: a missing state directory exits 2" \
+  "$([[ "$STUB_EXIT" -eq 2 ]] && echo 0 || echo 1)" "exit ${STUB_EXIT}"
+
 # The assertions above name the files and steps they know about, so a NEW modify
 # site in a new step, workflow or script is invisible to them -- which is how
 # #1820 outlived #1592 and #1821 outlived both. This sweep is keyed on the
@@ -510,7 +679,9 @@ assert_sweep "every 'aws rds modify-db-instance' site in .github/workflows and s
 # on ci.yml's comment describing this assertion would police what may be written
 # rather than what is run.
 FIXTURE_DIR="$(mktemp -d)"
-trap 'rm -rf "$FIXTURE_DIR"' EXIT
+# Replaces the stub trap set above rather than adding to it, so it has to clean
+# up both sets. A second `trap ... EXIT` silently discards the first.
+trap 'rm -rf "$FIXTURE_DIR" "$STUB_DIR" "$STUB_STATE" "$STUB_CALLS"' EXIT
 mkdir -p "${FIXTURE_DIR}/prose" "${FIXTURE_DIR}/wired" "${FIXTURE_DIR}/unwired" "${FIXTURE_DIR}/scripts" "${FIXTURE_DIR}/misattrib"
 
 cat >"${FIXTURE_DIR}/prose/mentions.yml" <<'EOF'
