@@ -317,7 +317,12 @@ func ScaleRecommendationCosts(rec Recommendation, ratio float64) Recommendation 
 		scaled := *rec.RecurringMonthlyCost * ratio
 		rec.RecurringMonthlyCost = &scaled
 	}
-	if details, ok := rec.Details.(*SavingsPlanDetails); ok {
+	// The nil check is not redundant with the comma-ok: an interface holding a
+	// typed nil (*SavingsPlanDetails)(nil) satisfies the assertion with
+	// ok == true, so copying without it dereferences nil. A malformed rec is
+	// left exactly as it was rather than gaining a fabricated zero-value
+	// commitment.
+	if details, ok := rec.Details.(*SavingsPlanDetails); ok && details != nil {
 		scaled := *details
 		scaled.HourlyCommitment *= ratio
 		rec.Details = &scaled

@@ -143,18 +143,22 @@ func applyCoverage(recs []common.Recommendation, coverage float64, drops *common
 		adjusted := rec
 
 		// For Savings Plans, reduce the hourly commitment instead of count.
-		// If the type assertion fails (defensive — Details should always
-		// be *SavingsPlanDetails for SP recs), preserve the recommendation
-		// at its original values rather than silently dropping it. A
-		// missing-Details record is a logged anomaly, not a reason to
-		// erase coverage from the run.
+		// If Details is the wrong type or a nil pointer (defensive — it
+		// should always be a non-nil *SavingsPlanDetails for SP recs),
+		// preserve the recommendation at its original values rather than
+		// silently dropping it. A missing-Details record is a logged
+		// anomaly, not a reason to erase coverage from the run.
+		//
+		// The nil check matters: an interface holding a typed nil satisfies
+		// the assertion, so testing ok alone would send an unscalable rec
+		// down the scaling path.
 		if common.IsSavingsPlan(rec.Service) {
-			if _, ok := rec.Details.(*common.SavingsPlanDetails); ok {
+			if details, ok := rec.Details.(*common.SavingsPlanDetails); ok && details != nil {
 				// ScaleRecommendationCosts scales HourlyCommitment along with
 				// the cost fields and replaces Details with a scaled copy.
 				adjusted = common.ScaleRecommendationCosts(adjusted, ratio)
 			} else {
-				AppLogger.Printf("WARNING: SP recommendation for service %q has unexpected Details type %T; passing through unscaled\n", rec.Service, rec.Details)
+				AppLogger.Printf("WARNING: SP recommendation for service %q has missing or unexpected Details (%T); passing through unscaled\n", rec.Service, rec.Details)
 			}
 			result = append(result, adjusted)
 			continue
@@ -425,14 +429,18 @@ func applyTargetCoverageSP(rec common.Recommendation, targetPct float64) (common
 	if rec.RecommendedUtilization <= 0 {
 		return rec, false
 	}
-	// If Details isn't a *SavingsPlanDetails (defensive — should always be
-	// for SP recs), log a warning and pass through UNCHANGED — including
-	// leaving ProjectedUtilization at zero. Setting projection fields on a
-	// rec whose commitment fields couldn't be scaled would produce a
-	// misleading row (projection=target%, savings=full-unscaled).
+	// If Details isn't a non-nil *SavingsPlanDetails (defensive — it should
+	// always be one for SP recs), log a warning and pass through UNCHANGED —
+	// including leaving ProjectedUtilization at zero. Setting projection
+	// fields on a rec whose commitment fields couldn't be scaled would
+	// produce a misleading row (projection=target%, savings=full-unscaled).
+	//
+	// The nil check must precede the HourlyCommitment read below: an
+	// interface holding a typed nil satisfies the assertion, so reading the
+	// field off it would dereference nil.
 	details, ok := rec.Details.(*common.SavingsPlanDetails)
-	if !ok {
-		AppLogger.Printf("WARNING: SP recommendation for service %q has unexpected Details type %T; passing through unscaled\n", rec.Service, rec.Details)
+	if !ok || details == nil {
+		AppLogger.Printf("WARNING: SP recommendation for service %q has missing or unexpected Details (%T); passing through unscaled\n", rec.Service, rec.Details)
 		return rec, true
 	}
 	// Also treat a $0 HourlyCommitment as "no signal" — CE occasionally
