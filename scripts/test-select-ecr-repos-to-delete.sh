@@ -249,6 +249,45 @@ run_case "more than one argument exits 2" 2 "" "$ACCOUNT_LISTING" "$OWNED" "cudl
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 WORKFLOW_DIR="${REPO_ROOT}/.github/workflows"
 
+# Both wiring assertions below have to tell a step that RUNS `aws ecr
+# delete-repository` apart from one that only mentions it. ci.yml's own comment
+# describing this assertion names the command in prose, and an `echo` may quote
+# it; neither deletes anything. A guard that fired on those would constrain what
+# may be written ABOUT the command, which is the same "the string is present
+# somewhere" mistake the selector itself exists to remove, one level up.
+#
+# So the awk programs match the shell code on a line rather than the raw line:
+#
+#   code_of()        drops a trailing comment. A `#` that starts a word ends the
+#                    line in both YAML and shell, and in neither is the `#` of
+#                    `a#b` a comment, so the word-start rule is the one rule
+#                    both languages already use.
+#   invokes_delete() additionally empties quoted string literals, so a command
+#                    named inside `"..."` or `'...'` is prose, not an invocation.
+#
+# The selector match runs on code_of() alone, because it asserts the literal
+# text of the `"$OWNED_REPO"` argument and emptying literals would erase it.
+# Running it on the raw line instead would let a commented-out selector stage
+# mask an unguarded delete in the same step, which fails open.
+#
+# `^#` and ` #` as two subs rather than one `(^|[[:space:]])#` alternation:
+# anchors inside a group are not portable across awk implementations, and CI's
+# awk is mawk rather than the awk this was written on. The single quote reaches
+# awk through -v because it cannot be written inside the single-quoted program.
+AWK_CODE_FUNCS='
+  function code_of(line) {
+    sub(/^#.*$/, "", line)
+    sub(/[[:space:]]#.*$/, "", line)
+    return line
+  }
+  function invokes_delete(line) {
+    line = code_of(line)
+    gsub(/"[^"]*"/, "", line)
+    gsub(SQ "[^" SQ "]*" SQ, "", line)
+    return line ~ /aws[[:space:]]+ecr[[:space:]]+delete-repository/
+  }
+'
+
 # assert_step_wiring WORKFLOW_FILE STEP_NAME EXPECTED_STEPS
 #
 # Asserts that WORKFLOW_FILE contains exactly EXPECTED_STEPS steps named
@@ -268,7 +307,7 @@ assert_step_wiring() {
     return
   fi
 
-  if awk -v step="$step" -v expected="$expected" '
+  if awk -v SQ="'" -v step="$step" -v expected="$expected" "$AWK_CODE_FUNCS"'
       function finish() {
         if (in_step) {
           steps++
@@ -280,8 +319,8 @@ assert_step_wiring() {
         finish(); in_step = 1; next
       }
       /^[[:space:]]*-[[:space:]]+name:/ { finish() }
-      in_step && /[|][[:space:]]*\.\/scripts\/select-ecr-repos-to-delete\.sh[[:space:]]+"[$]OWNED_REPO"/ { has_selector = 1 }
-      in_step && /aws ecr delete-repository/ { has_delete = 1 }
+      in_step && code_of($0) ~ /[|][[:space:]]*\.\/scripts\/select-ecr-repos-to-delete\.sh[[:space:]]+"[$]OWNED_REPO"/ { has_selector = 1 }
+      in_step && invokes_delete($0) { has_delete = 1 }
       END { finish(); exit !(steps == expected && unwired == 0) }
     ' "$workflow"; then
     echo "PASS: all ${expected} '${step}' step(s) in $(basename "$workflow") pipe ECR deletion through the selector"
@@ -308,24 +347,31 @@ assert_step_wiring "${WORKFLOW_DIR}/cleanup-staging.yml" "Force-delete the ECR r
 # workflow is called. The argument only has to be a quoted variable here; the
 # named assertions pin it to "$OWNED_REPO".
 #
-# It also fails when it finds no delete step at all, because that is what a
-# wrong WORKFLOW_DIR or an unmatched glob looks like, and an empty sweep would
-# otherwise report a clean result for files it never read. Both workflow
+# It also reports when it finds no delete step at all, because that is what a
+# wrong directory or an unmatched glob looks like, and an empty sweep would
+# otherwise read as a clean result for files it never opened. Both workflow
 # extensions GitHub accepts are swept, so a new `.yaml` file cannot slip past.
-shopt -s nullglob
-WORKFLOW_FILES=("${WORKFLOW_DIR}"/*.yml "${WORKFLOW_DIR}"/*.yaml)
-shopt -u nullglob
 
-if [[ ${#WORKFLOW_FILES[@]} -eq 0 ]]; then
-  echo "FAIL: no workflow files found under ${WORKFLOW_DIR}"
-  ((fail++)) || true
-  echo
-  echo "passed: ${pass}, failed: ${fail}"
-  exit 1
-fi
+# sweep_unwired DIR
+#
+# Prints one line per delete step in DIR that does not pipe through the
+# selector, plus a line of its own when DIR holds no delete step at all. No
+# output means the directory is clean. Kept separate from the pass/fail
+# reporting so the sweep itself can be exercised over fixtures below.
+sweep_unwired() {
+  local dir="$1"
+  local files=()
 
-unwired_report="$(
-  awk '
+  shopt -s nullglob
+  files=("${dir}"/*.yml "${dir}"/*.yaml)
+  shopt -u nullglob
+
+  if [[ ${#files[@]} -eq 0 ]]; then
+    echo "no workflow files found under ${dir}"
+    return
+  fi
+
+  awk -v SQ="'" "$AWK_CODE_FUNCS"'
     function finish() {
       if (has_delete && !has_selector) {
         printf "%s: step \"%s\"\n", FILENAME, step_name
@@ -339,24 +385,114 @@ unwired_report="$(
       step_name = $0
       sub(/^[[:space:]]*-[[:space:]]+name:[[:space:]]*/, "", step_name)
     }
-    /[|][[:space:]]*\.\/scripts\/select-ecr-repos-to-delete\.sh[[:space:]]+"[$][A-Za-z_][A-Za-z0-9_]*"/ { has_selector = 1 }
-    /aws ecr delete-repository/ { has_delete = 1 }
+    code_of($0) ~ /[|][[:space:]]*\.\/scripts\/select-ecr-repos-to-delete\.sh[[:space:]]+"[$][A-Za-z_][A-Za-z0-9_]*"/ { has_selector = 1 }
+    invokes_delete($0) { has_delete = 1 }
     END { finish(); if (total == 0) print "no `aws ecr delete-repository` step found at all" }
-  ' "${WORKFLOW_FILES[@]}"
-)"
+  ' "${files[@]}"
+}
 
-if [[ -z "$unwired_report" ]]; then
-  echo "PASS: every 'aws ecr delete-repository' step in .github/workflows pipes through the selector"
-  ((pass++)) || true
-else
-  echo "FAIL: an 'aws ecr delete-repository' step does not pipe through"
-  echo "      ./scripts/select-ecr-repos-to-delete.sh, so it deletes whatever its own"
-  echo "      filter matches:"
-  while IFS= read -r line; do
-    echo "        ${line}"
-  done <<<"$unwired_report"
-  ((fail++)) || true
-fi
+# assert_sweep LABEL DIR EXPECTED
+#
+# EXPECTED empty asserts the sweep finds nothing; otherwise it asserts EXPECTED
+# appears in the report, so a fixture pins which step was flagged rather than
+# only that something was.
+assert_sweep() {
+  local label="$1"
+  local dir="$2"
+  local expected="$3"
+  local report
+
+  report="$(sweep_unwired "$dir")"
+
+  if [[ -z "$expected" && -z "$report" ]] || [[ -n "$expected" && "$report" == *"$expected"* ]]; then
+    echo "PASS: $label"
+    ((pass++)) || true
+  else
+    echo "FAIL: $label"
+    if [[ -z "$expected" ]]; then
+      echo "      expected no findings, got:"
+    else
+      echo "      expected a finding containing '${expected}', got:"
+    fi
+    if [[ -z "$report" ]]; then
+      echo "        (no findings)"
+    else
+      while IFS= read -r line; do
+        echo "        ${line}"
+      done <<<"$report"
+    fi
+    ((fail++)) || true
+  fi
+}
+
+assert_sweep "every 'aws ecr delete-repository' step in .github/workflows pipes through the selector" \
+  "$WORKFLOW_DIR" ""
+
+# --- The sweep itself, in both directions, over fixtures ---------------------
+#
+# The sweep is the only assertion that covers delete sites nobody has named, so
+# a sweep that quietly stops recognizing them fails open. These fixtures pin
+# both directions of that recognition, including the prose case: an earlier
+# revision keyed on the string anywhere in a step and failed on ci.yml's own
+# comment describing this assertion, which is a guard policing what may be
+# written rather than what is run.
+FIXTURE_DIR="$(mktemp -d)"
+trap 'rm -rf "$FIXTURE_DIR"' EXIT
+mkdir -p "${FIXTURE_DIR}/prose" "${FIXTURE_DIR}/wired" "${FIXTURE_DIR}/unwired"
+
+# Prose only, in the two forms that occur: a comment describing the command and
+# a quoted string naming it. Neither deletes anything, so this directory holds
+# no delete site and the sweep must say so rather than flag a step.
+cat >"${FIXTURE_DIR}/prose/mentions.yml" <<'EOF'
+      - name: Describes the command without running it
+        run: |
+          # asserts every `aws ecr delete-repository` step is wired
+          echo "would run aws ecr delete-repository if it were wired"
+          echo 'aws ecr delete-repository is named here too'
+EOF
+
+# The same prose alongside a real, wired delete: the prose must not mask the
+# step, and the wired step must not be flagged.
+cat >"${FIXTURE_DIR}/wired/deletes.yml" <<'EOF'
+      - name: Describes the command without running it
+        run: |
+          # asserts every `aws ecr delete-repository` step is wired
+          echo "would run aws ecr delete-repository if it were wired"
+
+      - name: Force-delete the ECR repo this state owns
+        run: |
+          aws ecr describe-repositories --query 'repositories[].repositoryName' --output text \
+            | ./scripts/select-ecr-repos-to-delete.sh "$OWNED_REPO" \
+            | while IFS= read -r REPO; do
+                aws ecr delete-repository --repository-name "$REPO" --force
+              done
+EOF
+
+# The #1592/#1820 shape: a prefix filter, no selector. A commented-out selector
+# stage in the same step must not satisfy the wiring, which is why the selector
+# match runs on the comment-stripped line.
+cat >"${FIXTURE_DIR}/unwired/deletes.yml" <<'EOF'
+      - name: Force-delete all staging ECR repos
+        run: |
+          for REPO in $(aws ecr describe-repositories \
+            --query "repositories[?starts_with(repositoryName,'cudly-staging')].repositoryName" \
+            --output text); do
+            # | ./scripts/select-ecr-repos-to-delete.sh "$OWNED_REPO"
+            aws ecr delete-repository --repository-name "$REPO" --force
+          done
+EOF
+
+assert_sweep "a step that only mentions the command is not a delete site" \
+  "${FIXTURE_DIR}/prose" 'no `aws ecr delete-repository` step found at all'
+
+assert_sweep "a wired delete step alongside prose mentions is not flagged" \
+  "${FIXTURE_DIR}/wired" ""
+
+assert_sweep "an unwired delete step is flagged, past a commented-out selector stage" \
+  "${FIXTURE_DIR}/unwired" 'step "Force-delete all staging ECR repos"'
+
+assert_sweep "a directory holding no workflow file is reported, not passed" \
+  "${FIXTURE_DIR}/empty-does-not-exist" 'no workflow files found under'
 
 echo
 echo "passed: ${pass}, failed: ${fail}"
