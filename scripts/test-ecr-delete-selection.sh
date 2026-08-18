@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# test-select-ecr-repos-to-delete.sh
+# test-ecr-delete-selection.sh
 #
-# Exercises select-ecr-repos-to-delete.sh in BOTH directions over a table of
+# Exercises select-owned-name.sh, as the ECR destroy path uses it, in BOTH
+# directions over a table of
 # real and adversarial repository names. Both directions matter because the
 # consumer force-deletes what this selector prints: a selector that matches
 # nothing passes every "no longer over-matches" assertion while silently
@@ -13,7 +14,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SELECT="${SCRIPT_DIR}/select-ecr-repos-to-delete.sh"
+SELECT="${SCRIPT_DIR}/select-owned-name.sh"
 
 # The repository terraform/environments/aws creates for the dev stack:
 # local.stack_name = "${project_name}-${environment}-${random_id.suffix.hex}".
@@ -264,47 +265,17 @@ CLEANUP_SCRIPT="${SCRIPT_DIR}/force-delete-owned-ecr-repo.sh"
 # ABOUT the command, which is the same "the string is present somewhere" mistake
 # the selector itself exists to remove, one level up.
 #
-# So the awk programs match the shell code on a line rather than the raw line:
-#
-#   code_of()        drops a trailing comment. A `#` that starts a word ends the
-#                    line in both YAML and shell, and in neither is the `#` of
-#                    `a#b` a comment, so the word-start rule is the one rule
-#                    both languages already use.
-#   invokes_delete() additionally empties quoted string literals, so a command
-#                    named inside `"..."` or `'...'` is prose, not an invocation.
-#
-# pipes_to_selector() runs on code_of() alone, because it asserts the literal
-# text of the selector's quoted argument and emptying literals would erase it.
-# Running it on the raw line instead would let a commented-out selector stage
-# mask an unguarded delete in the same step, which fails open.
-#
-# Its path is matched as "anything with no pipe or space in it, ending in a
-# slash" so both call forms are recognised: the workflow fixtures' relative
-# `./scripts/select-...` and the shared script's `"${SCRIPT_DIR}/select-..."`,
-# which resolves the sibling script from BASH_SOURCE rather than from the
-# caller's working directory. Requiring the slash immediately before the file
-# name keeps `| cat select-ecr-repos-to-delete.sh "$X"` from counting.
-#
-# `^#` and ` #` as two subs rather than one `(^|[[:space:]])#` alternation:
-# anchors inside a group are not portable across awk implementations, and CI's
-# awk is mawk rather than the awk this was written on. The single quote reaches
-# awk through -v because it cannot be written inside the single-quoted program.
-AWK_CODE_FUNCS='
-  function code_of(line) {
-    sub(/^#.*$/, "", line)
-    sub(/[[:space:]]#.*$/, "", line)
-    return line
-  }
-  function invokes_delete(line) {
-    line = code_of(line)
-    gsub(/"[^"]*"/, "", line)
-    gsub(SQ "[^" SQ "]*" SQ, "", line)
-    return line ~ /aws[[:space:]]+ecr[[:space:]]+delete-repository/
-  }
-  function pipes_to_selector(line, argre) {
-    return code_of(line) ~ ("[|][[:space:]]*\"?[^|[:space:]]*/select-ecr-repos-to-delete\\.sh\"?[[:space:]]+" argre)
-  }
-'
+# So the awk programs match the shell code on a line rather than the raw line,
+# through code_of() / invokes() / pipes_to_selector() in
+# scripts/lib/code-scan-awk.sh. That file holds the rule and the reasoning; it
+# is shared with test-rds-deletion-protection-scope.sh, which guards the same
+# shape on RDS and would otherwise carry a second copy of it to drift against.
+# shellcheck source=scripts/lib/code-scan-awk.sh
+. "${SCRIPT_DIR}/lib/code-scan-awk.sh"
+
+# The command whose invocation makes a site dangerous here. Passed to invokes()
+# rather than baked into it, because the RDS suite scans for a different one.
+DELETE_CMD_RE='aws[[:space:]]+ecr[[:space:]]+delete-repository'
 
 # assert_step_wiring WORKFLOW_FILE STEP_NAME EXPECTED_STEPS
 #
@@ -389,13 +360,13 @@ assert_script_wiring() {
     return
   fi
 
-  if awk -v SQ="'" "$AWK_CODE_FUNCS"'
+  if awk -v SQ="'" -v cmdre="$DELETE_CMD_RE" "$AWK_CODE_FUNCS"'
       code_of($0) ~ /OWNED_REPO=.*jq[[:space:]]+-er[[:space:]]+.*\.ecr_repository_name\.value/ { owned++ }
       pipes_to_selector($0, "\"[$]OWNED_REPO\"") { piped++ }
       code_of($0) ~ /[|][[:space:]]*while[[:space:]]+IFS=[[:space:]]*read[[:space:]]+-r[[:space:]]+REPO/ {
         if (pipes_to_selector(prev, "\"[$]OWNED_REPO\"")) fed++
       }
-      invokes_delete($0) { deletes++ }
+      invokes($0, cmdre) { deletes++ }
       code_of($0) ~ /aws[[:space:]]+ecr[[:space:]]+delete-repository[[:space:]]+--repository-name[[:space:]]+"[$]REPO"/ { by_loop_var++ }
       { prev = $0 }
       END { exit !(owned == 1 && piped == 1 && fed == 1 && deletes == 1 && by_loop_var == 1) }
@@ -404,7 +375,7 @@ assert_script_wiring() {
     ((pass++)) || true
   else
     echo "FAIL: $(basename "$script") no longer reads the owned name from 'terraform"
-    echo "      output', pipes it to scripts/select-ecr-repos-to-delete.sh, and"
+    echo "      output', pipes it to scripts/select-owned-name.sh, and"
     echo "      force-deletes exactly the repositories that pipeline yields -- expected"
     echo "      one of each. This is where the deletion body lives now, so a prefix"
     echo "      filter reintroduced here is the #1592/#1820 over-match, whatever the"
@@ -473,7 +444,7 @@ sweep_unwired() {
   # file boundary is flushed by the next file's first line, by which point
   # FILENAME has already advanced and the report would send the reader to an
   # innocent file. Pinned by the two-file fixture below.
-  awk -v SQ="'" "$AWK_CODE_FUNCS"'
+  awk -v SQ="'" -v cmdre="$DELETE_CMD_RE" "$AWK_CODE_FUNCS"'
     function finish() {
       if (has_delete && !has_selector) {
         if (step_name == "") printf "%s: whole file\n", site_file
@@ -489,7 +460,7 @@ sweep_unwired() {
       sub(/^[[:space:]]*-[[:space:]]+name:[[:space:]]*/, "", step_name)
     }
     pipes_to_selector($0, "\"[$][A-Za-z_][A-Za-z0-9_]*\"") { has_selector = 1 }
-    invokes_delete($0) { has_delete = 1 }
+    invokes($0, cmdre) { has_delete = 1 }
     END { finish(); if (total == 0) print "no `aws ecr delete-repository` step found at all" }
   ' "${files[@]}"
 }
@@ -566,7 +537,7 @@ cat >"${FIXTURE_DIR}/wired/deletes.yml" <<'EOF'
       - name: Force-delete the ECR repo this state owns
         run: |
           aws ecr describe-repositories --query 'repositories[].repositoryName' --output text \
-            | ./scripts/select-ecr-repos-to-delete.sh "$OWNED_REPO" \
+            | ./scripts/select-owned-name.sh "$OWNED_REPO" \
             | while IFS= read -r REPO; do
                 aws ecr delete-repository --repository-name "$REPO" --force
               done
@@ -581,7 +552,7 @@ cat >"${FIXTURE_DIR}/unwired/deletes.yml" <<'EOF'
           for REPO in $(aws ecr describe-repositories \
             --query "repositories[?starts_with(repositoryName,'cudly-staging')].repositoryName" \
             --output text); do
-            # | ./scripts/select-ecr-repos-to-delete.sh "$OWNED_REPO"
+            # | ./scripts/select-owned-name.sh "$OWNED_REPO"
             aws ecr delete-repository --repository-name "$REPO" --force
           done
 EOF
@@ -609,7 +580,7 @@ mkdir -p "${FIXTURE_DIR}/scripts"
 cat >"${FIXTURE_DIR}/scripts/wired.sh" <<'EOF'
 aws ecr describe-repositories --query 'repositories[].repositoryName' --output text \
   | tr '\t' '\n' \
-  | "${SCRIPT_DIR}/select-ecr-repos-to-delete.sh" "$OWNED_REPO" \
+  | "${SCRIPT_DIR}/select-owned-name.sh" "$OWNED_REPO" \
   | while IFS= read -r REPO; do
       aws ecr delete-repository --repository-name "$REPO" --force
     done

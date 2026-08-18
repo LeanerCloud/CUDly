@@ -151,15 +151,19 @@ jobs:
       - name: Force-delete the ECR repo this state owns
         run: ./scripts/force-delete-owned-ecr-repo.sh terraform/environments/aws
 
-      - name: Disable RDS deletion protection before destroy
-        run: |
-          for INSTANCE_ID in $(aws rds describe-db-instances \
-            --query "DBInstances[?starts_with(DBInstanceIdentifier,'cudly-staging')].DBInstanceIdentifier" \
-            --output text 2>/dev/null); do
-            echo "Disabling deletion protection on $INSTANCE_ID..."
-            aws rds modify-db-instance --db-instance-identifier "$INSTANCE_ID" \
-              --no-deletion-protection --apply-immediately 2>/dev/null || true
-          done
+      # Runs before `terraform destroy`: an instance applied with
+      # deletion_protection = true blocks the destroy. Unprotects only the
+      # instance THIS state owns, by exact identifier. The
+      # `starts_with(DBInstanceIdentifier,'cudly-staging')` filter this step used
+      # to run also matched `cudly-staging-prod-mirror`,
+      # `cudly-staging-<hex>-postgres-replica` and the sibling staging state's
+      # instance, and stripped the last line of defence from them, leaving them
+      # exposed to the next destroy that did match (#1821). Rationale and why
+      # nothing here is swallowed: the script's header. Both staging jobs and
+      # destroy-fargate-dev.yml call the same script, so the guard cannot land in
+      # one workflow and not its sibling -- which is how #1592 became #1820.
+      - name: Disable RDS deletion protection on the instance this state owns
+        run: ./scripts/disable-owned-rds-deletion-protection.sh terraform/environments/aws
 
       - name: Terraform Destroy
         env:
@@ -229,15 +233,19 @@ jobs:
       - name: Force-delete the ECR repo this state owns
         run: ./scripts/force-delete-owned-ecr-repo.sh terraform/environments/aws
 
-      - name: Disable RDS deletion protection before destroy
-        run: |
-          for INSTANCE_ID in $(aws rds describe-db-instances \
-            --query "DBInstances[?starts_with(DBInstanceIdentifier,'cudly-staging')].DBInstanceIdentifier" \
-            --output text 2>/dev/null); do
-            echo "Disabling deletion protection on $INSTANCE_ID..."
-            aws rds modify-db-instance --db-instance-identifier "$INSTANCE_ID" \
-              --no-deletion-protection --apply-immediately 2>/dev/null || true
-          done
+      # Runs before `terraform destroy`: an instance applied with
+      # deletion_protection = true blocks the destroy. Unprotects only the
+      # instance THIS state owns, by exact identifier. The
+      # `starts_with(DBInstanceIdentifier,'cudly-staging')` filter this step used
+      # to run also matched `cudly-staging-prod-mirror`,
+      # `cudly-staging-<hex>-postgres-replica` and the sibling staging state's
+      # instance, and stripped the last line of defence from them, leaving them
+      # exposed to the next destroy that did match (#1821). Rationale and why
+      # nothing here is swallowed: the script's header. Both staging jobs and
+      # destroy-fargate-dev.yml call the same script, so the guard cannot land in
+      # one workflow and not its sibling -- which is how #1592 became #1820.
+      - name: Disable RDS deletion protection on the instance this state owns
+        run: ./scripts/disable-owned-rds-deletion-protection.sh terraform/environments/aws
 
       - name: Terraform Destroy
         env:
