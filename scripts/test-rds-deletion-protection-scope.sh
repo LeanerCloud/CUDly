@@ -574,8 +574,18 @@ assert_behaviour "behaviour: a missing state directory exits 2" \
 # wrong directory or an unmatched glob looks like, and an empty sweep would
 # otherwise read as a clean result for files it never opened. Both workflow
 # extensions GitHub accepts are swept, so a new `.yaml` file cannot slip past.
-# scripts/ is named file by file rather than globbed because this suite itself
-# lives there and quotes both the command and the selector, as data.
+#
+# scripts/ is GLOBBED, not named file by file. Naming the two known files was
+# the same defect this PR fixes, one level up: a NEW script running `aws rds
+# modify-db-instance` without the selector was invisible to a sweep that only
+# ever opened the two scripts already known to be guarded, so the guard did not
+# reach the sibling site. It also made ci.yml's claim that nothing else under
+# scripts/ runs the command unguarded an assertion nobody was checking.
+#
+# The two guard suites are excluded by name because they carry both the command
+# and the selector as fixture data and in awk programs; sweeping them would
+# report this file as a violation of itself. That exclusion is by basename, so
+# it cannot accidentally exempt a real script that merely sits near them.
 
 # sweep_unwired DIR [FILE...]
 #
@@ -668,8 +678,40 @@ assert_sweep() {
   fi
 }
 
-assert_sweep "every 'aws rds modify-db-instance' site in .github/workflows and scripts/ pipes through the selector" \
-  "$WORKFLOW_DIR" "" "$UNPROTECT_SCRIPT" "$SELECT"
+# The scripts/ half of the swept set is globbed, so a script added later is
+# swept without anyone remembering to name it here. Rationale and the nullglob
+# reasoning: build_swept_scripts in scripts/lib/code-scan-awk.sh.
+build_swept_scripts "$SCRIPT_DIR"
+
+# "Found no violations" must not be reachable by looking at nothing, so the
+# swept set is asserted non-empty and asserted to contain the one script that
+# actually runs the command. Guarding the expansion too: under `set -u`, bash
+# 3.2 treats "${arr[@]}" on an empty array as an unbound variable.
+if [[ ${#SWEPT_SCRIPTS[@]} -eq 0 ]]; then
+  echo "FAIL: the scripts/ half of the swept set is empty"
+  echo "      ${SCRIPT_DIR}/*.sh matched nothing, so the sweep below would report a"
+  echo "      clean result for files it never opened"
+  ((fail++)) || true
+else
+  echo "PASS: the swept set holds ${#SWEPT_SCRIPTS[@]} script(s) under scripts/"
+  ((pass++)) || true
+
+  swept_has_guarded=0
+  for swept_candidate in "${SWEPT_SCRIPTS[@]}"; do
+    [[ "$swept_candidate" == "$UNPROTECT_SCRIPT" ]] && swept_has_guarded=1
+  done
+  if [[ "$swept_has_guarded" -eq 1 ]]; then
+    echo "PASS: the swept set includes $(basename "$UNPROTECT_SCRIPT"), the script that runs the command"
+    ((pass++)) || true
+  else
+    echo "FAIL: the swept set does not include $(basename "$UNPROTECT_SCRIPT")"
+    echo "      the sweep would then find no modify site at all and pass vacuously"
+    ((fail++)) || true
+  fi
+
+  assert_sweep "every 'aws rds modify-db-instance' site in .github/workflows and scripts/ pipes through the selector" \
+    "$WORKFLOW_DIR" "" "${SWEPT_SCRIPTS[@]}"
+fi
 
 # --- The sweep itself, in both directions, over fixtures ---------------------
 #

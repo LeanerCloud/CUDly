@@ -762,6 +762,10 @@ jobs:
   # destroy steps still call scripts/force-delete-owned-ecr-repo.sh, that script
   # still deletes only what the selector yields, and nothing else under
   # .github/workflows or scripts/ runs `aws ecr delete-repository` unguarded.
+  # That last claim is checked over a GLOB of both directories, not a list of
+  # known files, so a script added later is covered without anyone remembering
+  # to name it; the sweep is asserted to have opened a non-zero number of files
+  # first, since an empty swept set has no violations either.
   # Fast (shell only), so it always runs.
   ecr-delete-selection:
     name: ECR delete selection scope
@@ -795,6 +799,12 @@ jobs:
   # scripts/disable-owned-rds-deletion-protection.sh, that script unprotects
   # only what the selector yields and swallows nothing, and nothing else under
   # .github/workflows or scripts/ runs `aws rds modify-db-instance` unguarded.
+  # That last claim is checked over a GLOB of both directories, not a list of
+  # known files, so a script added later is covered without anyone remembering
+  # to name it; the sweep is asserted to have opened a non-zero number of files
+  # first, since an empty swept set has no violations either.
+  # It additionally runs the script end to end against stubbed terraform and aws,
+  # so "a failed strip is not swallowed" is asserted as behaviour, not as text.
   # Fast (shell only), so it always runs.
   rds-deletion-protection-scope:
     name: RDS deletion protection scope

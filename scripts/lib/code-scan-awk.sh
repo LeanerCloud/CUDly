@@ -50,6 +50,44 @@
 # `(^|[[:space:]])#` alternation, for the same reason: anchors inside a group
 # are not portable across awk implementations.
 
+# build_swept_scripts SCRIPTS_DIR
+#
+# Sets SWEPT_SCRIPTS to every `*.sh` directly under SCRIPTS_DIR and under
+# SCRIPTS_DIR/lib, excluding the guard suites themselves.
+#
+# Globbed rather than named file by file, in both suites, because naming the two
+# scripts already known to be guarded is the same defect the suites exist to
+# catch, one level up: a NEW script running the dangerous command without the
+# selector is invisible to a sweep that only ever opens the files someone
+# remembered to list, which is how a guard fails to reach a sibling site.
+#
+# The guard suites are excluded by basename because each carries both its
+# dangerous command and the selector as fixture data and inside awk programs, so
+# sweeping them reports a suite as a violation of itself. Matching on basename
+# rather than on a path fragment keeps the exclusion from exempting a real
+# script that merely sits beside them.
+#
+# `nullglob` so a pattern matching nothing expands to nothing rather than to the
+# literal pattern text. Without it an unmatched glob becomes a nonexistent path,
+# the sweep bails out early, and it covers no scripts at all. Callers must still
+# assert SWEPT_SCRIPTS is non-empty and contains the script that actually runs
+# their command: an empty swept set satisfies every "no violations" reading.
+#
+# Returns through a global because bash 3.2, which this must run on, has no
+# namerefs.
+build_swept_scripts() {
+  local dir="$1" candidate
+  SWEPT_SCRIPTS=()
+  shopt -s nullglob
+  for candidate in "$dir"/*.sh "$dir"/lib/*.sh; do
+    case "$(basename "$candidate")" in
+      test-rds-deletion-protection-scope.sh | test-ecr-delete-selection.sh) continue ;;
+    esac
+    SWEPT_SCRIPTS+=("$candidate")
+  done
+  shopt -u nullglob
+}
+
 # shellcheck disable=SC2034  # read by the suites that source this file
 AWK_CODE_FUNCS='
   function code_of(line) {

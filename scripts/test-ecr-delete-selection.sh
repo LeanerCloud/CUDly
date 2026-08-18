@@ -394,13 +394,19 @@ assert_script_wiring "$CLEANUP_SCRIPT"
 # argument only has to be a quoted variable here; the named assertions pin it to
 # "$OWNED_REPO".
 #
-# The swept set is .github/workflows plus the two production scripts. Extracting
+# The swept set is .github/workflows plus every script under scripts/. Extracting
 # the deletion body out of the workflow steps moved the only real delete call
 # into scripts/, so a sweep that still looked only at .github/workflows would
 # report a clean result for a directory that no longer contains the thing it is
-# looking for. scripts/ is named file by file rather than globbed because this
-# suite itself lives there and quotes both the command and the selector, in
-# fixtures and in awk programs, as data.
+# looking for.
+#
+# scripts/ is GLOBBED, not named file by file. Naming only the two scripts
+# already known to be guarded left a NEW script running `aws ecr
+# delete-repository` unswept, which is the "the guard did not reach the sibling
+# site" mode this suite exists to catch, one level up. Raised by review on the
+# RDS suite (#1821) and fixed on both, since fixing one and not the other is
+# that same mode again. Rationale and the nullglob reasoning:
+# build_swept_scripts in scripts/lib/code-scan-awk.sh.
 #
 # It also reports when it finds no delete site at all, because that is what a
 # wrong directory or an unmatched glob looks like, and an empty sweep would
@@ -500,8 +506,37 @@ assert_sweep() {
   fi
 }
 
-assert_sweep "every 'aws ecr delete-repository' site in .github/workflows and scripts/ pipes through the selector" \
-  "$WORKFLOW_DIR" "" "$CLEANUP_SCRIPT" "$SELECT"
+build_swept_scripts "$SCRIPT_DIR"
+
+# "Found no violations" must not be reachable by looking at nothing, so the
+# swept set is asserted non-empty and asserted to contain the one script that
+# actually runs the command. Guarding the expansion too: under `set -u`, bash
+# 3.2 treats "${arr[@]}" on an empty array as an unbound variable.
+if [[ ${#SWEPT_SCRIPTS[@]} -eq 0 ]]; then
+  echo "FAIL: the scripts/ half of the swept set is empty"
+  echo "      ${SCRIPT_DIR}/*.sh matched nothing, so the sweep below would report a"
+  echo "      clean result for files it never opened"
+  ((fail++)) || true
+else
+  echo "PASS: the swept set holds ${#SWEPT_SCRIPTS[@]} script(s) under scripts/"
+  ((pass++)) || true
+
+  swept_has_guarded=0
+  for swept_candidate in "${SWEPT_SCRIPTS[@]}"; do
+    [[ "$swept_candidate" == "$CLEANUP_SCRIPT" ]] && swept_has_guarded=1
+  done
+  if [[ "$swept_has_guarded" -eq 1 ]]; then
+    echo "PASS: the swept set includes $(basename "$CLEANUP_SCRIPT"), the script that runs the command"
+    ((pass++)) || true
+  else
+    echo "FAIL: the swept set does not include $(basename "$CLEANUP_SCRIPT")"
+    echo "      the sweep would then find no delete site at all and pass vacuously"
+    ((fail++)) || true
+  fi
+
+  assert_sweep "every 'aws ecr delete-repository' site in .github/workflows and scripts/ pipes through the selector" \
+    "$WORKFLOW_DIR" "" "${SWEPT_SCRIPTS[@]}"
+fi
 
 # --- The sweep itself, in both directions, over fixtures ---------------------
 #
