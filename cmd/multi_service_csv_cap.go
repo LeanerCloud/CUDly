@@ -94,13 +94,11 @@ func savingsPerInstance(rec common.Recommendation) float64 {
 //
 // It must run before the cap, never after: ApplyInstanceLimit consumes its
 // input in slice order, so by the time it returns the selection has already
-// been made and re-ordering the survivors decides nothing.
-//
-// The rate itself is now invariant across the cap. ApplyInstanceLimit scales
-// a truncated row's EstimatedSavings by the same ratio it cuts Count by
-// (#1830), and savings/count is unchanged by scaling both, so ranking is
-// unaffected by where the cap runs. It was not always so: before #1830 a
-// post-cap row's rate was inflated by exactly the amount the cap removed.
+// been made and re-ordering the survivors decides nothing. The rate values
+// themselves are invariant across the cap since #1830 (a truncated row's
+// savings and Count are scaled by the same ratio, and savings/count is
+// unchanged by scaling both), but that only means a post-cap sort would be
+// harmless rather than useful. Ordering still has to happen first.
 func sortBySavingsPerInstance(recs []common.Recommendation) {
 	sort.SliceStable(recs, func(i, j int) bool {
 		a, b := recs[i], recs[j]

@@ -425,12 +425,22 @@ func applyTargetCoverageSP(rec common.Recommendation, targetPct float64) (common
 	if rec.RecommendedUtilization <= 0 {
 		return rec, false
 	}
+	// If Details isn't a *SavingsPlanDetails (defensive — should always be
+	// for SP recs), log a warning and pass through UNCHANGED — including
+	// leaving ProjectedUtilization at zero. Setting projection fields on a
+	// rec whose commitment fields couldn't be scaled would produce a
+	// misleading row (projection=target%, savings=full-unscaled).
+	details, ok := rec.Details.(*common.SavingsPlanDetails)
+	if !ok {
+		AppLogger.Printf("WARNING: SP recommendation for service %q has unexpected Details type %T; passing through unscaled\n", rec.Service, rec.Details)
+		return rec, true
+	}
 	// Also treat a $0 HourlyCommitment as "no signal" — CE occasionally
 	// returns placeholder recs with zero commitment. Sizing such a rec
 	// would produce nonsense ($0 commitment * ratio = $0) while still
 	// claiming the target coverage is achieved, which is incoherent.
 	// Pass through unchanged and count in the skip summary.
-	if details, ok := rec.Details.(*common.SavingsPlanDetails); ok && details.HourlyCommitment <= 0 {
+	if details.HourlyCommitment <= 0 {
 		return rec, false
 	}
 
@@ -441,16 +451,6 @@ func applyTargetCoverageSP(rec common.Recommendation, targetPct float64) (common
 	// zero value means we can't sanity-check the result); the scaling itself
 	// uses targetPct directly rather than a recUtil/target ratio so the flag's
 	// intent is honored even when AWS already projects above target.
-	//
-	// If Details isn't a *SavingsPlanDetails (defensive — should always be
-	// for SP recs), log a warning and pass through UNCHANGED — including
-	// leaving ProjectedUtilization at zero. Setting projection fields on a
-	// rec whose commitment fields couldn't be scaled would produce a
-	// misleading row (projection=target%, savings=full-unscaled).
-	if _, ok := rec.Details.(*common.SavingsPlanDetails); !ok {
-		AppLogger.Printf("WARNING: SP recommendation for service %q has unexpected Details type %T; passing through unscaled\n", rec.Service, rec.Details)
-		return rec, true
-	}
 	ratio := targetPct / 100.0
 	// ScaleRecommendationCosts scales HourlyCommitment along with the cost
 	// fields and replaces Details with a scaled copy.

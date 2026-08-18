@@ -284,11 +284,19 @@ type ServiceDetails interface {
 // Without this helper the same scaling pattern was duplicated at every sizing
 // site, and #1830 was a sizing site that forgot it entirely.
 //
-// Extensive fields scale here; intensive ones deliberately do not.
+// Extensive MONEY fields scale here; intensive ones deliberately do not.
 // SavingsPercentage and BreakEvenMonths are ratios of two figures that scale
 // together, so they are invariant. RecommendedCount is a frozen record of the
 // provider's pre-sizing proposal. AverageInstancesUsedPerHour and UsageHistory
 // describe observed demand, which does not change with what we choose to buy.
+//
+// Two count-linear NON-money fields are deliberately out of scope here and are
+// the caller's problem: ProjectedCoverage / ProjectedUtilization (recomputed
+// from the chosen quantity by the target-coverage callers, which is why
+// scaling them here would be wrong) and DataWarehouseDetails.NumberOfNodes
+// (a Redshift count mirror set at parse time). Neither is re-derived by
+// ApplyInstanceLimit, so a capped run can still report a projection sized for
+// the pre-cap count. Tracked separately; purchases read Count, not these.
 //
 // Pointer and pointed-to state is copied rather than mutated: callers hold the
 // pre-sizing slice (the reporter diffs against it), so writing through a

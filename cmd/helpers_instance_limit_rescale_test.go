@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"testing"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
@@ -138,7 +139,7 @@ func TestApplyInstanceLimitNonPositiveCountIsNotRescaled(t *testing.T) {
 
 	require.Len(t, got, 2)
 	for i := range got {
-		assert.False(t, isNaNOrInf(got[i].EstimatedSavings),
+		assert.False(t, math.IsNaN(got[i].EstimatedSavings) || math.IsInf(got[i].EstimatedSavings, 0),
 			"%s: savings must not become NaN/Inf via a non-positive denominator", got[i].ResourceType)
 	}
 	assert.Equal(t, 0, got[0].Count)
@@ -213,8 +214,4 @@ func TestApplyInstanceLimitTotalMatchesSumOfKeptRows(t *testing.T) {
 	want := 500.0 + 100.0*(4.0/6.0)
 	assert.InDelta(t, want, total, 0.0001,
 		"the reported total must equal the savings of the instances the run will actually buy")
-}
-
-func isNaNOrInf(f float64) bool {
-	return f != f || f > 1e300 || f < -1e300
 }
