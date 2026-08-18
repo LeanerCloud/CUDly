@@ -296,7 +296,7 @@ type ServiceDetails interface {
 // scaling them here would be wrong) and DataWarehouseDetails.NumberOfNodes
 // (a Redshift count mirror set at parse time). Neither is re-derived by
 // ApplyInstanceLimit, so a capped run can still report a projection sized for
-// the pre-cap count. Tracked separately; purchases read Count, not these.
+// the pre-cap count. Tracked by #1845; purchases read Count, not these.
 //
 // Pointer and pointed-to state is copied rather than mutated: callers hold the
 // pre-sizing slice (the reporter diffs against it), so writing through a
