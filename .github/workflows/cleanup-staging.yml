@@ -138,25 +138,18 @@ jobs:
           cd terraform/environments/aws
           terraform init -backend-config=/tmp/backend.tfbackend
 
-      - name: Force-delete all staging ECR repos
-        run: |
-          for REPO in $(aws ecr describe-repositories \
-            --query "repositories[?starts_with(repositoryName,'cudly-staging')].repositoryName" \
-            --output text 2>/dev/null); do
-            # Defense in depth: refuse anything outside the staging naming
-            # pattern (in particular the bare 'cudly' prod-adjacent repo)
-            # even if the query filter above is ever loosened.
-            case "$REPO" in
-              cudly-staging*) ;;
-              *)
-                echo "Refusing to delete non-staging ECR repo '$REPO'; staging cleanup only deletes cudly-staging* repos"
-                exit 1
-                ;;
-            esac
-            echo "Force-deleting ECR repo $REPO..."
-            aws ecr delete-repository --repository-name "$REPO" --force 2>/dev/null \
-              || echo "  Failed to delete $REPO (may already be gone)"
-          done
+      # Runs before `terraform destroy`: the repository is created with
+      # force_delete = false, so the destroy fails while images remain. Deletes
+      # only the repository THIS state owns, by exact name. The `cudly-staging*`
+      # prefix this used to select by also matched `cudly-staging-prod-mirror`,
+      # `cudly-staging-<hex>-backup` and the sibling staging state's repository,
+      # and force-deleted every image in them (#1820). Rationale, the
+      # `output -json` handling and why nothing here is swallowed: the script's
+      # header. Both staging jobs and destroy-fargate-dev.yml call the same
+      # script, so the guard cannot land in one workflow and not its sibling --
+      # which is how #1592 became #1820.
+      - name: Force-delete the ECR repo this state owns
+        run: ./scripts/force-delete-owned-ecr-repo.sh terraform/environments/aws
 
       - name: Disable RDS deletion protection before destroy
         run: |
@@ -223,25 +216,18 @@ jobs:
           cd terraform/environments/aws
           terraform init -backend-config=/tmp/backend.tfbackend
 
-      - name: Force-delete all staging ECR repos
-        run: |
-          for REPO in $(aws ecr describe-repositories \
-            --query "repositories[?starts_with(repositoryName,'cudly-staging')].repositoryName" \
-            --output text 2>/dev/null); do
-            # Defense in depth: refuse anything outside the staging naming
-            # pattern (in particular the bare 'cudly' prod-adjacent repo)
-            # even if the query filter above is ever loosened.
-            case "$REPO" in
-              cudly-staging*) ;;
-              *)
-                echo "Refusing to delete non-staging ECR repo '$REPO'; staging cleanup only deletes cudly-staging* repos"
-                exit 1
-                ;;
-            esac
-            echo "Force-deleting ECR repo $REPO..."
-            aws ecr delete-repository --repository-name "$REPO" --force 2>/dev/null \
-              || echo "  Failed to delete $REPO (may already be gone)"
-          done
+      # Runs before `terraform destroy`: the repository is created with
+      # force_delete = false, so the destroy fails while images remain. Deletes
+      # only the repository THIS state owns, by exact name. The `cudly-staging*`
+      # prefix this used to select by also matched `cudly-staging-prod-mirror`,
+      # `cudly-staging-<hex>-backup` and the sibling staging state's repository,
+      # and force-deleted every image in them (#1820). Rationale, the
+      # `output -json` handling and why nothing here is swallowed: the script's
+      # header. Both staging jobs and destroy-fargate-dev.yml call the same
+      # script, so the guard cannot land in one workflow and not its sibling --
+      # which is how #1592 became #1820.
+      - name: Force-delete the ECR repo this state owns
+        run: ./scripts/force-delete-owned-ecr-repo.sh terraform/environments/aws
 
       - name: Disable RDS deletion protection before destroy
         run: |
