@@ -277,13 +277,30 @@ type ServiceDetails interface {
 	GetDetailDescription() string
 }
 
-// ScaleRecommendationCosts multiplies all cost-bearing fields of rec by
-// ratio and returns the result. RecurringMonthlyCost is allocated as a
-// new pointer when present so callers don't mutate the upstream rec's
-// pointer target. Used by sizing paths (ApplyCoverage, ApplyTargetCoverage,
-// family-NU) to keep Count and cost in sync when a recommendation is
-// sized down (or up) from AWS's proposal — without this helper the same
-// four-field scaling pattern was duplicated at every sizing site.
+// ScaleRecommendationCosts multiplies every extensive (whole-row) money field
+// of rec by ratio and returns the result. Used by sizing paths (ApplyCoverage,
+// ApplyTargetCoverage, ApplyInstanceLimit, family-NU) to keep Count and cost in
+// sync when a recommendation is sized down (or up) from AWS's proposal.
+// Without this helper the same scaling pattern was duplicated at every sizing
+// site, and #1830 was a sizing site that forgot it entirely.
+//
+// Extensive fields scale here; intensive ones deliberately do not.
+// SavingsPercentage and BreakEvenMonths are ratios of two figures that scale
+// together, so they are invariant. RecommendedCount is a frozen record of the
+// provider's pre-sizing proposal. AverageInstancesUsedPerHour and UsageHistory
+// describe observed demand, which does not change with what we choose to buy.
+//
+// Pointer and pointed-to state is copied rather than mutated: callers hold the
+// pre-sizing slice (the reporter diffs against it), so writing through a
+// shared pointer would corrupt their copy.
+//
+//   - RecurringMonthlyCost is allocated as a new pointer when present. A nil
+//     stays nil: nil means "the provider returned no monthly breakdown" and
+//     renders as "—", which is not the same claim as $0.
+//   - SavingsPlanDetails.HourlyCommitment is the SP's own money quantity (an
+//     SP commitment is dollar-denominated, not count-denominated), so it
+//     scales with the rest. Details is replaced with a scaled copy. A rec
+//     whose Details is any other type is left alone.
 func ScaleRecommendationCosts(rec Recommendation, ratio float64) Recommendation {
 	rec.CommitmentCost *= ratio
 	rec.OnDemandCost *= ratio
@@ -291,6 +308,11 @@ func ScaleRecommendationCosts(rec Recommendation, ratio float64) Recommendation 
 	if rec.RecurringMonthlyCost != nil {
 		scaled := *rec.RecurringMonthlyCost * ratio
 		rec.RecurringMonthlyCost = &scaled
+	}
+	if details, ok := rec.Details.(*SavingsPlanDetails); ok {
+		scaled := *details
+		scaled.HourlyCommitment *= ratio
+		rec.Details = &scaled
 	}
 	return rec
 }
