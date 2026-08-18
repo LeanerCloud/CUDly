@@ -25,12 +25,13 @@
 #
 # Each of those opens with the config message govulncheck really emitted.
 #
-# The remaining three are hand-written and stand in for output that exists but
+# The remaining four are hand-written and stand in for output that exists but
 # cannot be drawn a verdict from: malformed.jsonl is unparseable, while
-# not-a-report.jsonl and empty-stream.jsonl are well-formed JSON carrying zero
-# findings. The last two are the ones that matter: they used to classify as a
-# clean binary, so a govulncheck invocation that silently produced nothing
-# certified the image.
+# not-a-report.jsonl, empty-stream.jsonl and wrong-protocol-version.jsonl are
+# well-formed JSON carrying zero findings this parser can see. Those three are
+# the ones that matter, because each used to classify as a clean binary: an
+# invocation that silently produced nothing, or a future govulncheck emitting a
+# schema this parser was not written against, would certify the image.
 #
 # Exits 0 when all cases pass; exits 1 on any failure.
 
@@ -123,17 +124,30 @@ run_case "a missing govulncheck output is exit 2, not a clean verdict" 2 \
 run_case "unparseable govulncheck output is exit 2, not a clean verdict" 2 \
   "${FIXTURES}/malformed.jsonl"
 
-# The two cases a parse-error check does NOT cover. Both are valid JSON that
-# yields zero findings, so both used to be indistinguishable from a clean
-# binary. Distinguishing them from no-findings.jsonl above is the entire point:
-# a clean run still carries the config message, these do not.
+# The cases a parse-error check does NOT cover. All are valid JSON that yields
+# zero findings, so all used to be indistinguishable from a clean binary.
+# Distinguishing them from no-findings.jsonl above is the entire point: a clean
+# run carries the config message this parser was written against, these do not.
 run_case "a well-formed stream that is not a report is exit 2" 2 \
   "${FIXTURES}/not-a-report.jsonl" \
-  "no config.protocol_version"
+  'expected config.protocol_version = "v1.0.0"' \
+  'found: ""'
 
 run_case "an empty stream is exit 2, not a clean verdict" 2 \
   "${FIXTURES}/empty-stream.jsonl" \
-  "no config.protocol_version"
+  'expected config.protocol_version = "v1.0.0"' \
+  'found: ""'
+
+# Non-empty is not a restriction. A govulncheck emitting a schema this parser
+# was not written against would satisfy a presence check, yield zero findings
+# through the same filter, and read as clean, arriving silently on a tool
+# upgrade rather than through a reviewed code change. The version is compared
+# to its expected value, not merely asserted to exist.
+run_case "a stream from an unexpected schema version is exit 2" 2 \
+  "${FIXTURES}/wrong-protocol-version.jsonl" \
+  'expected config.protocol_version = "v1.0.0"' \
+  'found: "v2.0.0"' \
+  "govulncheck v1.1.4"
 
 echo ""
 echo "Results: ${pass} passed, ${fail} failed."

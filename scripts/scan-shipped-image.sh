@@ -60,6 +60,19 @@ set -euo pipefail
 # clean run it never performed.
 readonly REQUIRED_BINARY="/app/cudly"
 
+# The JSON schema version govulncheck emits, and the version of govulncheck
+# this parser was written against. Pinned to an exact value rather than merely
+# required to be present: a future govulncheck emitting a different schema
+# would satisfy a non-empty check, flow through the `select(has("finding"))`
+# filter, produce zero findings and classify as clean. That is the same
+# fail-open one version bump away, and it would arrive silently on a tool
+# upgrade rather than through a code change anyone reviews. Keep
+# PINNED_GOVULNCHECK_VERSION in step with the `go install
+# golang.org/x/vuln/cmd/govulncheck@...` pin in .github/workflows/ci.yml, and
+# revalidate this parser against the new schema when bumping either.
+readonly EXPECTED_PROTOCOL_VERSION="v1.0.0"
+readonly PINNED_GOVULNCHECK_VERSION="v1.1.4"
+
 # classify_findings JSON_FILE LABEL
 #
 # Reads a `govulncheck -format json` stream and reports one line per advisory,
@@ -89,9 +102,10 @@ classify_findings() {
   # parse error does not cover it, because none of those IS a parse error.
   #
   # Every real run opens with a config message, so require its
-  # protocol_version. The chain is total (`objects`/`strings` yield nothing
-  # rather than erroring on the wrong type), so a stream whose first message is
-  # some other shape lands on "" and is rejected rather than throwing.
+  # protocol_version, and require it to be exactly the schema this parser
+  # reads. The chain is total (`objects`/`strings` yield nothing rather than
+  # erroring on the wrong type), so a stream whose first message is some other
+  # shape lands on "" and is rejected rather than throwing.
   local protocol
   if ! protocol="$(jq -s -r '
     (.[0] | objects | .config | objects | .protocol_version | strings) // ""
@@ -99,10 +113,16 @@ classify_findings() {
     echo "ERROR: could not parse govulncheck output at $json" >&2
     return 2
   fi
-  if [[ -z "$protocol" ]]; then
-    echo "ERROR: $json is not a govulncheck report: its first message carries" >&2
-    echo "       no config.protocol_version. An empty, truncated or otherwise" >&2
-    echo "       degenerate stream must not read as a binary with no findings." >&2
+  if [[ "$protocol" != "$EXPECTED_PROTOCOL_VERSION" ]]; then
+    {
+      echo "ERROR: $json does not carry the govulncheck report schema this parser reads."
+      echo "       expected config.protocol_version = \"$EXPECTED_PROTOCOL_VERSION\"" \
+        "(as emitted by govulncheck $PINNED_GOVULNCHECK_VERSION)"
+      echo "       found: \"$protocol\""
+      echo "       An empty, truncated or newer-schema stream must not read as a binary"
+      echo "       with no findings. If govulncheck was upgraded, revalidate this parser"
+      echo "       against the new schema rather than relaxing this check."
+    } >&2
     return 2
   fi
 
