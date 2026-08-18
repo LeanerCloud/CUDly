@@ -1,0 +1,18 @@
+# Fixture: a declaration with no whitespace between the block header tokens.
+# Must exit 1.
+#
+# `resource"azurerm_key_vault_access_policy""nospace"{` is valid HCL: the
+# parser does not require the separators, and `terraform fmt` reports it as
+# needing reformatting rather than as a parse error. A guard requiring
+# whitespace after `resource` would report this file clean, so the tolerance is
+# pinned here rather than left to the fmt gate that would normally rewrite it.
+
+resource"azurerm_key_vault_access_policy""nospace"{
+  key_vault_id = var.key_vault_id
+  tenant_id    = data.azurerm_client_config.current.tenant_id
+  object_id    = azurerm_user_assigned_identity.workload.principal_id
+
+  secret_permissions = [
+    "Get",
+  ]
+}
