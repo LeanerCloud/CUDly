@@ -238,8 +238,10 @@ jobs:
         run: |
           # -tags 'pgx5', matching the Dockerfile and the library import in
           # internal/database/postgres/migrations: the postgres tag links
-          # lib/pq, which carries three unfixable advisories (issue #1849).
-          go install -tags 'pgx5' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.1
+          # lib/pq, which carries unfixable advisories (issue #1849). No
+          # @version suffix: installed as a package of this module, so the
+          # version and dependency set come from go.mod.
+          go install -tags 'pgx5' github.com/golang-migrate/migrate/v4/cmd/migrate
 
       - name: Run database migrations
         env:
