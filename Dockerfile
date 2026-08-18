@@ -38,23 +38,6 @@ RUN apk add --no-cache \
 # Set shell with pipefail for safer pipe operations
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
-# Build golang-migrate from source on this stage's pinned Go toolchain, the same
-# way `make install-tools` does. Upstream's prebuilt release tarballs carry
-# whatever toolchain upstream built them with (v4.19.1 ships go1.25.4), which is
-# how issue #1833's stdlib CVEs reached the runtime image, where entrypoint.sh
-# runs `migrate up` against the database on every container start.
-# `go install` refuses GOBIN when cross-compiling and writes to
-# bin/${GOOS}_${GOARCH}/ instead, so resolve both layouts; the final `mv` fails
-# the build if neither produced a binary.
-# Keep this version in step with MIGRATE_VERSION in the Makefile.
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-      go install -tags=postgres -ldflags="-s -w -X main.Version=v4.19.1" \
-      github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.1 && \
-    GOPATH_BIN="$(go env GOPATH)/bin" && \
-    MIGRATE_BIN="${GOPATH_BIN}/${TARGETOS}_${TARGETARCH}/migrate" && \
-    { [ -x "${MIGRATE_BIN}" ] || MIGRATE_BIN="${GOPATH_BIN}/migrate"; } && \
-    mv "${MIGRATE_BIN}" /usr/local/bin/migrate
-
 WORKDIR /app
 
 # Copy go module files
@@ -68,6 +51,38 @@ COPY providers/gcp/go.mod providers/gcp/go.sum providers/gcp/
 
 # Download dependencies
 RUN go mod download
+
+# Build golang-migrate from source on this stage's pinned Go toolchain, the same
+# way `make install-tools` does. Upstream's prebuilt release tarballs carry
+# whatever toolchain upstream built them with (v4.19.1 ships go1.25.4), which is
+# how issue #1833's stdlib CVEs reached the runtime image, where entrypoint.sh
+# runs `migrate up` against the database on every container start.
+#
+# Built as a package of THIS module (no @version suffix) rather than
+# `go install ...@v4.19.1`, and therefore placed after `go mod download`.
+# The @version form resolves dependencies from golang-migrate's own go.mod,
+# which pins jackc/pgx v5.5.4, x/crypto v0.45.0 and x/text v0.31.0 - all
+# superseded, and together 17 advisories with published fixes that
+# scripts/scan-shipped-image.sh correctly fails on. Building from the main
+# module instead resolves them at this repo's own versions, which are already
+# above every one of those fixes. The migrate version therefore comes from
+# go.mod, and is read back out of the build list rather than restated.
+#
+# -tags=pgx5, not postgres: the postgres tag links the lib/pq driver, which
+# carries advisories with no fixed version in any release (GO-2026-6166, 6168,
+# 6170, 6171, 6172) reached through Driver.Open and conn.Exec on every
+# container start. The pgx5 tag builds the same driver on jackc/pgx v5, which
+# the application already uses. It registers the "pgx5" URL scheme only, so
+# scripts/entrypoint.sh and .github/workflows/database-migration.yml must build
+# pgx5:// URLs - a postgres:// URL against this binary fails at runtime with
+# "unknown driver". See issue #1849.
+RUN MIGRATE_VERSION="$(go list -m -f '{{.Version}}' github.com/golang-migrate/migrate/v4)" && \
+    echo "Building golang-migrate ${MIGRATE_VERSION} for ${TARGETOS}/${TARGETARCH}" && \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+      -tags=pgx5 \
+      -ldflags="-s -w -X main.Version=${MIGRATE_VERSION}" \
+      -o /usr/local/bin/migrate \
+      github.com/golang-migrate/migrate/v4/cmd/migrate
 
 # Copy source code
 COPY . .

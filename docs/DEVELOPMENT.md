@@ -36,17 +36,23 @@ docker-compose down
 
 ### 3. Database Access
 
+> Migration URLs use the `pgx5://` scheme, not `postgres://`. golang-migrate
+> picks its database driver by URL scheme, and this repo builds `migrate` with
+> `-tags pgx5` so the binary does not link `lib/pq`, which carries advisories
+> with no published fix (issue #1849). A `postgres://` URL fails against it with
+> `unknown driver postgres`.
+
 ```bash
 # Connect to PostgreSQL using psql
 docker-compose exec postgres psql -U cudly -d cudly
 
 # Run migrations manually
 docker-compose exec app migrate -path /app/internal/database/postgres/migrations \
-    -database "postgresql://cudly:cudly_local_dev@postgres:5432/cudly?sslmode=disable" up
+    -database "pgx5://cudly:cudly_local_dev@postgres:5432/cudly?sslmode=disable" up
 
 # Check migration status
 docker-compose exec app migrate -path /app/internal/database/postgres/migrations \
-    -database "postgresql://cudly:cudly_local_dev@postgres:5432/cudly?sslmode=disable" version
+    -database "pgx5://cudly:cudly_local_dev@postgres:5432/cudly?sslmode=disable" version
 ```
 
 ## Development Workflow
@@ -68,11 +74,11 @@ migrate create -ext sql -dir internal/database/postgres/migrations -seq add_new_
 
 # Run migrations
 docker-compose exec app migrate -path /app/internal/database/postgres/migrations \
-    -database "postgresql://cudly:cudly_local_dev@postgres:5432/cudly?sslmode=disable" up
+    -database "pgx5://cudly:cudly_local_dev@postgres:5432/cudly?sslmode=disable" up
 
 # Rollback last migration
 docker-compose exec app migrate -path /app/internal/database/postgres/migrations \
-    -database "postgresql://cudly:cudly_local_dev@postgres:5432/cudly?sslmode=disable" down 1
+    -database "pgx5://cudly:cudly_local_dev@postgres:5432/cudly?sslmode=disable" down 1
 ```
 
 ## Environment Variables
@@ -374,7 +380,7 @@ docker-compose exec postgres psql -U cudly -d cudly -c "SELECT * FROM schema_mig
 
 # Force migration version (use with caution)
 migrate -path internal/database/postgres/migrations \
-    -database "postgresql://cudly:cudly_local_dev@localhost:5432/cudly?sslmode=disable" \
+    -database "pgx5://cudly:cudly_local_dev@localhost:5432/cudly?sslmode=disable" \
     force <version>
 ```
 

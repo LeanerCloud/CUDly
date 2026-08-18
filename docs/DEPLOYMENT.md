@@ -637,12 +637,17 @@ Multi-account support requires an AES-256-GCM encryption key for stored cloud ac
 
 If `DB_AUTO_MIGRATE=true` (the default), migration 000011 runs automatically on Lambda cold start. To run manually:
 
+> The URL scheme is `pgx5://`, not `postgres://`. golang-migrate selects its
+> driver by scheme, and `migrate` is built here with `-tags pgx5` so it does not
+> link `lib/pq` (issue #1849). A `postgres://` URL fails with
+> `unknown driver postgres`.
+
 ```bash
 DB_PASSWORD=$(aws secretsmanager get-secret-value --secret-id cudly-dev-db-password-* --query SecretString --output text | jq -r .password)
 RDS_ENDPOINT=$(cd terraform/environments/aws && terraform output -raw database_proxy_endpoint)
 
 migrate -path internal/database/postgres/migrations \
-  -database "postgresql://cudly:${DB_PASSWORD}@${RDS_ENDPOINT}:5432/cudly?sslmode=require" up
+  -database "pgx5://cudly:${DB_PASSWORD}@${RDS_ENDPOINT}:5432/cudly?sslmode=require" up
 ```
 
 ---
@@ -656,7 +661,7 @@ DB_PASSWORD=$(aws secretsmanager get-secret-value --secret-id cudly-dev-db-passw
 RDS_ENDPOINT=$(cd terraform/environments/aws && terraform output -raw database_proxy_endpoint)
 
 migrate -path internal/database/postgres/migrations \
-  -database "postgresql://cudly:${DB_PASSWORD}@${RDS_ENDPOINT}:5432/cudly?sslmode=require" up
+  -database "pgx5://cudly:${DB_PASSWORD}@${RDS_ENDPOINT}:5432/cudly?sslmode=require" up
 ```
 
 ### Terraform State Lock

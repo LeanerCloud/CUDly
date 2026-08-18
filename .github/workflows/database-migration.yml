@@ -276,7 +276,12 @@ jobs:
           go-version-file: go.mod
 
       - name: Install golang-migrate
-        run: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.1
+        # No @version suffix: installed as a package of this module, so the
+        # migrate version and its dependency set come from go.mod, the same way
+        # the Dockerfile and `make install-tools` build it. -tags 'pgx5' keeps
+        # lib/pq out of the binary that talks to the production database.
+        # See issue #1849.
+        run: go install -tags 'pgx5' github.com/golang-migrate/migrate/v4/cmd/migrate
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@d979d5b3a71173a29b74b5b88418bfda9437d885 # v6.1.1
@@ -304,7 +309,9 @@ jobs:
           STEPS: ${{ inputs.steps }}
         run: |
           set -uo pipefail
-          DB_URL="postgresql://cudly:${DB_PASSWORD}@${DB_ENDPOINT}:5432/cudly?sslmode=require"
+          # pgx5://, not postgresql://: migrate is installed with -tags 'pgx5'
+          # above and golang-migrate dispatches on the URL scheme (issue #1849).
+          DB_URL="pgx5://cudly:${DB_PASSWORD}@${DB_ENDPOINT}:5432/cudly?sslmode=require"
 
           # `validate` already rejects a malformed `steps`/`direction` before this
           # job is ever reached, but this job sits behind an environment gate and
@@ -339,7 +346,9 @@ jobs:
           DB_ENDPOINT: ${{ steps.get-endpoint.outputs.endpoint }}
         run: |
           set -uo pipefail
-          DB_URL="postgresql://cudly:${DB_PASSWORD}@${DB_ENDPOINT}:5432/cudly?sslmode=require"
+          # pgx5://, not postgresql://: migrate is installed with -tags 'pgx5'
+          # above and golang-migrate dispatches on the URL scheme (issue #1849).
+          DB_URL="pgx5://cudly:${DB_PASSWORD}@${DB_ENDPOINT}:5432/cudly?sslmode=require"
           VERSION=$(migrate -path "$MIGRATIONS_PATH" -database "$DB_URL" version 2>&1 || echo "unknown")
           echo "Current migration version: $VERSION"
           echo "MIGRATION_VERSION=$VERSION" >> "$GITHUB_ENV"
@@ -378,7 +387,12 @@ jobs:
           go-version-file: go.mod
 
       - name: Install golang-migrate
-        run: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.1
+        # No @version suffix: installed as a package of this module, so the
+        # migrate version and its dependency set come from go.mod, the same way
+        # the Dockerfile and `make install-tools` build it. -tags 'pgx5' keeps
+        # lib/pq out of the binary that talks to the production database.
+        # See issue #1849.
+        run: go install -tags 'pgx5' github.com/golang-migrate/migrate/v4/cmd/migrate
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
@@ -409,7 +423,9 @@ jobs:
           STEPS: ${{ inputs.steps }}
         run: |
           set -uo pipefail
-          DB_URL="postgresql://cudly:${DB_PASSWORD}@${DB_ENDPOINT}:5432/cudly?sslmode=require"
+          # pgx5://, not postgresql://: migrate is installed with -tags 'pgx5'
+          # above and golang-migrate dispatches on the URL scheme (issue #1849).
+          DB_URL="pgx5://cudly:${DB_PASSWORD}@${DB_ENDPOINT}:5432/cudly?sslmode=require"
 
           STEPS="${STEPS:-0}"
 
@@ -465,7 +481,12 @@ jobs:
           go-version-file: go.mod
 
       - name: Install golang-migrate
-        run: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.1
+        # No @version suffix: installed as a package of this module, so the
+        # migrate version and its dependency set come from go.mod, the same way
+        # the Dockerfile and `make install-tools` build it. -tags 'pgx5' keeps
+        # lib/pq out of the binary that talks to the production database.
+        # See issue #1849.
+        run: go install -tags 'pgx5' github.com/golang-migrate/migrate/v4/cmd/migrate
 
       - name: Azure Login
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
@@ -494,7 +515,9 @@ jobs:
           STEPS: ${{ inputs.steps }}
         run: |
           set -uo pipefail
-          DB_URL="postgresql://cudly:${DB_PASSWORD}@${DB_ENDPOINT}:5432/cudly?sslmode=require"
+          # pgx5://, not postgresql://: migrate is installed with -tags 'pgx5'
+          # above and golang-migrate dispatches on the URL scheme (issue #1849).
+          DB_URL="pgx5://cudly:${DB_PASSWORD}@${DB_ENDPOINT}:5432/cudly?sslmode=require"
 
           STEPS="${STEPS:-0}"
 
