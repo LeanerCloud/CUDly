@@ -7,12 +7,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write
   contents: read
 
 jobs:
   sanity:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     env:
       REPORT_PATH: azure_sanity_report.json
 

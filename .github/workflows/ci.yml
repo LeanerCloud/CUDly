@@ -115,9 +115,10 @@ jobs:
         run: |
           set -euo pipefail
           count=$(find .github/workflows -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) | wc -l | tr -d ' ')
-          # Both linters exit 0 on an empty input set, so a bad path or a glob
-          # that stops matching would leave this job green while scanning
-          # nothing. Fail instead of reporting a vacuous pass.
+          # Defence in depth, not the only guard: both linters do exit 3 on an
+          # empty input set. This catches the case they cannot, where the path
+          # still resolves but the set silently shrinks, and it prints the count
+          # so a drop is visible in the log rather than inferred from silence.
           if [ "$count" -eq 0 ]; then
             echo "::error::no workflow files found under .github/workflows"
             exit 1
@@ -139,32 +140,50 @@ jobs:
             shellcheck --version | sed -n "1,3p"'
 
       - name: Run actionlint
+        # No file arguments: actionlint discovers .github/workflows itself, so
+        # it also covers .yaml files and any workflow added later. Passing an
+        # explicit *.yml glob would silently skip a .yaml workflow that the
+        # count step above still counts.
         run: |
           set -euo pipefail
-          docker run --rm -v "$PWD:/repo" -w /repo "$ACTIONLINT_IMAGE" \
-            -color .github/workflows/*.yml
+          docker run --rm -v "$PWD:/repo" -w /repo "$ACTIONLINT_IMAGE" -color
 
       - name: Run zizmor
         # --offline on purpose: the online audits query the GitHub API for action
         # metadata, so findings could change without a change in this repo and
         # redden main, the same class of failure the hadolint digest pin fixed.
         #
-        # --min-severity=medium is a gate threshold, not a suppression: there is
-        # no baseline file, no per-finding ignore and no only-new-issues, so any
-        # new medium or high finding fails this job. The pre-fix rollback.yml
-        # injection scored high/high, so the class this job exists to catch is
-        # above the line. The informational and low tier that sits below it is
-        # 42 template-injection hits on values already assessed as
-        # non-injectable in #1649 (github.actor, github.sha and similar);
-        # clearing it means rewriting the deploy workflows and is tracked
-        # separately rather than silenced here.
+        # Coverage note: zizmor reads the directory non-recursively, while
+        # actionlint walks it. A workflow under .github/workflows/sub/ would
+        # therefore reach actionlint but not zizmor. GitHub itself ignores
+        # workflows in subdirectories, so this is not a live hole, and the
+        # -maxdepth 1 count above fails loud if the set ever moves down a level.
+        #
+        # Two independent filters, and it matters which does what.
+        #
+        # --persona=pedantic rather than the default regular: regular hides
+        # three high-severity findings this repo actually had (workflow-level
+        # id-token: write in both sanity workflows, and an unpinned postgres
+        # service image). Those are fixed rather than filtered, so the stricter
+        # persona costs nothing today and gates more. auditor is the one level
+        # up and is documented as accepting false positives, so it is not used.
+        #
+        # --min-severity=medium is a threshold, not a suppression: no baseline
+        # file, no per-finding ignore, no only-new-issues. Every medium and
+        # high finding the pedantic persona surfaces fails this job, and the
+        # injection class this job exists to catch scores high. Below the line
+        # sit 106 findings, none above low: 66 template-injection on values
+        # #1649 already assessed as non-injectable (github.actor, github.sha
+        # and similar), plus undocumented-permissions, concurrency-limits and
+        # anonymous-definition. Clearing those means rewriting the deploy
+        # workflows, so they are left to a follow-up rather than silenced here.
         run: |
           set -euo pipefail
           # `pipx run --spec` rather than `pipx install`: it pins the version in
           # the same statement that invokes it and does not assume pipx's bin
           # directory is on PATH.
           pipx run --spec "zizmor==${ZIZMOR_VERSION}" zizmor \
-            --offline --persona=regular --min-severity=medium \
+            --offline --persona=pedantic --min-severity=medium \
             --color=always .github/workflows/
 
   # Unit tests with race detection
@@ -307,7 +326,10 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16-alpine
+        # Pinned by digest for the same reason as the linter images below: a
+        # floating tag lets the service container change under an unchanged
+        # repo, which is how #1695 turned main red.
+        image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
         env:
           POSTGRES_DB: cudly_test
           POSTGRES_USER: cudly_test
@@ -882,11 +904,12 @@ jobs:
   ecr-delete-selection:
     name: ECR delete selection scope
     runs-on: ubuntu-latest
-    # ci.yml declares no workflow-level `permissions`, so a job without its own
-    # block gets the repository default, which is read/write on this repo. This
-    # job checks out the tree and runs a shell script against it; `contents:
-    # read` is all of that needs, and it is the same shape security-scan above
-    # uses (which adds `security-events: write` only because it uploads SARIF).
+    # This job checks out the tree and runs a shell script against it, so
+    # `contents: read` is all it needs. Same shape as security-scan above,
+    # which adds `security-events: write` only because it uploads SARIF.
+    # ci.yml now also declares `contents: read` at workflow level, so this
+    # block narrows nothing on its own; it is kept explicit so the job states
+    # its own requirement rather than inheriting silently.
     permissions:
       contents: read
 
@@ -922,8 +945,7 @@ jobs:
     name: RDS deletion protection scope
     runs-on: ubuntu-latest
     # Same shape as ecr-delete-selection above: this job checks out the tree and
-    # runs a shell script against it, so the repository-default read/write token
-    # is narrowed to `contents: read`.
+    # runs a shell script against it, so `contents: read` is all it needs.
     permissions:
       contents: read
 
@@ -956,8 +978,7 @@ jobs:
     name: AWS Terraform state namespace per platform
     runs-on: ubuntu-latest
     # Same shape as ecr-delete-selection above: this job checks out the tree and
-    # runs a shell script against it, so the repository-default read/write token
-    # is narrowed to `contents: read`.
+    # runs a shell script against it, so `contents: read` is all it needs.
     permissions:
       contents: read
 
