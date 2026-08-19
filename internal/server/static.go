@@ -94,7 +94,7 @@ func directoryIndex(absDir, dirPath, cleanPath string) (indexPath, indexClean st
 	if err != nil || !symlinkSafeContainedIn(absDir, absCandidate) {
 		return "", "", false
 	}
-	info, err := os.Stat(candidate)
+	info, err := os.Stat(candidate) //nolint:gosec // G703: candidate is absCandidate, checked by the symlinkSafeContainedIn call directly above
 	if err != nil || info.IsDir() {
 		return "", "", false
 	}
@@ -104,7 +104,7 @@ func directoryIndex(absDir, dirPath, cleanPath string) (indexPath, indexClean st
 // spaIndex returns the SPA shell that client-side routes fall back to.
 func spaIndex(dir string) (filePath, cleanPath string, ok bool) {
 	filePath = filepath.Join(dir, "index.html")
-	if _, err := os.Stat(filePath); err != nil {
+	if _, err := os.Stat(filePath); err != nil { //nolint:gosec // G703: dir is the operator-set STATIC_DIR and the filename is a constant; no request-derived segment reaches this path
 		return "", "", false
 	}
 	return filePath, "/index.html", true
@@ -134,7 +134,7 @@ func resolveStaticFilePath(dir, urlPath string) (filePath, cleanPath string, ok 
 		return "", "", false
 	}
 
-	if info, statErr := os.Stat(filePath); statErr == nil {
+	if info, statErr := os.Stat(filePath); statErr == nil { //nolint:gosec // G703: filePath passed filepath.Abs + symlinkSafeContainedIn above, which rejects any path resolving outside dir
 		if !info.IsDir() {
 			return filePath, cleanPath, true
 		}
