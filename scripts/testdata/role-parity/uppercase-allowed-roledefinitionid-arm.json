@@ -1,5 +1,15 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "parameters": {
+    "servicePrincipalObjectId": {
+      "type": "string"
+    }
+  },
+  "variables": {
+    "roles": {
+      "reader": "/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7"
+    }
+  },
   "resources": [
     {
       "type": "Microsoft.Authorization/roleDefinitions",
@@ -37,7 +47,7 @@
       "name": "reader-grant-uppercase-expr",
       "properties": {
         "roleDefinitionId": "[Variables('Roles').Reader]",
-        "principalId": "00000000-0000-0000-0000-0000000000aa",
+        "principalId": "[parameters('servicePrincipalObjectId')]",
         "principalType": "ServicePrincipal"
       }
     }

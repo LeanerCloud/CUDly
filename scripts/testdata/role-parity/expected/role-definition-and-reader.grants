@@ -1,0 +1,7 @@
+# Expected grant set for uppercase-allowed-roledefinitionid-arm.json: a role
+# definition plus one Reader assignment, whose roleDefinitionId is deliberately
+# spelled "[Variables('Roles').Reader]" to prove case folding. The fixture
+# declares the variables table that spelling reads, so the grant is recorded by
+# the definition it resolves to rather than by the name pointing at it.
+roleDefinition assignableScopes=<canonical-subscription-scope>
+roleAssignment roleDefinitionId=/providers/microsoft.authorization/roledefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7 principalId=<servicePrincipalObjectId-parameter> scope=<inherited>
