@@ -563,6 +563,38 @@ describe('loadCoverageBreakdown — fetch + render flow', () => {
     expect(barTh!.textContent).toBe('Coverage bar');
     expect(barTh!.getAttribute('aria-label')).toBe('Coverage bar');
   });
+
+  // The bar carries no text of its own, so the value has to reach assistive
+  // tech some other way (issue #1777).
+  test('coverage bar announces its percentage, and an absent figure renders no bar', async () => {
+    (api.getCoverageBreakdown as jest.Mock).mockResolvedValue({
+      providers: [
+        makeProviderSection('aws', [
+          { service: 'ec2', covered_monthly: 100, on_demand_monthly: 100, coverage_pct: 50 },
+          { service: 'opensearch', covered_monthly: 0, on_demand_monthly: 0, coverage_pct: null },
+        ], 50),
+        makeProviderSection('azure', null, null),
+        makeProviderSection('gcp', null, null),
+      ],
+    });
+
+    await loadCoverageBreakdown();
+
+    const rows = document.getElementById('coverage-providers')!.querySelectorAll('tbody tr');
+    expect(rows).toHaveLength(2);
+
+    const bar = rows[0]!.querySelector('.coverage-bar')!;
+    expect(bar).not.toBeNull();
+    expect(bar.getAttribute('role')).toBe('img');
+    expect(bar.getAttribute('aria-label')).toBe('50.0% covered');
+    expect(bar.querySelector<HTMLElement>('.coverage-bar-fill')!.style.width).toBe('50%');
+
+    // Absent is not zero: no track at all, and an explicit placeholder so the
+    // cell does not read as a rendering failure.
+    const absentCell = rows[1]!.querySelector('.coverage-bar-cell')!;
+    expect(absentCell.querySelector('.coverage-bar')).toBeNull();
+    expect(absentCell.querySelector('.coverage-bar-absent')!.textContent).toBe('N/A');
+  });
 });
 
 // ──────────────────────────────────────────────
