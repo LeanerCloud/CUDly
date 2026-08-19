@@ -7,7 +7,7 @@ import * as state from './state';
 import { showLoginModal, showAdminSetupModal, showResetPasswordModal, updateUserUI } from './auth';
 import { loadDashboard, setupDashboardHandlers } from './dashboard';
 import { setupRecommendationsHandlers, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, getFanOutBuckets, clearFanOutBuckets, getExecuteMode, clearExecuteMode, type FanOutBucket } from './recommendations';
-import { switchTab, applyTabFromPath, initRouter, switchSettingsSubTab, getSettingsSubTabFromPath } from './navigation';
+import { switchTab, applyTabFromPath, initRouter, switchSettingsSubTab, canonicalTabPath } from './navigation';
 import { savePlan, setupPlanHandlers, closePlanModal, openNewPlanModal, closePurchaseModal } from './plans';
 import { saveGlobalSettings, setupSettingsHandlers, resetSettings } from './settings';
 import { setupUserHandlers } from './users';
@@ -91,14 +91,12 @@ export async function init(): Promise<void> {
     // tab routing still runs underneath so the app is fully functional.
     handleArcheraDeeplink();
     const target = applyTabFromPath();
-    let url = '/' + target;
-    if (target === 'admin') {
-      url = '/admin/' + getSettingsSubTabFromPath();
-    }
+    // switchTab below re-reads the sub-tab from the URL, so this rewrite must
+    // keep the segment of a deep-linked /inventory/<subtab> or /admin/<subtab>.
     window.history.replaceState(
       { tab: target, id: 0 },
       '',
-      url + window.location.search + window.location.hash,
+      canonicalTabPath(target) + window.location.search + window.location.hash,
     );
     switchTab(target, { push: false });
     setupEventListeners();

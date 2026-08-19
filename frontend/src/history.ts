@@ -42,10 +42,27 @@ type StatusFilter = 'all' | 'pending' | 'completed' | 'failed' | 'expired' | 'ca
 let lastPurchases: HistoryPurchase[] = [];
 let activeStatusFilter: StatusFilter = 'all';
 
-// _fourEyesMode mirrors GlobalConfig.require_different_approver (issue #1005),
-// refreshed on every loadHistory() call. Gates the inline Approve button so a
-// creator can't approve their own pending purchase when dual-control is on.
+// _fourEyesMode mirrors GlobalConfig.require_different_approver (issue #1005).
+// Gates the inline Approve button so a creator can't approve their own pending
+// purchase when dual-control is on.
 let _fourEyesMode = false;
+
+/**
+ * Refresh _fourEyesMode and the dual-control banner from GlobalConfig.
+ *
+ * Every path that renders the approval queue must call this first, or the
+ * queue renders as though dual control were off and offers the creator an
+ * Approve button the backend will reject. A failed fetch keeps the previous
+ * value rather than throwing, so a config blip cannot block the render.
+ */
+async function refreshFourEyesMode(): Promise<void> {
+  const cfgResponse = await api.getConfig().catch(() => null);
+  if (cfgResponse?.global) {
+    _fourEyesMode = cfgResponse.global.require_different_approver === true;
+  }
+  const banner = document.getElementById('four-eyes-banner');
+  if (banner) banner.classList.toggle('hidden', !_fourEyesMode);
+}
 
 function normalizeStatus(p: HistoryPurchase): string {
   // Absent status → legacy DB row → counts as completed for filtering.
@@ -223,10 +240,19 @@ export function initHistoryDateRange(): void {
  * would be misleading.
  */
 export async function viewPlanHistory(planId: string): Promise<void> {
-  switchTab('history');
+  // skipDefaultLoad: the tab's own unscoped 7-day fetch would land after the
+  // plan-scoped one below and overwrite it, and its date-range seeding is
+  // exactly what the doc comment above says not to do here.
+  switchTab('purchases', { skipDefaultLoad: true });
+  // switchTab renders a no-access placeholder for sessions without
+  // view:purchases; don't overwrite it with the plan's purchases.
+  if (!canAccess('view', 'purchases')) return;
 
   try {
-    const data = await api.getHistory({ planId }) as unknown as HistoryResponse;
+    const [data] = await Promise.all([
+      api.getHistory({ planId }) as unknown as Promise<HistoryResponse>,
+      refreshFourEyesMode(),
+    ]);
     renderHistorySummary(data.summary ?? null);
     const purchases = data.purchases || [];
     renderApprovalQueue(purchases);
@@ -312,18 +338,10 @@ export async function loadHistory(): Promise<void> {
       provider,
       account_ids: accountIDs
     };
-    const [data, cfgResponse] = await Promise.all([
+    const [data] = await Promise.all([
       api.getHistory(filters) as unknown as Promise<HistoryResponse>,
-      // 4-eyes mode (issue #1005) lives on GlobalConfig; a failed fetch must
-      // not block the history render, so this leg fails closed to "no config"
-      // rather than throwing, and _fourEyesMode falls back to its last value.
-      api.getConfig().catch(() => null),
+      refreshFourEyesMode(),
     ]);
-    if (cfgResponse?.global) {
-      _fourEyesMode = cfgResponse.global.require_different_approver === true;
-    }
-    const banner = document.getElementById('four-eyes-banner');
-    if (banner) banner.classList.toggle('hidden', !_fourEyesMode);
     renderHistorySummary(data.summary ?? null);
     const purchases = data.purchases || [];
     renderApprovalQueue(purchases);

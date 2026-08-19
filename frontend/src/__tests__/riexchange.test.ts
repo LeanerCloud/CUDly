@@ -673,11 +673,14 @@ describe('⚙︎ Exchange settings deep-link', () => {
     jest.resetAllMocks();
   });
 
-  it('switches to Settings → Purchasing when clicked', () => {
+  // Issue #1775: 'settings' was the pre-#340 tab name, so switchTab fell back
+  // to Home while switchSettingsSubTab still set the Admin title and pushed
+  // /admin/purchasing -- URL and title said Admin over the Home dashboard.
+  it('switches to Admin → Purchasing when clicked', () => {
     setupRIExchangeHandlers();
     const btn = document.getElementById('ri-exchange-settings-btn')!;
     btn.click();
-    expect(navigation.switchTab).toHaveBeenCalledWith('settings');
+    expect(navigation.switchTab).toHaveBeenCalledWith('admin', { push: false, skipDefaultLoad: true });
     expect(navigation.switchSettingsSubTab).toHaveBeenCalledWith('purchasing');
   });
 });
