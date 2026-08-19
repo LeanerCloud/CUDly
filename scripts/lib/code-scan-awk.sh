@@ -2,13 +2,14 @@
 # code-scan-awk.sh
 #
 # Shared awk helper functions for the guard suites that scan workflow and shell
-# sources for destructive commands: test-ecr-delete-selection.sh and
-# test-rds-deletion-protection-scope.sh. Sourced, not executed; it defines one
-# variable, AWK_CODE_FUNCS, to be prepended to an awk program.
+# sources for what a step actually runs: test-ecr-delete-selection.sh,
+# test-rds-deletion-protection-scope.sh and test-aws-tfstate-platform-key.sh.
+# Sourced, not executed; it defines one variable, AWK_CODE_FUNCS, to be
+# prepended to an awk program.
 #
 # Shared rather than copied because these functions encode the rule that
-# separates code that RUNS a command from prose that only mentions it, and both
-# suites are wrong in the same way if that rule drifts in one of them. A guard
+# separates code that RUNS a command from prose that only mentions it, and every
+# suite is wrong in the same way if that rule drifts in one of them. A guard
 # that fires on a comment constrains what may be WRITTEN about a command, which
 # is the "the string is present somewhere" mistake the selector these suites
 # guard exists to remove, one level up.
@@ -53,19 +54,19 @@
 # build_swept_scripts SCRIPTS_DIR
 #
 # Sets SWEPT_SCRIPTS to every `*.sh` directly under SCRIPTS_DIR and under
-# SCRIPTS_DIR/lib, excluding the guard suites themselves.
+# SCRIPTS_DIR/lib, excluding the three guard suites themselves.
 #
-# Globbed rather than named file by file, in both suites, because naming the two
+# Globbed rather than named file by file, in every suite, because naming the
 # scripts already known to be guarded is the same defect the suites exist to
 # catch, one level up: a NEW script running the dangerous command without the
 # selector is invisible to a sweep that only ever opens the files someone
 # remembered to list, which is how a guard fails to reach a sibling site.
 #
-# The guard suites are excluded by basename because each carries both its
-# dangerous command and the selector as fixture data and inside awk programs, so
-# sweeping them reports a suite as a violation of itself. Matching on basename
-# rather than on a path fragment keeps the exclusion from exempting a real
-# script that merely sits beside them.
+# The guard suites are excluded by basename because each carries the very
+# pattern it looks for as fixture data and inside awk programs, so sweeping them
+# reports a suite as a violation of itself. Matching on basename rather than on
+# a path fragment keeps the exclusion from exempting a real script that merely
+# sits beside them.
 #
 # `nullglob` so a pattern matching nothing expands to nothing rather than to the
 # literal pattern text. Without it an unmatched glob becomes a nonexistent path,
@@ -81,7 +82,8 @@ build_swept_scripts() {
   shopt -s nullglob
   for candidate in "$dir"/*.sh "$dir"/lib/*.sh; do
     case "$(basename "$candidate")" in
-      test-rds-deletion-protection-scope.sh | test-ecr-delete-selection.sh) continue ;;
+      test-rds-deletion-protection-scope.sh | test-ecr-delete-selection.sh | \
+        test-aws-tfstate-platform-key.sh) continue ;;
     esac
     SWEPT_SCRIPTS+=("$candidate")
   done
