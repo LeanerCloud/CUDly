@@ -94,7 +94,10 @@ func directoryIndex(absDir, dirPath, cleanPath string) (indexPath, indexClean st
 	if err != nil || !symlinkSafeContainedIn(absDir, absCandidate) {
 		return "", "", false
 	}
-	info, err := os.Stat(candidate) //nolint:gosec // G703: candidate is absCandidate, checked by the symlinkSafeContainedIn call directly above
+	// #nosec G703 -- candidate is dirPath (already contained) plus a constant
+	// filename, then re-checked by the symlinkSafeContainedIn call above, which
+	// catches a symlinked index.html whose target sits outside dir.
+	info, err := os.Stat(candidate)
 	if err != nil || info.IsDir() {
 		return "", "", false
 	}
@@ -113,7 +116,11 @@ func spaIndex(absDir, dir string) (filePath, cleanPath string, ok bool) {
 	if err != nil || !symlinkSafeContainedIn(absDir, absFile) {
 		return "", "", false
 	}
-	if _, err := os.Stat(filePath); err != nil { //nolint:gosec // G703: filePath is dir plus a constant filename, checked by the symlinkSafeContainedIn call directly above
+	// #nosec G703 -- dir plus a constant filename, re-checked by the
+	// symlinkSafeContainedIn call above. See TestSPAFallbackRejectsSymlinkedShell:
+	// without that check a symlinked shell is refused at /index.html and served
+	// at every extensionless route.
+	if _, err := os.Stat(filePath); err != nil {
 		return "", "", false
 	}
 	return filePath, "/index.html", true
@@ -143,7 +150,12 @@ func resolveStaticFilePath(dir, urlPath string) (filePath, cleanPath string, ok 
 		return "", "", false
 	}
 
-	if info, statErr := os.Stat(filePath); statErr == nil { //nolint:gosec // G703: filePath passed filepath.Abs + symlinkSafeContainedIn above, which rejects any path resolving outside dir
+	// #nosec G703 -- guarded by filepath.Abs + symlinkSafeContainedIn above.
+	// That check is the load-bearing one and removing it alone fails the
+	// Hostile suite and both symlink tests, because a symlink is the escape
+	// path.Clean cannot see. path.Clean is defense in depth for the lexical
+	// cases only: removing it alone fails nothing, removing both escapes dir.
+	if info, statErr := os.Stat(filePath); statErr == nil {
 		if !info.IsDir() {
 			return filePath, cleanPath, true
 		}

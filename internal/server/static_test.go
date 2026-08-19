@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/LeanerCloud/CUDly/internal/testutil"
@@ -485,6 +487,158 @@ func TestSPAFallbackRejectsSymlinkedShell(t *testing.T) {
 			content, _, _, found := serveStaticForLambda(root, route)
 			testutil.AssertEqual(t, false, found)
 			testutil.AssertEqual(t, "", string(content))
+		})
+	}
+}
+
+// hostileRoot builds a static root with a sibling tree outside it holding a
+// file that must never be served, and returns (root, outsideFile).
+func hostileRoot(t *testing.T) (string, string) {
+	t.Helper()
+	parent := t.TempDir()
+	root := filepath.Join(parent, "static")
+	if err := os.MkdirAll(filepath.Join(root, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for name, body := range map[string]string{
+		"index.html":      "<html>spa</html>",
+		"docs/index.html": "<html>docs</html>",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	outside := filepath.Join(parent, "secret.txt")
+	if err := os.WriteFile(outside, []byte("TOP-SECRET"), 0o644); err != nil {
+		t.Fatalf("write secret: %v", err)
+	}
+	// Symlinks that escape the root, inside the same fixture as the lexical
+	// cases. Keeping them here means one `-run Hostile` covers both classes;
+	// when they lived only in separately-named tests, a name-filtered
+	// mutation run silently skipped the only cases that exercise
+	// symlinkSafeContainedIn, which is the check path.Clean cannot stand in
+	// for.
+	if err := os.Symlink(outside, filepath.Join(root, "escape.txt")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "docs", "leak.html")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	return root, outside
+}
+
+// Asserting on the resolved path, not on a status code: a handler that serves
+// the wrong file with 200 passes a status-only assertion. The invariant is that
+// whatever resolveStaticFilePath hands back is inside the served root, with
+// symlinks resolved, or it hands back nothing.
+func TestResolveStaticFilePath_HostilePathsNeverEscapeRoot(t *testing.T) {
+	root, outside := hostileRoot(t)
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("evalsymlinks root: %v", err)
+	}
+
+	hostile := []string{
+		"/../secret.txt",
+		"/../../secret.txt",
+		"/..",
+		"/../",
+		"/docs/../../secret.txt",
+		"/./../secret.txt",
+		"/....//secret.txt",
+		"/..%2fsecret.txt",           // encoded, as the Lambda RawPath transport delivers it
+		"/%2e%2e%2fsecret.txt",       // fully encoded
+		"/%252e%252e%252fsecret.txt", // double encoded
+		"/..\\secret.txt",            // backslash separator
+		"/" + outside,                // absolute path pasted into the URL
+		outside,                      // absolute path, no leading join
+		"//secret.txt",
+		"/docs/./../../secret.txt",
+		"/\x00/secret.txt", // NUL byte
+		"/plans\x00.html",
+		"/escape.txt",     // symlink in the root pointing outside it
+		"/docs/leak.html", // symlink one level down
+	}
+
+	for _, p := range hostile {
+		t.Run(strconv.Quote(p), func(t *testing.T) {
+			filePath, _, ok := resolveStaticFilePath(root, p)
+			if !ok {
+				return // refused outright, which is a valid answer
+			}
+			abs, absErr := filepath.Abs(filePath)
+			if absErr != nil {
+				t.Fatalf("abs(%q): %v", filePath, absErr)
+			}
+			// Resolve symlinks before comparing: a lexically-contained path
+			// whose target is outside is exactly the bypass being tested for.
+			if resolved, symErr := filepath.EvalSymlinks(abs); symErr == nil {
+				abs = resolved
+			}
+			if !isPathContainedIn(abs, realRoot) {
+				t.Fatalf("path %q escaped the root: resolved to %q, outside %q", p, abs, realRoot)
+			}
+			// Belt and braces: never the secret, whatever the path.
+			if data, readErr := os.ReadFile(abs); readErr == nil && strings.Contains(string(data), "TOP-SECRET") {
+				t.Fatalf("path %q served the out-of-root secret from %q", p, abs)
+			}
+		})
+	}
+}
+
+// Same matrix through the real HTTP handler, so Go's own URL decoding is in the
+// loop rather than assumed. Asserts on the served bytes, not the status.
+func TestSpaFileServer_HostilePathsNeverServeOutOfRoot(t *testing.T) {
+	root, _ := hostileRoot(t)
+	handler := spaFileServer(root)
+
+	for _, target := range []string{
+		"/../secret.txt",
+		"/../../secret.txt",
+		"/docs/../../secret.txt",
+		"/..%2fsecret.txt",
+		"/%2e%2e%2fsecret.txt",
+		"/%252e%252e%252fsecret.txt",
+		"/..\\secret.txt",
+		"//secret.txt",
+		"/....//secret.txt",
+		"/escape.txt",
+		"/docs/leak.html",
+	} {
+		t.Run(target, func(t *testing.T) {
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, target, nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if strings.Contains(w.Body.String(), "TOP-SECRET") {
+				t.Fatalf("target %q served out-of-root content (status %d)", target, w.Code)
+			}
+		})
+	}
+}
+
+// The Lambda transport passes RawPath, which is not decoded the way
+// http.Request.URL.Path is, so the two transports must be checked separately.
+func TestServeStaticForLambda_HostilePathsNeverServeOutOfRoot(t *testing.T) {
+	root, outside := hostileRoot(t)
+
+	for _, p := range []string{
+		"/../secret.txt",
+		"/../../secret.txt",
+		"/docs/../../secret.txt",
+		"/..%2fsecret.txt",
+		"/%2e%2e%2fsecret.txt",
+		"/%252e%252e%252fsecret.txt",
+		"/..\\secret.txt",
+		"//secret.txt",
+		"/escape.txt",
+		"/docs/leak.html",
+		outside,
+	} {
+		t.Run(strconv.Quote(p), func(t *testing.T) {
+			content, _, _, _ := serveStaticForLambda(root, p)
+			if strings.Contains(string(content), "TOP-SECRET") {
+				t.Fatalf("path %q served out-of-root content", p)
+			}
 		})
 	}
 }
