@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "servicePrincipalObjectId": {
+      "type": "string",
+      "metadata": {}
+    },
+    "roleAssignmentGuidPrefix": {
+      "type": "string",
+      "defaultValue": "[newGuid()]",
+      "metadata": {}
+    }
+  },
+  "variables": {
+    "roles": {
+      "reader": "/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7",
+      "costManagementReader": "/providers/Microsoft.Authorization/roleDefinitions/72fafb9e-0641-4937-9268-a91bfd8191a3"
+    },
+    "customRoleName": "[guid(subscription().subscriptionId, 'cudly-reservation-purchaser')]",
+    "customRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', guid(subscription().subscriptionId, 'cudly-reservation-purchaser'))]"
+  },
+  "resources": "see the other template"
+}

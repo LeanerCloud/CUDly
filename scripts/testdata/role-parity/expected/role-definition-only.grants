@@ -1,0 +1,9 @@
+# Expected grant set for the fixtures that carry a role definition and nothing
+# else. Passed to check-azure-role-parity.sh with --expected-grants, because
+# the script's built-in EXPECTED_GRANTS describes the real onboarding template
+# and these fixtures are deliberately smaller.
+#
+# Several spellings of the canonical subscription scope in one assignableScopes
+# array are one grant, so canonical-scope-variants-arm.json (four spellings)
+# reduces to the same single line as matching-arm.json (one).
+roleDefinition assignableScopes=<canonical-subscription-scope>
