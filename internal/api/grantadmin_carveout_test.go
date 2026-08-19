@@ -191,3 +191,167 @@ func TestGrantPermissionsScoped_ConstrainedCheckFailsClosedOnEmptyConstraintSets
 	require.NoError(t, err)
 	assert.True(t, has)
 }
+
+// constrainedGrantCase is one permission-side constraint plus a request that
+// falls inside it and a request that falls outside it. Holding both directions
+// in the same case is deliberate: a mock that refuses everyone passes an
+// outside-only assertion, and the pre-fix mock that allowed everyone passes an
+// inside-only one. Only the pair distinguishes them.
+type constrainedGrantCase struct {
+	permConstraints *auth.PermissionConstraints
+	inside          auth.PermissionConstraints
+	outside         auth.PermissionConstraints
+	name            string
+	action          string
+	resource        string
+}
+
+// constrainedGrantCases covers all five constraint dimensions. Each case holds
+// exactly one permission, so the dimension under test is the only thing that
+// can decide the answer.
+var constrainedGrantCases = []constrainedGrantCase{
+	{
+		name:            "providers",
+		action:          auth.ActionExecute,
+		resource:        auth.ResourceRIExchange,
+		permConstraints: &auth.PermissionConstraints{Providers: []string{"aws"}},
+		inside:          auth.PermissionConstraints{Providers: []string{"aws"}},
+		outside:         auth.PermissionConstraints{Providers: []string{"azure"}},
+	},
+	{
+		name:            "regions require every requested region",
+		action:          auth.ActionExecute,
+		resource:        auth.ResourceRIExchange,
+		permConstraints: &auth.PermissionConstraints{Regions: []string{"eastus"}},
+		inside:          auth.PermissionConstraints{Regions: []string{"eastus"}},
+		outside:         auth.PermissionConstraints{Regions: []string{"eastus", "westus"}},
+	},
+	{
+		name:            "services",
+		action:          auth.ActionExecute,
+		resource:        auth.ResourcePurchases,
+		permConstraints: &auth.PermissionConstraints{Services: []string{"ec2"}},
+		inside:          auth.PermissionConstraints{Services: []string{"ec2"}},
+		outside:         auth.PermissionConstraints{Services: []string{"rds"}},
+	},
+	{
+		name:            "account IDs",
+		action:          auth.ActionExecute,
+		resource:        auth.ResourcePurchases,
+		permConstraints: &auth.PermissionConstraints{AccountIDs: []string{"acct-a"}},
+		inside:          auth.PermissionConstraints{AccountIDs: []string{"acct-a"}},
+		outside:         auth.PermissionConstraints{AccountIDs: []string{"acct-b"}},
+	},
+	{
+		name:            "max purchase amount is the spend guard",
+		action:          auth.ActionExecute,
+		resource:        auth.ResourcePurchases,
+		permConstraints: &auth.PermissionConstraints{MaxPurchaseAmount: 1000},
+		inside:          auth.PermissionConstraints{MaxPurchaseAmount: 500},
+		outside:         auth.PermissionConstraints{MaxPurchaseAmount: 5000},
+	},
+}
+
+// TestGrantPermissionsScoped_ConstraintDimensionsAreEnforced is the issue
+// #1762 regression barrier: the mock's HasPermissionForConstraintsAPI must
+// answer from the constraint arguments, not discard them.
+//
+// It fails on the pre-fix mock -- which wired that method to a closure taking
+// only (action, resource) -- with every `outside` row returning true. Measured
+// against auth.PermissionsAllowForConstraintSets before the fix, all five
+// dimensions diverged, so a handler test asserting a constraint refusal was
+// green whether or not the handler enforced anything.
+func TestGrantPermissionsScoped_ConstraintDimensionsAreEnforced(t *testing.T) {
+	ctx := context.Background()
+
+	for _, tc := range constrainedGrantCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockAuth := new(MockAuthService)
+			t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+			mockAuth.grantPermissions([]auth.Permission{{
+				Action: tc.action, Resource: tc.resource, Constraints: tc.permConstraints,
+			}})
+
+			has, err := mockAuth.HasPermissionForConstraintsAPI(ctx, "u1", tc.action, tc.resource,
+				[]auth.PermissionConstraints{tc.inside})
+			require.NoError(t, err)
+			assert.True(t, has, "a request inside the permission's constraints must be allowed")
+
+			has, err = mockAuth.HasPermissionForConstraintsAPI(ctx, "u1", tc.action, tc.resource,
+				[]auth.PermissionConstraints{tc.outside})
+			require.NoError(t, err)
+			assert.False(t, has, "a request outside the permission's constraints must be refused")
+		})
+	}
+}
+
+// TestGrantPermissionsScoped_AdminDoesNotWidenAConstrainedCarveOut covers the
+// principal shape PR #1758 made reachable: execute:ri-exchange is carved out
+// of admin:*, so an administrator reaches it only by ALSO holding an explicit
+// grant. Migration 000096 seeds that grant unconstrained, but an operator may
+// configure a constrained one, and when they do the admin permission alongside
+// it must not widen them back out.
+func TestGrantPermissionsScoped_AdminDoesNotWidenAConstrainedCarveOut(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	mockAuth.grantPermissions([]auth.Permission{
+		{Action: auth.ActionAdmin, Resource: auth.ResourceAll},
+		{
+			Action: auth.ActionExecute, Resource: auth.ResourceRIExchange,
+			Constraints: &auth.PermissionConstraints{Providers: []string{"aws"}},
+		},
+	})
+
+	has, err := mockAuth.HasPermissionForConstraintsAPI(ctx, "u1", auth.ActionExecute, auth.ResourceRIExchange,
+		[]auth.PermissionConstraints{{Providers: []string{"aws"}}})
+	require.NoError(t, err)
+	assert.True(t, has, "the explicit grant covers its own provider")
+
+	has, err = mockAuth.HasPermissionForConstraintsAPI(ctx, "u1", auth.ActionExecute, auth.ResourceRIExchange,
+		[]auth.PermissionConstraints{{Providers: []string{"azure"}}})
+	require.NoError(t, err)
+	assert.False(t, has,
+		"admin:* must not satisfy a carved-out verb the explicit grant constrains to another provider")
+}
+
+// TestRequirePermissionConstraints_ConstrainedGrantIsBoundedAtHandler drives
+// the same principal through the handler gate the money paths call, so the
+// barrier covers requirePermissionConstraints' consumption of the answer and
+// not only the mock's production of it.
+func TestRequirePermissionConstraints_ConstrainedGrantIsBoundedAtHandler(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	mockAuth.grantPermissions([]auth.Permission{{
+		Action:      auth.ActionExecute,
+		Resource:    auth.ResourceRIExchange,
+		Constraints: &auth.PermissionConstraints{Providers: []string{"aws"}, MaxPurchaseAmount: 1000},
+	}})
+	h := &Handler{auth: mockAuth}
+	session := &Session{UserID: "u1"}
+
+	require.NoError(t,
+		h.requirePermissionConstraints(ctx, session, auth.ResourceRIExchange, []auth.PermissionConstraints{{
+			Providers: []string{"aws"}, MaxPurchaseAmount: 500,
+		}}),
+		"a request inside every dimension must pass the gate")
+
+	for _, tc := range []struct {
+		name    string
+		request auth.PermissionConstraints
+	}{
+		{"wrong provider", auth.PermissionConstraints{Providers: []string{"azure"}, MaxPurchaseAmount: 500}},
+		{"over the spend cap", auth.PermissionConstraints{Providers: []string{"aws"}, MaxPurchaseAmount: 5000}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := h.requirePermissionConstraints(ctx, session, auth.ResourceRIExchange,
+				[]auth.PermissionConstraints{tc.request})
+			require.Error(t, err)
+			ce, ok := IsClientError(err)
+			require.True(t, ok, "expected a ClientError, got %T: %v", err, err)
+			assert.Equal(t, 403, ce.code)
+			assert.Contains(t, ce.Error(), "exceeds the constraints")
+		})
+	}
+}

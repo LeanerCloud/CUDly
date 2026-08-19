@@ -1309,12 +1309,10 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 }
 
 func TestMatchConstraints(t *testing.T) {
-	service := &Service{}
-
 	t.Run("all empty constraints match", func(t *testing.T) {
 		permConstraints := &PermissionConstraints{}
 		reqConstraints := &PermissionConstraints{}
-		assert.True(t, service.matchConstraints(permConstraints, reqConstraints))
+		assert.True(t, matchConstraints(permConstraints, reqConstraints))
 	})
 
 	t.Run("account IDs match when intersection exists", func(t *testing.T) {
@@ -1324,7 +1322,7 @@ func TestMatchConstraints(t *testing.T) {
 		reqConstraints := &PermissionConstraints{
 			AccountIDs: []string{"account-2"},
 		}
-		assert.True(t, service.matchConstraints(permConstraints, reqConstraints))
+		assert.True(t, matchConstraints(permConstraints, reqConstraints))
 	})
 
 	t.Run("account IDs don't match when no intersection", func(t *testing.T) {
@@ -1334,7 +1332,7 @@ func TestMatchConstraints(t *testing.T) {
 		reqConstraints := &PermissionConstraints{
 			AccountIDs: []string{"account-3"},
 		}
-		assert.False(t, service.matchConstraints(permConstraints, reqConstraints))
+		assert.False(t, matchConstraints(permConstraints, reqConstraints))
 	})
 
 	t.Run("providers match when intersection exists", func(t *testing.T) {
@@ -1344,7 +1342,7 @@ func TestMatchConstraints(t *testing.T) {
 		reqConstraints := &PermissionConstraints{
 			Providers: []string{"azure"},
 		}
-		assert.True(t, service.matchConstraints(permConstraints, reqConstraints))
+		assert.True(t, matchConstraints(permConstraints, reqConstraints))
 	})
 
 	t.Run("services match when intersection exists", func(t *testing.T) {
@@ -1354,7 +1352,7 @@ func TestMatchConstraints(t *testing.T) {
 		reqConstraints := &PermissionConstraints{
 			Services: []string{"ec2"},
 		}
-		assert.True(t, service.matchConstraints(permConstraints, reqConstraints))
+		assert.True(t, matchConstraints(permConstraints, reqConstraints))
 	})
 
 	t.Run("regions match when intersection exists", func(t *testing.T) {
@@ -1364,7 +1362,7 @@ func TestMatchConstraints(t *testing.T) {
 		reqConstraints := &PermissionConstraints{
 			Regions: []string{"us-east-1"},
 		}
-		assert.True(t, service.matchConstraints(permConstraints, reqConstraints))
+		assert.True(t, matchConstraints(permConstraints, reqConstraints))
 	})
 
 	t.Run("max purchase amount under limit", func(t *testing.T) {
@@ -1374,7 +1372,7 @@ func TestMatchConstraints(t *testing.T) {
 		reqConstraints := &PermissionConstraints{
 			MaxPurchaseAmount: 5000.00,
 		}
-		assert.True(t, service.matchConstraints(permConstraints, reqConstraints))
+		assert.True(t, matchConstraints(permConstraints, reqConstraints))
 	})
 
 	t.Run("max purchase amount over limit", func(t *testing.T) {
@@ -1384,7 +1382,7 @@ func TestMatchConstraints(t *testing.T) {
 		reqConstraints := &PermissionConstraints{
 			MaxPurchaseAmount: 15000.00,
 		}
-		assert.False(t, service.matchConstraints(permConstraints, reqConstraints))
+		assert.False(t, matchConstraints(permConstraints, reqConstraints))
 	})
 
 	t.Run("max purchase amount at exact limit", func(t *testing.T) {
@@ -1394,7 +1392,7 @@ func TestMatchConstraints(t *testing.T) {
 		reqConstraints := &PermissionConstraints{
 			MaxPurchaseAmount: 10000.00,
 		}
-		assert.True(t, service.matchConstraints(permConstraints, reqConstraints))
+		assert.True(t, matchConstraints(permConstraints, reqConstraints))
 	})
 
 	t.Run("multiple constraint types combined", func(t *testing.T) {
@@ -1412,7 +1410,7 @@ func TestMatchConstraints(t *testing.T) {
 			Regions:           []string{"us-east-1"},
 			MaxPurchaseAmount: 5000.00,
 		}
-		assert.True(t, service.matchConstraints(permConstraints, reqConstraints))
+		assert.True(t, matchConstraints(permConstraints, reqConstraints))
 	})
 
 	t.Run("one non-matching constraint fails all", func(t *testing.T) {
@@ -1430,7 +1428,7 @@ func TestMatchConstraints(t *testing.T) {
 			Regions:           []string{"us-east-1"},
 			MaxPurchaseAmount: 5000.00,
 		}
-		assert.False(t, service.matchConstraints(permConstraints, reqConstraints))
+		assert.False(t, matchConstraints(permConstraints, reqConstraints))
 	})
 }
 
@@ -1447,8 +1445,6 @@ func TestMatchConstraints(t *testing.T) {
 // so re-wiring the Regions dimension back to matchStringListConstraints
 // fails these tests rather than leaving them vacuously green.
 func TestMatchConstraints_RegionsRequireEveryRequestedRegion(t *testing.T) {
-	service := &Service{}
-
 	tests := []struct {
 		name        string
 		permRegions []string
@@ -1525,7 +1521,7 @@ func TestMatchConstraints_RegionsRequireEveryRequestedRegion(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := service.matchConstraints(
+			got := matchConstraints(
 				&PermissionConstraints{Regions: tt.permRegions},
 				&PermissionConstraints{Regions: tt.reqRegions},
 			)
