@@ -7,12 +7,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write
   contents: read
 
 jobs:
   sanity:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     env:
       REPORT_PATH: azure_sanity_report.json
 
@@ -35,6 +37,8 @@ jobs:
       - name: Checkout
         if: steps.precheck.outputs.should_run == 'true'
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Go
         if: steps.precheck.outputs.should_run == 'true'

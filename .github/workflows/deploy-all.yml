@@ -15,6 +15,9 @@
 
 name: Deploy to All Clouds
 
+permissions:
+  contents: read
+
 # Adding a trigger here, or a second caller of the deploy-* workflows, means
 # revisiting the `prepare` comments in deploy-azure.yml, deploy-gcp.yml and
 # deploy-aws-lambda.yml. Since #1805 those three resolve their environment from
@@ -63,6 +66,8 @@ jobs:
   determine-deployment:
     name: Determine Deployment Strategy
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       environment: ${{ steps.set-env.outputs.environment }}
       deploy-aws-lambda: ${{ steps.set-clouds.outputs.deploy-aws-lambda }}
@@ -113,22 +118,22 @@ jobs:
              [[ "$DEPLOY_TO" == "aws-only" ]] || \
              [[ "$DEPLOY_TO" == "aws-gcp" ]] || \
              [[ "$DEPLOY_TO" == "aws-azure" ]]; then
-            echo "deploy-aws-lambda=true" >> $GITHUB_OUTPUT
+            echo "deploy-aws-lambda=true" >> "$GITHUB_OUTPUT"
           else
-            echo "deploy-aws-lambda=false" >> $GITHUB_OUTPUT
+            echo "deploy-aws-lambda=false" >> "$GITHUB_OUTPUT"
           fi
 
           # AWS Fargate (optional, can be enabled separately)
-          echo "deploy-aws-fargate=false" >> $GITHUB_OUTPUT
+          echo "deploy-aws-fargate=false" >> "$GITHUB_OUTPUT"
 
           # GCP
           if [[ "$DEPLOY_TO" == "all" ]] || \
              [[ "$DEPLOY_TO" == "gcp-only" ]] || \
              [[ "$DEPLOY_TO" == "aws-gcp" ]] || \
              [[ "$DEPLOY_TO" == "gcp-azure" ]]; then
-            echo "deploy-gcp=true" >> $GITHUB_OUTPUT
+            echo "deploy-gcp=true" >> "$GITHUB_OUTPUT"
           else
-            echo "deploy-gcp=false" >> $GITHUB_OUTPUT
+            echo "deploy-gcp=false" >> "$GITHUB_OUTPUT"
           fi
 
           # Azure
@@ -136,23 +141,25 @@ jobs:
              [[ "$DEPLOY_TO" == "azure-only" ]] || \
              [[ "$DEPLOY_TO" == "aws-azure" ]] || \
              [[ "$DEPLOY_TO" == "gcp-azure" ]]; then
-            echo "deploy-azure=true" >> $GITHUB_OUTPUT
+            echo "deploy-azure=true" >> "$GITHUB_OUTPUT"
           else
-            echo "deploy-azure=false" >> $GITHUB_OUTPUT
+            echo "deploy-azure=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Display deployment plan
         run: |
-          echo "## Deployment Plan" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** ${{ steps.set-env.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Deploy Strategy:** ${{ inputs.deploy_to || 'all' }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Clouds" >> $GITHUB_STEP_SUMMARY
-          echo "- AWS Lambda: ${{ steps.set-clouds.outputs.deploy-aws-lambda }}" >> $GITHUB_STEP_SUMMARY
-          echo "- AWS Fargate: ${{ steps.set-clouds.outputs.deploy-aws-fargate }}" >> $GITHUB_STEP_SUMMARY
-          echo "- GCP Cloud Run: ${{ steps.set-clouds.outputs.deploy-gcp }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Azure Container Apps: ${{ steps.set-clouds.outputs.deploy-azure }}" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Deployment Plan"
+            echo ""
+            echo "**Environment:** ${{ steps.set-env.outputs.environment }}"
+            echo "**Deploy Strategy:** ${{ inputs.deploy_to || 'all' }}"
+            echo ""
+            echo "### Clouds"
+            echo "- AWS Lambda: ${{ steps.set-clouds.outputs.deploy-aws-lambda }}"
+            echo "- AWS Fargate: ${{ steps.set-clouds.outputs.deploy-aws-fargate }}"
+            echo "- GCP Cloud Run: ${{ steps.set-clouds.outputs.deploy-gcp }}"
+            echo "- Azure Container Apps: ${{ steps.set-clouds.outputs.deploy-azure }}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Deploy to AWS Lambda
   deploy-aws-lambda:
@@ -243,62 +250,66 @@ jobs:
       - deploy-azure
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Aggregate results
         run: |
-          echo "## Multi-Cloud Deployment Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** ${{ needs.determine-deployment.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Timestamp:** $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Multi-Cloud Deployment Results"
+            echo ""
+            echo "**Environment:** ${{ needs.determine-deployment.outputs.environment }}"
+            echo "**Timestamp:** $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo ""
 
-          echo "### Deployment Status" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Deployment Status"
+            echo ""
 
-          # AWS Lambda
-          if [[ "${{ needs.determine-deployment.outputs.deploy-aws-lambda }}" == "true" ]]; then
-            if [[ "${{ needs.deploy-aws-lambda.result }}" == "success" ]]; then
-              echo "- ✅ AWS Lambda: Success" >> $GITHUB_STEP_SUMMARY
+            # AWS Lambda
+            if [[ "${{ needs.determine-deployment.outputs.deploy-aws-lambda }}" == "true" ]]; then
+              if [[ "${{ needs.deploy-aws-lambda.result }}" == "success" ]]; then
+                echo "- ✅ AWS Lambda: Success"
+              else
+                echo "- ❌ AWS Lambda: ${{ needs.deploy-aws-lambda.result }}"
+              fi
             else
-              echo "- ❌ AWS Lambda: ${{ needs.deploy-aws-lambda.result }}" >> $GITHUB_STEP_SUMMARY
+              echo "- ⏭️ AWS Lambda: Skipped"
             fi
-          else
-            echo "- ⏭️ AWS Lambda: Skipped" >> $GITHUB_STEP_SUMMARY
-          fi
 
-          # AWS Fargate
-          if [[ "${{ needs.determine-deployment.outputs.deploy-aws-fargate }}" == "true" ]]; then
-            if [[ "${{ needs.deploy-aws-fargate.result }}" == "success" ]]; then
-              echo "- ✅ AWS Fargate: Success" >> $GITHUB_STEP_SUMMARY
+            # AWS Fargate
+            if [[ "${{ needs.determine-deployment.outputs.deploy-aws-fargate }}" == "true" ]]; then
+              if [[ "${{ needs.deploy-aws-fargate.result }}" == "success" ]]; then
+                echo "- ✅ AWS Fargate: Success"
+              else
+                echo "- ❌ AWS Fargate: ${{ needs.deploy-aws-fargate.result }}"
+              fi
             else
-              echo "- ❌ AWS Fargate: ${{ needs.deploy-aws-fargate.result }}" >> $GITHUB_STEP_SUMMARY
+              echo "- ⏭️ AWS Fargate: Skipped"
             fi
-          else
-            echo "- ⏭️ AWS Fargate: Skipped" >> $GITHUB_STEP_SUMMARY
-          fi
 
-          # GCP
-          if [[ "${{ needs.determine-deployment.outputs.deploy-gcp }}" == "true" ]]; then
-            if [[ "${{ needs.deploy-gcp.result }}" == "success" ]]; then
-              echo "- ✅ GCP Cloud Run: Success" >> $GITHUB_STEP_SUMMARY
+            # GCP
+            if [[ "${{ needs.determine-deployment.outputs.deploy-gcp }}" == "true" ]]; then
+              if [[ "${{ needs.deploy-gcp.result }}" == "success" ]]; then
+                echo "- ✅ GCP Cloud Run: Success"
+              else
+                echo "- ❌ GCP Cloud Run: ${{ needs.deploy-gcp.result }}"
+              fi
             else
-              echo "- ❌ GCP Cloud Run: ${{ needs.deploy-gcp.result }}" >> $GITHUB_STEP_SUMMARY
+              echo "- ⏭️ GCP Cloud Run: Skipped"
             fi
-          else
-            echo "- ⏭️ GCP Cloud Run: Skipped" >> $GITHUB_STEP_SUMMARY
-          fi
 
-          # Azure
-          if [[ "${{ needs.determine-deployment.outputs.deploy-azure }}" == "true" ]]; then
-            if [[ "${{ needs.deploy-azure.result }}" == "success" ]]; then
-              echo "- ✅ Azure Container Apps: Success" >> $GITHUB_STEP_SUMMARY
+            # Azure
+            if [[ "${{ needs.determine-deployment.outputs.deploy-azure }}" == "true" ]]; then
+              if [[ "${{ needs.deploy-azure.result }}" == "success" ]]; then
+                echo "- ✅ Azure Container Apps: Success"
+              else
+                echo "- ❌ Azure Container Apps: ${{ needs.deploy-azure.result }}"
+              fi
             else
-              echo "- ❌ Azure Container Apps: ${{ needs.deploy-azure.result }}" >> $GITHUB_STEP_SUMMARY
+              echo "- ⏭️ Azure Container Apps: Skipped"
             fi
-          else
-            echo "- ⏭️ Azure Container Apps: Skipped" >> $GITHUB_STEP_SUMMARY
-          fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check for failures
         run: |
@@ -327,12 +338,12 @@ jobs:
           fi
 
           if [ "$FAILED" = true ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "❌ **Deployment did not complete successfully. Check individual job logs.**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "❌ **Deployment did not complete successfully. Check individual job logs.**" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           else
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "✅ **All deployments completed successfully!**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "✅ **All deployments completed successfully!**" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       # Optional: Send notification to Slack, Discord, email, etc.

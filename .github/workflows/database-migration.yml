@@ -175,8 +175,8 @@ jobs:
 
           # Check migration files
           if [ -d "$MIGRATIONS_PATH" ]; then
-            UP_COUNT=$(ls -1 "$MIGRATIONS_PATH"/*.up.sql 2>/dev/null | wc -l)
-            DOWN_COUNT=$(ls -1 "$MIGRATIONS_PATH"/*.down.sql 2>/dev/null | wc -l)
+            UP_COUNT=$(find "$MIGRATIONS_PATH" -maxdepth 1 -type f -name '*.up.sql' 2>/dev/null | wc -l)
+            DOWN_COUNT=$(find "$MIGRATIONS_PATH" -maxdepth 1 -type f -name '*.down.sql' 2>/dev/null | wc -l)
 
             echo "Migration files found:"
             echo "  Up migrations: $UP_COUNT"
@@ -299,7 +299,7 @@ jobs:
             echo "Failed to get database endpoint"
             exit 1
           fi
-          echo "endpoint=$DB_ENDPOINT" >> $GITHUB_OUTPUT
+          echo "endpoint=$DB_ENDPOINT" >> "$GITHUB_OUTPUT"
 
       - name: Run migrations
         env:
@@ -413,7 +413,7 @@ jobs:
             echo "Failed to get database endpoint"
             exit 1
           fi
-          echo "endpoint=$DB_ENDPOINT" >> $GITHUB_OUTPUT
+          echo "endpoint=$DB_ENDPOINT" >> "$GITHUB_OUTPUT"
 
       - name: Run migrations
         env:
@@ -505,7 +505,7 @@ jobs:
             echo "Failed to get database endpoint"
             exit 1
           fi
-          echo "endpoint=$DB_ENDPOINT" >> $GITHUB_OUTPUT
+          echo "endpoint=$DB_ENDPOINT" >> "$GITHUB_OUTPUT"
 
       - name: Run migrations
         env:

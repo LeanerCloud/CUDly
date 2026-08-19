@@ -23,7 +23,6 @@
 name: Deploy to Azure Container Apps
 
 permissions:
-  id-token: write
   contents: read
 
 # No workflow-level `concurrency` on purpose. What needs protecting is the
@@ -73,6 +72,8 @@ jobs:
   prepare:
     name: Prepare Deployment
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       environment: ${{ steps.set-env.outputs.environment }}
     steps:
@@ -128,6 +129,9 @@ jobs:
     name: Build & Deploy
     runs-on: ubuntu-latest
     needs: prepare
+    permissions:
+      id-token: write
+      contents: read
     # Every run that writes github-<environment>.terraform.tfstate serializes
     # here, whatever its ref and whatever workflow it came from. The group name
     # is a 1:1 function of the state key, and the same literal prefix is used by
@@ -155,6 +159,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
 
       - name: Azure Login
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
@@ -257,11 +263,11 @@ jobs:
 
           # Get app URL
           APP_URL=$(terraform output -raw container_app_url 2>/dev/null | grep -v '::' || echo "")
-          echo "app_url=$APP_URL" >> $GITHUB_OUTPUT
+          echo "app_url=$APP_URL" >> "$GITHUB_OUTPUT"
 
           # Get app name
           APP_NAME=$(terraform output -raw container_app_name 2>/dev/null | grep -v '::' || echo "")
-          echo "app_name=$APP_NAME" >> $GITHUB_OUTPUT
+          echo "app_name=$APP_NAME" >> "$GITHUB_OUTPUT"
 
       # The provider fails the data read outright when the custom role is absent,
       # so a Terraform precondition can never run for this case. Issue #1794: the
@@ -338,17 +344,23 @@ jobs:
       # leases, which is the bug this issue is about.
 
       - name: Save deployment info
+        env:
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
+          APP_URL: ${{ steps.deploy.outputs.app_url }}
+          APP_NAME: ${{ steps.deploy.outputs.app_name }}
+          DEPLOYED_BY: ${{ github.actor }}
+          COMMIT: ${{ github.sha }}
         run: |
-          cat <<EOF > deployment-info.json
-          {
-            "environment": "${{ needs.prepare.outputs.environment }}",
-            "app_url": "${{ steps.deploy.outputs.app_url }}",
-            "app_name": "${{ steps.deploy.outputs.app_name }}",
-            "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "deployed_by": "${{ github.actor }}",
-            "commit": "${{ github.sha }}"
-          }
-          EOF
+          set -euo pipefail
+          jq -n \
+            --arg environment "$ENVIRONMENT" \
+            --arg app_url "$APP_URL" \
+            --arg app_name "$APP_NAME" \
+            --arg deployed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg deployed_by "$DEPLOYED_BY" \
+            --arg commit "$COMMIT" \
+            '{environment: $environment, app_url: $app_url, app_name: $app_name, deployed_at: $deployed_at, deployed_by: $deployed_by, commit: $commit}' \
+            > deployment-info.json
           cat deployment-info.json
 
       - name: Upload deployment info
@@ -364,6 +376,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [prepare, build-and-deploy]
     if: always() && needs.build-and-deploy.result == 'success'
+    permissions:
+      id-token: write
+      contents: read
 
     steps:
       - name: Azure Login
@@ -387,7 +402,7 @@ jobs:
             *) APP_URL="https://$APP_URL" ;;
           esac
           APP_URL="${APP_URL%/}"
-          echo "url=$APP_URL" >> $GITHUB_OUTPUT
+          echo "url=$APP_URL" >> "$GITHUB_OUTPUT"
 
       - name: Wait for Container App to be ready
         run: |
@@ -451,6 +466,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [prepare, build-and-deploy, test-deployment]
     if: always()
+    permissions:
+      contents: read
 
     steps:
       - name: Download deployment info
@@ -461,28 +478,30 @@ jobs:
 
       - name: Post summary
         run: |
-          echo "## Azure Container Apps Deployment Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** ${{ needs.prepare.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Location:** ${{ env.AZURE_LOCATION }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Azure Container Apps Deployment Summary"
+            echo ""
+            echo "**Environment:** ${{ needs.prepare.outputs.environment }}"
+            echo "**Location:** ${{ env.AZURE_LOCATION }}"
+            echo ""
 
-          if [ -f deployment-info.json ]; then
-            echo "### Deployment Details" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
-            cat deployment-info.json >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          fi
+            if [ -f deployment-info.json ]; then
+              echo "### Deployment Details"
+              echo "\`\`\`json"
+              cat deployment-info.json
+              echo "\`\`\`"
+            fi
 
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Job Results" >> $GITHUB_STEP_SUMMARY
-          echo "- Deploy: ${{ needs.build-and-deploy.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Test: ${{ needs.test-deployment.result }}" >> $GITHUB_STEP_SUMMARY
+            echo ""
+            echo "### Job Results"
+            echo "- Deploy: ${{ needs.build-and-deploy.result }}"
+            echo "- Test: ${{ needs.test-deployment.result }}"
 
-          if [ "${{ needs.build-and-deploy.result }}" == "success" ] && [ "${{ needs.test-deployment.result }}" == "success" ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "✅ **Deployment successful!**" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "❌ **Deployment failed. Check logs for details.**" >> $GITHUB_STEP_SUMMARY
-          fi
+            if [ "${{ needs.build-and-deploy.result }}" == "success" ] && [ "${{ needs.test-deployment.result }}" == "success" ]; then
+              echo ""
+              echo "✅ **Deployment successful!**"
+            else
+              echo ""
+              echo "❌ **Deployment failed. Check logs for details.**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
