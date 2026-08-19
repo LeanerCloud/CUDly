@@ -102,9 +102,18 @@ func directoryIndex(absDir, dirPath, cleanPath string) (indexPath, indexClean st
 }
 
 // spaIndex returns the SPA shell that client-side routes fall back to.
-func spaIndex(dir string) (filePath, cleanPath string, ok bool) {
+//
+// Runs the same containment check as directoryIndex. A direct /index.html
+// request is validated by resolveStaticFilePath before it gets here, so
+// without this a symlinked shell pointing out of dir would be refused at
+// /index.html and served at every client-side route.
+func spaIndex(absDir, dir string) (filePath, cleanPath string, ok bool) {
 	filePath = filepath.Join(dir, "index.html")
-	if _, err := os.Stat(filePath); err != nil { //nolint:gosec // G703: dir is the operator-set STATIC_DIR and the filename is a constant; no request-derived segment reaches this path
+	absFile, err := filepath.Abs(filePath)
+	if err != nil || !symlinkSafeContainedIn(absDir, absFile) {
+		return "", "", false
+	}
+	if _, err := os.Stat(filePath); err != nil { //nolint:gosec // G703: filePath is dir plus a constant filename, checked by the symlinkSafeContainedIn call directly above
 		return "", "", false
 	}
 	return filePath, "/index.html", true
@@ -149,7 +158,7 @@ func resolveStaticFilePath(dir, urlPath string) (filePath, cleanPath string, ok 
 	if path.Ext(cleanPath) != "" {
 		return "", "", false
 	}
-	return spaIndex(dir)
+	return spaIndex(absDir, dir)
 }
 
 // cacheControlForExt returns the Cache-Control header value for a file extension.

@@ -52,14 +52,19 @@ let _fourEyesMode = false;
  *
  * Every path that renders the approval queue must call this first, or the
  * queue renders as though dual control were off and offers the creator an
- * Approve button the backend will reject. A failed fetch keeps the previous
- * value rather than throwing, so a config blip cannot block the render.
+ * Approve button the backend will reject.
+ *
+ * An unreadable config fails closed, to dual-control ON. The fetch never
+ * throws, so a config blip cannot block the render; it can only make the UI
+ * more restrictive than the backend, never less. The cost is a temporarily
+ * hidden Approve button during an outage, which self-corrects on the next
+ * successful load.
  */
 async function refreshFourEyesMode(): Promise<void> {
   const cfgResponse = await api.getConfig().catch(() => null);
-  if (cfgResponse?.global) {
-    _fourEyesMode = cfgResponse.global.require_different_approver === true;
-  }
+  _fourEyesMode = cfgResponse?.global
+    ? cfgResponse.global.require_different_approver === true
+    : true;
   const banner = document.getElementById('four-eyes-banner');
   if (banner) banner.classList.toggle('hidden', !_fourEyesMode);
 }

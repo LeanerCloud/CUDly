@@ -456,3 +456,35 @@ func TestResolveStaticFilePath_DirectoryIndexRejectsSymlinkEscape(t *testing.T) 
 	testutil.AssertEqual(t, true, viaDirFound)
 	testutil.AssertEqual(t, "<html>spa</html>", string(viaDir))
 }
+
+// The SPA shell is served for every client-side route, so it needs the same
+// containment check as the direct request path. Without it a symlinked
+// index.html pointing out of the static dir is refused at /index.html and
+// served at /plans, which is the same asymmetry directoryIndex avoids.
+func TestSPAFallbackRejectsSymlinkedShell(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "static")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("mkdir static: %v", err)
+	}
+	outside := filepath.Join(parent, "secret.html")
+	if err := os.WriteFile(outside, []byte("should-not-serve"), 0o644); err != nil {
+		t.Fatalf("write secret.html: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "index.html")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	// Direct spelling: already rejected before this change.
+	_, _, _, directFound := serveStaticForLambda(root, "/index.html")
+	testutil.AssertEqual(t, false, directFound)
+
+	// Client-side route: must reach the same verdict, not serve the target.
+	for _, route := range []string{"/plans", "/inventory/coverage", "/"} {
+		t.Run(route, func(t *testing.T) {
+			content, _, _, found := serveStaticForLambda(root, route)
+			testutil.AssertEqual(t, false, found)
+			testutil.AssertEqual(t, "", string(content))
+		})
+	}
+}
