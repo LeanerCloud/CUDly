@@ -1205,14 +1205,28 @@ func mapSavingsPlansSlug(service string) (common.ServiceType, bool) {
 // Direct-execute purchases (Opportunities flow) have no plan to advance --
 // PlanID is empty and the Postgres UUID column would reject the query
 // with SQLSTATE 22P02, so short-circuit cleanly before hitting the store.
-// The actual increment is delegated to IncrementPlanCurrentStep which holds
-// a SELECT FOR UPDATE lock for the duration, preventing the lost-update race
-// when two Lambda invocations overlap on the same plan (issue #1071).
-func (m *Manager) updatePlanProgress(ctx context.Context, planID string) error {
-	if planID == "" {
+//
+// The step being completed is read off the execution itself, never off the
+// plan's current position: a multi-account step fans out into one execution
+// per account, each retryable on its own, so the plan's position is exactly
+// what a second completion of one step must not be trusted to imply (issue
+// #1669). CompletePlanStep holds a SELECT FOR UPDATE lock for the duration,
+// which also closes the lost-update race between overlapping Lambda
+// invocations on the same plan (issue #1071).
+func (m *Manager) updatePlanProgress(ctx context.Context, exec *config.PurchaseExecution) error {
+	if exec.PlanID == "" {
 		return nil
 	}
-	return m.config.IncrementPlanCurrentStep(ctx, planID)
+	if exec.StepNumber <= 0 {
+		// Reachable for a row stamped by pre-#1669 code, which wrote the COUNT
+		// of completed steps and so wrote 0 for a plan's first step. Migration
+		// 000098 retargets those rows, leaving only ones written during the
+		// deploy overlap. Advancing the ramp from an unknown step would be a
+		// guess on the money path; report instead.
+		return fmt.Errorf("execution %s is attributed to plan %s but carries ramp step %d: refusing to advance the ramp",
+			exec.ExecutionID, exec.PlanID, exec.StepNumber)
+	}
+	return m.config.CompletePlanStep(ctx, exec.PlanID, exec.StepNumber)
 }
 
 // getAWSAccountID retrieves the current AWS account ID using STS.

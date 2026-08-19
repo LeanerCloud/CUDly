@@ -191,10 +191,10 @@ func (m *MockConfigStore) UpdatePurchasePlan(ctx context.Context, plan *config.P
 	return args.Error(0)
 }
 
-// IncrementPlanCurrentStep mocks the atomic step-advance operation.
-func (m *MockConfigStore) IncrementPlanCurrentStep(ctx context.Context, planID string) error {
-	m.record("IncrementPlanCurrentStep", ctx, planID)
-	args := m.Called(ctx, planID)
+// CompletePlanStep mocks the idempotent ramp-step advance operation.
+func (m *MockConfigStore) CompletePlanStep(ctx context.Context, planID string, stepNumber int) error {
+	m.record("CompletePlanStep", ctx, planID, stepNumber)
+	args := m.Called(ctx, planID, stepNumber)
 	return args.Error(0)
 }
 

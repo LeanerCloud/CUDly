@@ -46,8 +46,9 @@ func stubExecuteChain(t *testing.T, store *MockConfigStore, sender *MockEmailSen
 	sender.On("SendPurchaseConfirmation", mock.Anything, mock.Anything).Return(nil)
 	// finalizeExecution writes status=completed via SavePurchaseExecution.
 	store.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
-	// updatePlanProgress calls IncrementPlanCurrentStep (atomic, issue #1071).
-	store.On("IncrementPlanCurrentStep", mock.Anything, planID).Return(nil)
+	// updatePlanProgress calls CompletePlanStep (atomic, issue #1071); every
+	// caller of this helper stamps StepNumber: 1 on its "updated" fixture.
+	store.On("CompletePlanStep", mock.Anything, planID, 1).Return(nil)
 }
 
 func TestManager_ApproveExecution_Success(t *testing.T) {
@@ -65,6 +66,7 @@ func TestManager_ApproveExecution_Success(t *testing.T) {
 		PlanID:        "plan-456",
 		Status:        "approved",
 		ApprovalToken: "valid-token",
+		StepNumber:    1,
 	}
 
 	store.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
@@ -92,6 +94,7 @@ func TestManager_ApproveExecution_StampsApprovedBy(t *testing.T) {
 		PlanID:        "plan-456",
 		Status:        "approved",
 		ApprovalToken: "valid-token",
+		StepNumber:    1,
 	}
 
 	store.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
@@ -125,6 +128,7 @@ func TestManager_ApproveExecution_NotifiedStatus(t *testing.T) {
 		PlanID:        "plan-456",
 		Status:        "approved",
 		ApprovalToken: "valid-token",
+		StepNumber:    1,
 	}
 
 	store.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
@@ -288,6 +292,7 @@ func TestManager_ApproveAndExecute_SkipsTokenCheck(t *testing.T) {
 		PlanID:        "plan-789",
 		Status:        "approved",
 		ApprovalToken: "tok",
+		StepNumber:    1,
 	}
 	store.On("TransitionExecutionStatus", ctx, "exec-456", approveFromStatuses, "approved",
 		mock.MatchedBy(func(actor *string) bool { return actor != nil && *actor == actorUUID })).Return(updated, nil)
@@ -376,6 +381,7 @@ func TestManager_ApproveAndExecute_FourEyesOn_AllowsDifferentApprover(t *testing
 		ExecutionID: "exec-direct-diff",
 		PlanID:      "plan-fourEyes",
 		Status:      "approved",
+		StepNumber:  1,
 	}
 
 	store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOnForManager(), nil)
@@ -471,7 +477,7 @@ func TestManager_ApproveAndExecute_FourEyesOff_AllowsSelfApprove(t *testing.T) {
 	manager, store, sender := newApproveManager(t)
 
 	creatorID := "user-creator"
-	updated := &config.PurchaseExecution{ExecutionID: "exec-mode-off", PlanID: "plan-fourEyes", Status: "approved"}
+	updated := &config.PurchaseExecution{ExecutionID: "exec-mode-off", PlanID: "plan-fourEyes", Status: "approved", StepNumber: 1}
 	store.On("TransitionExecutionStatus", ctx, "exec-mode-off", approveFromStatuses, "approved", &creatorID).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-fourEyes")
 
@@ -536,6 +542,7 @@ func TestManager_ApproveExecution_FourEyesOn_DifferentActor_Allowed(t *testing.T
 		PlanID:        "plan-fourEyes",
 		Status:        "approved",
 		ApprovalToken: "valid-token",
+		StepNumber:    1,
 	}
 
 	store.On("GetExecutionByID", ctx, "exec-sqs-diff").Return(execution, nil)
@@ -817,6 +824,7 @@ func TestManager_ApproveExecution_ValidTokenWithinTTL(t *testing.T) {
 		PlanID:        "plan-live",
 		Status:        "approved",
 		ApprovalToken: "valid-token",
+		StepNumber:    1,
 	}
 	store.On("GetExecutionByID", ctx, "exec-live").Return(execution, nil)
 	store.On("TransitionExecutionStatus", ctx, "exec-live", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
@@ -846,6 +854,7 @@ func TestManager_ApproveExecution_NilExpiresAt_LegacyRow(t *testing.T) {
 		ExecutionID: "exec-legacy",
 		PlanID:      "plan-legacy",
 		Status:      "approved",
+		StepNumber:  1,
 	}
 	store.On("GetExecutionByID", ctx, "exec-legacy").Return(execution, nil)
 	store.On("TransitionExecutionStatus", ctx, "exec-legacy", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
@@ -906,6 +915,7 @@ func TestManager_ApproveExecution_AWSOrphanFallsThrough(t *testing.T) {
 		PlanID:        "plan-aws",
 		Status:        "approved",
 		ApprovalToken: "valid-token",
+		StepNumber:    1,
 	}
 	store.On("GetExecutionByID", ctx, "exec-aws-ambient").Return(execution, nil)
 	store.On("TransitionExecutionStatus", ctx, "exec-aws-ambient", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
@@ -1018,6 +1028,7 @@ func TestApproveExecution_MintsRevocationToken(t *testing.T) {
 		PlanID:        "plan-rotate",
 		Status:        "approved",
 		ApprovalToken: "pre-rotate-token",
+		StepNumber:    1,
 	}
 
 	// GetExecutionByID is called twice: once in ApproveExecution itself and

@@ -181,6 +181,7 @@ func TestManager_ProcessScheduledPurchases_DuePurchase(t *testing.T) {
 			ExecutionID:   "exec-123",
 			PlanID:        "plan-456",
 			Status:        "pending",
+			StepNumber:    1,
 			ScheduledDate: pastDate,
 			Recommendations: []config.RecommendationRecord{
 				{
@@ -219,7 +220,7 @@ func TestManager_ProcessScheduledPurchases_DuePurchase(t *testing.T) {
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
-	mockStore.On("IncrementPlanCurrentStep", ctx, "plan-456").Return(nil)
+	mockStore.On("CompletePlanStep", ctx, "plan-456", 1).Return(nil)
 	mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
 		Account: aws.String("123456789012"),
 	}, nil)
@@ -596,6 +597,7 @@ func TestManager_RecoverStrandedApprovals_AWSOnlyRedrives(t *testing.T) {
 		ExecutionID: "exec-aws-stranded",
 		PlanID:      "plan-aws-456",
 		Status:      "approved",
+		StepNumber:  1,
 		Recommendations: []config.RecommendationRecord{
 			{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, UpfrontCost: 200.0, Selected: true, Purchased: false},
 		},
@@ -624,7 +626,7 @@ func TestManager_RecoverStrandedApprovals_AWSOnlyRedrives(t *testing.T) {
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
 		Run(func(args mock.Arguments) { saved = args.Get(1).(*config.PurchaseExecution) }).
 		Return(nil)
-	mockStore.On("IncrementPlanCurrentStep", ctx, "plan-aws-456").Return(nil)
+	mockStore.On("CompletePlanStep", ctx, "plan-aws-456", 1).Return(nil)
 	mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
 		Account: aws.String("123456789012"),
 	}, nil)
@@ -684,6 +686,7 @@ func TestManager_RecoverStrandedApprovals_AzureReservationRedrives(t *testing.T)
 		ExecutionID: "exec-azure-res-stranded",
 		PlanID:      "plan-azure-res",
 		Status:      "approved",
+		StepNumber:  1,
 		Recommendations: []config.RecommendationRecord{
 			{Provider: "azure", Service: "compute", ResourceType: "Standard_D4s_v3", Region: "eastus", Count: 1, UpfrontCost: 300.0, Selected: true, Purchased: false},
 		},
@@ -712,7 +715,7 @@ func TestManager_RecoverStrandedApprovals_AzureReservationRedrives(t *testing.T)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
 		Run(func(args mock.Arguments) { saved = args.Get(1).(*config.PurchaseExecution) }).
 		Return(nil)
-	mockStore.On("IncrementPlanCurrentStep", ctx, "plan-azure-res").Return(nil)
+	mockStore.On("CompletePlanStep", ctx, "plan-azure-res", 1).Return(nil)
 
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "azure", mock.Anything).Return(mockProvider, nil)
 	mockProvider.On("GetServiceClient", mock.Anything, common.ServiceCompute, "eastus").Return(mockServiceClient, nil)
@@ -765,6 +768,7 @@ func TestManager_RecoverStrandedApprovals_GCPRedrives(t *testing.T) {
 		ExecutionID: "exec-gcp-stranded",
 		PlanID:      "plan-gcp",
 		Status:      "approved",
+		StepNumber:  1,
 		Recommendations: []config.RecommendationRecord{
 			{Provider: "gcp", Service: "compute", ResourceType: "n2-standard-4", Region: "us-central1", Count: 2, UpfrontCost: 150.0, Selected: true, Purchased: false},
 		},
@@ -793,7 +797,7 @@ func TestManager_RecoverStrandedApprovals_GCPRedrives(t *testing.T) {
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
 		Run(func(args mock.Arguments) { saved = args.Get(1).(*config.PurchaseExecution) }).
 		Return(nil)
-	mockStore.On("IncrementPlanCurrentStep", ctx, "plan-gcp").Return(nil)
+	mockStore.On("CompletePlanStep", ctx, "plan-gcp", 1).Return(nil)
 
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "gcp", mock.Anything).Return(mockProvider, nil)
 	mockProvider.On("GetServiceClient", mock.Anything, common.ServiceCompute, "us-central1").Return(mockServiceClient, nil)

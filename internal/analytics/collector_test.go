@@ -160,7 +160,7 @@ func (m *mockConfigStore) UpdatePurchasePlan(ctx context.Context, plan *config.P
 	return nil
 }
 
-func (m *mockConfigStore) IncrementPlanCurrentStep(ctx context.Context, planID string) error {
+func (m *mockConfigStore) CompletePlanStep(ctx context.Context, planID string, stepNumber int) error {
 	return nil
 }
 

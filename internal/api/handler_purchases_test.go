@@ -5653,14 +5653,14 @@ func TestHandler_approvePurchaseViaSession_FourEyesOn_DifferentApproverSucceeds(
 		Status:          "pending",
 		CreatedByUserID: &creatorID,
 	}
-	approved := &config.PurchaseExecution{ExecutionID: execID, PlanID: planID, Status: "approved"}
+	approved := &config.PurchaseExecution{ExecutionID: execID, PlanID: planID, Status: "approved", StepNumber: 1}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
 	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "approved", &approverID).Return(approved, nil)
 	plan := &config.PurchasePlan{ID: planID, Name: "test-plan"}
 	mockConfig.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
 	mockConfig.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
-	mockConfig.On("IncrementPlanCurrentStep", ctx, planID).Return(nil)
+	mockConfig.On("CompletePlanStep", ctx, planID, 1).Return(nil)
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{UserID: approverID, Email: approverEmail}, nil)
