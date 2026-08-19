@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # setup-gcp-wif.sh — Configure a GCP Workload Identity Pool and Provider so that
 # CUDly (running on AWS or with an OIDC token) can access GCP without a service
-# account key file.  Outputs the external-account credential config JSON that
-# should be stored as gcp_workload_identity_config in CUDly.
+# account key file.  For an AWS provider it outputs the external-account
+# credential config JSON to store as gcp_workload_identity_config in CUDly.  For
+# an OIDC provider that config can only be built once you say where the CUDly
+# deployment reads its token from (--oidc-credential-source); without it the
+# script prints the WIF audience to register as gcp_wif_audience instead, which
+# is all CUDly needs when it signs its own subject token.
 #
 # SECURITY: the provider is always created with an --attribute-condition and the
 # service account impersonation grant is always scoped to a single principal.
@@ -31,7 +35,15 @@
 #       --provider-type oidc \
 #       --issuer-uri https://token.actions.githubusercontent.com \
 #       --oidc-subject 'repo:my-org/my-repo:ref:refs/heads/main' \
-#       --sa-email cudly@my-gcp-project.iam.gserviceaccount.com
+#       --sa-email cudly@my-gcp-project.iam.gserviceaccount.com \
+#       --oidc-credential-source /var/run/secrets/cudly/token
+#
+# --oidc-credential-source is where the CUDly deployment reads its OIDC token
+# from: an absolute path (file-sourced) or an https:// URL (URL-sourced). It is
+# only needed to emit the credential config JSON; omit it when CUDly signs its
+# own subject token, and register the printed gcp_wif_audience instead. Add
+# --oidc-credential-source-field <key> when the URL returns the token inside a
+# JSON object rather than as the raw response body.
 #
 # Upgrading from an earlier run: versions of this script before the
 # --aws-role-name / --oidc-subject requirement granted
@@ -51,6 +63,8 @@ AWS_ACCOUNT_ID=""
 AWS_ROLE_NAME=""
 ISSUER_URI=""
 OIDC_SUBJECT=""
+OIDC_CREDENTIAL_SOURCE=""
+OIDC_CREDENTIAL_SOURCE_FIELD=""
 REMOVE_LEGACY_POOL_BINDING="false"
 
 die() { echo "Error: $*" >&2; exit 1; }
@@ -67,6 +81,8 @@ while [[ $# -gt 0 ]]; do
     --aws-role-name)     AWS_ROLE_NAME="$2";     shift 2 ;;
     --issuer-uri)        ISSUER_URI="$2";        shift 2 ;;
     --oidc-subject)      OIDC_SUBJECT="$2";      shift 2 ;;
+    --oidc-credential-source)       OIDC_CREDENTIAL_SOURCE="$2";       shift 2 ;;
+    --oidc-credential-source-field) OIDC_CREDENTIAL_SOURCE_FIELD="$2"; shift 2 ;;
     --remove-legacy-pool-binding) REMOVE_LEGACY_POOL_BINDING="true"; shift ;;
     # Removed on purpose: --subject-condition took a raw CEL expression, so a
     # value such as "true" or "assertion.sub != ''" looked like a restriction
@@ -112,6 +128,12 @@ validate_principal_value "--provider-id" "$PROVIDER_ID" '^[a-z0-9][-a-z0-9]{2,30
 validate_principal_value "--sa-email"    "$SA_EMAIL"    '^[a-zA-Z0-9][-a-zA-Z0-9._]*@[a-z0-9.-]+\.gserviceaccount\.com$'
 
 if [[ "$PROVIDER_TYPE" == "aws" ]]; then
+  # An AWS provider's credential source is AWS IMDS (--aws below). Silently
+  # ignoring these would emit an IMDS-sourced config while the operator believes
+  # they pinned a token file, and would skip the shape validation the OIDC
+  # branch applies to them.
+  [[ -z "$OIDC_CREDENTIAL_SOURCE" && -z "$OIDC_CREDENTIAL_SOURCE_FIELD" ]] \
+    || die "--oidc-credential-source/--oidc-credential-source-field do not apply to --provider-type aws, whose credential source is AWS IMDS"
   [[ -n "$AWS_ACCOUNT_ID" ]] || die "--aws-account-id is required for --provider-type aws"
   # Mandatory: without a role to pin, the provider has no attribute condition and
   # every IAM principal in the AWS account can federate as the service account.
@@ -164,6 +186,23 @@ else
   [[ ${#OIDC_SUBJECT} -le 127 ]] || die "--oidc-subject must be at most 127 characters (google.subject limit); got ${#OIDC_SUBJECT}"
   EXPECTED_CONDITION="google.subject == '${OIDC_SUBJECT}'"
   EXPECTED_MAPPING="google.subject=assertion.sub"
+  # --oidc-credential-source says where the CUDly deployment reads its subject
+  # token from, which is what create-cred-config below needs and what an OIDC
+  # provider does not imply. The two forms cannot be confused (a URL cannot
+  # start with '/' and a path cannot start with 'https://'), so the gcloud flag
+  # is derived from the value rather than from a second flag that could
+  # contradict it. Plain http:// is refused: the token would cross the network
+  # in cleartext.
+  CRED_SOURCE_FLAG=""
+  if [[ -n "$OIDC_CREDENTIAL_SOURCE" ]]; then
+    case "$OIDC_CREDENTIAL_SOURCE" in
+      /*)        CRED_SOURCE_FLAG="--credential-source-file" ;;
+      https://*) CRED_SOURCE_FLAG="--credential-source-url" ;;
+      *) die "--oidc-credential-source must be an absolute path (file-sourced) or an https:// URL (URL-sourced); got: $OIDC_CREDENTIAL_SOURCE" ;;
+    esac
+  elif [[ -n "$OIDC_CREDENTIAL_SOURCE_FIELD" ]]; then
+    die "--oidc-credential-source-field only applies to a credential source; pass --oidc-credential-source as well"
+  fi
 fi
 
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
@@ -411,24 +450,51 @@ if [[ -n "$OTHER_GRANTS" ]]; then
   echo "      Remove any that are no longer expected." >&2
 fi
 
-# ── Generate external account credential config (no secrets) ──────────────────
+# ── Report the values CUDly needs (no secrets) ────────────────────────────────
 PROVIDER_RESOURCE="${POOL_RESOURCE}/providers/${PROVIDER_ID}"
+WIF_AUDIENCE="//iam.googleapis.com/${PROVIDER_RESOURCE}"
 echo ""
-echo "══════════════════════════════════════════════════════════════"
-echo "  External account credential config (store in CUDly as"
-echo "  gcp_workload_identity_config — contains no secrets)"
-echo "══════════════════════════════════════════════════════════════"
 if [[ "$PROVIDER_TYPE" == "aws" ]]; then
+  CRED_CONFIG_ARGS=(--aws)
+elif [[ -n "$OIDC_CREDENTIAL_SOURCE" ]]; then
+  CRED_CONFIG_ARGS=("${CRED_SOURCE_FLAG}=${OIDC_CREDENTIAL_SOURCE}")
+  if [[ -n "$OIDC_CREDENTIAL_SOURCE_FIELD" ]]; then
+    # A JSON response needs both the format and the key holding the token;
+    # gcloud's default (text) would treat the whole response body as the token.
+    CRED_CONFIG_ARGS+=(--credential-source-type=json "--credential-source-field-name=${OIDC_CREDENTIAL_SOURCE_FIELD}")
+  fi
+else
+  CRED_CONFIG_ARGS=()
+fi
+
+if [[ ${#CRED_CONFIG_ARGS[@]} -gt 0 ]]; then
+  echo "══════════════════════════════════════════════════════════════"
+  echo "  External account credential config (store in CUDly as"
+  echo "  gcp_workload_identity_config — contains no secrets)"
+  echo "══════════════════════════════════════════════════════════════"
   gcloud iam workload-identity-pools create-cred-config \
     "$PROVIDER_RESOURCE" \
     --service-account="$SA_EMAIL" \
-    --aws \
+    "${CRED_CONFIG_ARGS[@]}" \
     --output-file=/dev/stdout
 else
-  gcloud iam workload-identity-pools create-cred-config \
-    "$PROVIDER_RESOURCE" \
-    --service-account="$SA_EMAIL" \
-    --output-file=/dev/stdout
+  # No credential source, so no credential config. create-cred-config requires
+  # exactly one of (--aws | --azure | --credential-source-file |
+  # --credential-source-url | --executable-command); this branch used to call it
+  # with none, which gcloud rejects, and under `set -e` that aborted the run
+  # here, after the pool, the provider and the impersonation grant had all been
+  # created. Nothing is lost by skipping it: CUDly needs the credential config
+  # only when something other than CUDly holds the token. When CUDly signs its
+  # own subject token it needs the audience below, which is what the served
+  # onboarding script (internal/iacfiles/templates/gcp-wif-cli.sh.tmpl) emits.
+  echo "══════════════════════════════════════════════════════════════"
+  echo "  No credential config generated: none was requested."
+  echo "  Pass --oidc-credential-source <absolute path|https URL> to emit"
+  echo "  one, or register the gcp_wif_audience below, which is all CUDly"
+  echo "  needs when it signs its own subject token. In that case the"
+  echo "  trusted subject '${OIDC_SUBJECT}' must be the one your CUDly"
+  echo "  deployment signs, and ${ISSUER_URI} must be its OIDC issuer."
+  echo "══════════════════════════════════════════════════════════════"
 fi
 echo ""
 echo "══════════════════════════════════════════════════════════════"
@@ -437,4 +503,10 @@ echo "    provider       : gcp"
 echo "    gcp_auth_mode  : workload_identity_federation"
 echo "    gcp_project_id : ${PROJECT}"
 echo "    gcp_client_email (optional) : ${SA_EMAIL}"
+if [[ "$PROVIDER_TYPE" != "aws" ]]; then
+  # OIDC only: an AWS-federated account registers the credential config printed
+  # above. Registering the audience instead would have CUDly present a
+  # self-signed assertion to a provider that only trusts AWS role ARNs.
+  echo "    gcp_wif_audience : ${WIF_AUDIENCE}"
+fi
 echo "══════════════════════════════════════════════════════════════"
