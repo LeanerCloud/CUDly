@@ -94,6 +94,10 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    /* space-between alone leaves zero separation once the three blocks fill
+       the row, which put the action buttons flush against the savings figure
+       (issue #1776). */
+    gap: var(--cudly-sp-4);
     background: var(--cudly-surface);
     padding: var(--cudly-sp-4) var(--cudly-sp-5);
     border-radius: var(--cudly-r-md);
@@ -143,6 +147,16 @@
 
 .upcoming-savings {
     text-align: right;
+    /* Keep the figure and its label at natural width so a long plan name
+       squeezes the info block instead of wrapping the label into the
+       buttons. */
+    flex-shrink: 0;
+}
+
+/* The block had no rule at all, so its buttons rendered edge to edge. */
+.upcoming-actions {
+    display: flex;
+    gap: var(--cudly-sp-2);
 }
 
 .upcoming-savings .amount {
