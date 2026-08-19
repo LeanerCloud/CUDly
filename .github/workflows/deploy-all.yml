@@ -15,6 +15,9 @@
 
 name: Deploy to All Clouds
 
+permissions:
+  contents: read
+
 # Adding a trigger here, or a second caller of the deploy-* workflows, means
 # revisiting the `prepare` comments in deploy-azure.yml, deploy-gcp.yml and
 # deploy-aws-lambda.yml. Since #1805 those three resolve their environment from
@@ -63,6 +66,8 @@ jobs:
   determine-deployment:
     name: Determine Deployment Strategy
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       environment: ${{ steps.set-env.outputs.environment }}
       deploy-aws-lambda: ${{ steps.set-clouds.outputs.deploy-aws-lambda }}
@@ -245,6 +250,8 @@ jobs:
       - deploy-azure
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Aggregate results

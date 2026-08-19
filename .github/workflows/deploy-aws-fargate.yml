@@ -22,7 +22,6 @@
 name: Deploy to AWS Fargate
 
 permissions:
-  id-token: write
   contents: read
 
 # No workflow-level `concurrency` on purpose. What needs protecting is the
@@ -69,6 +68,8 @@ jobs:
   prepare:
     name: Prepare Deployment
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       environment: ${{ steps.set-env.outputs.environment }}
       image_tag: ${{ steps.set-tag.outputs.tag }}
@@ -116,6 +117,9 @@ jobs:
     name: Deploy to Fargate
     runs-on: ubuntu-24.04-arm
     needs: prepare
+    permissions:
+      id-token: write
+      contents: read
     # Every run that writes
     # s3://<bucket>/github-fargate-<environment>/terraform.tfstate serializes
     # here, whatever ref or workflow it came from (#1806). This is a DIFFERENT
@@ -141,6 +145,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@d979d5b3a71173a29b74b5b88418bfda9437d885 # v6.1.1
@@ -213,18 +219,25 @@ jobs:
           echo "service_name=$(terraform output -raw fargate_service_name 2>/dev/null | grep -v '::' || echo "")" >> "$GITHUB_OUTPUT"
 
       - name: Save deployment info
+        env:
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
+          IMAGE_TAG: ${{ needs.prepare.outputs.image_tag }}
+          ALB_URL: ${{ steps.outputs.outputs.alb_url }}
+          SERVICE_NAME: ${{ steps.outputs.outputs.service_name }}
+          DEPLOYED_BY: ${{ github.actor }}
+          COMMIT: ${{ github.sha }}
         run: |
-          cat <<EOF > deployment-info.json
-          {
-            "environment": "${{ needs.prepare.outputs.environment }}",
-            "image_tag": "${{ needs.prepare.outputs.image_tag }}",
-            "alb_url": "${{ steps.outputs.outputs.alb_url }}",
-            "service_name": "${{ steps.outputs.outputs.service_name }}",
-            "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "deployed_by": "${{ github.actor }}",
-            "commit": "${{ github.sha }}"
-          }
-          EOF
+          set -euo pipefail
+          jq -n \
+            --arg environment "$ENVIRONMENT" \
+            --arg image_tag "$IMAGE_TAG" \
+            --arg alb_url "$ALB_URL" \
+            --arg service_name "$SERVICE_NAME" \
+            --arg deployed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg deployed_by "$DEPLOYED_BY" \
+            --arg commit "$COMMIT" \
+            '{environment: $environment, image_tag: $image_tag, alb_url: $alb_url, service_name: $service_name, deployed_at: $deployed_at, deployed_by: $deployed_by, commit: $commit}' \
+            > deployment-info.json
           cat deployment-info.json
 
       - name: Upload deployment info
@@ -240,6 +253,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [prepare, deploy]
     if: always() && needs.deploy.result == 'success'
+    permissions:
+      contents: read
 
     steps:
       - name: Get ALB URL
@@ -309,6 +324,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [prepare, deploy, test-deployment]
     if: always()
+    permissions:
+      contents: read
 
     steps:
       - name: Download deployment info

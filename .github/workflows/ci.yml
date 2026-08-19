@@ -15,6 +15,9 @@
 
 name: CI - Build & Test
 
+permissions:
+  contents: read
+
 on:
   pull_request:
     branches: [main, develop]
@@ -32,6 +35,8 @@ jobs:
   lint:
     name: Lint Code
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
@@ -77,6 +82,8 @@ jobs:
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
@@ -206,6 +213,8 @@ jobs:
   integration-tests:
     name: Integration Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     services:
       postgres:
@@ -331,6 +340,8 @@ jobs:
   docker-build:
     name: Build Docker Image
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
@@ -392,6 +403,8 @@ jobs:
   terraform-validate:
     name: Validate Terraform (${{ matrix.cloud }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       matrix:
         cloud: [aws, gcp, azure]
@@ -644,6 +657,8 @@ jobs:
     name: Snyk Security Scan
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
@@ -671,6 +686,8 @@ jobs:
   e2e-tests:
     name: E2E Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
@@ -702,6 +719,8 @@ jobs:
   azure-role-parity:
     name: Azure role actions parity (ARM vs TF)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
@@ -721,6 +740,8 @@ jobs:
   aws-iam-parity:
     name: AWS IAM actions parity (CFN vs TF)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
@@ -740,6 +761,8 @@ jobs:
   gcp-secret-scope:
     name: GCP Secret Manager grant scope
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
@@ -867,6 +890,8 @@ jobs:
   azure-kv-access-policy:
     name: Azure Key Vault grant model
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
@@ -900,6 +925,8 @@ jobs:
       - aws-tfstate-platform-key
       - azure-kv-access-policy
     if: always()
+    permissions:
+      contents: read
 
     steps:
       - name: Check all jobs
