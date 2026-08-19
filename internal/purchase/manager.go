@@ -247,9 +247,33 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 	if execErr == nil {
 		if err := m.updatePlanProgress(ctx, exec); err != nil {
 			logging.Errorf("Failed to update plan progress: %v", err)
+			m.recordRampAdvanceRefusal(ctx, exec, err)
 		}
 	}
 	return execErr
+}
+
+// recordRampAdvanceRefusal stamps a refused ramp advance onto the execution row
+// that just completed, so the decision outlives the log retention window.
+//
+// The refusal paths are new in issue #1669: the previous blind CurrentStep++
+// could not decline, so a purchase always moved the ramp. Now money can be spent
+// on a step the plan then declines to count (an unknown step_number, or a step
+// more than one beyond CurrentStep), and CompletePlanStep returning before its
+// write leaves next_execution_date stale, which shouldNotifyPlan reads as
+// daysUntil < 0 and stops notifying that plan. A stall is therefore not
+// self-correcting, and a logging.Errorf was its only trace.
+//
+// The status stays "completed": the purchase did complete, and only the plan's
+// progress accounting did not. Recovery is deliberately NOT scheduled here (see
+// issue #1861); this records the fact so History shows it and an operator can
+// act on it.
+func (m *Manager) recordRampAdvanceRefusal(ctx context.Context, exec *config.PurchaseExecution, cause error) {
+	exec.Error = appendErrNote(exec.Error, fmt.Sprintf("ramp not advanced: %v", cause))
+	if saveErr := m.config.SavePurchaseExecution(ctx, exec); saveErr != nil {
+		logging.Errorf("AUDIT LOSS: failed to persist ramp-advance refusal for execution %s: %v",
+			exec.ExecutionID, saveErr)
+	}
 }
 
 // allRecsSafeToRedrive reports whether this sweep's automatic in-place re-drive

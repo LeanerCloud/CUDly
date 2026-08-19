@@ -444,6 +444,83 @@ func TestManager_UpdatePlanProgress_ZeroStepRefusesAndSkipsStore(t *testing.T) {
 	mockStore.AssertNotCalled(t, "CompletePlanStep", mock.Anything, mock.Anything, mock.Anything)
 }
 
+// TestExecuteAndFinalize_RefusedRampAdvanceIsRecordedOnTheRow is the CR
+// follow-up guard on #1862: the refusal paths are new in issue #1669 (the old
+// blind CurrentStep++ could not decline), so money can now be spent on a step
+// the plan then declines to count. Before this, the only trace was a log line,
+// and a stalled plan is not self-correcting because shouldNotifyPlan reads the
+// stale next_execution_date as daysUntil < 0 and stops notifying.
+//
+// The execution must stay "completed" (the purchase did complete) while the
+// refusal is persisted on the row so History shows it.
+func TestExecuteAndFinalize_RefusedRampAdvanceIsRecordedOnTheRow(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+	mockFactory := new(MockProviderFactory)
+	mockProviderInst := new(MockProvider)
+	mockServiceClient := new(MockServiceClient)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	// A plan-attributed row carrying no ramp step: the deploy-overlap shape that
+	// updatePlanProgress refuses. CompletePlanStep is registered but must never
+	// be reached, so the refusal comes from the caller rather than the store.
+	exec := &config.PurchaseExecution{
+		ExecutionID: "exec-refused-advance",
+		PlanID:      "plan-refuse",
+		Status:      "running",
+		StepNumber:  0,
+		Recommendations: []config.RecommendationRecord{
+			{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, UpfrontCost: 300, Selected: true},
+		},
+	}
+
+	var saves []config.PurchaseExecution
+	mockStore.SavePurchaseExecutionFn = func(_ context.Context, e *config.PurchaseExecution) error {
+		saves = append(saves, *e)
+		return nil
+	}
+	mockStore.GetPurchasePlanFn = func(_ context.Context, id string) (*config.PurchasePlan, error) {
+		return &config.PurchasePlan{ID: id, Name: "Refuse Plan"}, nil
+	}
+	mockStore.GetPlanAccountsFn = func(_ context.Context, _ string) ([]config.CloudAccount, error) {
+		return nil, nil
+	}
+	mockStore.On("CompletePlanStep", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockStore.On("SavePurchaseHistory", mock.Anything, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil).Maybe()
+	mockEmail.On("SendPurchaseConfirmation", mock.Anything, mock.AnythingOfType("email.NotificationData")).Return(nil).Maybe()
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil).Maybe()
+	mockProviderInst.On("GetServiceClient", mock.Anything, common.ServiceEC2, mock.Anything).Return(mockServiceClient, nil).Maybe()
+	mockServiceClient.On("PurchaseCommitment", mock.Anything, mock.Anything, mock.Anything).
+		Return(common.PurchaseResult{Success: true, CommitmentID: "ri-ok"}, nil).Maybe()
+
+	manager := &Manager{
+		config:          mockStore,
+		email:           mockEmail,
+		providerFactory: mockFactory,
+		credStore:       awsAccessKeyCredStore(),
+		dashboardURL:    "https://dashboard.example.com",
+	}
+
+	require.NoError(t, manager.executeAndFinalize(ctx, exec),
+		"a refused ramp advance must not fail the purchase; the money already moved")
+
+	// Assert a non-zero number of saves before asserting anything about their
+	// content, so an empty slice cannot satisfy the checks below.
+	require.GreaterOrEqual(t, len(saves), 2,
+		"the terminal save plus the ramp-refusal save must both reach the store")
+
+	final := saves[len(saves)-1]
+	assert.Equal(t, "completed", final.Status,
+		"the purchase completed; only the plan's progress accounting did not")
+	assert.Contains(t, final.Error, "ramp not advanced",
+		"the refusal must survive on the row, not only in the log")
+	assert.Contains(t, final.Error, "plan-refuse",
+		"the recorded note must name the plan whose ramp stalled")
+
+	mockStore.AssertNotCalled(t, "CompletePlanStep", mock.Anything, mock.Anything, mock.Anything)
+}
+
 func TestManager_GetAWSAccountID_Success(t *testing.T) {
 	ctx := context.Background()
 	mockSTS := new(MockSTSClient)
