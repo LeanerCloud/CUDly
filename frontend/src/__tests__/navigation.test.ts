@@ -1,7 +1,7 @@
 /**
  * Navigation module tests
  */
-import { switchTab, switchSettingsSubTab, switchInventorySubTab, getSettingsSubTabFromPath, getInventorySubTabFromPath } from '../navigation';
+import { switchTab, switchSettingsSubTab, switchInventorySubTab, getSettingsSubTabFromPath, getInventorySubTabFromPath, applyTabFromPath, canonicalTabPath } from '../navigation';
 
 // Mock the dependent modules
 jest.mock('../dashboard', () => ({
@@ -61,6 +61,7 @@ import { loadGlobalSettings } from '../settings';
 import { loadAutomationSettings } from '../riexchange';
 import { canAccess } from '../permissions';
 import { loadInventory } from '../inventory';
+import { isAdmin } from '../auth';
 
 describe('Navigation Module', () => {
   beforeEach(() => {
@@ -94,8 +95,13 @@ describe('Navigation Module', () => {
       </div>
     `;
 
-    // Clear all mocks
+    // Clear all mocks. clearAllMocks() only drops recorded calls, not
+    // implementations, so restore the permissive defaults explicitly --
+    // otherwise a test that flips isAdmin/canAccess to false leaks that into
+    // every test declared after it.
     jest.clearAllMocks();
+    (isAdmin as jest.Mock).mockReturnValue(true);
+    (canAccess as jest.Mock).mockReturnValue(true);
   });
 
   describe('switchTab', () => {
@@ -434,6 +440,129 @@ describe('Navigation Module', () => {
       switchInventorySubTab('coverage', { push: false });
       // URL unchanged: the caller (initial load / popstate) owns the URL.
       expect(window.location.pathname).toBe('/inventory/active-commitments');
+    });
+  });
+
+  // Issue #1775: resolving the URL on a direct load / refresh. Placed BEFORE
+  // the *FromPath describes for the same reason as switchInventorySubTab --
+  // those replace window.location with a plain object.
+  describe('applyTabFromPath', () => {
+    test.each([
+      ['/home', 'home'],
+      ['/opportunities', 'opportunities'],
+      ['/plans', 'plans'],
+      ['/purchases', 'purchases'],
+      ['/inventory', 'inventory'],
+      ['/admin', 'admin'],
+      ['/', 'home'],
+      ['/plans/', 'plans'],
+      ['/PLANS', 'plans'],
+      ['/plans/extra/segments', 'plans'],
+      ['/not-a-route', 'home'],
+    ])('%s resolves to the %s tab', (path, expected) => {
+      window.history.replaceState(null, '', path);
+      expect(applyTabFromPath()).toBe(expected);
+    });
+
+    test.each([
+      ['/dashboard', 'home'],
+      ['/recommendations', 'opportunities'],
+      ['/history', 'purchases'],
+      ['/settings', 'admin'],
+      ['/ri-exchange', 'inventory'],
+    ])('legacy %s redirects to the %s tab and rewrites the URL', (path, expected) => {
+      window.history.replaceState(null, '', path);
+      expect(applyTabFromPath()).toBe(expected);
+      expect(window.location.pathname).toBe('/' + expected);
+    });
+
+    // A path whose first segment names an Object.prototype member used to pass
+    // the `segment in TABS` membership test, so switchTab then read an
+    // undefined TabMeta (or the Object constructor) and threw out of init(),
+    // stranding the app on its unrouted default markup.
+    test.each(['/constructor', '/toString', '/valueOf', '/hasOwnProperty', '/__proto__'])(
+      '%s is not a known route and falls back to home',
+      (path) => {
+        window.history.replaceState(null, '', path);
+        expect(applyTabFromPath()).toBe('home');
+      },
+    );
+
+    test('an Object.prototype sub-tab name is not a known admin sub-tab', () => {
+      window.history.replaceState(null, '', '/admin/constructor');
+      expect(getSettingsSubTabFromPath()).toBe('general');
+      switchSettingsSubTab(getSettingsSubTabFromPath(), { push: false });
+      expect(document.title).toBe('CUDly — Admin · General');
+    });
+  });
+
+  // canonicalTabPath is what app.ts writes into the initial replaceState, so
+  // it must keep the sub-tab segment switchTab reads back out of the URL.
+  describe('canonicalTabPath', () => {
+    test.each(['home', 'opportunities', 'plans', 'purchases'])(
+      '%s has no sub-tab segment',
+      (tab) => {
+        window.history.replaceState(null, '', '/' + tab);
+        expect(canonicalTabPath(tab)).toBe('/' + tab);
+      },
+    );
+
+    test.each(['active-commitments', 'coverage', 'ri-exchange'])(
+      'a deep-linked /inventory/%s keeps its sub-tab segment',
+      (sub) => {
+        window.history.replaceState(null, '', '/inventory/' + sub);
+        expect(canonicalTabPath('inventory')).toBe('/inventory/' + sub);
+      },
+    );
+
+    test('a bare /inventory canonicalises to the default sub-tab', () => {
+      window.history.replaceState(null, '', '/inventory');
+      expect(canonicalTabPath('inventory')).toBe('/inventory/active-commitments');
+    });
+
+    test.each(['general', 'purchasing', 'accounts', 'users'])(
+      'a deep-linked /admin/%s keeps its sub-tab segment',
+      (sub) => {
+        window.history.replaceState(null, '', '/admin/' + sub);
+        // currentSettingsSubTab is module state; drive it through the real
+        // entry point so the assertion reflects an actual navigation.
+        switchSettingsSubTab(sub, { push: false });
+        expect(canonicalTabPath('admin')).toBe('/admin/' + sub);
+      },
+    );
+
+    // app.ts calls this at init, before anything has set currentSettingsSubTab,
+    // so the URL is the only source for the segment. A fresh module instance is
+    // the only way to observe that state from inside this file.
+    test('falls back to the URL when no admin sub-tab has been visited yet', () => {
+      window.history.replaceState(null, '', '/admin/users');
+      jest.isolateModules(() => {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const nav = require('../navigation') as typeof import('../navigation');
+        expect(nav.canonicalTabPath('admin')).toBe('/admin/users');
+      });
+    });
+  });
+
+  describe('switchTab skipDefaultLoad', () => {
+    test('purchases: reveals the tab without firing its default loads', () => {
+      switchTab('purchases', { skipDefaultLoad: true, push: false });
+      expect(document.getElementById('purchases-tab')?.classList.contains('active')).toBe(true);
+      expect(initHistoryDateRange).not.toHaveBeenCalled();
+      expect(loadHistory).not.toHaveBeenCalled();
+    });
+
+    test('purchases: the view:purchases gate still applies', () => {
+      (canAccess as jest.Mock).mockReturnValue(false);
+      switchTab('purchases', { skipDefaultLoad: true, push: false });
+      expect(document.getElementById('purchases-tab')?.textContent).toContain('do not have access');
+      expect(loadHistory).not.toHaveBeenCalled();
+    });
+
+    test('admin: reveals the tab without loading the default sub-tab', () => {
+      switchTab('admin', { skipDefaultLoad: true, push: false });
+      expect(document.getElementById('admin-tab')?.classList.contains('active')).toBe(true);
+      expect(loadGlobalSettings).not.toHaveBeenCalled();
     });
   });
 

@@ -194,7 +194,9 @@ export function setupRIExchangeHandlers(): void {
   const settingsBtn = document.getElementById('ri-exchange-settings-btn');
   if (settingsBtn) {
     settingsBtn.addEventListener('click', () => {
-      switchTab('settings');
+      // switchSettingsSubTab owns the sub-tab DOM, title and history push, so
+      // switchTab only has to reveal the Admin panel.
+      switchTab('admin', { push: false, skipDefaultLoad: true });
       switchSettingsSubTab('purchasing');
       const target = document.getElementById('ri-exchange-automation-settings');
       if (target) {

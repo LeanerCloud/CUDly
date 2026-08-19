@@ -197,6 +197,41 @@ describe('4-eyes approval mode (issue #1005)', () => {
     expect(document.getElementById('four-eyes-banner')?.classList.contains('hidden')).toBe(true);
   });
 
+  // An unreadable config must fail closed. Failing open would offer the
+  // creator an Approve action the backend rejects, which is a UI claim the
+  // system will not honour.
+  test('dual control is ON when the config fetch fails', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(REG_USER);
+    (api.getConfig as jest.Mock).mockRejectedValue(new Error('config unavailable'));
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [makeRow({ purchase_id: 'exec-own', created_by_user_id: REG_USER.id })],
+    });
+
+    await loadHistory();
+
+    const list = document.getElementById('history-list')!;
+    expect(list.querySelectorAll('.history-approve-btn')).toHaveLength(0);
+    expect(document.getElementById('four-eyes-banner')?.classList.contains('hidden')).toBe(false);
+  });
+
+  // A config that reads successfully but omits the flag is a known "off",
+  // not an outage, so it must not be forced closed.
+  test('dual control is OFF when the config reads successfully without the flag', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(REG_USER);
+    (api.getConfig as jest.Mock).mockResolvedValue({ global: {} });
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [makeRow({ purchase_id: 'exec-own', created_by_user_id: REG_USER.id })],
+    });
+
+    await loadHistory();
+
+    const list = document.getElementById('history-list')!;
+    expect(list.querySelectorAll('.history-approve-btn')).toHaveLength(1);
+    expect(document.getElementById('four-eyes-banner')?.classList.contains('hidden')).toBe(true);
+  });
+
   test('badge shown when button hidden by mode (admin approve-any self-approval)', async () => {
     // Admin holds approve-any, which would normally show Approve on every
     // pending row regardless of creator. Four-eyes still blocks self-approval

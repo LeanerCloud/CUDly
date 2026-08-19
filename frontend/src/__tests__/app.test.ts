@@ -38,7 +38,10 @@ jest.mock('../navigation', () => ({
   applyTabFromPath: jest.fn().mockReturnValue('dashboard'),
   initRouter: jest.fn(),
   switchSettingsSubTab: jest.fn(),
-  getSettingsSubTabFromPath: jest.fn().mockReturnValue('general'),
+  // Deliberately not '/' + tab: init() must write whatever canonicalTabPath
+  // returns into the initial replaceState, because that is what preserves a
+  // deep-linked sub-tab segment for switchTab to read back.
+  canonicalTabPath: jest.fn((tab: string) => `/${tab}/sub-segment`),
 }));
 
 jest.mock('../recommendations', () => ({
@@ -108,6 +111,23 @@ describe('App Module', () => {
       expect(navigation.applyTabFromPath).toHaveBeenCalled();
       expect(navigation.switchTab).toHaveBeenCalledWith('dashboard', { push: false });
       expect(auth.updateUserUI).toHaveBeenCalled();
+    });
+
+    test('seeds the URL from canonicalTabPath before routing', async () => {
+      (api.isAuthenticated as jest.Mock).mockReturnValue(true);
+      (api.getCurrentUser as jest.Mock).mockResolvedValue({ id: 'user-1', email: 'test@example.com' });
+      (navigation.applyTabFromPath as jest.Mock).mockReturnValue('inventory');
+      const replaceState = jest.spyOn(window.history, 'replaceState').mockImplementation(() => {});
+
+      await init();
+
+      expect(navigation.canonicalTabPath).toHaveBeenCalledWith('inventory');
+      expect(replaceState).toHaveBeenCalledWith(
+        { tab: 'inventory', id: 0 },
+        '',
+        expect.stringContaining('/inventory/sub-segment'),
+      );
+      replaceState.mockRestore();
     });
 
     test('shows login modal on 401 error', async () => {

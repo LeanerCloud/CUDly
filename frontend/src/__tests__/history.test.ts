@@ -13,6 +13,13 @@ jest.mock('../navigation', () => ({
   switchTab: jest.fn()
 }));
 
+// Default: the session may view purchases. viewPlanHistory consults this
+// before rendering into the Purchases tab, because switchTab renders a
+// no-access placeholder there for sessions without view:purchases.
+jest.mock('../permissions', () => ({
+  canAccess: jest.fn().mockReturnValue(true),
+}));
+
 jest.mock('../utils', () => ({
   // Mirrors the real formatCurrency behaviour: null/undefined/NaN -> '--', numbers -> '$<val>'
   formatCurrency: jest.fn((val) => (val === null || val === undefined || isNaN(val)) ? '--' : `$${val}`),
@@ -57,6 +64,7 @@ jest.mock('../state', () => ({
 
 import * as api from '../api';
 import { switchTab } from '../navigation';
+import { canAccess } from '../permissions';
 
 describe('History Module', () => {
   beforeEach(() => {
@@ -122,7 +130,10 @@ describe('History Module', () => {
   });
 
   describe('viewPlanHistory', () => {
-    test('switches to history tab', async () => {
+    // Issue #1775: 'history' was the pre-#340 tab name, so this silently fell
+    // back to Home and the Plans page's "View history" button rendered the
+    // Home dashboard.
+    test('switches to the Purchases tab without its default load', async () => {
       (api.getHistory as jest.Mock).mockResolvedValue({
         summary: {},
         purchases: []
@@ -130,7 +141,16 @@ describe('History Module', () => {
 
       await viewPlanHistory('plan-123');
 
-      expect(switchTab).toHaveBeenCalledWith('history');
+      expect(switchTab).toHaveBeenCalledWith('purchases', { skipDefaultLoad: true });
+    });
+
+    test('does not fetch when the session cannot view purchases', async () => {
+      (canAccess as jest.Mock).mockReturnValueOnce(false);
+
+      await viewPlanHistory('plan-123');
+
+      expect(switchTab).toHaveBeenCalledWith('purchases', { skipDefaultLoad: true });
+      expect(api.getHistory).not.toHaveBeenCalled();
     });
 
     test('calls getHistory with planId filter', async () => {

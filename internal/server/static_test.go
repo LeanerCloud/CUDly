@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/LeanerCloud/CUDly/internal/testutil"
@@ -333,4 +335,327 @@ func TestSpaFileServer_404WhenIndexMissing(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	testutil.AssertEqual(t, http.StatusNotFound, w.Code)
+}
+
+// ----- SPA catch-all: every frontend route (issue #1775) -----
+
+// appRoutes lists every path the SPA can be deep-linked to, taken from the
+// tab table and the legacy-redirect table in frontend/src/navigation.ts. A new
+// nav entry (or a new root-level mux registration that shadows one) must not
+// silently start serving something other than the SPA shell.
+var appRoutes = []string{
+	"/",
+	"/home",
+	"/opportunities",
+	"/plans",
+	"/purchases",
+	"/inventory",
+	"/inventory/active-commitments",
+	"/inventory/coverage",
+	"/inventory/ri-exchange",
+	"/admin",
+	"/admin/general",
+	"/admin/purchasing",
+	"/admin/accounts",
+	"/admin/users",
+	// Legacy paths kept alive by LEGACY_PATH_REDIRECTS for old bookmarks.
+	"/dashboard",
+	"/recommendations",
+	"/history",
+	"/settings",
+	"/ri-exchange",
+	// Non-tab SPA landing paths.
+	"/reset-password",
+	"/archera-insurance",
+	"/purchases/approve/abc-123",
+	"/purchases/cancel/abc-123",
+}
+
+func TestSPAFallbackServesIndexForEveryAppRoute(t *testing.T) {
+	dir := makeStaticDir(t, map[string]string{
+		"index.html":      "<html>spa</html>",
+		"docs/index.html": "<html>docs</html>",
+	})
+
+	for _, route := range appRoutes {
+		t.Run(route, func(t *testing.T) {
+			if !isStaticPath(route) {
+				t.Fatalf("route %s is not classified as a static path; the API router would swallow it", route)
+			}
+
+			content, _, _, found := serveStaticForLambda(dir, route)
+			testutil.AssertEqual(t, true, found)
+			testutil.AssertEqual(t, "<html>spa</html>", string(content))
+
+			handler := spaFileServer(dir)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, route, nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			testutil.AssertEqual(t, http.StatusOK, w.Code)
+			testutil.AssertEqual(t, "<html>spa</html>", w.Body.String())
+		})
+	}
+}
+
+// The API docs page is a real directory in the build output. Before #1775 a
+// directory stat fell straight through to the SPA fallback, so the "API Docs"
+// header link (href="/docs/") rendered the dashboard instead.
+func TestResolveStaticFilePath_DirectoryIndex(t *testing.T) {
+	dir := makeStaticDir(t, map[string]string{
+		"index.html":      "<html>spa</html>",
+		"docs/index.html": "<html>docs</html>",
+	})
+
+	for _, route := range []string{"/docs", "/docs/"} {
+		t.Run(route, func(t *testing.T) {
+			content, _, _, found := serveStaticForLambda(dir, route)
+			testutil.AssertEqual(t, true, found)
+			testutil.AssertEqual(t, "<html>docs</html>", string(content))
+		})
+	}
+}
+
+// A directory without its own index.html still falls back to the SPA shell, so
+// asset directories (dist/js, dist/css) do not 404 into a broken page.
+func TestResolveStaticFilePath_DirectoryWithoutIndexFallsBackToSPA(t *testing.T) {
+	dir := makeStaticDir(t, map[string]string{
+		"index.html": "<html>spa</html>",
+		"js/app.js":  "var x=1;",
+	})
+
+	content, _, _, found := serveStaticForLambda(dir, "/js")
+	testutil.AssertEqual(t, true, found)
+	testutil.AssertEqual(t, "<html>spa</html>", string(content))
+}
+
+// A directory index reached via /docs/ must not serve a file the direct
+// request path (/docs/index.html) would reject. os.Stat follows symlinks, so
+// the containment check has to run on the candidate, not just on the directory.
+func TestResolveStaticFilePath_DirectoryIndexRejectsSymlinkEscape(t *testing.T) {
+	parent := t.TempDir()
+	staticDir := filepath.Join(parent, "static", "docs")
+	if err := os.MkdirAll(staticDir, 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	root := filepath.Join(parent, "static")
+	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("<html>spa</html>"), 0o644); err != nil {
+		t.Fatalf("write index.html: %v", err)
+	}
+	outside := filepath.Join(parent, "secret.html")
+	if err := os.WriteFile(outside, []byte("should-not-serve"), 0o644); err != nil {
+		t.Fatalf("write secret.html: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(staticDir, "index.html")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	// Both spellings must agree, and neither may serve the out-of-tree file.
+	direct, _, _, directFound := serveStaticForLambda(root, "/docs/index.html")
+	testutil.AssertEqual(t, false, directFound)
+	testutil.AssertEqual(t, "", string(direct))
+
+	viaDir, _, _, viaDirFound := serveStaticForLambda(root, "/docs/")
+	testutil.AssertEqual(t, true, viaDirFound)
+	testutil.AssertEqual(t, "<html>spa</html>", string(viaDir))
+}
+
+// The SPA shell is served for every client-side route, so it needs the same
+// containment check as the direct request path. Without it a symlinked
+// index.html pointing out of the static dir is refused at /index.html and
+// served at /plans, which is the same asymmetry directoryIndex avoids.
+func TestSPAFallbackRejectsSymlinkedShell(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "static")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("mkdir static: %v", err)
+	}
+	outside := filepath.Join(parent, "secret.html")
+	if err := os.WriteFile(outside, []byte("should-not-serve"), 0o644); err != nil {
+		t.Fatalf("write secret.html: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "index.html")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	// Direct spelling: already rejected before this change.
+	_, _, _, directFound := serveStaticForLambda(root, "/index.html")
+	testutil.AssertEqual(t, false, directFound)
+
+	// Client-side route: must reach the same verdict, not serve the target.
+	for _, route := range []string{"/plans", "/inventory/coverage", "/"} {
+		t.Run(route, func(t *testing.T) {
+			content, _, _, found := serveStaticForLambda(root, route)
+			testutil.AssertEqual(t, false, found)
+			testutil.AssertEqual(t, "", string(content))
+		})
+	}
+}
+
+// hostileRoot builds a static root with a sibling tree outside it holding a
+// file that must never be served. Returns (root, outsideFile, symlinked), where
+// symlinked reports whether the symlink cases could be created.
+//
+// The lexical fixture is built unconditionally and the symlink cases are
+// additive, so a platform without symlink support loses the symlink cases only.
+// t.Skip here would take the traversal, encoded-path, absolute-path and NUL
+// cases with it and report the whole suite as skipped, which reads as a pass.
+func hostileRoot(t *testing.T) (string, string, bool) {
+	t.Helper()
+	parent := t.TempDir()
+	root := filepath.Join(parent, "static")
+	if err := os.MkdirAll(filepath.Join(root, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for name, body := range map[string]string{
+		"index.html":      "<html>spa</html>",
+		"docs/index.html": "<html>docs</html>",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	outside := filepath.Join(parent, "secret.txt")
+	if err := os.WriteFile(outside, []byte("TOP-SECRET"), 0o644); err != nil {
+		t.Fatalf("write secret: %v", err)
+	}
+	// Symlinks that escape the root, in the same fixture as the lexical cases.
+	// Keeping them together means one `-run Hostile` covers both classes; when
+	// they lived only in separately-named tests, a name-filtered mutation run
+	// silently skipped the only cases exercising symlinkSafeContainedIn, which
+	// is the check path.Clean cannot stand in for.
+	symlinked := true
+	for _, link := range []string{
+		filepath.Join(root, "escape.txt"),
+		filepath.Join(root, "docs", "leak.html"),
+	} {
+		if err := os.Symlink(outside, link); err != nil {
+			t.Logf("symlinks unavailable, symlink cases skipped (lexical cases still run): %v", err)
+			symlinked = false
+			break
+		}
+	}
+	return root, outside, symlinked
+}
+
+// symlinkCases returns the escaping-symlink paths when the fixture could create
+// them, and nothing otherwise, so callers append rather than branch.
+func symlinkCases(symlinked bool) []string {
+	if !symlinked {
+		return nil
+	}
+	return []string{"/escape.txt", "/docs/leak.html"}
+}
+
+// Asserting on the resolved path, not on a status code: a handler that serves
+// the wrong file with 200 passes a status-only assertion. The invariant is that
+// whatever resolveStaticFilePath hands back is inside the served root, with
+// symlinks resolved, or it hands back nothing.
+func TestResolveStaticFilePath_HostilePathsNeverEscapeRoot(t *testing.T) {
+	root, outside, symlinked := hostileRoot(t)
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("evalsymlinks root: %v", err)
+	}
+
+	hostile := append([]string{
+		"/../secret.txt",
+		"/../../secret.txt",
+		"/..",
+		"/../",
+		"/docs/../../secret.txt",
+		"/./../secret.txt",
+		"/....//secret.txt",
+		"/..%2fsecret.txt",           // encoded, as the Lambda RawPath transport delivers it
+		"/%2e%2e%2fsecret.txt",       // fully encoded
+		"/%252e%252e%252fsecret.txt", // double encoded
+		"/..\\secret.txt",            // backslash separator
+		"/" + outside,                // absolute path pasted into the URL
+		outside,                      // absolute path, no leading join
+		"//secret.txt",
+		"/docs/./../../secret.txt",
+		"/\x00/secret.txt", // NUL byte
+		"/plans\x00.html",
+	}, symlinkCases(symlinked)...)
+
+	for _, p := range hostile {
+		t.Run(strconv.Quote(p), func(t *testing.T) {
+			filePath, _, ok := resolveStaticFilePath(root, p)
+			if !ok {
+				return // refused outright, which is a valid answer
+			}
+			abs, absErr := filepath.Abs(filePath)
+			if absErr != nil {
+				t.Fatalf("abs(%q): %v", filePath, absErr)
+			}
+			// Resolve symlinks before comparing: a lexically-contained path
+			// whose target is outside is exactly the bypass being tested for.
+			if resolved, symErr := filepath.EvalSymlinks(abs); symErr == nil {
+				abs = resolved
+			}
+			if !isPathContainedIn(abs, realRoot) {
+				t.Fatalf("path %q escaped the root: resolved to %q, outside %q", p, abs, realRoot)
+			}
+			// Belt and braces: never the secret, whatever the path.
+			if data, readErr := os.ReadFile(abs); readErr == nil && strings.Contains(string(data), "TOP-SECRET") {
+				t.Fatalf("path %q served the out-of-root secret from %q", p, abs)
+			}
+		})
+	}
+}
+
+// Same matrix through the real HTTP handler, so Go's own URL decoding is in the
+// loop rather than assumed. Asserts on the served bytes, not the status.
+func TestSpaFileServer_HostilePathsNeverServeOutOfRoot(t *testing.T) {
+	root, _, symlinked := hostileRoot(t)
+	handler := spaFileServer(root)
+
+	targets := append([]string{
+		"/../secret.txt",
+		"/../../secret.txt",
+		"/docs/../../secret.txt",
+		"/..%2fsecret.txt",
+		"/%2e%2e%2fsecret.txt",
+		"/%252e%252e%252fsecret.txt",
+		"/..\\secret.txt",
+		"//secret.txt",
+		"/....//secret.txt",
+	}, symlinkCases(symlinked)...)
+
+	for _, target := range targets {
+		t.Run(target, func(t *testing.T) {
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, target, nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if strings.Contains(w.Body.String(), "TOP-SECRET") {
+				t.Fatalf("target %q served out-of-root content (status %d)", target, w.Code)
+			}
+		})
+	}
+}
+
+// The Lambda transport passes RawPath, which is not decoded the way
+// http.Request.URL.Path is, so the two transports must be checked separately.
+func TestServeStaticForLambda_HostilePathsNeverServeOutOfRoot(t *testing.T) {
+	root, outside, symlinked := hostileRoot(t)
+
+	paths := append([]string{
+		"/../secret.txt",
+		"/../../secret.txt",
+		"/docs/../../secret.txt",
+		"/..%2fsecret.txt",
+		"/%2e%2e%2fsecret.txt",
+		"/%252e%252e%252fsecret.txt",
+		"/..\\secret.txt",
+		"//secret.txt",
+		outside,
+	}, symlinkCases(symlinked)...)
+
+	for _, p := range paths {
+		t.Run(strconv.Quote(p), func(t *testing.T) {
+			content, _, _, _ := serveStaticForLambda(root, p)
+			if strings.Contains(string(content), "TOP-SECRET") {
+				t.Fatalf("path %q served out-of-root content", p)
+			}
+		})
+	}
 }

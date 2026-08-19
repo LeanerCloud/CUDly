@@ -69,6 +69,39 @@ let historyId = 0;
 interface SwitchTabOptions {
   push?: boolean;
   skipDirtyGuard?: boolean;
+  /**
+   * Skip the tab's own default data load, for callers that switch to a tab
+   * only to render their own scoped view into it. The permission gate still
+   * applies.
+   */
+  skipDefaultLoad?: boolean;
+}
+
+/**
+ * Own-property membership test for the route tables above. `key in record`
+ * also matches Object.prototype members, so /constructor resolved as a known
+ * tab and switchTab then read a TabMeta that isn't one.
+ */
+function isKnownKey(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+/**
+ * The canonical URL path for a tab. Inventory and Admin carry a sub-tab
+ * segment; every other tab is just /<tab>.
+ *
+ * Shared by switchTab's pushState and app.ts's initial replaceState: switchTab
+ * reads the sub-tab back out of the URL, so a caller that writes the URL first
+ * must not drop the segment.
+ */
+export function canonicalTabPath(tabName: string): string {
+  if (tabName === 'admin') {
+    return '/admin/' + (currentSettingsSubTab ?? getSettingsSubTabFromPath());
+  }
+  if (tabName === 'inventory') {
+    return '/inventory/' + getInventorySubTabFromPath();
+  }
+  return '/' + tabName;
 }
 
 /**
@@ -91,7 +124,7 @@ function renderNoAccess(tabId: string): void {
  * Switch between tabs
  */
 export function switchTab(tabName: string, opts: SwitchTabOptions = {}): void {
-  if (!(tabName in TABS)) tabName = 'home';
+  if (!isKnownKey(TABS, tabName)) tabName = 'home';
 
   const isSelfSwitch = tabName === currentTab;
 
@@ -129,8 +162,11 @@ export function switchTab(tabName: string, opts: SwitchTabOptions = {}): void {
         renderNoAccess(`${tabName}-tab`);
         break;
       }
-      initHistoryDateRange();
+      // Savings history is tab-scoped, never plan-scoped, so it loads even
+      // for a caller that brings its own purchase list.
       void loadSavingsHistory();
+      if (opts.skipDefaultLoad) break;
+      initHistoryDateRange();
       // Auto-load history so the Approval queue card and the Purchase
       // History table populate on first visit, without requiring the
       // user to click "Load History" just to see pending approvals.
@@ -139,6 +175,7 @@ export function switchTab(tabName: string, opts: SwitchTabOptions = {}): void {
       void loadHistory();
       break;
     case 'admin':
+      if (opts.skipDefaultLoad) break;
       switchSettingsSubTab(getSettingsSubTabFromPath(), { push: false });
       break;
     case 'inventory':
@@ -159,22 +196,10 @@ export function switchTab(tabName: string, opts: SwitchTabOptions = {}): void {
 
   if (opts.push !== false) {
     historyId += 1;
-    let url: string;
-    if (tabName === 'admin') {
-      url = '/admin/' + (currentSettingsSubTab ?? 'general');
-    } else if (tabName === 'inventory') {
-      // Inventory carries a sub-tab segment in the URL (QA A.4), mirroring
-      // Admin. loadInventory() above already applied the sub-section from
-      // the path (or the default); reflect that same segment here so the
-      // canonical URL is /inventory/<subtab>, never a bare /inventory.
-      url = '/inventory/' + getInventorySubTabFromPath();
-    } else {
-      url = '/' + tabName;
-    }
     window.history.pushState(
       { tab: tabName, id: historyId },
       '',
-      url + window.location.search + window.location.hash,
+      canonicalTabPath(tabName) + window.location.search + window.location.hash,
     );
   }
 }
@@ -189,7 +214,7 @@ export function getSettingsSubTabFromPath(): string {
     .replace(/\/+$/, '')
     .split('/');
   const sub = (segments[1] ?? '').toLowerCase();
-  return sub in SETTINGS_SUBTABS ? sub : 'general';
+  return isKnownKey(SETTINGS_SUBTABS, sub) ? sub : 'general';
 }
 
 /**
@@ -242,7 +267,7 @@ export function getInventorySubTabFromPath(): string {
  * Manages section visibility, load lifecycle, and sub-tab URL history.
  */
 export function switchSettingsSubTab(subTab: string, opts: SwitchTabOptions = {}): void {
-  if (!(subTab in SETTINGS_SUBTABS)) subTab = 'general';
+  if (!isKnownKey(SETTINGS_SUBTABS, subTab)) subTab = 'general';
 
   if ((subTab === 'accounts' || subTab === 'users') && !isAdmin()) {
     subTab = 'general';
@@ -311,12 +336,12 @@ export function applyTabFromPath(): string {
     .split('/')[0]
     ?.toLowerCase() ?? '';
   if (segment === '') return 'home';
-  if (segment in LEGACY_PATH_REDIRECTS) {
+  if (isKnownKey(LEGACY_PATH_REDIRECTS, segment)) {
     const canonical = LEGACY_PATH_REDIRECTS[segment]!;
     window.history.replaceState(null, '', '/' + canonical + window.location.search + window.location.hash);
     return canonical;
   }
-  return segment in TABS ? segment : 'home';
+  return isKnownKey(TABS, segment) ? segment : 'home';
 }
 
 /**
