@@ -273,19 +273,21 @@ jobs:
     timeout-minutes: 30
     needs: validate
     if: inputs.cloud == 'aws-fargate'
-    # NOTE the group is `aws-tfstate-*`, NOT `aws-fargate-tfstate-*`. Despite
-    # the job name, the state key this job builds below is
-    # `github-<environment>/terraform.tfstate` -- the LAMBDA namespace -- not
-    # `github-fargate-<environment>/` as deploy-aws-fargate.yml uses. The group
-    # must name the object this job actually locks, or it would serialize
-    # against a state file it never touches while writing one unguarded, which
-    # is #1806 reproduced in a new place. That namespace mismatch is a real
-    # pre-existing defect (a Fargate rollback applies into the Lambda state),
-    # tracked in #1811 rather than changed here, because moving the key changes
-    # which infrastructure a rollback rewrites. When #1811 lands, this group
-    # moves to `aws-fargate-tfstate-*` in the same commit as the key.
+    # `terraform apply` against
+    # s3://<bucket>/github-fargate-<environment>/terraform.tfstate, the same
+    # object deploy-aws-fargate.yml, cleanup-staging.yml and
+    # destroy-fargate-dev.yml write, so it takes the same concurrency group
+    # (#1806). Until #1811 this job built the key from the LAMBDA namespace
+    # (`github-<environment>/`) and so carried `aws-tfstate-*` to match; the
+    # group and the key move together, because a group that does not name the
+    # object the job locks serializes against a state file it never touches
+    # while writing one unguarded. `inputs.environment` is a required `choice`
+    # constrained to dev|staging|prod, so the suffix is never empty; it is the
+    # same value this job interpolates into the state key below.
+    # scripts/test-aws-tfstate-platform-key.sh is what keeps the key and the
+    # `compute_platform` this job applies from drifting apart again.
     concurrency:
-      group: aws-tfstate-${{ inputs.environment }}
+      group: aws-fargate-tfstate-${{ inputs.environment }}
       cancel-in-progress: false
     permissions:
       id-token: write
@@ -343,7 +345,7 @@ jobs:
           IMAGE_URI: ${{ needs.validate.outputs.image_uri }}
         run: |
           set -euo pipefail
-          printf '%s\nkey = "github-%s/terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
+          printf '%s\nkey = "github-fargate-%s/terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/aws
           terraform init -backend-config=/tmp/backend.tfbackend
 
