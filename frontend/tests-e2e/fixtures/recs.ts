@@ -93,6 +93,29 @@ export const ACCOUNTS = [
   { id: 'acct-201', name: 'GCP Sandbox (acct-201)', provider: 'gcp',   external_id: 'project-yyyy' },
 ];
 
+/**
+ * Coverage breakdown fixture for the Inventory & Coverage -> Coverage sub-tab
+ * (issue #1777). Rows deliberately span the boundaries where a percentage-driven
+ * bar breaks: fully covered (100), a mid value, zero coverage with real
+ * on-demand spend (0), and no usage at all (null -- absent, not zero).
+ */
+export const COVERAGE = {
+  providers: [
+    {
+      provider: 'aws',
+      overall_coverage_pct: 54.2,
+      services: [
+        { service: 'ec2', covered_monthly: 4000, on_demand_monthly: 0, coverage_pct: 100 },
+        { service: 'rds', covered_monthly: 500, on_demand_monthly: 300, coverage_pct: 62.5 },
+        { service: 'lambda', covered_monthly: 0, on_demand_monthly: 220, coverage_pct: 0 },
+        { service: 'opensearch', covered_monthly: 0, on_demand_monthly: 0, coverage_pct: null },
+      ],
+    },
+    { provider: 'azure', overall_coverage_pct: null, services: null },
+    { provider: 'gcp', overall_coverage_pct: null, services: null },
+  ],
+};
+
 export const SUMMARY = {
   total_recommendations: RECS.length,
   total_upfront_cost: RECS.reduce((s, r) => s + r.upfront_cost, 0),
@@ -300,6 +323,19 @@ export async function mockApi(page: Page): Promise<MockHandle> {
       return;
     }
     await route.fulfill({ status: 405, body: '' });
+  });
+
+  // Inventory & Coverage. The Coverage sub-tab reads /inventory/coverage; the
+  // default Active-commitments sub-tab reads /inventory/commitments and is hit
+  // whenever a test lands on /inventory without a sub-tab segment.
+  await page.route('**/api/inventory/coverage**', async (route) => {
+    record(route);
+    await jsonRoute(route, COVERAGE);
+  });
+
+  await page.route('**/api/inventory/commitments**', async (route) => {
+    record(route);
+    await jsonRoute(route, { commitments: [] });
   });
 
   // Per-id detail — covers the row-click drawer. Returns a benign empty

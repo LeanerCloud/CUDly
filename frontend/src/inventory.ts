@@ -494,6 +494,9 @@ function buildServiceRow(row: CoverageServiceRow): HTMLTableRowElement {
   if (row.coverage_pct !== null && row.coverage_pct !== undefined) {
     const bar = document.createElement('div');
     bar.className = 'coverage-bar';
+    // The bar carries no text, so screen readers need the value spelled out.
+    bar.setAttribute('role', 'img');
+    bar.setAttribute('aria-label', `${row.coverage_pct.toFixed(1)}% covered`);
     const fill = document.createElement('div');
     fill.className = 'coverage-bar-fill';
     // Clamp to [0, 100] so a misconfigured value can't overflow.
@@ -501,6 +504,14 @@ function buildServiceRow(row: CoverageServiceRow): HTMLTableRowElement {
     fill.style.width = `${pct}%`;
     bar.appendChild(fill);
     barTd.appendChild(bar);
+  } else {
+    // No coverage figure: say so rather than leaving the cell blank, which
+    // reads as a rendering failure. A 0%-width bar is not an option -- it
+    // would claim we measured zero coverage.
+    const absent = document.createElement('span');
+    absent.className = 'coverage-bar-absent';
+    absent.textContent = 'N/A';
+    barTd.appendChild(absent);
   }
   tr.appendChild(barTd);
 

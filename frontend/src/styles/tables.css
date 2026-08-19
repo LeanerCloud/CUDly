@@ -175,3 +175,32 @@ tr.history-row-highlight:hover {
     background: #f8d7da;
     color: #721c24;
 }
+
+/* Coverage breakdown bar, Inventory & Coverage -> Coverage (issue #1777).
+ * buildServiceRow() in inventory.ts builds the track/fill divs and sets the
+ * fill width inline from coverage_pct; without these rules both collapsed to
+ * height 0 and the column rendered blank. */
+.coverage-bar-cell {
+    width: 160px;
+    vertical-align: middle;
+}
+
+.coverage-bar {
+    height: 8px;
+    background: var(--cudly-border);
+    border-radius: var(--cudly-r-full);
+    overflow: hidden;
+}
+
+.coverage-bar-fill {
+    height: 100%;
+    background: var(--cudly-success);
+    border-radius: inherit;
+}
+
+/* No coverage figure for this service. Distinguishes "unknown" from a 0%
+ * bar, which would claim we measured zero coverage. */
+.coverage-bar-absent {
+    color: var(--cudly-text-subtle);
+    font-size: var(--cudly-fs-xs);
+}
