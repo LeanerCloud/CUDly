@@ -40,8 +40,13 @@ CUDLY_FEDERATED_SUBJECT="${CUDLY_FEDERATED_SUBJECT:-cudly-controller}"
 # rewrites the condition: "x' || true || '" yields assertion.sub == 'x' || true
 # || '', which admits every subject the issuer will sign. A '*' widens the
 # principal identifier the same way. Restrict the value to characters both
-# destinations treat as inert; '|' is allowed because Auth0/Okta-style subjects
-# use it (google-oauth2|123) and it carries no meaning in either place.
+# destinations treat as inert. The set is the one validate_principal_value
+# applies to --oidc-subject in arm/CUDly-CrossSubscription/setup-gcp-wif.sh,
+# kept identical so one charset governs the subject on both onboarding paths;
+# '|' is inert in both destinations and is in the set for that parity, not for
+# any caller here. CUDly itself always signs the default: gcpFederatedSubject in
+# internal/credentials/gcp_federated.go is a compile-time constant, so an
+# override pins the provider to a subject CUDly will not present.
 if ! [[ "${CUDLY_FEDERATED_SUBJECT}" =~ ^[A-Za-z0-9][-A-Za-z0-9._:/@=+~|]*$ ]]; then
   echo "ERROR: CUDLY_FEDERATED_SUBJECT must start with a letter or digit and use only [-A-Za-z0-9._:/@=+~|] (got: ${CUDLY_FEDERATED_SUBJECT})." >&2
   echo "       Quotes, backslashes, '*' and '\$' would escape the provider's attribute condition or widen the impersonation grant." >&2
@@ -202,6 +207,21 @@ if gcloud iam workload-identity-pools providers describe "${PROVIDER_ID}" \
   # with ';'. This mapping has a single entry, so it compares directly against
   # the form --attribute-mapping takes as input.
   EXISTING_MAPPING=$(provider_field attributeMapping)
+
+  # An audience list restricts which `aud` the provider accepts. Empty means
+  # unset, and GCP then defaults to the provider's own resource name, which is
+  # exactly what WIF_AUDIENCE is, so empty is correct rather than unrestricted.
+  # A non-empty list that omits WIF_AUDIENCE rejects every token CUDly mints.
+  # value() joins a repeated field with ';'.
+  EXISTING_AUDIENCES=$(provider_field oidc.allowedAudiences)
+  if [[ -n "${EXISTING_AUDIENCES}" ]]; then
+    _audience_ok=""
+    while IFS= read -r _audience; do
+      [[ "${_audience}" == "${WIF_AUDIENCE}" ]] && _audience_ok=yes
+    done <<<"${EXISTING_AUDIENCES//;/$'\n'}"
+    [[ -n "${_audience_ok}" ]] \
+      || reject_existing_provider "allowed audience list" "${EXISTING_AUDIENCES}" "a list containing ${WIF_AUDIENCE}"
+  fi
 
   [[ "${EXISTING_ISSUER}" == "${CUDLY_ISSUER_URL}" ]] \
     || reject_existing_provider "issuer URI" "${EXISTING_ISSUER}" "${CUDLY_ISSUER_URL}"

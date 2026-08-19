@@ -239,6 +239,26 @@ func TestSetupScriptRejectsCredentialSourceInAWSMode(t *testing.T) {
 	}
 }
 
+// TestSetupScriptRejectsCredentialFieldWithoutSource covers the other half of
+// the credential-source validation: the field name says how to read a token out
+// of a JSON response, so on its own it configures nothing. Accepting it silently
+// would emit a credential config with no credential source, which is the
+// invocation gcloud rejects in the first place.
+func TestSetupScriptRejectsCredentialFieldWithoutSource(t *testing.T) {
+	exitCode, _, stderr, calls := runSetupScript(t,
+		setupScriptOIDCArgs("--oidc-credential-source-field", "value")...)
+
+	if exitCode == 0 {
+		t.Error("--oidc-credential-source-field was accepted without a source (exit 0)")
+	}
+	if len(calls) != 0 {
+		t.Errorf("the rejection must happen before the first gcloud call, got %d: %v", len(calls), calls)
+	}
+	if !strings.Contains(stderr, "--oidc-credential-source-field") {
+		t.Errorf("stderr must name the rejected flag, got:\n%s", stderr)
+	}
+}
+
 // TestSetupScriptRejectsInsecureCredentialSource pins the two shapes a
 // credential source may take. A plain http:// endpoint would carry the subject
 // token in cleartext, and anything else is neither a path gcloud can read nor a
