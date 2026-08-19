@@ -188,7 +188,7 @@ jobs:
 
           # Get service URL
           SERVICE_URL=$(terraform output -raw cloud_run_service_url 2>/dev/null | grep -v '::' || echo "")
-          echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
+          echo "service_url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
 
       # No automatic state-lock release on failure. The step that used to live
       # here ran on `failure() || cancelled()` with no age check and no check
@@ -238,7 +238,7 @@ jobs:
             exit 1
           fi
           SERVICE_URL="${SERVICE_URL%/}"
-          echo "url=$SERVICE_URL" >> $GITHUB_OUTPUT
+          echo "url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
 
       - name: Wait for Cloud Run to be ready
         run: |
@@ -302,28 +302,30 @@ jobs:
 
       - name: Post summary
         run: |
-          echo "## GCP Cloud Run Deployment Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** ${{ needs.prepare.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Region:** ${{ env.GCP_REGION }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## GCP Cloud Run Deployment Summary"
+            echo ""
+            echo "**Environment:** ${{ needs.prepare.outputs.environment }}"
+            echo "**Region:** ${{ env.GCP_REGION }}"
+            echo ""
 
-          if [ -f deployment-info.json ]; then
-            echo "### Deployment Details" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
-            cat deployment-info.json >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          fi
+            if [ -f deployment-info.json ]; then
+              echo "### Deployment Details"
+              echo "\`\`\`json"
+              cat deployment-info.json
+              echo "\`\`\`"
+            fi
 
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Job Results" >> $GITHUB_STEP_SUMMARY
-          echo "- Deploy: ${{ needs.build-and-deploy.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Test: ${{ needs.test-deployment.result }}" >> $GITHUB_STEP_SUMMARY
+            echo ""
+            echo "### Job Results"
+            echo "- Deploy: ${{ needs.build-and-deploy.result }}"
+            echo "- Test: ${{ needs.test-deployment.result }}"
 
-          if [ "${{ needs.build-and-deploy.result }}" == "success" ] && [ "${{ needs.test-deployment.result }}" == "success" ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "✅ **Deployment successful!**" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "❌ **Deployment failed. Check logs for details.**" >> $GITHUB_STEP_SUMMARY
-          fi
+            if [ "${{ needs.build-and-deploy.result }}" == "success" ] && [ "${{ needs.test-deployment.result }}" == "success" ]; then
+              echo ""
+              echo "✅ **Deployment successful!**"
+            else
+              echo ""
+              echo "❌ **Deployment failed. Check logs for details.**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

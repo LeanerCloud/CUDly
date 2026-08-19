@@ -257,11 +257,11 @@ jobs:
 
           # Get app URL
           APP_URL=$(terraform output -raw container_app_url 2>/dev/null | grep -v '::' || echo "")
-          echo "app_url=$APP_URL" >> $GITHUB_OUTPUT
+          echo "app_url=$APP_URL" >> "$GITHUB_OUTPUT"
 
           # Get app name
           APP_NAME=$(terraform output -raw container_app_name 2>/dev/null | grep -v '::' || echo "")
-          echo "app_name=$APP_NAME" >> $GITHUB_OUTPUT
+          echo "app_name=$APP_NAME" >> "$GITHUB_OUTPUT"
 
       # The provider fails the data read outright when the custom role is absent,
       # so a Terraform precondition can never run for this case. Issue #1794: the
@@ -387,7 +387,7 @@ jobs:
             *) APP_URL="https://$APP_URL" ;;
           esac
           APP_URL="${APP_URL%/}"
-          echo "url=$APP_URL" >> $GITHUB_OUTPUT
+          echo "url=$APP_URL" >> "$GITHUB_OUTPUT"
 
       - name: Wait for Container App to be ready
         run: |
@@ -461,28 +461,30 @@ jobs:
 
       - name: Post summary
         run: |
-          echo "## Azure Container Apps Deployment Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** ${{ needs.prepare.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Location:** ${{ env.AZURE_LOCATION }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Azure Container Apps Deployment Summary"
+            echo ""
+            echo "**Environment:** ${{ needs.prepare.outputs.environment }}"
+            echo "**Location:** ${{ env.AZURE_LOCATION }}"
+            echo ""
 
-          if [ -f deployment-info.json ]; then
-            echo "### Deployment Details" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
-            cat deployment-info.json >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          fi
+            if [ -f deployment-info.json ]; then
+              echo "### Deployment Details"
+              echo "\`\`\`json"
+              cat deployment-info.json
+              echo "\`\`\`"
+            fi
 
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Job Results" >> $GITHUB_STEP_SUMMARY
-          echo "- Deploy: ${{ needs.build-and-deploy.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Test: ${{ needs.test-deployment.result }}" >> $GITHUB_STEP_SUMMARY
+            echo ""
+            echo "### Job Results"
+            echo "- Deploy: ${{ needs.build-and-deploy.result }}"
+            echo "- Test: ${{ needs.test-deployment.result }}"
 
-          if [ "${{ needs.build-and-deploy.result }}" == "success" ] && [ "${{ needs.test-deployment.result }}" == "success" ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "✅ **Deployment successful!**" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "❌ **Deployment failed. Check logs for details.**" >> $GITHUB_STEP_SUMMARY
-          fi
+            if [ "${{ needs.build-and-deploy.result }}" == "success" ] && [ "${{ needs.test-deployment.result }}" == "success" ]; then
+              echo ""
+              echo "✅ **Deployment successful!**"
+            else
+              echo ""
+              echo "❌ **Deployment failed. Check logs for details.**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

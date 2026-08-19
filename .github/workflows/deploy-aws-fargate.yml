@@ -109,7 +109,7 @@ jobs:
       - name: Set image tag
         id: set-tag
         run: |
-          echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "tag=${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
   # Deploy with Terraform
   deploy:
@@ -209,8 +209,8 @@ jobs:
         id: outputs
         run: |
           cd terraform/environments/aws
-          echo "alb_url=$(terraform output -raw fargate_alb_dns_name 2>/dev/null | grep -v '::' || echo "")" >> $GITHUB_OUTPUT
-          echo "service_name=$(terraform output -raw fargate_service_name 2>/dev/null | grep -v '::' || echo "")" >> $GITHUB_OUTPUT
+          echo "alb_url=$(terraform output -raw fargate_alb_dns_name 2>/dev/null | grep -v '::' || echo "")" >> "$GITHUB_OUTPUT"
+          echo "service_name=$(terraform output -raw fargate_service_name 2>/dev/null | grep -v '::' || echo "")" >> "$GITHUB_OUTPUT"
 
       - name: Save deployment info
         run: |
@@ -256,7 +256,7 @@ jobs:
             *) ALB_URL="http://$ALB_URL" ;;
           esac
           ALB_URL="${ALB_URL%/}"
-          echo "url=$ALB_URL" >> $GITHUB_OUTPUT
+          echo "url=$ALB_URL" >> "$GITHUB_OUTPUT"
 
       - name: Wait for deployment
         run: |
@@ -319,28 +319,30 @@ jobs:
 
       - name: Post summary
         run: |
-          echo "## AWS Fargate Deployment Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** ${{ needs.prepare.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Deploy Status:** ${{ needs.deploy.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## AWS Fargate Deployment Summary"
+            echo ""
+            echo "**Environment:** ${{ needs.prepare.outputs.environment }}"
+            echo "**Deploy Status:** ${{ needs.deploy.result }}"
+            echo ""
 
-          if [ -f deployment-info.json ]; then
-            echo "### Deployment Details" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
-            cat deployment-info.json >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          fi
+            if [ -f deployment-info.json ]; then
+              echo "### Deployment Details"
+              echo "\`\`\`json"
+              cat deployment-info.json
+              echo "\`\`\`"
+            fi
 
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Job Results" >> $GITHUB_STEP_SUMMARY
-          echo "- Deploy: ${{ needs.deploy.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Test: ${{ needs.test-deployment.result }}" >> $GITHUB_STEP_SUMMARY
+            echo ""
+            echo "### Job Results"
+            echo "- Deploy: ${{ needs.deploy.result }}"
+            echo "- Test: ${{ needs.test-deployment.result }}"
 
-          if [ "${{ needs.deploy.result }}" == "success" ] && [ "${{ needs.test-deployment.result }}" == "success" ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Deployment successful!**" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Deployment failed. Check logs for details.**" >> $GITHUB_STEP_SUMMARY
-          fi
+            if [ "${{ needs.deploy.result }}" == "success" ] && [ "${{ needs.test-deployment.result }}" == "success" ]; then
+              echo ""
+              echo "**Deployment successful!**"
+            else
+              echo ""
+              echo "**Deployment failed. Check logs for details.**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
