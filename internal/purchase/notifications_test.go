@@ -191,7 +191,9 @@ func TestManager_GetOrCreateExecution(t *testing.T) {
 	assert.NotNil(t, execution)
 	assert.Equal(t, "plan-123", execution.PlanID)
 	assert.Equal(t, "pending", execution.Status)
-	assert.Equal(t, 1, execution.StepNumber)
+	// step_number names the step this row will COMPLETE, so a plan with one
+	// step already done creates the row for step 2 (issue #1669).
+	assert.Equal(t, 2, execution.StepNumber)
 	assert.NotEmpty(t, execution.ExecutionID)
 	assert.NotEmpty(t, execution.ApprovalToken)
 
@@ -325,7 +327,8 @@ func TestManager_GetOrCreateExecution_CreatesOnErrNotFound(t *testing.T) {
 	require.NotNil(t, execution)
 	assert.Equal(t, "plan-f2", execution.PlanID)
 	assert.Equal(t, "pending", execution.Status)
-	assert.Equal(t, 2, execution.StepNumber)
+	// Two steps already completed, so this row is step 3 (issue #1669).
+	assert.Equal(t, 3, execution.StepNumber)
 	assert.NotEmpty(t, execution.ExecutionID)
 	assert.NotEmpty(t, execution.ApprovalToken)
 

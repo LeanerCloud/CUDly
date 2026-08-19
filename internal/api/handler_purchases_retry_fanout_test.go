@@ -171,7 +171,7 @@ func executeSuccessorForReal(t *testing.T, successor *config.PurchaseExecution) 
 	// Plan progress advances only on a fully clean run; .Maybe() so a run that
 	// ends partial/failed does not turn into a mock-expectation failure that
 	// would mask the purchase-count assertion the caller actually makes.
-	store.On("IncrementPlanCurrentStep", mock.Anything, fanoutPlanID).Return(nil).Maybe()
+	store.On("CompletePlanStep", mock.Anything, fanoutPlanID, mock.Anything).Return(nil).Maybe()
 
 	store.GetPurchasePlanFn = func(_ context.Context, planID string) (*config.PurchasePlan, error) {
 		return &config.PurchasePlan{ID: planID, Name: "Plan 1537"}, nil

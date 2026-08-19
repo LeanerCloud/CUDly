@@ -245,7 +245,7 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 		}
 	}
 	if execErr == nil {
-		if err := m.updatePlanProgress(ctx, exec.PlanID); err != nil {
+		if err := m.updatePlanProgress(ctx, exec); err != nil {
 			logging.Errorf("Failed to update plan progress: %v", err)
 		}
 	}

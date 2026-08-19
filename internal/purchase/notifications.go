@@ -128,10 +128,15 @@ func (m *Manager) getOrCreateExecution(ctx context.Context, plan *config.Purchas
 	}
 	tokenExpiresAt := time.Now().Add(config.ApprovalTokenTTL)
 	execution := &config.PurchaseExecution{
-		PlanID:                 plan.ID,
-		ExecutionID:            uuid.New().String(),
-		Status:                 "pending",
-		StepNumber:             plan.RampSchedule.CurrentStep,
+		PlanID:      plan.ID,
+		ExecutionID: uuid.New().String(),
+		Status:      "pending",
+		// step_number names the step this row will COMPLETE, not the count
+		// already completed, matching api.createPurchaseExecutionsTx
+		// (CurrentStep + i + 1). The ramp advance is keyed on this value since
+		// issue #1669, so stamping the completed count here would have every
+		// notification-created row re-complete a counted step, freezing the ramp.
+		StepNumber:             plan.RampSchedule.CurrentStep + 1,
 		ScheduledDate:          *plan.NextExecutionDate,
 		ApprovalToken:          approvalToken,
 		ApprovalTokenExpiresAt: &tokenExpiresAt,

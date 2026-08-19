@@ -30,10 +30,16 @@ type StoreInterface interface {
 	CreatePurchasePlan(ctx context.Context, plan *PurchasePlan) error
 	GetPurchasePlan(ctx context.Context, planID string) (*PurchasePlan, error)
 	UpdatePurchasePlan(ctx context.Context, plan *PurchasePlan) error
-	// IncrementPlanCurrentStep atomically advances the ramp schedule for planID
-	// inside a SELECT FOR UPDATE transaction, preventing the concurrent-write
-	// lost-update race described in issue #1071.
-	IncrementPlanCurrentStep(ctx context.Context, planID string) error
+	// CompletePlanStep records that ramp step stepNumber finished and advances
+	// the plan's schedule to it, inside a SELECT FOR UPDATE transaction that
+	// prevents the concurrent-write lost-update race of issue #1071.
+	//
+	// It is idempotent in stepNumber: completing a step the plan has already
+	// counted is a no-op. That is what keeps a multi-account ramp step from
+	// advancing twice when an operator retries two separately-failed accounts
+	// of the same step (issue #1669). A step still counts as completed when one
+	// execution for it ran clean, not when every account has bought.
+	CompletePlanStep(ctx context.Context, planID string, stepNumber int) error
 	// UpdatePurchasePlanTx is the tx-accepting variant of UpdatePurchasePlan.
 	// Used from createPlannedPurchases' WithTx block so the per-row
 	// SavePurchaseExecutionTx writes and the plan's next_execution_date

@@ -105,7 +105,7 @@ func armedHarness(t *testing.T, serviceType common.ServiceType) (*Manager, *Mock
 	store.GetPlanAccountsFn = func(_ context.Context, _ string) ([]config.CloudAccount, error) { return nil, nil }
 
 	store.On("SavePurchaseHistory", mock.Anything, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil).Maybe()
-	store.On("IncrementPlanCurrentStep", mock.Anything, mock.Anything).Return(nil).Maybe()
+	store.On("CompletePlanStep", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil).Maybe()
 	email.On("SendPurchaseConfirmation", mock.Anything, mock.AnythingOfType("email.NotificationData")).Return(nil).Maybe()
 

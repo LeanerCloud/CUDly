@@ -322,7 +322,7 @@ func TestManager_UpdatePlanProgress(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
 
-	mockStore.On("IncrementPlanCurrentStep", ctx, "plan-123").Return(nil)
+	mockStore.On("CompletePlanStep", ctx, "plan-123", 2).Return(nil)
 
 	manager := &Manager{
 		config:       mockStore,
@@ -330,7 +330,11 @@ func TestManager_UpdatePlanProgress(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.updatePlanProgress(ctx, "plan-123")
+	err := manager.updatePlanProgress(ctx, &config.PurchaseExecution{
+		ExecutionID: "exec-123",
+		PlanID:      "plan-123",
+		StepNumber:  2,
+	})
 	require.NoError(t, err)
 
 	mockStore.AssertExpectations(t)
@@ -341,8 +345,8 @@ func TestManager_UpdatePlanProgress_PlanNotFound(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
 
-	// IncrementPlanCurrentStep returns nil when the plan no longer exists.
-	mockStore.On("IncrementPlanCurrentStep", ctx, "nonexistent").Return(nil)
+	// CompletePlanStep returns nil when the plan no longer exists.
+	mockStore.On("CompletePlanStep", ctx, "nonexistent", 1).Return(nil)
 
 	manager := &Manager{
 		config:       mockStore,
@@ -350,7 +354,11 @@ func TestManager_UpdatePlanProgress_PlanNotFound(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.updatePlanProgress(ctx, "nonexistent")
+	err := manager.updatePlanProgress(ctx, &config.PurchaseExecution{
+		ExecutionID: "exec-nonexistent",
+		PlanID:      "nonexistent",
+		StepNumber:  1,
+	})
 	require.NoError(t, err)
 
 	mockStore.AssertExpectations(t)
@@ -361,7 +369,7 @@ func TestManager_UpdatePlanProgress_GetError(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
 
-	mockStore.On("IncrementPlanCurrentStep", ctx, "plan-123").Return(errors.New("database error"))
+	mockStore.On("CompletePlanStep", ctx, "plan-123", 1).Return(errors.New("database error"))
 
 	manager := &Manager{
 		config:       mockStore,
@@ -369,7 +377,11 @@ func TestManager_UpdatePlanProgress_GetError(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.updatePlanProgress(ctx, "plan-123")
+	err := manager.updatePlanProgress(ctx, &config.PurchaseExecution{
+		ExecutionID: "exec-123",
+		PlanID:      "plan-123",
+		StepNumber:  1,
+	})
 	assert.Error(t, err)
 
 	mockStore.AssertExpectations(t)
@@ -380,9 +392,9 @@ func TestManager_UpdatePlanProgress_CompleteRamp(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
 
-	// The step-advance and completion logic now live inside IncrementPlanCurrentStep
+	// The step-completion and ramp-advance logic now live inside CompletePlanStep
 	// in the store, tested at the store layer with pgxmock.
-	mockStore.On("IncrementPlanCurrentStep", ctx, "plan-123").Return(nil)
+	mockStore.On("CompletePlanStep", ctx, "plan-123", 4).Return(nil)
 
 	manager := &Manager{
 		config:       mockStore,
@@ -390,10 +402,46 @@ func TestManager_UpdatePlanProgress_CompleteRamp(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.updatePlanProgress(ctx, "plan-123")
+	err := manager.updatePlanProgress(ctx, &config.PurchaseExecution{
+		ExecutionID: "exec-123",
+		PlanID:      "plan-123",
+		StepNumber:  4,
+	})
 	require.NoError(t, err)
 
 	mockStore.AssertExpectations(t)
+}
+
+// TestManager_UpdatePlanProgress_ZeroStepRefusesAndSkipsStore is the
+// regression guard for issue #1669: an execution attributed to a plan but
+// carrying a non-positive ramp step must not guess at the ramp position by
+// calling the store. updatePlanProgress must return an error and the store
+// must never be called.
+func TestManager_UpdatePlanProgress_ZeroStepRefusesAndSkipsStore(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+
+	// Registered so AssertNotCalled below is a meaningful check rather than a
+	// vacuous one (a bare AssertNotCalled without a matching registered
+	// expectation always passes in this repo's mock setup).
+	mockStore.On("CompletePlanStep", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	manager := &Manager{
+		config:       mockStore,
+		email:        mockEmail,
+		dashboardURL: "https://dashboard.example.com",
+	}
+
+	err := manager.updatePlanProgress(ctx, &config.PurchaseExecution{
+		ExecutionID: "exec-zero-step",
+		PlanID:      "plan-123",
+		StepNumber:  0,
+	})
+	require.Error(t, err)
+
+	mockStore.AssertNotCalled(t, "CompletePlanStep", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestManager_GetAWSAccountID_Success(t *testing.T) {

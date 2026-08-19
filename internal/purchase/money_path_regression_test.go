@@ -320,7 +320,7 @@ func TestMultiAccountPartialSuccessIsAcked(t *testing.T) {
 	// updatePlanProgress only runs on a fully-clean run (execErr == nil); a
 	// partial multi-account run skips it. Marked Maybe so a (non-deterministic)
 	// all-success ordering of the two account goroutines doesn't fail the mock.
-	mockStore.On("IncrementPlanCurrentStep", ctx, "plan-x").Return(nil).Maybe()
+	mockStore.On("CompletePlanStep", ctx, "plan-x", mock.Anything).Return(nil).Maybe()
 
 	var savedRoot *config.PurchaseExecution
 	mockStore.SavePurchaseExecutionFn = func(_ context.Context, e *config.PurchaseExecution) error {
@@ -412,7 +412,7 @@ func runScopelessRow(t *testing.T, exec *config.PurchaseExecution, accounts []co
 	var tokens []string
 	mockStore.On("SavePurchaseHistory", mock.Anything, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil).Maybe()
 	mockEmail.On("SendPurchaseConfirmation", mock.Anything, mock.AnythingOfType("email.NotificationData")).Return(nil).Maybe()
-	mockStore.On("IncrementPlanCurrentStep", mock.Anything, "plan-x").Return(nil).Maybe()
+	mockStore.On("CompletePlanStep", mock.Anything, "plan-x", mock.Anything).Return(nil).Maybe()
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil).Maybe()
 	mockProviderInst.On("GetServiceClient", mock.Anything, common.ServiceEC2, mock.Anything).Return(mockServiceClient, nil).Maybe()
 	mockServiceClient.On("PurchaseCommitment", mock.Anything, mock.Anything, mock.AnythingOfType("common.PurchaseOptions")).

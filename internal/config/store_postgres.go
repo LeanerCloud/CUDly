@@ -548,7 +548,7 @@ const purchasePlanSelectCols = `
 
 // scanPurchasePlanRow deserialises one purchase_plans row returned by QueryRow
 // or the first row of a query with FOR UPDATE. Extracted so GetPurchasePlan
-// and IncrementPlanCurrentStep share the same scan logic.
+// and CompletePlanStep share the same scan logic.
 func scanPurchasePlanRow(row pgx.Row) (*PurchasePlan, error) {
 	var plan PurchasePlan
 	var servicesJSON, rampScheduleJSON []byte
@@ -604,13 +604,34 @@ func (s *PostgresStore) GetPurchasePlan(ctx context.Context, planID string) (*Pu
 	return plan, nil
 }
 
-// IncrementPlanCurrentStep atomically advances the ramp schedule for planID
-// inside a transaction. The row is locked with SELECT FOR UPDATE so concurrent
-// callers (overlapping Lambda invocations, multi-tick cron) cannot both read
-// the same CurrentStep value and both write CurrentStep+1, skipping a step.
+// CompletePlanStep records that ramp step stepNumber of planID completed and
+// advances the schedule to it, inside a transaction. The row is locked with
+// SELECT FOR UPDATE so concurrent callers (overlapping Lambda invocations,
+// multi-tick cron) cannot both read the same CurrentStep value and both write
+// CurrentStep+1, skipping a step (issue #1071).
+//
+// The operation is idempotent in stepNumber rather than a blind increment: a
+// multi-account plan produces one execution per account per ramp step, and
+// retrying two separately-failed accounts of the same step used to advance the
+// ramp twice, so the plan reported itself a step further along than the
+// commitment it had actually bought (issue #1669). Completing a step at or
+// below CurrentStep is therefore a no-op.
+//
+// Completing a step more than one beyond CurrentStep is refused with an error
+// instead of jumping: the steps in between never completed, and advancing over
+// them would silently overstate how much the plan has bought.
+//
+// Granularity: "the step completed" still means at least one execution for that
+// step ran clean, not that every account of a multi-account plan bought. That
+// was true before #1669 too and is unchanged here; #1669 only stops one step
+// being counted more than once.
+//
 // Returns nil when the plan no longer exists (deleted between execution and
 // progress update) so the caller is not penalized for a race it cannot control.
-func (s *PostgresStore) IncrementPlanCurrentStep(ctx context.Context, planID string) error {
+func (s *PostgresStore) CompletePlanStep(ctx context.Context, planID string, stepNumber int) error {
+	if stepNumber <= 0 {
+		return fmt.Errorf("cannot complete ramp step %d of plan %s: step numbers are 1-based", stepNumber, planID)
+	}
 	return s.WithTx(ctx, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, purchasePlanSelectCols+` WHERE id = $1 FOR UPDATE`, planID)
 		plan, err := scanPurchasePlanRow(row)
@@ -621,8 +642,23 @@ func (s *PostgresStore) IncrementPlanCurrentStep(ctx context.Context, planID str
 			return fmt.Errorf("failed to lock purchase plan %s: %w", planID, err)
 		}
 
-		if !plan.RampSchedule.IsComplete() {
-			plan.RampSchedule.CurrentStep++
+		switch {
+		case plan.RampSchedule.IsComplete():
+			// The ramp finished; a trailing execution cannot extend it. Fall
+			// through to the write anyway so a completed ramp always ends up
+			// with next_execution_date cleared (the invariant issue #1071
+			// established).
+		case plan.RampSchedule.CurrentStep >= stepNumber:
+			// Already counted: a second successful execution of a step the ramp
+			// has passed, which is what a per-account retry of a
+			// partially-failed fan-out produces. Nothing to advance.
+			return nil
+		case plan.RampSchedule.CurrentStep != stepNumber-1:
+			return fmt.Errorf("refusing to advance plan %s from ramp step %d to %d: step(s) %d-%d never completed",
+				planID, plan.RampSchedule.CurrentStep, stepNumber,
+				plan.RampSchedule.CurrentStep+1, stepNumber-1)
+		default:
+			plan.RampSchedule.CurrentStep = stepNumber
 		}
 
 		if !plan.RampSchedule.IsComplete() {
@@ -634,7 +670,7 @@ func (s *PostgresStore) IncrementPlanCurrentStep(ctx context.Context, planID str
 
 		now := time.Now()
 		plan.LastExecutionDate = &now
-		// Refresh updated_at on every increment. The plan was read from the DB
+		// Refresh updated_at on every advance. The plan was read from the DB
 		// with its previous UpdatedAt, so UpdatePurchasePlanTx's zero-value
 		// guard would otherwise persist a stale updated_at timestamp.
 		plan.UpdatedAt = now

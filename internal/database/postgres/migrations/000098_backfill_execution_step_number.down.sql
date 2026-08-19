@@ -1,0 +1,13 @@
+-- 000098 down: intentional no-op.
+--
+-- The up migration rewrites purchase_executions.step_number for executable
+-- rows that carried the pre-#1669 convention. The rows it changed cannot be
+-- identified afterwards, so an inverse UPDATE would also rewrite correctly
+-- stamped rows and corrupt them.
+--
+-- Leaving the corrected values in place is safe for a rollback: the pre-#1669
+-- code advances the ramp with a blind CurrentStep++ and never reads
+-- step_number to decide anything, so a corrected row behaves identically under
+-- the old code. A no-op makes that explicit rather than hiding it behind a
+-- silent empty file.
+SELECT 1; -- no-op: the affected rows cannot be identified after the fact

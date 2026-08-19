@@ -200,6 +200,7 @@ func TestHandleExecutePurchase_ApprovedStatus(t *testing.T) {
 		ExecutionID:     "exec-approved",
 		PlanID:          "plan-approved",
 		Status:          "approved",
+		StepNumber:      1,
 		Recommendations: []config.RecommendationRecord{},
 	}
 
@@ -212,7 +213,7 @@ func TestHandleExecutePurchase_ApprovedStatus(t *testing.T) {
 	mockStore.On("GetPurchasePlan", ctx, "plan-approved").Return(plan, nil)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
-	mockStore.On("IncrementPlanCurrentStep", ctx, "plan-approved").Return(nil)
+	mockStore.On("CompletePlanStep", ctx, "plan-approved", 1).Return(nil)
 	mockSTS.On("GetCallerIdentity", ctx, mock.Anything).Return(nil, errors.New("sts error"))
 
 	manager := &Manager{
@@ -351,6 +352,7 @@ func TestProcessMessage_ApproveHappyPath(t *testing.T) {
 		PlanID:          planID,
 		Status:          "approved",
 		ApprovalToken:   "correct-token",
+		StepNumber:      1,
 		Recommendations: exec.Recommendations,
 	}
 	account := &config.CloudAccount{ID: accountID, ContactEmail: "owner@example.com"}
@@ -369,7 +371,7 @@ func TestProcessMessage_ApproveHappyPath(t *testing.T) {
 	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.Anything).Return(nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
-	mockStore.On("IncrementPlanCurrentStep", ctx, planID).Return(nil)
+	mockStore.On("CompletePlanStep", ctx, planID, 1).Return(nil)
 
 	manager := &Manager{
 		config:       mockStore,
@@ -460,6 +462,7 @@ func TestProcessMessage_ApproveFourEyesOn_DifferentApproverSucceeds(t *testing.T
 		ExecutionID:     "exec-appv-diff",
 		PlanID:          planID,
 		Status:          "approved",
+		StepNumber:      1,
 		Recommendations: exec.Recommendations,
 	}
 	account := &config.CloudAccount{ID: accountID, ContactEmail: "approver@example.com"}
@@ -476,7 +479,7 @@ func TestProcessMessage_ApproveFourEyesOn_DifferentApproverSucceeds(t *testing.T
 	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.Anything).Return(nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
-	mockStore.On("IncrementPlanCurrentStep", ctx, planID).Return(nil)
+	mockStore.On("CompletePlanStep", ctx, planID, 1).Return(nil)
 
 	manager := &Manager{
 		config:       mockStore,
