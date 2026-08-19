@@ -17,7 +17,7 @@
 #
 # The owned name is read from `terraform output` on the state the destroy is
 # about to tear down and compared by exact equality against every repository in
-# the account, by scripts/select-ecr-repos-to-delete.sh. The callers used to
+# the account, by scripts/select-owned-name.sh. The callers used to
 # select by the `cudly-dev*` / `cudly-staging*` prefix, which also matches
 # `cudly-staging-prod-mirror` and `cudly-staging-<hex>-backup` and force-deleted
 # every image in them (#1592, #1820). The prefix also spans both staging states:
@@ -77,7 +77,7 @@ echo "This state owns ECR repository '$OWNED_REPO'"
 
 aws ecr describe-repositories --query 'repositories[].repositoryName' --output text \
   | tr '\t' '\n' \
-  | "${SCRIPT_DIR}/select-ecr-repos-to-delete.sh" "$OWNED_REPO" \
+  | "${SCRIPT_DIR}/select-owned-name.sh" "$OWNED_REPO" \
   | while IFS= read -r REPO; do
       echo "Force-deleting ECR repo $REPO..."
       aws ecr delete-repository --repository-name "$REPO" --force

@@ -45,6 +45,17 @@ output "database_endpoint" {
   value       = module.database.proxy_endpoint != null ? module.database.proxy_endpoint : module.database.instance_address
 }
 
+# The identifier of the one RDS instance this state owns. Read by
+# scripts/disable-owned-rds-deletion-protection.sh, which strips deletion
+# protection before `terraform destroy`: the destroy steps used to select by the
+# `cudly-dev` / `cudly-staging` identifier prefix, which also matches
+# `cudly-dev-prod-mirror` and the sibling staging state's instance (#1821).
+# Publishing the identifier is what lets that selection be an equality test.
+output "database_instance_identifier" {
+  description = "RDS instance identifier owned by this state"
+  value       = module.database.instance_identifier
+}
+
 output "database_instance_endpoint" {
   description = "RDS instance endpoint"
   value       = module.database.instance_endpoint
