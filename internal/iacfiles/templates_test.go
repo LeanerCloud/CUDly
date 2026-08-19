@@ -160,12 +160,26 @@ func TestCLITemplatesAutoRegister(t *testing.T) {
 				// deployment, subject is the fixed cudly-controller.
 				`CUDLY_ISSUER_URL="${CUDLY_ISSUER_URL:-https://cudly.example.com/oidc}"`,
 				`--issuer-uri="${CUDLY_ISSUER_URL}"`,
-				`--attribute-mapping="google.subject=assertion.sub"`,
-				`--attribute-condition="assertion.sub == '${CUDLY_FEDERATED_SUBJECT}'"`,
+				// #1661: the provider is created from these two variables and an
+				// existing provider is compared against the same ones, so the
+				// create path and the reuse check cannot drift apart.
+				`EXPECTED_MAPPING="google.subject=assertion.sub"`,
+				`EXPECTED_CONDITION="assertion.sub == '${CUDLY_FEDERATED_SUBJECT}'"`,
+				`--attribute-mapping="${EXPECTED_MAPPING}"`,
+				`--attribute-condition="${EXPECTED_CONDITION}"`,
 				`principal://iam.googleapis.com/${POOL_NAME}/subject/${CUDLY_FEDERATED_SUBJECT}`,
 				`WIF_AUDIENCE="//iam.googleapis.com/${POOL_NAME}/providers/${PROVIDER_ID}"`,
 			},
 			mustNot: []string{
+				// #1661: a swallowed create is what let the script grant the
+				// impersonation binding against a provider it never inspected.
+				"(pool may already exist)",
+				"(provider may already exist)",
+				// An abort message must not overstate what it left behind:
+				// `gcloud config set project` and `services enable` have both
+				// already run by then. Reassuring output that does not match
+				// what happened is the defect this issue is about.
+				"Nothing has been created or changed",
 				"/api/registrations",
 				`"service_account_email":`,
 				// The old AWS-STS-ARN provider is gone.
@@ -270,11 +284,31 @@ func awsStubScript(logPath string) string {
 // runRenderedWIFScript writes the rendered aws-wif-cli.sh to a temp file, puts a
 // recording `aws` stub first on PATH, runs the script under bash, and returns
 // its exit code, stderr and the list of `aws` invocations the stub saw.
+func runRenderedWIFScript(t *testing.T, rendered string, env map[string]string) (exitCode int, stderr string, awsCalls []string) {
+	t.Helper()
+	// stdout is dropped: this script's progress chatter is not under test.
+	exitCode, _, stderr, awsCalls = runRenderedScript(t, "aws-wif-cli.sh", rendered,
+		func(logPath string) map[string]string {
+			return map[string]string{"aws": awsStubScript(logPath)}
+		}, env)
+	return exitCode, stderr, awsCalls
+}
+
+// runRenderedScript writes a rendered script to a temp file, puts the given stub
+// executables (name -> script body, built around the invocation log path this
+// function owns) first on PATH, runs the script under bash, and returns its exit
+// code, stderr and the invocations the stubs recorded.
 //
 // PATH is set on the child process only (exec.Cmd.Env). The parent test
 // process's environment is never mutated, so a run here cannot race with, or
-// leak a stub `aws` into, any other test in this package.
-func runRenderedWIFScript(t *testing.T, rendered string, env map[string]string) (exitCode int, stderr string, awsCalls []string) {
+// leak a stub CLI into, any other test in this package.
+func runRenderedScript(
+	t *testing.T,
+	scriptName string,
+	rendered string,
+	stubs func(logPath string) map[string]string,
+	env map[string]string,
+) (exitCode int, stdout, stderr string, calls []string) {
 	t.Helper()
 
 	// Fatal, not Skip: this is a security regression test, and a green run that
@@ -287,7 +321,7 @@ func runRenderedWIFScript(t *testing.T, rendered string, env map[string]string) 
 	}
 
 	dir := t.TempDir()
-	scriptPath := filepath.Join(dir, "aws-wif-cli.sh")
+	scriptPath := filepath.Join(dir, scriptName)
 	if err := os.WriteFile(scriptPath, []byte(rendered), 0o600); err != nil {
 		t.Fatalf("write rendered script: %v", err)
 	}
@@ -296,9 +330,11 @@ func runRenderedWIFScript(t *testing.T, rendered string, env map[string]string) 
 	if err := os.Mkdir(stubDir, 0o700); err != nil {
 		t.Fatalf("create stub dir: %v", err)
 	}
-	logPath := filepath.Join(dir, "aws-invocations.log")
-	if err := os.WriteFile(filepath.Join(stubDir, "aws"), []byte(awsStubScript(logPath)), 0o755); err != nil {
-		t.Fatalf("write aws stub: %v", err)
+	logPath := filepath.Join(dir, "invocations.log")
+	for name, body := range stubs(logPath) {
+		if err := os.WriteFile(filepath.Join(stubDir, name), []byte(body), 0o755); err != nil {
+			t.Fatalf("write %s stub: %v", name, err)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -306,13 +342,11 @@ func runRenderedWIFScript(t *testing.T, rendered string, env map[string]string) 
 
 	cmd := exec.CommandContext(ctx, bashPath, scriptPath)
 	// The real PATH is kept after stubDir so the script's `sed`/`echo` still
-	// resolve; stubDir comes first so `aws` resolves to the stub.
+	// resolve; stubDir comes first so the stubbed CLI resolves to the stub.
 	cmd.Env = []string{"PATH=" + stubDir + string(os.PathListSeparator) + os.Getenv("PATH")}
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
-	// stdout is captured but not returned: the script's progress chatter is not
-	// under test, and capturing it keeps it out of the test log.
 	var errBuf, outBuf strings.Builder
 	cmd.Stderr = &errBuf
 	cmd.Stdout = &outBuf
@@ -327,15 +361,15 @@ func runRenderedWIFScript(t *testing.T, rendered string, env map[string]string) 
 	case os.IsNotExist(err):
 		// The stub was never invoked, which is what the reject cases want.
 	case err != nil:
-		t.Fatalf("read aws invocation log: %v", err)
+		t.Fatalf("read invocation log: %v", err)
 	default:
 		for _, line := range strings.Split(strings.TrimSpace(string(logBytes)), "\n") {
 			if line != "" {
-				awsCalls = append(awsCalls, line)
+				calls = append(calls, line)
 			}
 		}
 	}
-	return cmd.ProcessState.ExitCode(), errBuf.String(), awsCalls
+	return cmd.ProcessState.ExitCode(), outBuf.String(), errBuf.String(), calls
 }
 
 // TestAWSWIFCLI_SubjectClaimGuardBlocksAWSCalls executes the rendered script
