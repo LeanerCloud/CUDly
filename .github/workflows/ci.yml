@@ -78,6 +78,95 @@ jobs:
           fi
           echo "✅ All functions have acceptable cyclomatic complexity (≤10)"
 
+  # GitHub Actions workflow linting
+  #
+  # Nothing else in this repo reads .github/workflows/ for defects. govulncheck
+  # and gosec are Go source scanners, trivy-config targets Terraform/Dockerfile/
+  # Kubernetes, and check-yaml only proves the YAML parses. That gap is why the
+  # rollback.yml and deploy-aws-lambda.yml expression injections (#1542, #1649),
+  # both reaching production cloud credentials, passed every CI run.
+  #
+  # Both linters are needed and neither substitutes for the other:
+  #   - actionlint catches workflow-level defects and, via shellcheck, shell
+  #     bugs inside run: blocks.
+  #   - zizmor has a template-injection audit that names the injection itself.
+  #     Measured against the pre-fix rollback.yml, actionlint exited 1 only on
+  #     unrelated SC2086 noise and never flagged the injected heredoc at all;
+  #     zizmor flagged that exact line high severity, high confidence. actionlint
+  #     alone would not have caught the bug this job exists to prevent.
+  workflow-lint:
+    name: Lint Workflows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      # Pinned by digest, not only by tag. A tag is mutable, and a linter whose
+      # ruleset changes without a change in this repo turns main red on its own
+      # schedule -- the hadolint :latest failure in #1695.
+      ACTIONLINT_IMAGE: 'rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667'
+      ZIZMOR_VERSION: '1.29.0'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assert there are workflows to lint
+        run: |
+          set -euo pipefail
+          count=$(find .github/workflows -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) | wc -l | tr -d ' ')
+          # Both linters exit 0 on an empty input set, so a bad path or a glob
+          # that stops matching would leave this job green while scanning
+          # nothing. Fail instead of reporting a vacuous pass.
+          if [ "$count" -eq 0 ]; then
+            echo "::error::no workflow files found under .github/workflows"
+            exit 1
+          fi
+          echo "Linting $count workflow files"
+
+      - name: Assert shellcheck is available to actionlint
+        # actionlint does not fail when shellcheck is missing from PATH: it
+        # silently skips every run: block and still exits 0. That silent skip is
+        # the failure mode this job exists to close, so assert the binary is
+        # present rather than trusting the image to keep bundling it.
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint sh "$ACTIONLINT_IMAGE" -c '
+            command -v shellcheck >/dev/null || {
+              echo "::error::shellcheck is not present in the actionlint image; shell linting would be silently skipped"
+              exit 1
+            }
+            shellcheck --version | sed -n "1,3p"'
+
+      - name: Run actionlint
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/repo" -w /repo "$ACTIONLINT_IMAGE" \
+            -color .github/workflows/*.yml
+
+      - name: Run zizmor
+        # --offline on purpose: the online audits query the GitHub API for action
+        # metadata, so findings could change without a change in this repo and
+        # redden main, the same class of failure the hadolint digest pin fixed.
+        #
+        # --min-severity=medium is a gate threshold, not a suppression: there is
+        # no baseline file, no per-finding ignore and no only-new-issues, so any
+        # new medium or high finding fails this job. The pre-fix rollback.yml
+        # injection scored high/high, so the class this job exists to catch is
+        # above the line. The informational and low tier that sits below it is
+        # 42 template-injection hits on values already assessed as
+        # non-injectable in #1649 (github.actor, github.sha and similar);
+        # clearing it means rewriting the deploy workflows and is tracked
+        # separately rather than silenced here.
+        run: |
+          set -euo pipefail
+          # `pipx run --spec` rather than `pipx install`: it pins the version in
+          # the same statement that invokes it and does not assume pipx's bin
+          # directory is on PATH.
+          pipx run --spec "zizmor==${ZIZMOR_VERSION}" zizmor \
+            --offline --persona=regular --min-severity=medium \
+            --color=always .github/workflows/
+
   # Unit tests with race detection
   unit-tests:
     name: Unit Tests
@@ -911,6 +1000,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - lint
+      - workflow-lint
       - unit-tests
       - integration-tests
       - docker-build
