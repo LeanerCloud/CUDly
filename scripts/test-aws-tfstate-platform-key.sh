@@ -21,12 +21,17 @@
 # key from the LAMBDA namespace and applied `compute_platform=fargate` into it,
 # so the two rollback jobs wrote the same object.
 #
-# The `concurrency` group is checked on the same axis. #1806 keyed every group
-# on the state object its job locks, so a group naming a different namespace
-# from the key means one of the two moved alone: the job then serializes against
-# a state file it never touches while writing one unguarded. Only groups in the
-# `aws-tfstate-*` / `aws-fargate-tfstate-*` families are checked; the Azure and
-# GCP groups guard state objects that have no platform split.
+# The `concurrency` group is checked on the same axis, in two ways. #1806 keyed
+# every group on the state object its job locks, so a group naming a different
+# namespace from the key means one of the two moved alone: the job then
+# serializes against a state file it never touches while writing one unguarded.
+# A job with NO group is a violation too, not an exemption: it applies shared
+# state with nothing serializing it at all, which is the same hazard without
+# even a wrong answer to notice. Gating that check on the group being present
+# read absence as permission and let exactly that job through.
+#
+# Only groups in the `aws-tfstate-*` / `aws-fargate-tfstate-*` families are
+# checked; the Azure and GCP groups guard state objects with no platform split.
 #
 # A green workflow run proves nothing about this, which is why the pairing is
 # asserted here as text rather than left to a live rollback to discover.
@@ -148,8 +153,22 @@ scan_platform_keys() {
             printf "%s: %s: compute_platform=%s applies into the %s state namespace\n", basename(site_file), label(), platform, nsdesc(ns)
         }
       }
-      if (mode != "census" && grp != "" && ns != "" && ns != "MIXED" && grp != ns)
-        printf "%s: %s: concurrency group aws%s-tfstate-* guards a job writing the %s state namespace\n", basename(site_file), label(), (grp == "fargate" ? "-fargate" : ""), nsdesc(ns)
+      # Two independent conditions, not an if/else on `grp != ""`. Gating the
+      # whole check on a non-empty group made ABSENCE read as permission: a job
+      # with the right key and the right platform but no group at all passed,
+      # and then applies shared state with nothing serializing it, which is
+      # #1806 with the guard watching. Empty is a missing requirement here, not
+      # an exemption.
+      #
+      # The mismatch arm does not require a platform, so a read-only job that
+      # locks the wrong object is still caught; the missing-group arm does,
+      # because a job that only reads state needs no lock.
+      if (mode != "census" && ns != "" && ns != "MIXED") {
+        if (grp == "" && platform != "")
+          printf "%s: %s: no AWS concurrency group serializes a job applying compute_platform=%s into the %s state namespace\n", basename(site_file), label(), platform, nsdesc(ns)
+        else if (grp != "" && grp != ns)
+          printf "%s: %s: concurrency group aws%s-tfstate-* guards a job writing the %s state namespace\n", basename(site_file), label(), (grp == "fargate" ? "-fargate" : ""), nsdesc(ns)
+      }
       site = ""; ns = ""; platform = ""; grp = ""
     }
     function label() { return (site == "" ? "whole file" : ("job \"" site "\"")) }
@@ -325,6 +344,9 @@ mkdir -p "${FIXTURE_DIR}/split" "${FIXTURE_DIR}/bug1811" "${FIXTURE_DIR}/prose" 
 cat >"${FIXTURE_DIR}/split/ok.yml" <<'EOF'
 jobs:
   deploy-lambda:
+    concurrency:
+      group: aws-tfstate-${{ inputs.environment }}
+      cancel-in-progress: false
     steps:
       - name: Terraform Init
         run: |
@@ -333,6 +355,9 @@ jobs:
         run: |
           terraform plan -var="compute_platform=lambda"
   deploy-fargate:
+    concurrency:
+      group: aws-fargate-tfstate-${{ inputs.environment }}
+      cancel-in-progress: false
     steps:
       - name: Terraform Init
         run: |
@@ -375,6 +400,8 @@ jobs:
   rollback-aws-fargate:
     # Until #1811 this job wrote key = "github-%s/terraform.tfstate" while
     # applying -var="compute_platform=fargate".
+    concurrency:
+      group: aws-fargate-tfstate-${{ inputs.environment }}
     steps:
       - name: Terraform Init
         run: |
@@ -468,8 +495,26 @@ jobs:
           printf '%s\nprefix = "github-%s"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
 EOF
 
+# The fail-open the group check originally had: key right, platform right, no
+# group at all. Nothing about the pairing is wrong, so every other assertion in
+# this suite stays green while that job applies shared state with nothing
+# serializing it. Absence is a missing requirement, not an exemption.
+cat >"${FIXTURE_DIR}/group/nogroup.yml" <<'EOF'
+jobs:
+  rollback-aws-fargate:
+    steps:
+      - name: Rollback with Terraform
+        run: |
+          printf '%s\nkey = "github-fargate-%s/terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
+          terraform apply -auto-approve -var="compute_platform=fargate"
+EOF
+
 assert_scan "a concurrency group naming the other namespace is flagged" \
   'drift.yml: job "rollback-aws-fargate": concurrency group aws-tfstate-* guards a job writing the github-fargate-<env>/ (fargate) state namespace' \
+  "${FIXTURE_DIR}/group"
+
+assert_scan "a job with no concurrency group at all is flagged, not passed" \
+  'nogroup.yml: job "rollback-aws-fargate": no AWS concurrency group serializes a job applying compute_platform=fargate into the github-fargate-<env>/ (fargate) state namespace' \
   "${FIXTURE_DIR}/group"
 
 assert_scan "the Azure and GCP jobs are not read as AWS namespaces" \
@@ -536,6 +581,54 @@ EOF
 assert_scan "a script pairing them wrongly is flagged as a whole file" \
   'deploy.sh: whole file: compute_platform=fargate applies into the github-<env>/ (lambda) state namespace' \
   "${FIXTURE_DIR}/split" "${FIXTURE_DIR}/scripts/deploy.sh"
+
+# --- build_swept_scripts reaches nested directories --------------------------
+#
+# The helper is shared with test-ecr-delete-selection.sh and
+# test-rds-deletion-protection-scope.sh, and until this was fixed it globbed
+# `$dir/*.sh` and `$dir/lib/*.sh` only. That names two directories the same way
+# naming files would: a script at `scripts/aws/rollback.sh` was invisible to all
+# three suites while each reported coverage of every script under `scripts/`.
+#
+# Asserted on a fixture tree rather than on the real `scripts/`, which has no
+# nested `*.sh` today: the recursion has to be proven where a nested file
+# actually exists, or the assertion passes for a directory that could not have
+# failed it.
+mkdir -p "${FIXTURE_DIR}/tree/lib" "${FIXTURE_DIR}/tree/aws/deep"
+: >"${FIXTURE_DIR}/tree/top.sh"
+: >"${FIXTURE_DIR}/tree/lib/helper.sh"
+: >"${FIXTURE_DIR}/tree/aws/rollback.sh"
+: >"${FIXTURE_DIR}/tree/aws/deep/nested.sh"
+: >"${FIXTURE_DIR}/tree/aws/not-a-script.txt"
+: >"${FIXTURE_DIR}/tree/test-ecr-delete-selection.sh"
+
+build_swept_scripts "${FIXTURE_DIR}/tree"
+swept_list="$(printf '%s\n' "${SWEPT_SCRIPTS[@]}" | sed "s#^${FIXTURE_DIR}/tree/##" | sort | tr '\n' ' ')"
+expected_list="aws/deep/nested.sh aws/rollback.sh lib/helper.sh top.sh "
+
+if [[ "$swept_list" == "$expected_list" ]]; then
+  note_pass "build_swept_scripts reaches nested directories and still excludes the guard suites"
+else
+  note_fail "build_swept_scripts did not sweep the expected set"
+  echo "      expected: ${expected_list}"
+  echo "      actual:   ${swept_list}"
+fi
+
+# The nested script is not merely discovered, it is actually scanned: discovery
+# that does not reach the scanner is the same gap one step later.
+cat >"${FIXTURE_DIR}/tree/aws/rollback.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\nkey = "github-%s/terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
+terraform apply -var="compute_platform=fargate"
+EOF
+
+build_swept_scripts "${FIXTURE_DIR}/tree"
+assert_scan "an invalid pairing in a NESTED script directory is scanned and flagged" \
+  'rollback.sh: whole file: compute_platform=fargate applies into the github-<env>/ (lambda) state namespace' \
+  "${FIXTURE_DIR}/split" "${SWEPT_SCRIPTS[@]}"
+
+# Restore the real swept set: the assertions above reassigned the global.
+build_swept_scripts "$SCRIPT_DIR"
 
 echo
 echo "passed: ${pass}, failed: ${fail}"

@@ -53,14 +53,29 @@
 
 # build_swept_scripts SCRIPTS_DIR
 #
-# Sets SWEPT_SCRIPTS to every `*.sh` directly under SCRIPTS_DIR and under
-# SCRIPTS_DIR/lib, excluding the three guard suites themselves.
+# Sets SWEPT_SCRIPTS to every `*.sh` anywhere under SCRIPTS_DIR, at any depth,
+# excluding the three guard suites themselves.
 #
-# Globbed rather than named file by file, in every suite, because naming the
+# Discovered rather than named file by file, in every suite, because naming the
 # scripts already known to be guarded is the same defect the suites exist to
 # catch, one level up: a NEW script running the dangerous command without the
 # selector is invisible to a sweep that only ever opens the files someone
 # remembered to list, which is how a guard fails to reach a sibling site.
+#
+# RECURSIVE, via `find`, and this is the second half of that same defect. The
+# original form globbed `$dir/*.sh` and `$dir/lib/*.sh`, which names two
+# directories the way the thing above names two files: a script added at
+# `scripts/aws/rollback.sh` was never opened by ANY of the three suites, while
+# each went on reporting coverage of "every script under scripts/". Raised by
+# review on this suite and fixed here in the shared helper rather than locally,
+# because the RDS and ECR guards call this same function and carried the
+# identical blind spot.
+#
+# `find -print0` with `read -d ''` rather than a `**` glob: `globstar` is bash 4,
+# and this must run on the bash 3.2 that ships with macOS. `sort -z` so the swept
+# order is deterministic across platforms, since `find` order is not defined.
+# The loop runs in the current shell (process substitution, not a pipe), because
+# a pipeline subshell would build the array and then discard it.
 #
 # The guard suites are excluded by basename because each carries the very
 # pattern it looks for as fixture data and inside awk programs, so sweeping them
@@ -68,26 +83,23 @@
 # a path fragment keeps the exclusion from exempting a real script that merely
 # sits beside them.
 #
-# `nullglob` so a pattern matching nothing expands to nothing rather than to the
-# literal pattern text. Without it an unmatched glob becomes a nonexistent path,
-# the sweep bails out early, and it covers no scripts at all. Callers must still
-# assert SWEPT_SCRIPTS is non-empty and contains the script that actually runs
-# their command: an empty swept set satisfies every "no violations" reading.
+# A directory with no `*.sh` yields an empty SWEPT_SCRIPTS rather than a
+# nonexistent path. Callers must still assert SWEPT_SCRIPTS is non-empty and
+# contains the script that actually runs their command: an empty swept set
+# satisfies every "no violations" reading.
 #
 # Returns through a global because bash 3.2, which this must run on, has no
 # namerefs.
 build_swept_scripts() {
   local dir="$1" candidate
   SWEPT_SCRIPTS=()
-  shopt -s nullglob
-  for candidate in "$dir"/*.sh "$dir"/lib/*.sh; do
+  while IFS= read -r -d '' candidate; do
     case "$(basename "$candidate")" in
       test-rds-deletion-protection-scope.sh | test-ecr-delete-selection.sh | \
         test-aws-tfstate-platform-key.sh) continue ;;
     esac
     SWEPT_SCRIPTS+=("$candidate")
-  done
-  shopt -u nullglob
+  done < <(find "$dir" -type f -name '*.sh' -print0 2>/dev/null | sort -z)
 }
 
 # shellcheck disable=SC2034  # read by the suites that source this file
