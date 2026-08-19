@@ -492,8 +492,14 @@ func TestSPAFallbackRejectsSymlinkedShell(t *testing.T) {
 }
 
 // hostileRoot builds a static root with a sibling tree outside it holding a
-// file that must never be served, and returns (root, outsideFile).
-func hostileRoot(t *testing.T) (string, string) {
+// file that must never be served. Returns (root, outsideFile, symlinked), where
+// symlinked reports whether the symlink cases could be created.
+//
+// The lexical fixture is built unconditionally and the symlink cases are
+// additive, so a platform without symlink support loses the symlink cases only.
+// t.Skip here would take the traversal, encoded-path, absolute-path and NUL
+// cases with it and report the whole suite as skipped, which reads as a pass.
+func hostileRoot(t *testing.T) (string, string, bool) {
 	t.Helper()
 	parent := t.TempDir()
 	root := filepath.Join(parent, "static")
@@ -512,19 +518,32 @@ func hostileRoot(t *testing.T) (string, string) {
 	if err := os.WriteFile(outside, []byte("TOP-SECRET"), 0o644); err != nil {
 		t.Fatalf("write secret: %v", err)
 	}
-	// Symlinks that escape the root, inside the same fixture as the lexical
-	// cases. Keeping them here means one `-run Hostile` covers both classes;
-	// when they lived only in separately-named tests, a name-filtered
-	// mutation run silently skipped the only cases that exercise
-	// symlinkSafeContainedIn, which is the check path.Clean cannot stand in
-	// for.
-	if err := os.Symlink(outside, filepath.Join(root, "escape.txt")); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
+	// Symlinks that escape the root, in the same fixture as the lexical cases.
+	// Keeping them together means one `-run Hostile` covers both classes; when
+	// they lived only in separately-named tests, a name-filtered mutation run
+	// silently skipped the only cases exercising symlinkSafeContainedIn, which
+	// is the check path.Clean cannot stand in for.
+	symlinked := true
+	for _, link := range []string{
+		filepath.Join(root, "escape.txt"),
+		filepath.Join(root, "docs", "leak.html"),
+	} {
+		if err := os.Symlink(outside, link); err != nil {
+			t.Logf("symlinks unavailable, symlink cases skipped (lexical cases still run): %v", err)
+			symlinked = false
+			break
+		}
 	}
-	if err := os.Symlink(outside, filepath.Join(root, "docs", "leak.html")); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
+	return root, outside, symlinked
+}
+
+// symlinkCases returns the escaping-symlink paths when the fixture could create
+// them, and nothing otherwise, so callers append rather than branch.
+func symlinkCases(symlinked bool) []string {
+	if !symlinked {
+		return nil
 	}
-	return root, outside
+	return []string{"/escape.txt", "/docs/leak.html"}
 }
 
 // Asserting on the resolved path, not on a status code: a handler that serves
@@ -532,13 +551,13 @@ func hostileRoot(t *testing.T) (string, string) {
 // whatever resolveStaticFilePath hands back is inside the served root, with
 // symlinks resolved, or it hands back nothing.
 func TestResolveStaticFilePath_HostilePathsNeverEscapeRoot(t *testing.T) {
-	root, outside := hostileRoot(t)
+	root, outside, symlinked := hostileRoot(t)
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		t.Fatalf("evalsymlinks root: %v", err)
 	}
 
-	hostile := []string{
+	hostile := append([]string{
 		"/../secret.txt",
 		"/../../secret.txt",
 		"/..",
@@ -556,9 +575,7 @@ func TestResolveStaticFilePath_HostilePathsNeverEscapeRoot(t *testing.T) {
 		"/docs/./../../secret.txt",
 		"/\x00/secret.txt", // NUL byte
 		"/plans\x00.html",
-		"/escape.txt",     // symlink in the root pointing outside it
-		"/docs/leak.html", // symlink one level down
-	}
+	}, symlinkCases(symlinked)...)
 
 	for _, p := range hostile {
 		t.Run(strconv.Quote(p), func(t *testing.T) {
@@ -589,10 +606,10 @@ func TestResolveStaticFilePath_HostilePathsNeverEscapeRoot(t *testing.T) {
 // Same matrix through the real HTTP handler, so Go's own URL decoding is in the
 // loop rather than assumed. Asserts on the served bytes, not the status.
 func TestSpaFileServer_HostilePathsNeverServeOutOfRoot(t *testing.T) {
-	root, _ := hostileRoot(t)
+	root, _, symlinked := hostileRoot(t)
 	handler := spaFileServer(root)
 
-	for _, target := range []string{
+	targets := append([]string{
 		"/../secret.txt",
 		"/../../secret.txt",
 		"/docs/../../secret.txt",
@@ -602,9 +619,9 @@ func TestSpaFileServer_HostilePathsNeverServeOutOfRoot(t *testing.T) {
 		"/..\\secret.txt",
 		"//secret.txt",
 		"/....//secret.txt",
-		"/escape.txt",
-		"/docs/leak.html",
-	} {
+	}, symlinkCases(symlinked)...)
+
+	for _, target := range targets {
 		t.Run(target, func(t *testing.T) {
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, target, nil)
 			w := httptest.NewRecorder()
@@ -619,9 +636,9 @@ func TestSpaFileServer_HostilePathsNeverServeOutOfRoot(t *testing.T) {
 // The Lambda transport passes RawPath, which is not decoded the way
 // http.Request.URL.Path is, so the two transports must be checked separately.
 func TestServeStaticForLambda_HostilePathsNeverServeOutOfRoot(t *testing.T) {
-	root, outside := hostileRoot(t)
+	root, outside, symlinked := hostileRoot(t)
 
-	for _, p := range []string{
+	paths := append([]string{
 		"/../secret.txt",
 		"/../../secret.txt",
 		"/docs/../../secret.txt",
@@ -630,10 +647,10 @@ func TestServeStaticForLambda_HostilePathsNeverServeOutOfRoot(t *testing.T) {
 		"/%252e%252e%252fsecret.txt",
 		"/..\\secret.txt",
 		"//secret.txt",
-		"/escape.txt",
-		"/docs/leak.html",
 		outside,
-	} {
+	}, symlinkCases(symlinked)...)
+
+	for _, p := range paths {
 		t.Run(strconv.Quote(p), func(t *testing.T) {
 			content, _, _, _ := serveStaticForLambda(root, p)
 			if strings.Contains(string(content), "TOP-SECRET") {
