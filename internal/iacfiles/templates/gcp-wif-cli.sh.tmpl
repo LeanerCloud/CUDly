@@ -34,29 +34,56 @@ CUDLY_FEDERATED_SUBJECT="${CUDLY_FEDERATED_SUBJECT:-cudly-controller}"
 : "${SERVICE_ACCOUNT_EMAIL:?set SERVICE_ACCOUNT_EMAIL to the CUDly target service account in the project}"
 : "${CUDLY_ISSUER_URL:?set CUDLY_ISSUER_URL to the OIDC issuer URL of your CUDly deployment (base URL + /oidc)}"
 
+# CUDLY_FEDERATED_SUBJECT is interpolated into the CEL string literal of the
+# provider's --attribute-condition below and into the principal:// identifier of
+# the impersonation grant. A quote closes that literal and the rest of the value
+# rewrites the condition: "x' || true || '" yields assertion.sub == 'x' || true
+# || '', which admits every subject the issuer will sign. A '*' widens the
+# principal identifier the same way. Restrict the value to characters both
+# destinations treat as inert; '|' is allowed because Auth0/Okta-style subjects
+# use it (google-oauth2|123) and it carries no meaning in either place.
+if ! [[ "${CUDLY_FEDERATED_SUBJECT}" =~ ^[A-Za-z0-9][-A-Za-z0-9._:/@=+~|]*$ ]]; then
+  echo "ERROR: CUDLY_FEDERATED_SUBJECT must start with a letter or digit and use only [-A-Za-z0-9._:/@=+~|] (got: ${CUDLY_FEDERATED_SUBJECT})." >&2
+  echo "       Quotes, backslashes, '*' and '\$' would escape the provider's attribute condition or widen the impersonation grant." >&2
+  exit 1
+fi
+# google.subject is capped at 127 characters by GCP; a longer value is rejected
+# at token-exchange time, long after this script reported success.
+if [[ ${#CUDLY_FEDERATED_SUBJECT} -gt 127 ]]; then
+  echo "ERROR: CUDLY_FEDERATED_SUBJECT must be at most 127 characters (google.subject limit); got ${#CUDLY_FEDERATED_SUBJECT}." >&2
+  exit 1
+fi
+
 gcloud config set project "${PROJECT_ID}"
 
 echo "Enabling required APIs..."
 gcloud services enable iam.googleapis.com iamcredentials.googleapis.com sts.googleapis.com
 
+# The provider is created with exactly these two values, and an existing
+# provider is compared against them before it is reused. Kept in variables so
+# the create path and the reuse check cannot drift apart.
+#
+# EXPECTED_MAPPING must stay a single entry: the reuse check compares it as a
+# plain string against gcloud's describe output, which joins map entries with
+# ';' rather than the ',' this flag takes. A second entry would make every
+# legitimate re-run report a mapping mismatch.
+EXPECTED_MAPPING="google.subject=assertion.sub"
+EXPECTED_CONDITION="assertion.sub == '${CUDLY_FEDERATED_SUBJECT}'"
+
 echo "Creating Workload Identity Pool ${POOL_ID}..."
-gcloud iam workload-identity-pools create "${POOL_ID}" \
-  --location=global \
-  --display-name="CUDly WIF pool" \
-  --project="${PROJECT_ID}" \
-  || echo "  (pool may already exist)"
+if gcloud iam workload-identity-pools describe "${POOL_ID}" \
+     --location=global --project="${PROJECT_ID}" >/dev/null 2>&1; then
+  echo "  Reusing existing pool ${POOL_ID}"
+else
+  gcloud iam workload-identity-pools create "${POOL_ID}" \
+    --location=global \
+    --display-name="CUDly WIF pool" \
+    --project="${PROJECT_ID}"
+fi
 
-echo "Creating OIDC provider ${PROVIDER_ID} bound to CUDly issuer..."
-gcloud iam workload-identity-pools providers create-oidc "${PROVIDER_ID}" \
-  --location=global \
-  --workload-identity-pool="${POOL_ID}" \
-  --issuer-uri="${CUDLY_ISSUER_URL}" \
-  --attribute-mapping="google.subject=assertion.sub" \
-  --attribute-condition="assertion.sub == '${CUDLY_FEDERATED_SUBJECT}'" \
-  --project="${PROJECT_ID}" \
-  || echo "  (provider may already exist)"
-
-# WIF pool creation is eventually consistent — retry describe briefly
+# WIF pool creation is eventually consistent — retry describe briefly. This runs
+# before the provider is created: a provider create against a pool that has not
+# propagated yet fails, and no failure here is tolerated any more.
 for _attempt in 1 2 3 4 5; do
   POOL_NAME=$(gcloud iam workload-identity-pools describe "${POOL_ID}" --location=global --project="${PROJECT_ID}" --format="value(name)" 2>/dev/null) && break
   echo "  Waiting for WIF pool to propagate (attempt ${_attempt})..."
@@ -68,6 +95,131 @@ done
 # The full WIF audience CUDly uses as the STS audience is the
 # provider resource, prefixed with //iam.googleapis.com/
 WIF_AUDIENCE="//iam.googleapis.com/${POOL_NAME}/providers/${PROVIDER_ID}"
+
+# The impersonation grant further down names the pool, not the provider: GCP
+# principal identifiers are pool-scoped, so any other provider in ${POOL_ID}
+# that maps a token to subject '${CUDLY_FEDERATED_SUBJECT}' satisfies it too.
+# Verifying only ${PROVIDER_ID} would leave that door open, so the pool must
+# hold nothing else.
+#
+# Checked here rather than next to the grant, because it is the one check that
+# can refuse a project this script has not touched yet: run after the provider
+# create, it would create a provider and only then abort, leaving one behind on
+# every attempt.
+#
+# Soft-deleted providers are excluded (--show-deleted is not passed) so that one
+# deleted earlier does not block a re-run. That is a deliberate gap, not a free
+# choice: a soft-deleted sibling is restorable by whoever created it for 30
+# days, and the grant would already be in place when they restore it. Aborting
+# on them instead would refuse every pool that has ever had a provider removed,
+# which is the worse failure. Deliberately asymmetric with ${PROVIDER_ID} itself,
+# where a DELETED state is a hard abort below: there the alternative is not a
+# refused re-run but this script reporting success over a provider that cannot
+# mint a token, which is a claim it controls.
+#
+# The list is fetched into a variable rather than piped: a failed list inside a
+# pipeline would read as "no other providers" and wave through the case this
+# check exists to catch.
+POOL_PROVIDERS=$(gcloud iam workload-identity-pools providers list \
+  --location=global \
+  --workload-identity-pool="${POOL_ID}" \
+  --project="${PROJECT_ID}" \
+  --format="value(name)")
+FOREIGN_PROVIDERS=""
+while IFS= read -r _provider; do
+  [[ -n "${_provider}" ]] || continue
+  # Compared as a whole path segment, not with a substring test: a provider
+  # named "cudly-oidc-old" must not be read as this run's "cudly-oidc".
+  [[ "${_provider##*/}" == "${PROVIDER_ID}" ]] || FOREIGN_PROVIDERS+="  ${_provider}"$'\n'
+done <<<"${POOL_PROVIDERS}"
+if [[ -n "${FOREIGN_PROVIDERS}" ]]; then
+  echo "ERROR: pool '${POOL_ID}' holds providers this script did not configure:" >&2
+  printf '%s' "${FOREIGN_PROVIDERS}" >&2
+  echo "       The impersonation grant names the pool, so any of them that maps a token" >&2
+  echo "       to subject '${CUDLY_FEDERATED_SUBJECT}' could impersonate ${SERVICE_ACCOUNT_EMAIL}." >&2
+  echo "       One named cudly-aws or cudly-azure was created by an earlier version of" >&2
+  echo "       this script and may still be the provider that account federates through," >&2
+  echo "       so do not delete it before checking. The safe move is to set POOL_ID to a" >&2
+  echo "       new pool for this run; the WIF audience changes with the pool, so register" >&2
+  echo "       the one that run prints at the end." >&2
+  echo "       No provider was created and no impersonation grant was made." >&2
+  exit 1
+fi
+
+provider_field() {
+  gcloud iam workload-identity-pools providers describe "${PROVIDER_ID}" \
+    --location=global \
+    --workload-identity-pool="${POOL_ID}" \
+    --project="${PROJECT_ID}" \
+    --format="value($1)"
+}
+
+reject_existing_provider() {
+  echo "ERROR: provider '${PROVIDER_ID}' already exists with a different $1, so this script" >&2
+  echo "       cannot vouch for which identities enter pool '${POOL_ID}'." >&2
+  echo "  found   : ${2:-(none)}" >&2
+  echo "  expected: $3" >&2
+  # Not "use a different PROVIDER_ID": that leaves this provider in the pool,
+  # which the enumeration above then refuses. The pool is the unit to move.
+  echo "Delete the provider and re-run, or set POOL_ID to a new pool:" >&2
+  echo "  gcloud iam workload-identity-pools providers delete ${PROVIDER_ID} --location=global --workload-identity-pool=${POOL_ID} --project=${PROJECT_ID}" >&2
+  echo "Note that delete is a soft delete: the ID stays reserved for 30 days, so a" >&2
+  echo "re-run in the same pool needs 'providers undelete' first." >&2
+  exit 1
+}
+
+echo "Creating OIDC provider ${PROVIDER_ID} bound to CUDly issuer..."
+if gcloud iam workload-identity-pools providers describe "${PROVIDER_ID}" \
+     --location=global --workload-identity-pool="${POOL_ID}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+  # A provider that already exists keeps whatever it was created with, and the
+  # grant below admits everything that provider lets into the pool. Reusing one
+  # whose attribute condition is weaker (or absent) is therefore the failure
+  # this check exists to stop, not the failed create itself: a condition of
+  # "true" is non-empty and admits every subject the issuer signs. Every field
+  # below is compared against what this script would have written, and any
+  # difference aborts before the impersonation grant.
+  #
+  # describe returns a soft-deleted or disabled provider with its configuration
+  # intact, so those comparisons would all match while no token exchange can use
+  # it. An empty state means gcloud did not report the field, not that the
+  # provider is unusable.
+  EXISTING_STATE=$(provider_field state)
+  EXISTING_DISABLED=$(provider_field disabled)
+  # Both fields are compared against the one value that means "usable" rather
+  # than against the values that mean "not": testing EXISTING_DISABLED == True
+  # would pass a "true" or "1" the day gcloud renders the boolean differently.
+  if [[ -n "${EXISTING_STATE}" && "${EXISTING_STATE}" != "ACTIVE" ]] || [[ -n "${EXISTING_DISABLED}" && "${EXISTING_DISABLED}" != "False" ]]; then
+    echo "ERROR: provider '${PROVIDER_ID}' exists but cannot exchange tokens (state: ${EXISTING_STATE:-unreported}, disabled: ${EXISTING_DISABLED:-unreported})." >&2
+    echo "       Restore it and re-run, or set POOL_ID to a new pool:" >&2
+    echo "  gcloud iam workload-identity-pools providers undelete ${PROVIDER_ID} --location=global --workload-identity-pool=${POOL_ID} --project=${PROJECT_ID}" >&2
+    echo "  gcloud iam workload-identity-pools providers update-oidc ${PROVIDER_ID} --no-disabled --location=global --workload-identity-pool=${POOL_ID} --project=${PROJECT_ID}" >&2
+    exit 1
+  fi
+
+  EXISTING_ISSUER=$(provider_field oidc.issuerUri)
+  EXISTING_CONDITION=$(provider_field attributeCondition)
+  # gcloud's value() printer renders a map field as "key=value" entries joined
+  # with ';'. This mapping has a single entry, so it compares directly against
+  # the form --attribute-mapping takes as input.
+  EXISTING_MAPPING=$(provider_field attributeMapping)
+
+  [[ "${EXISTING_ISSUER}" == "${CUDLY_ISSUER_URL}" ]] \
+    || reject_existing_provider "issuer URI" "${EXISTING_ISSUER}" "${CUDLY_ISSUER_URL}"
+  [[ "${EXISTING_CONDITION}" == "${EXPECTED_CONDITION}" ]] \
+    || reject_existing_provider "attribute condition" "${EXISTING_CONDITION}" "${EXPECTED_CONDITION}"
+  [[ "${EXISTING_MAPPING}" == "${EXPECTED_MAPPING}" ]] \
+    || reject_existing_provider "attribute mapping" "${EXISTING_MAPPING}" "${EXPECTED_MAPPING}"
+
+  echo "  Reusing existing provider ${PROVIDER_ID} (issuer, attribute condition and mapping match)"
+else
+  gcloud iam workload-identity-pools providers create-oidc "${PROVIDER_ID}" \
+    --location=global \
+    --workload-identity-pool="${POOL_ID}" \
+    --issuer-uri="${CUDLY_ISSUER_URL}" \
+    --attribute-mapping="${EXPECTED_MAPPING}" \
+    --attribute-condition="${EXPECTED_CONDITION}" \
+    --project="${PROJECT_ID}"
+fi
 
 echo "Granting workloadIdentityUser on ${SERVICE_ACCOUNT_EMAIL} to ${CUDLY_FEDERATED_SUBJECT}..."
 gcloud iam service-accounts add-iam-policy-binding "${SERVICE_ACCOUNT_EMAIL}" \
