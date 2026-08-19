@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
@@ -294,20 +293,40 @@ func permissionDecision(args mock.Arguments, action, resource string) bool {
 
 func (m *MockAuthService) HasPermissionForConstraintsAPI(ctx context.Context, userID, action, resource string, constraintSets []auth.PermissionConstraints) (bool, error) {
 	args := m.Called(ctx, userID, action, resource, constraintSets)
-	// The decision-function path (registered by grantPermissionsScoped) must
-	// mirror auth.Service.HasPermissionForConstraintsAPI's fail-closed
-	// contract: an empty constraintSets is a caller bug, not a grant. Explicit
+	// The decision-function path (registered by grantPermissionsScoped) reads
+	// the constraint arguments, so it answers from auth's real matchers rather
+	// than from a re-statement of their contract. Explicit
 	// mock.On(...).Return(bool, err) expectations for constrained-permission
 	// tests are untouched -- those already encode the intended outcome for
 	// whatever constraintSets the test passes, via permissionDecision below.
-	if decide, ok := args.Get(0).(func(action, resource string) bool); ok {
-		if len(constraintSets) == 0 {
-			return false, fmt.Errorf("no permission constraint sets provided for %s on %s", action, resource)
+	if decide, ok := args.Get(0).(constraintDecisionFunc); ok {
+		if err := args.Error(1); err != nil {
+			return false, err
 		}
-		return decide(action, resource), args.Error(1)
+		return decide(action, resource, constraintSets)
+	}
+	// permissionDecision's func(action, resource) bool answers from the verb
+	// alone. On THIS method that IS the #1762 defect: constraintSets is
+	// discarded, so every request outside the permission's constraints reads
+	// as allowed. Reject it here rather than letting a future registration
+	// reintroduce the divergence silently. Note that this aborts the test
+	// binary, so a wholesale revert of grantPermissionsScoped's wiring dies
+	// here instead of reporting the per-dimension failures in
+	// TestGrantPermissionsScoped_ConstraintDimensionsAreEnforced; the reach
+	// this adds is over a one-off inline registration, which no test asserts.
+	if _, blind := args.Get(0).(func(action, resource string) bool); blind {
+		panic("MockAuthService.HasPermissionForConstraintsAPI: a func(action, resource) bool return " +
+			"discards the constraint arguments (issue #1762); register a constraintDecisionFunc")
 	}
 	return permissionDecision(args, action, resource), args.Error(1)
 }
+
+// constraintDecisionFunc is the constraint-AWARE mock return registered by
+// grantPermissionsScoped, for HasPermissionForConstraintsAPI only. A named
+// type rather than a bare signature so the registration site says which of
+// the two decision shapes it means, and so the blind-signature check above
+// has something unambiguous to reject.
+type constraintDecisionFunc func(action, resource string, constraintSets []auth.PermissionConstraints) (bool, error)
 
 func (m *MockAuthService) GetUserPermissionsAPI(ctx context.Context, userID string) (any, error) {
 	args := m.Called(ctx, userID)
@@ -391,10 +410,13 @@ func (m *MockAuthService) grantPermissions(perms []auth.Permission) {
 	m.grantPermissionsScoped(perms, nil)
 }
 
-// grantPermissionsScoped is the shared implementation. The permission checks
-// are answered by auth.AuthContext.HasPermission rather than by a constant, so
-// a handler asking for a verb this principal does not hold is DENIED exactly
-// as it would be in production.
+// grantPermissionsScoped is the shared implementation. Both halves of the
+// authorization decision are answered by the real auth code rather than by a
+// constant: the verb check by auth.AuthContext.HasPermission, the constraint
+// check by auth.PermissionsAllowForConstraintSets. A handler asking for a verb
+// this principal does not hold, or for a request outside the Constraints
+// configured on the permission that grants it, is DENIED exactly as it would
+// be in production.
 //
 // .Maybe() is retained: many handlers legitimately return before reaching a
 // permission check (bad body, bad UUID). Asserting the check happened is a
@@ -407,11 +429,29 @@ func (m *MockAuthService) grantPermissionsScoped(perms []auth.Permission, accoun
 	}
 	m.On("HasPermissionAPI", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(decide, nil).Maybe()
-	// The SEC-01 execution-time constraint check. A principal holding only
-	// admin:* satisfies any constraint set for the verbs it holds, and holds
-	// none of the carved-out verbs, so the same decision function applies.
+	// The SEC-01 execution-time constraint check. This previously reused
+	// `decide`, which takes only (action, resource) and therefore discarded
+	// the constraint arguments outright, so the mock answered "allowed" for
+	// all five constraint dimensions when the request fell OUTSIDE the
+	// permission's constraints (issue #1762).
+	//
+	// The shortcut was justified on the grounds that a principal holding only
+	// admin:* satisfies any constraint set for the verbs it holds. That is
+	// true, and stayed true through #1758: both halves short-circuit on the
+	// admin:* wildcard before reaching any constraint comparison, so for such
+	// a principal the constraint arguments are ignored whatever Constraints
+	// the admin permission itself carries, and #1758's carve-out of
+	// execute:ri-exchange only changed which verbs both DENY in lockstep.
+	// What the justification never covered is the helper it was attached to.
+	// grantPermissionsScoped takes an ARBITRARY permission set, and a
+	// permission carrying Constraints is exactly what the check exists to
+	// bound.
+	decideConstrained := constraintDecisionFunc(
+		func(action, resource string, constraintSets []auth.PermissionConstraints) (bool, error) {
+			return auth.PermissionsAllowForConstraintSets(perms, action, resource, constraintSets)
+		})
 	m.On("HasPermissionForConstraintsAPI", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(decide, nil).Maybe()
+		Return(decideConstrained, nil).Maybe()
 	m.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).
 		Return(accounts, nil).Maybe()
 }

@@ -413,17 +413,49 @@ func (s *Service) HasPermissionAPI(ctx context.Context, userID, action, resource
 // union semantics of group grants).
 //
 // Fail closed: an empty constraintSets slice is a caller bug, not a grant -
-// it returns an explicit error rather than allowing.
+// it returns an explicit error rather than allowing. Checked here as well as
+// in PermissionsAllowForConstraintSets so a caller bug never reaches the
+// store, which the "empty constraint sets fail loud" case asserts by leaving
+// the store mock with no registered expectation.
 func (s *Service) HasPermissionForConstraintsAPI(ctx context.Context, userID, action, resource string, constraintSets []PermissionConstraints) (bool, error) {
 	if len(constraintSets) == 0 {
-		return false, fmt.Errorf("no permission constraint sets provided for %s on %s", action, resource)
+		return false, errNoConstraintSets(action, resource)
 	}
 	permissions, err := s.GetUserPermissions(ctx, userID)
 	if err != nil {
 		return false, err
 	}
+	return PermissionsAllowForConstraintSets(permissions, action, resource, constraintSets)
+}
+
+// errNoConstraintSets is the shared fail-closed error for an empty
+// constraint-set slice, so the three entry points that guard against it
+// (this file's two, plus HasAPIKeyPermissionForConstraintsAPI) cannot drift
+// apart in wording.
+func errNoConstraintSets(action, resource string) error {
+	return fmt.Errorf("no permission constraint sets provided for %s on %s", action, resource)
+}
+
+// PermissionsAllowForConstraintSets is the decision half of
+// HasPermissionForConstraintsAPI with the permission fetch removed: it
+// reports whether an already-resolved permission set grants action on
+// resource for EVERY request-derived constraint set.
+//
+// Exported so a caller that already holds the effective permission set
+// answers from this code rather than from a re-implementation of it. The
+// api package's MockAuthService is the caller that motivated it: it modeled
+// the permission set faithfully but discarded the constraint arguments
+// entirely, so it answered "allowed" for requests on every one of the five
+// constraint dimensions that this function denies, and a handler test
+// asserting a constraint refusal was measuring the mock (issue #1762).
+//
+// Fail closed: an empty constraintSets slice is a caller bug, not a grant.
+func PermissionsAllowForConstraintSets(permissions []Permission, action, resource string, constraintSets []PermissionConstraints) (bool, error) {
+	if len(constraintSets) == 0 {
+		return false, errNoConstraintSets(action, resource)
+	}
 	for i := range constraintSets {
-		if !s.permissionsAllow(permissions, action, resource, &constraintSets[i]) {
+		if !permissionsAllow(permissions, action, resource, &constraintSets[i]) {
 			return false, nil
 		}
 	}

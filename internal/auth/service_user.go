@@ -443,7 +443,7 @@ func (s *Service) guardSelfEscalation(ctx context.Context, prior, next []string)
 		if err != nil {
 			return fmt.Errorf("failed to verify manage-users permission: %w", err)
 		}
-		if !s.permissionsAllow(heldBefore, ActionUpdate, ResourceUsers, nil) {
+		if !permissionsAllow(heldBefore, ActionUpdate, ResourceUsers, nil) {
 			return ErrSelfEscalation
 		}
 		// Holding update:users is NOT enough to hand yourself the money verbs.
@@ -551,7 +551,7 @@ func (s *Service) firstUnheldCarvedOut(group *Group, held []Permission) *Permiss
 		if !adminCarvedOuts[[2]string{perm.Action, perm.Resource}] {
 			continue
 		}
-		if s.permissionsAllow(held, perm.Action, perm.Resource, nil) {
+		if permissionsAllow(held, perm.Action, perm.Resource, nil) {
 			continue
 		}
 		return &group.Permissions[i]

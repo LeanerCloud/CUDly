@@ -310,7 +310,7 @@ func (s *Service) HasPermission(ctx context.Context, userID, action, resource st
 		return false, err
 	}
 
-	return s.permissionsAllow(permissions, action, resource, constraints), nil
+	return permissionsAllow(permissions, action, resource, constraints), nil
 }
 
 // permissionsAllow reports whether any permission in the effective set grants
@@ -322,7 +322,11 @@ func (s *Service) HasPermission(ctx context.Context, userID, action, resource st
 // admin:* wildcard grants everything EXCEPT the money-spending verbs in
 // adminCarvedOuts (separation of duties, issue #923). For those, admin falls
 // through to the explicit-permission check below instead of short-circuiting.
-func (s *Service) permissionsAllow(permissions []Permission, action, resource string, constraints *PermissionConstraints) bool {
+//
+// A package function rather than a Service method: the decision reads nothing
+// off the receiver, and PermissionsAllowForConstraintSets exposes it to
+// callers that hold an already-resolved permission set but no Service.
+func permissionsAllow(permissions []Permission, action, resource string, constraints *PermissionConstraints) bool {
 	for _, perm := range permissions {
 		if checkAdminPermission(perm) {
 			if adminCarvedOuts[[2]string{action, resource}] {
@@ -335,7 +339,7 @@ func (s *Service) permissionsAllow(permissions []Permission, action, resource st
 			continue
 		}
 
-		if !checkPermissionConstraints(s, perm, constraints) {
+		if !checkPermissionConstraints(perm, constraints) {
 			continue
 		}
 
@@ -378,20 +382,20 @@ func checkPermissionMatch(perm Permission, action, resource string) bool {
 	return true
 }
 
-func checkPermissionConstraints(s *Service, perm Permission, constraints *PermissionConstraints) bool {
+func checkPermissionConstraints(perm Permission, constraints *PermissionConstraints) bool {
 	if constraints != nil && perm.Constraints != nil {
-		return s.matchConstraints(perm.Constraints, constraints)
+		return matchConstraints(perm.Constraints, constraints)
 	}
 	return true
 }
 
 // matchConstraints checks if permission constraints match request constraints.
-func (s *Service) matchConstraints(permConstraints, reqConstraints *PermissionConstraints) bool {
-	return s.matchStringListConstraints(permConstraints.AccountIDs, reqConstraints.AccountIDs) &&
-		s.matchStringListConstraints(permConstraints.Providers, reqConstraints.Providers) &&
-		s.matchStringListConstraints(permConstraints.Services, reqConstraints.Services) &&
-		s.matchAllRegionsConstraint(permConstraints.Regions, reqConstraints.Regions) &&
-		s.matchPurchaseAmountConstraint(permConstraints.MaxPurchaseAmount, reqConstraints.MaxPurchaseAmount)
+func matchConstraints(permConstraints, reqConstraints *PermissionConstraints) bool {
+	return matchStringListConstraints(permConstraints.AccountIDs, reqConstraints.AccountIDs) &&
+		matchStringListConstraints(permConstraints.Providers, reqConstraints.Providers) &&
+		matchStringListConstraints(permConstraints.Services, reqConstraints.Services) &&
+		matchAllRegionsConstraint(permConstraints.Regions, reqConstraints.Regions) &&
+		matchPurchaseAmountConstraint(permConstraints.MaxPurchaseAmount, reqConstraints.MaxPurchaseAmount)
 }
 
 // matchStringListConstraints checks if two string lists have any overlap.
@@ -407,7 +411,7 @@ func (s *Service) matchConstraints(permConstraints, reqConstraints *PermissionCo
 // Callers that need "a constrained permission must only match an explicit
 // request value" should verify reqList is non-empty before calling, or add
 // a separate dimension-specific check.
-func (s *Service) matchStringListConstraints(permList, reqList []string) bool {
+func matchStringListConstraints(permList, reqList []string) bool {
 	if len(permList) > 0 && len(reqList) > 0 {
 		return containsAny(permList, reqList)
 	}
@@ -435,7 +439,7 @@ func (s *Service) matchStringListConstraints(permList, reqList []string) bool {
 // empty-list semantics are unchanged from matchStringListConstraints (an
 // unconstrained permission, or a request that does not name a region, still
 // matches).
-func (s *Service) matchAllRegionsConstraint(permRegions, reqRegions []string) bool {
+func matchAllRegionsConstraint(permRegions, reqRegions []string) bool {
 	if len(permRegions) == 0 || len(reqRegions) == 0 {
 		return true
 	}
@@ -452,7 +456,7 @@ func (s *Service) matchAllRegionsConstraint(permRegions, reqRegions []string) bo
 }
 
 // matchPurchaseAmountConstraint checks if requested amount is within permitted limit.
-func (s *Service) matchPurchaseAmountConstraint(permMax, reqMax float64) bool {
+func matchPurchaseAmountConstraint(permMax, reqMax float64) bool {
 	if permMax > 0 && reqMax > permMax {
 		return false
 	}

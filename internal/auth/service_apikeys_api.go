@@ -377,7 +377,7 @@ func (s *Service) HasAPIKeyPermissionAPI(ctx context.Context, apiKey, action, re
 // failure returns an error and callers must deny.
 func (s *Service) HasAPIKeyPermissionForConstraintsAPI(ctx context.Context, keyID, userID, action, resource string, constraintSets []PermissionConstraints) (bool, error) {
 	if len(constraintSets) == 0 {
-		return false, fmt.Errorf("no permission constraint sets provided for %s on %s", action, resource)
+		return false, errNoConstraintSets(action, resource)
 	}
 	key, err := s.store.GetAPIKeyByID(ctx, keyID)
 	if err != nil {
@@ -405,10 +405,10 @@ func (s *Service) HasAPIKeyPermissionForConstraintsAPI(ctx context.Context, keyI
 	//   - The key's effective permissions (key's constraint limits, e.g. MaxPurchaseAmount).
 	//   - The owner's group permissions (owner's constraint limits).
 	for i := range constraintSets {
-		if !s.permissionsAllow(perms, action, resource, &constraintSets[i]) {
+		if !permissionsAllow(perms, action, resource, &constraintSets[i]) {
 			return false, nil
 		}
-		if !s.permissionsAllow(ownerAuthCtx.Permissions, action, resource, &constraintSets[i]) {
+		if !permissionsAllow(ownerAuthCtx.Permissions, action, resource, &constraintSets[i]) {
 			return false, nil
 		}
 	}
