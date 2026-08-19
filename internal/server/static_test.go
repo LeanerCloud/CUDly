@@ -334,3 +334,125 @@ func TestSpaFileServer_404WhenIndexMissing(t *testing.T) {
 
 	testutil.AssertEqual(t, http.StatusNotFound, w.Code)
 }
+
+// ----- SPA catch-all: every frontend route (issue #1775) -----
+
+// appRoutes lists every path the SPA can be deep-linked to, taken from the
+// tab table and the legacy-redirect table in frontend/src/navigation.ts. A new
+// nav entry (or a new root-level mux registration that shadows one) must not
+// silently start serving something other than the SPA shell.
+var appRoutes = []string{
+	"/",
+	"/home",
+	"/opportunities",
+	"/plans",
+	"/purchases",
+	"/inventory",
+	"/inventory/active-commitments",
+	"/inventory/coverage",
+	"/inventory/ri-exchange",
+	"/admin",
+	"/admin/general",
+	"/admin/purchasing",
+	"/admin/accounts",
+	"/admin/users",
+	// Legacy paths kept alive by LEGACY_PATH_REDIRECTS for old bookmarks.
+	"/dashboard",
+	"/recommendations",
+	"/history",
+	"/settings",
+	"/ri-exchange",
+	// Non-tab SPA landing paths.
+	"/reset-password",
+	"/archera-insurance",
+	"/purchases/approve/abc-123",
+	"/purchases/cancel/abc-123",
+}
+
+func TestSPAFallbackServesIndexForEveryAppRoute(t *testing.T) {
+	dir := makeStaticDir(t, map[string]string{
+		"index.html":      "<html>spa</html>",
+		"docs/index.html": "<html>docs</html>",
+	})
+
+	for _, route := range appRoutes {
+		t.Run(route, func(t *testing.T) {
+			if !isStaticPath(route) {
+				t.Fatalf("route %s is not classified as a static path; the API router would swallow it", route)
+			}
+
+			content, _, _, found := serveStaticForLambda(dir, route)
+			testutil.AssertEqual(t, true, found)
+			testutil.AssertEqual(t, "<html>spa</html>", string(content))
+
+			handler := spaFileServer(dir)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, route, nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			testutil.AssertEqual(t, http.StatusOK, w.Code)
+			testutil.AssertEqual(t, "<html>spa</html>", w.Body.String())
+		})
+	}
+}
+
+// The API docs page is a real directory in the build output. Before #1775 a
+// directory stat fell straight through to the SPA fallback, so the "API Docs"
+// header link (href="/docs/") rendered the dashboard instead.
+func TestResolveStaticFilePath_DirectoryIndex(t *testing.T) {
+	dir := makeStaticDir(t, map[string]string{
+		"index.html":      "<html>spa</html>",
+		"docs/index.html": "<html>docs</html>",
+	})
+
+	for _, route := range []string{"/docs", "/docs/"} {
+		t.Run(route, func(t *testing.T) {
+			content, _, _, found := serveStaticForLambda(dir, route)
+			testutil.AssertEqual(t, true, found)
+			testutil.AssertEqual(t, "<html>docs</html>", string(content))
+		})
+	}
+}
+
+// A directory without its own index.html still falls back to the SPA shell, so
+// asset directories (dist/js, dist/css) do not 404 into a broken page.
+func TestResolveStaticFilePath_DirectoryWithoutIndexFallsBackToSPA(t *testing.T) {
+	dir := makeStaticDir(t, map[string]string{
+		"index.html": "<html>spa</html>",
+		"js/app.js":  "var x=1;",
+	})
+
+	content, _, _, found := serveStaticForLambda(dir, "/js")
+	testutil.AssertEqual(t, true, found)
+	testutil.AssertEqual(t, "<html>spa</html>", string(content))
+}
+
+// A directory index reached via /docs/ must not serve a file the direct
+// request path (/docs/index.html) would reject. os.Stat follows symlinks, so
+// the containment check has to run on the candidate, not just on the directory.
+func TestResolveStaticFilePath_DirectoryIndexRejectsSymlinkEscape(t *testing.T) {
+	parent := t.TempDir()
+	staticDir := filepath.Join(parent, "static", "docs")
+	if err := os.MkdirAll(staticDir, 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	root := filepath.Join(parent, "static")
+	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("<html>spa</html>"), 0o644); err != nil {
+		t.Fatalf("write index.html: %v", err)
+	}
+	outside := filepath.Join(parent, "secret.html")
+	if err := os.WriteFile(outside, []byte("should-not-serve"), 0o644); err != nil {
+		t.Fatalf("write secret.html: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(staticDir, "index.html")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	// Both spellings must agree, and neither may serve the out-of-tree file.
+	direct, _, _, directFound := serveStaticForLambda(root, "/docs/index.html")
+	testutil.AssertEqual(t, false, directFound)
+	testutil.AssertEqual(t, "", string(direct))
+
+	viaDir, _, _, viaDirFound := serveStaticForLambda(root, "/docs/")
+	testutil.AssertEqual(t, true, viaDirFound)
+	testutil.AssertEqual(t, "<html>spa</html>", string(viaDir))
+}

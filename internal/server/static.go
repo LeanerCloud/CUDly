@@ -79,6 +79,37 @@ func symlinkSafeContainedIn(absDir, absFile string) bool {
 	return true
 }
 
+// directoryIndex resolves dirPath/index.html when the requested path is a
+// directory that ships its own index. /docs/ must serve dist/docs/index.html,
+// not the SPA shell: without this a directory stat falls straight through to
+// the SPA fallback and the "API Docs" link renders the dashboard again.
+//
+// The candidate re-runs symlinkSafeContainedIn. Appending a constant filename
+// keeps the path lexically inside absDir, but os.Stat follows symlinks, so a
+// symlinked index.html could otherwise serve a file the direct request path
+// (/docs/index.html) rejects.
+func directoryIndex(absDir, dirPath, cleanPath string) (indexPath, indexClean string, ok bool) {
+	candidate := filepath.Join(dirPath, "index.html")
+	absCandidate, err := filepath.Abs(candidate)
+	if err != nil || !symlinkSafeContainedIn(absDir, absCandidate) {
+		return "", "", false
+	}
+	info, err := os.Stat(candidate)
+	if err != nil || info.IsDir() {
+		return "", "", false
+	}
+	return candidate, path.Join(cleanPath, "index.html"), true
+}
+
+// spaIndex returns the SPA shell that client-side routes fall back to.
+func spaIndex(dir string) (filePath, cleanPath string, ok bool) {
+	filePath = filepath.Join(dir, "index.html")
+	if _, err := os.Stat(filePath); err != nil {
+		return "", "", false
+	}
+	return filePath, "/index.html", true
+}
+
 // resolveStaticFilePath validates the URL path against directory traversal and
 // resolves the actual file path. Falls back to index.html for extensionless
 // paths (SPA routing). Returns the file path, the clean path used for content
@@ -103,20 +134,22 @@ func resolveStaticFilePath(dir, urlPath string) (filePath, cleanPath string, ok 
 		return "", "", false
 	}
 
-	info, err := os.Stat(filePath) //nolint:gosec // G703: error from Close handled in defer
-	if err != nil || info.IsDir() {
-		if path.Ext(cleanPath) != "" {
-			return "", "", false
+	if info, statErr := os.Stat(filePath); statErr == nil {
+		if !info.IsDir() {
+			return filePath, cleanPath, true
 		}
-		// SPA fallback
-		filePath = filepath.Join(dir, "index.html")
-		cleanPath = "/index.html"
-		if _, err := os.Stat(filePath); err != nil { //nolint:gosec // G703: error from Close handled in defer
-			return "", "", false
+		if idxPath, idxClean, isDirIndex := directoryIndex(absDir, filePath, cleanPath); isDirIndex {
+			return idxPath, idxClean, true
 		}
 	}
 
-	return filePath, cleanPath, true
+	// Nothing servable at that path. An extension means the caller asked for a
+	// concrete asset, so a miss is a genuine 404; an extensionless path is a
+	// client-side route and gets the SPA shell.
+	if path.Ext(cleanPath) != "" {
+		return "", "", false
+	}
+	return spaIndex(dir)
 }
 
 // cacheControlForExt returns the Cache-Control header value for a file extension.
