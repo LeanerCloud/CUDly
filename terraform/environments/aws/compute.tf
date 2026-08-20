@@ -99,9 +99,12 @@ module "compute_lambda" {
   )
 
   # Multi-account IAM capabilities. cross_account_role_name_prefix scopes the
-  # Lambda role's sts:AssumeRole IAM grant to role names starting with the
-  # prefix — defence-in-depth on top of the app-layer ExternalId check.
-  enable_cross_account_sts             = true
+  # Lambda role's sts:AssumeRole grant to role names starting with the prefix;
+  # cross_account_target_account_ids scopes it to the accounts the operator
+  # declared. The prefix alone never constrained the account (#1636), so the
+  # grant is derived from the account list: no accounts declared, no grant.
+  enable_cross_account_sts             = length(var.cross_account_target_account_ids) > 0
+  cross_account_target_account_ids     = var.cross_account_target_account_ids
   cross_account_role_name_prefix       = "CUDly"
   enable_org_discovery                 = true
   credential_encryption_key_secret_arn = module.secrets.credential_encryption_key_secret_arn
@@ -220,9 +223,11 @@ module "compute_fargate" {
 
   # Multi-account IAM capabilities — kept at parity with the Lambda branch.
   # cross_account_role_name_prefix scopes the task role's sts:AssumeRole grant
-  # to role names starting with the prefix; ExternalId validation still
+  # to role names starting with the prefix; cross_account_target_account_ids
+  # scopes it to the declared accounts (#1636). ExternalId validation still
   # happens at the app layer (credentials/resolver.go).
-  enable_cross_account_sts             = true
+  enable_cross_account_sts             = length(var.cross_account_target_account_ids) > 0
+  cross_account_target_account_ids     = var.cross_account_target_account_ids
   cross_account_role_name_prefix       = "CUDly"
   enable_org_discovery                 = true
   credential_encryption_key_secret_arn = module.secrets.credential_encryption_key_secret_arn

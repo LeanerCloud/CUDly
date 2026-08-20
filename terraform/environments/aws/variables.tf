@@ -329,6 +329,12 @@ variable "max_account_parallelism" {
   default     = 10
 }
 
+variable "cross_account_target_account_ids" {
+  description = "AWS account IDs this deployment itself calls sts:AssumeRole against, for multi-account plan execution. Empty (the default) grants no cross-account sts:AssumeRole at all: the compute module's grant is not created. Listing an account here is what authorizes it at IAM; it does not onboard it, which still happens in the app. For bastion-mode accounts list the bastion's account, not the target's, because only the first hop runs on this deployment's identity. Deliberately not defaulted to a wildcard: see #1636."
+  type        = list(string)
+  default     = []
+}
+
 # ==============================================
 # Additional Configuration
 # ==============================================

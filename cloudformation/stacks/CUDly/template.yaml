@@ -140,6 +140,22 @@ Parameters:
     Default: "rate(1 day)"
     Description: How often to check for new recommendations
 
+  CrossAccountTargetAccountIds:
+    Type: CommaDelimitedList
+    Default: ""
+    AllowedPattern: "^$|^[0-9]{12}$"
+    Description: >-
+      Comma-separated AWS account IDs this stack itself calls sts:AssumeRole
+      against, for multi-account plan execution. Empty (the default) creates no
+      cross-account grant at all. There is no "any account" value: the previous
+      unconditional grant let the hub assume any CUDly* role in any AWS
+      account, so a mis-selected account produced a successful purchase in the
+      wrong account rather than an AccessDenied (#1636). For bastion-mode
+      accounts list the bastion's account, not the target's, because only the
+      first hop runs on this stack's identity. UPGRADING AN EXISTING STACK WITHOUT
+      SETTING THIS REMOVES THE GRANT, and multi-account collection then fails
+      with AccessDenied until the accounts are listed.
+
 Conditions:
   DeployDashboard:
     Fn::Equals:
@@ -162,6 +178,17 @@ Conditions:
     Fn::Equals:
       - Ref: CpuArchitecture
       - arm64
+
+  # Joining the list back to a string is how a CommaDelimitedList is tested for
+  # emptiness: the Default of "" arrives as a one-element list holding "", which
+  # is not equal to an empty list and cannot be compared to one.
+  HasCrossAccountTargets:
+    Fn::Not:
+      - Fn::Equals:
+          - Fn::Join:
+              - ""
+              - Ref: CrossAccountTargetAccountIds
+          - ""
 
 Resources:
   # =============================================================================
@@ -480,12 +507,32 @@ Resources:
               - organizations:DescribeOrganization
             Resource: "*"
 
-          # Cross-account role assumption for multi-account plans
-          - Sid: CrossAccountAssumeRole
-            Effect: Allow
-            Action:
-              - sts:AssumeRole
-            Resource: "arn:aws:iam::*:role/CUDly*"
+          # Cross-account role assumption for multi-account plans.
+          #
+          # aws:ResourceAccount pins the grant to the declared accounts. The
+          # Resource pattern narrows which role but never whose account:
+          # arn:aws:iam::*:role/CUDly* matches a CUDly role in any AWS account
+          # on earth, so before #1636 a mis-selected account produced a
+          # successful AssumeRole instead of an AccessDenied. sts:ExternalId
+          # StringLike "*" requires the field to be present and non-empty, at
+          # parity with the Terraform modules; per-account values are checked
+          # in internal/credentials/resolver.go.
+          #
+          # Dropped entirely rather than widened when no accounts are declared.
+          - Fn::If:
+              - HasCrossAccountTargets
+              - Sid: CrossAccountAssumeRole
+                Effect: Allow
+                Action:
+                  - sts:AssumeRole
+                Resource: "arn:aws:iam::*:role/CUDly*"
+                Condition:
+                  StringEquals:
+                    aws:ResourceAccount:
+                      Ref: CrossAccountTargetAccountIds
+                  StringLike:
+                    sts:ExternalId: "*"
+              - Ref: AWS::NoValue
 
           # DynamoDB access
           - Sid: DynamoDBAccess

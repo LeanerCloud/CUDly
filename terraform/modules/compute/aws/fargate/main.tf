@@ -240,16 +240,26 @@ resource "aws_iam_role_policy" "ses_access" {
   })
 }
 
-# Cross-account role assumption for multi-account plan execution. Scoped by
-# var.cross_account_role_name_prefix (default "CUDly"). ExternalId is also
-# enforced at the app layer in the credentials resolver; the IAM StringLike
-# "*" condition here is defence-in-depth that requires a non-empty ExternalId
-# to be supplied on every AssumeRole call. Mirrors the Lambda module.
+# Cross-account role assumption for multi-account plan execution. Mirrors the
+# Lambda module, including the two conditions and the precondition; see the
+# block comment on aws_iam_role_policy.cross_account_sts in
+# modules/compute/aws/lambda/main.tf for why each one is there.
+#
+# In short: aws:ResourceAccount pins the grant to the declared account IDs,
+# because the Resource pattern narrows which role but never whose account
+# (#1636); sts:ExternalId StringLike "*" only requires the field to be present.
 resource "aws_iam_role_policy" "cross_account_sts" {
   count = var.enable_cross_account_sts ? 1 : 0
 
   name = "cross-account-sts"
   role = aws_iam_role.task.id
+
+  lifecycle {
+    precondition {
+      condition     = length(var.cross_account_target_account_ids) > 0
+      error_message = "enable_cross_account_sts is true but cross_account_target_account_ids is empty. List the AWS account IDs this deployment may assume a role in, or set enable_cross_account_sts = false. There is no 'any account' setting: that was the #1636 grant."
+    }
+  }
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -259,6 +269,9 @@ resource "aws_iam_role_policy" "cross_account_sts" {
         Action   = ["sts:AssumeRole"]
         Resource = "arn:aws:iam::*:role/${var.cross_account_role_name_prefix}*"
         Condition = {
+          StringEquals = {
+            "aws:ResourceAccount" = var.cross_account_target_account_ids
+          }
           StringLike = {
             "sts:ExternalId" = "*"
           }
