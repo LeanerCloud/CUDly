@@ -86,6 +86,22 @@ export function closeGroupModal(): void {
 export async function saveGroup(e: Event): Promise<void> {
   e.preventDefault();
 
+  // Refuse rather than widen. A stored constraint value this form cannot
+  // carry unchanged is flagged when the row is rendered; saving anyway would
+  // re-submit a materially different permission set than the one loaded, and
+  // for a constraint list that means an unintended widening (an empty list is
+  // "no restriction" at enforcement). The group stays uneditable through the
+  // form until the value is repaired via the API or in the database.
+  const blocked = unrepresentablePermissionErrors();
+  if (blocked.length > 0) {
+    showError(
+      `Cannot save: ${blocked.join('; ')}. ` +
+      'Saving would silently drop the restriction, so the edit is refused. ' +
+      'Repair the value through the API or in the database, then reload this page.'
+    );
+    return;
+  }
+
   const name = (document.getElementById('group-name') as HTMLInputElement).value;
   const description = (document.getElementById('group-description') as HTMLTextAreaElement).value;
   const permissions = collectPermissions();
@@ -204,6 +220,17 @@ export function addPermission(permission?: Permission): void {
 
   const permDiv = document.createElement('div');
   permDiv.className = 'permission-item';
+
+  // Record the verdict, not the value: which of this row's constraint lists
+  // hold something the text encoding cannot carry back unchanged. saveGroup
+  // refuses while any row carries this. The attribute lives and dies with the
+  // row, so removing the row clears it and nothing outlives the modal.
+  const unsafe = unrepresentableDimensions(permission?.constraints);
+  if (unsafe.length > 0) {
+    permDiv.setAttribute('data-unrepresentable', unsafe.join(', '));
+    permDiv.setAttribute('data-permission-label', `${permission?.action ?? ''}:${permission?.resource ?? ''}`);
+  }
+
   permDiv.innerHTML = `
     <div class="form-row">
       <label>Action:
@@ -255,6 +282,69 @@ export function addPermission(permission?: Permission): void {
   }
 }
 
+// The one tokenizer for every comma-separated constraint input. Both the save
+// path and the render-time safety check below go through it, deliberately: if
+// this drops or alters a value, the check must catch it, and sharing the
+// function is what stops the two from drifting apart.
+function parseConstraintList(raw: string): string[] {
+  return raw.split(',').map(s => s.trim()).filter(s => s);
+}
+
+// Names the constraint lists in `constraints` that this form cannot carry
+// back unchanged (issue #1629, raised again by CodeRabbit on PR #1875).
+//
+// The form encodes a list as comma-separated text, and that encoding is not
+// injective. A stored [""] renders blank and re-parses as ABSENT; a stored
+// [","] re-parses as an empty list; a stored [" acct A "] comes back trimmed,
+// which is a different fence, since enforcement compares values exactly. In
+// every case the form would re-submit a materially different restriction than
+// the one it loaded, and for a constraint list "different" means WIDER: an
+// empty list is "no restriction on this dimension" at enforcement
+// (matchStringListConstraints). The refusal in saveGroup is the loud
+// alternative to that silent widening.
+//
+// The test is a round trip through parseConstraintList rather than a
+// hand-written blank check, for two reasons: it is the same predicate the
+// save path uses, so the two cannot disagree; and a per-entry "is it blank"
+// test would MISS [","], whose entry is not blank yet still vanishes, because
+// the split runs before the filter.
+//
+// An absent or empty list is NOT flagged. Both mean "no restriction on this
+// dimension", both are perfectly normal, and refusing them would make
+// ordinary unconstrained groups uneditable.
+function unrepresentableDimensions(constraints: Permission['constraints']): string[] {
+  if (!constraints) return [];
+
+  const unsafe: string[] = [];
+  for (const dimension of ['accounts', 'providers', 'services', 'regions'] as const) {
+    const values = constraints[dimension];
+    if (!values || values.length === 0) continue;
+    const reparsed = parseConstraintList(values.join(', '));
+    if (reparsed.length !== values.length || reparsed.some((value, i) => value !== values[i])) {
+      unsafe.push(dimension);
+    }
+  }
+  return unsafe;
+}
+
+// Builds one message per flagged row, naming the permission by index and by
+// action:resource and naming the constraint list, so an operator with a
+// multi-permission group knows exactly which value to repair. Mirrors the
+// specificity of the backend's own refusal in validateConstraintEntries.
+function unrepresentablePermissionErrors(): string[] {
+  const permissionsList = document.getElementById('permissions-list');
+  if (!permissionsList) return [];
+
+  const errors: string[] = [];
+  permissionsList.querySelectorAll('.permission-item').forEach((item, index) => {
+    const dimensions = item.getAttribute('data-unrepresentable');
+    if (!dimensions) return;
+    const label = item.getAttribute('data-permission-label') || 'unknown';
+    errors.push(`permission ${index} (${label}) has a stored "${dimensions}" constraint value this form cannot represent`);
+  });
+  return errors;
+}
+
 /**
  * Render permissions list
  */
@@ -303,10 +393,10 @@ function collectPermissions(): Permission[] {
 
     if (accounts || providers || services || regions || maxAmount) {
       permission.constraints = {};
-      if (accounts) permission.constraints.accounts = accounts.split(',').map(s => s.trim()).filter(s => s);
-      if (providers) permission.constraints.providers = providers.split(',').map(s => s.trim()).filter(s => s);
-      if (services) permission.constraints.services = services.split(',').map(s => s.trim()).filter(s => s);
-      if (regions) permission.constraints.regions = regions.split(',').map(s => s.trim()).filter(s => s);
+      if (accounts) permission.constraints.accounts = parseConstraintList(accounts);
+      if (providers) permission.constraints.providers = parseConstraintList(providers);
+      if (services) permission.constraints.services = parseConstraintList(services);
+      if (regions) permission.constraints.regions = parseConstraintList(regions);
       if (maxAmount) {
         const parsed = parseFloat(maxAmount);
         // Reject non-finite or negative values (feedback_nullable_not_zero).

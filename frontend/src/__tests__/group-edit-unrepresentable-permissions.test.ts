@@ -49,10 +49,19 @@ jest.mock('../confirmDialog', () => ({
   confirmDialog: jest.fn().mockResolvedValue(true),
 }));
 
+// Only the toast functions are stubbed; escapeHtml and the rest stay real,
+// because the escaping tests below depend on the genuine implementation.
+jest.mock('../users/utils', () => ({
+  ...jest.requireActual('../users/utils'),
+  showError: jest.fn(),
+  showSuccess: jest.fn(),
+}));
+
 import * as api from '../api';
 import * as groupState from '../groups/state';
 import * as groupModals from '../groups/groupModals';
 import { setupGroupHandlers } from '../groups/handlers';
+import { showError } from '../users/utils';
 import { ALL_ACTIONS, ALL_RESOURCES } from '../permissions';
 
 // The exact seeded Purchaser group permission set (PURCHASER_PERMS in
@@ -484,5 +493,123 @@ describe('regression: group edit preserves constraints.accounts (#1629)', () => 
     expect(savedPermissions()).toEqual([
       { action: 'view', resource: 'history', constraints: { accounts: [payload] } },
     ]);
+  });
+
+  /**
+   * Raised by CodeRabbit on PR #1875 and taken rather than dismissed.
+   *
+   * Representing `accounts` fixes the common case but leaves one open: a
+   * value the comma-separated text encoding cannot carry back unchanged. A
+   * stored [""] renders blank and re-parses as ABSENT; [","] re-parses as an
+   * empty list; [" acct A "] comes back trimmed. Each re-submits a different
+   * restriction than the one loaded, and for a constraint list "different"
+   * means WIDER, because an empty list is "no restriction" at enforcement.
+   * The backend guard cannot catch it either: the form filters the value out
+   * before the request is built, so validateConstraintEntries never sees a
+   * blank to reject.
+   *
+   * The fix detects it when the row renders and refuses the save. A loud
+   * refusal beats a silent widening.
+   *
+   * Every assertion here is keyed on the outgoing payload or on the error
+   * message, never on the `data-unrepresentable` attribute the fix
+   * introduces: a negative keyed on a hook that does not exist pre-fix can
+   * never fail pre-fix.
+   */
+  describe('refuses to save a stored constraint value it cannot represent', () => {
+    function groupWithAccounts(accounts: string[]): api.APIGroup {
+      return {
+        id: 'operators-group-id',
+        name: 'Prod Operators',
+        description: 'Old description',
+        permissions: [{ action: 'view', resource: 'history', constraints: { accounts } }],
+        created_at: '2024-01-01T00:00:00Z',
+      };
+    }
+
+    // Each of these vanishes or mutates through parseConstraintList. The
+    // second is the case a per-entry "is it blank" check would miss: "," is
+    // not blank, but the split runs before the filter, so it still vanishes.
+    const UNREPRESENTABLE: Array<[string, string[]]> = [
+      ['a blank entry (deny-everything becomes allow-everything)', ['']],
+      ['a comma-only entry, which is not blank but still vanishes', [',']],
+      ['a whitespace-padded entry, which would come back as a different fence', [' acct A ']],
+      ['a blank entry beside a real one', ['acct-prod-1', '  ']],
+    ];
+
+    test.each(UNREPRESENTABLE)('%s refuses the save', async (_label, accounts) => {
+      await openEdit(groupWithAccounts(accounts));
+      (document.getElementById('group-description') as HTMLTextAreaElement).value = 'New description';
+
+      // The form is valid, so the browser submits and the handler runs: the
+      // refusal is this code's decision, not constraint validation's.
+      const form = document.getElementById('group-form') as HTMLFormElement;
+      expect(form.checkValidity()).toBe(true);
+      await clickSave();
+
+      expect(api.updateGroup).not.toHaveBeenCalled();
+      expect(showError).toHaveBeenCalledTimes(1);
+      const message = (showError as jest.Mock).mock.calls[0][0] as string;
+      // Names which permission and which constraint list, matching the
+      // specificity of the backend refusal.
+      expect(message).toContain('permission 0');
+      expect(message).toContain('view:history');
+      expect(message).toContain('accounts');
+    });
+
+    test('names every offending permission, by index, when several are unsafe', async () => {
+      const group = groupWithAccounts(['']);
+      group.permissions = [
+        { action: 'view', resource: 'plans' },
+        { action: 'view', resource: 'history', constraints: { accounts: [''] } },
+        { action: 'update-any', resource: 'purchases', constraints: { regions: [' us-east-1 '] } },
+      ];
+      await openEdit(group);
+      await clickSave();
+
+      expect(api.updateGroup).not.toHaveBeenCalled();
+      const message = (showError as jest.Mock).mock.calls[0][0] as string;
+      expect(message).toContain('permission 1 (view:history)');
+      expect(message).toContain('permission 2 (update-any:purchases)');
+      expect(message).toContain('regions');
+      // The clean row is not blamed.
+      expect(message).not.toContain('view:plans');
+    });
+
+    test('removing the offending row unblocks the save', async () => {
+      // The verdict lives on the row, so deleting the row clears it. Removing
+      // the permission outright is an explicit edit, not a silent drop.
+      await openEdit(groupWithAccounts(['']));
+      const removeBtn = document.querySelector('.permission-item .remove-permission-btn') as HTMLButtonElement;
+      removeBtn.click();
+      await clickSave();
+
+      expect(showError).not.toHaveBeenCalled();
+      expect(api.updateGroup).toHaveBeenCalledWith('operators-group-id', {
+        name: 'Prod Operators',
+        description: 'Old description',
+        permissions: [],
+      });
+    });
+
+    // Negative controls, payload-keyed: the refusal must not fire on the
+    // ordinary constraint shapes this form exists to edit. An absent or empty
+    // list both mean "no restriction" and are entirely normal.
+    const REPRESENTABLE: Array<[string, api.Permission]> = [
+      ['a populated list', { action: 'view', resource: 'history', constraints: { accounts: ['acct-prod-1', 'acct-prod-2'] } }],
+      ['an empty list', { action: 'view', resource: 'history', constraints: { accounts: [] } }],
+      ['no constraints at all', { action: 'view', resource: 'history' }],
+      ['a non-list constraint only', { action: 'view', resource: 'history', constraints: { max_amount: 5000 } }],
+    ];
+
+    test.each(REPRESENTABLE)('%s still saves', async (_label, permission) => {
+      const group = groupWithAccounts([]);
+      group.permissions = [permission];
+      await openEdit(group);
+      await clickSave();
+
+      expect(showError).not.toHaveBeenCalled();
+      expect(api.updateGroup).toHaveBeenCalledTimes(1);
+    });
   });
 });
