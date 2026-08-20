@@ -605,6 +605,31 @@ aws rds describe-db-proxies --db-proxy-name cudly-dev-proxy
 aws rds describe-db-clusters --db-cluster-identifier cudly-dev-postgres
 ```
 
+### Multi-Account Cross-Account Access
+
+Declare every AWS account the deployment will call `sts:AssumeRole` against. Nothing is reachable
+cross-account until you do.
+
+| Deployment shape | Setting |
+| ---------------- | ------- |
+| Terraform (`terraform/environments/aws`) | `cross_account_target_account_ids = ["111111111111", ...]` in your tfvars |
+| CloudFormation (`cloudformation/stacks/CUDly`) | `CrossAccountTargetAccountIds` stack parameter, comma-separated |
+
+Both render an `aws:ResourceAccount` condition onto the grant. An account that is not listed is
+denied by IAM, not merely by the app's account selection. Leaving the setting empty creates **no
+cross-account grant at all** — that is the intended fail-closed default, not an oversight.
+
+For accounts using `bastion` auth mode, list the **bastion's** account ID rather than the target's.
+Only the first hop runs on the deployment's own identity; the bastion assumes into the target on its
+own identity policy, which this setting does not govern.
+
+> **Upgrading an existing multi-account deployment**: the grant used to be scoped by role name only
+> (`arn:aws:iam::*:role/CUDly*`), which matched a CUDly role in *every* AWS account rather than in
+> yours (#1636). List your linked accounts **in the same change that picks up this version**. On
+> Terraform the apply removes `aws_iam_role_policy.cross_account_sts` and exits 0; on CloudFormation
+> the stack update drops the statement. Either way the first symptom otherwise is a runtime
+> `AccessDenied` during collection, not a failed deploy.
+
 ### Multi-Account Credential Encryption
 
 Multi-account support requires an AES-256-GCM encryption key for stored cloud account credentials. Terraform creates the key secret automatically (see `specs/multi-account-execution/iac.md`).

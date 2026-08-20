@@ -273,6 +273,17 @@ variable "cross_account_role_name_prefix" {
   default     = "CUDly"
 }
 
+variable "cross_account_target_account_ids" {
+  description = "AWS account IDs the Lambda itself calls sts:AssumeRole against. Rendered into an aws:ResourceAccount condition on the grant, so an account not listed here is denied by IAM rather than by application-layer account selection (#1636). For role_arn accounts this is the target account. For bastion accounts it is the BASTION's account, not the target's: the Lambda assumes into the bastion, and the bastion assumes into the target on its own identity policy, which this condition does not govern (internal/credentials/resolver.go:242-247). Must be non-empty when enable_cross_account_sts is true (enforced by a precondition in main.tf); an empty list means no cross-account reach, never all accounts."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for id in var.cross_account_target_account_ids : can(regex("^[0-9]{12}$", id))])
+    error_message = "cross_account_target_account_ids must contain bare 12-digit AWS account IDs. A wildcard is not an account ID: the condition uses StringEquals, under which '*' is the literal string '*' and matches nothing, so it denies every cross-account call rather than allowing them. There is no 'any account' value."
+  }
+}
+
 variable "enable_org_discovery" {
   description = "Allow Lambda to call AWS Organizations ListAccounts for member account discovery"
   type        = bool

@@ -83,6 +83,18 @@ credential_encryption_key = "REPLACE_WITH_64_CHAR_HEX_STRING"
 # Maximum number of cloud accounts to process in parallel during plan fan-out.
 max_account_parallelism = 10
 
+# AWS account IDs this deployment itself calls sts:AssumeRole against.
+# Listing an account here is what authorises it at IAM; onboarding it is still
+# a separate step in the app. Leave empty and no cross-account sts:AssumeRole
+# grant is created at all — the grant used to be scoped by role name only,
+# which matched a CUDly role in every AWS account rather than in yours (#1636).
+# Add every linked account before switching a single-account deployment to
+# multi-account, or collection from the new account fails with AccessDenied.
+# For bastion-mode accounts list the BASTION's account ID, not the target's:
+# only the first hop runs on this deployment's identity, the second runs on
+# the bastion role's own policy.
+# cross_account_target_account_ids = ["111111111111", "222222222222"]
+
 # ==============================================
 # Frontend (CloudFront + S3)
 # ==============================================

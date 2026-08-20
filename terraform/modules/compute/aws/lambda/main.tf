@@ -398,22 +398,39 @@ resource "aws_iam_role_policy" "ri_exchange" {
 
 # Cross-account role assumption for multi-account plan execution.
 #
-# Scoped by var.cross_account_role_name_prefix (default "CUDly") so the
-# Lambda can only assume roles whose names start with that prefix. The
-# shipped federation templates (iac/federation/aws-*) create roles matching
-# this prefix. ExternalId validation also happens at the application layer
-# (resolver.go); this IAM condition is defence-in-depth so a single app-
-# layer bug cannot pivot into arbitrary roles without a non-empty ExternalId.
+# Two independent conditions, closing two different gaps:
 #
-# The StringLike "*" condition requires that sts:ExternalId is present and
-# non-empty in every AssumeRole call. Per-account ExternalId values are
-# validated at the application layer; IAM here enforces that the field is
-# present at all, closing the gap where an app-layer bug could omit it.
+#   aws:ResourceAccount pins the grant to the account IDs the operator
+#   declared in var.cross_account_target_account_ids. The Resource pattern
+#   alone is not a restriction: arn:aws:iam::*:role/CUDly* matches
+#   arn:aws:iam::999999999999:role/CUDly in an account nobody onboarded, so
+#   before #1636 a mis-selected CloudAccount row produced a successful
+#   AssumeRole instead of an AccessDenied, and the first sign of the defect
+#   was an irreversible purchase in the wrong account. The role-name prefix
+#   still narrows *which* role, it just never narrowed *whose*.
+#
+#   sts:ExternalId StringLike "*" requires the field to be present and
+#   non-empty on every call. Per-account values are checked at the app layer
+#   (internal/credentials/resolver.go); IAM here only closes the gap where an
+#   app-layer bug omits the field entirely. It cannot detect a wrong-account
+#   selection, because the ARN and the external ID are read off the same
+#   record, so a mis-selected account supplies both consistently.
+#
+# An empty account list means no cross-account reach at all, not reach into
+# every account: the precondition below fails the plan rather than rendering
+# a policy whose only account constraint is absent.
 resource "aws_iam_role_policy" "cross_account_sts" {
   count = var.enable_cross_account_sts ? 1 : 0
 
   name_prefix = "${var.stack_name}-cross-account-sts-"
   role        = aws_iam_role.lambda.id
+
+  lifecycle {
+    precondition {
+      condition     = length(var.cross_account_target_account_ids) > 0
+      error_message = "enable_cross_account_sts is true but cross_account_target_account_ids is empty. List the AWS account IDs this deployment may assume a role in, or set enable_cross_account_sts = false. There is no 'any account' setting: that was the #1636 grant."
+    }
+  }
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -423,6 +440,9 @@ resource "aws_iam_role_policy" "cross_account_sts" {
         Action   = ["sts:AssumeRole"]
         Resource = "arn:aws:iam::*:role/${var.cross_account_role_name_prefix}*"
         Condition = {
+          StringEquals = {
+            "aws:ResourceAccount" = var.cross_account_target_account_ids
+          }
           StringLike = {
             "sts:ExternalId" = "*"
           }

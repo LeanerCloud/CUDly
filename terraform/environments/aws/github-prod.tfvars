@@ -82,6 +82,22 @@ enable_scheduled_tasks  = true
 recommendation_schedule = "rate(1 day)"
 
 # ==============================================
+# Multi-Account Cross-Account Access
+# ==============================================
+
+# Accounts this deployment may call sts:AssumeRole against. Empty means the
+# cross-account grant is not created at all.
+#
+# These environments have never declared a linked account in Terraform, so [] is
+# the honest value. It is written out rather than left to the default because
+# the first apply after #1636 DESTROYS aws_iam_role_policy.cross_account_sts:
+# the grant used to be unconditional, scoped by role name only, and matched a
+# CUDly* role in every AWS account rather than in ours. If any of these
+# environments has had a linked account added through the app, list it here in
+# the same change or its collection starts failing with AccessDenied.
+cross_account_target_account_ids = []
+
+# ==============================================
 # Variables provided by GitHub Actions:
 #   TF_VAR_admin_email    = ${{ secrets.ADMIN_EMAIL }}
 #   TF_VAR_image_uri      = (from build step)
