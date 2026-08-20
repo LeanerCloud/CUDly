@@ -59,6 +59,33 @@ const DRAWER_CONTROLS: Record<string, string> = {
   'Account chip': '#sidebar button[aria-label="Account"]',
 };
 
+type AriaRole = Parameters<Page['getByRole']>[0];
+
+/**
+ * What a screen reader must not find while the drawer is closed and must
+ * find once it is open: the drawer itself, its navigation, and the account
+ * action this PR moved into it. Role queries match only nodes present in the
+ * accessibility tree, which is what an aria-hidden ancestor removes them
+ * from; the CSS locators elsewhere in this file cannot see that.
+ */
+const ACCESSIBLE_DRAWER_CONTENT: ReadonlyArray<readonly [AriaRole, string]> = [
+  ['complementary', 'Primary navigation'],
+  ['tablist', 'Main navigation'],
+  ['button', 'Logout'],
+];
+
+/** True when the caret sits in a subtree no screen reader will follow. */
+async function focusIsInsideHiddenSubtree(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    let node: Element | null = document.activeElement;
+    while (node) {
+      if (node.getAttribute('aria-hidden') === 'true') return true;
+      node = node.parentElement;
+    }
+    return false;
+  });
+}
+
 /** The subset that is tappable and so bound by the 44x44 minimum. */
 const TAPPABLE = [
   'API Docs link',
@@ -286,5 +313,81 @@ test.describe('phone viewport', () => {
     await page.setViewportSize(DESKTOP);
     await expect(page.locator('#sidebar')).not.toHaveAttribute('aria-hidden', 'true');
     await expect(page.getByRole('complementary', { name: 'Primary navigation' })).toHaveCount(1);
+  });
+
+  /**
+   * The mirror of the widening defect. A closed drawer is parked off-screen
+   * by a CSS transform, which hides it from sight but not from assistive
+   * technology, and this file moves the account controls into it. Without an
+   * aria-hidden a screen-reader user reaches Logout, the identity block and
+   * both filter chips inside a drawer that is closed.
+   */
+  test('a closed drawer is out of the accessibility tree on a narrow load', async ({ page }) => {
+    await openApp(page);
+
+    await expect(page.locator('#sidebar')).toHaveAttribute('aria-hidden', 'true');
+    for (const [role, name] of ACCESSIBLE_DRAWER_CONTENT) {
+      await expect(page.getByRole(role, { name }), `${name} is out of reach`).toHaveCount(0);
+    }
+
+    // Still reachable once it is actually open, rather than hidden for good.
+    await openDrawer(page);
+    for (const [role, name] of ACCESSIBLE_DRAWER_CONTENT) {
+      await expect(page.getByRole(role, { name }), `${name} is reachable`).toHaveCount(1);
+    }
+  });
+});
+
+test.describe('desktop viewport', () => {
+  test.use({ viewport: DESKTOP });
+
+  test('narrowing hides the drawer it moves the controls into', async ({ page }) => {
+    await openApp(page);
+    // Exposed on the desktop side, which is the whole point of the widening
+    // fix above, so the assertions below are a real transition.
+    await expect(page.getByRole('complementary', { name: 'Primary navigation' })).toHaveCount(1);
+
+    await page.setViewportSize(PHONE);
+    await expect(page.locator('#sidebar #user-info')).toHaveCount(1);
+
+    await expect(page.locator('#sidebar')).toHaveAttribute('aria-hidden', 'true');
+    for (const [role, name] of ACCESSIBLE_DRAWER_CONTENT) {
+      await expect(page.getByRole(role, { name }), `${name} is out of reach`).toHaveCount(0);
+    }
+  });
+
+  /**
+   * Focus on a sidebar link survives the crossing: the nav is not one of the
+   * relocated regions, so nothing detaches the focused node. Hiding the
+   * sidebar under it would leave the caret in a subtree screen readers no
+   * longer expose, so it has to be handed to the visible hamburger first.
+   */
+  test('narrowing moves focus off a sidebar link onto the hamburger', async ({ page }) => {
+    await openApp(page);
+    await page.locator('#sidebar .tab-btn').first().focus();
+    await expect(page.locator('#sidebar .tab-btn').first()).toBeFocused();
+
+    await page.setViewportSize(PHONE);
+    await expect(page.locator('#sidebar')).toHaveAttribute('aria-hidden', 'true');
+
+    await expect(page.locator('#hamburger-btn')).toBeFocused();
+    expect(await focusIsInsideHiddenSubtree(page), 'focus left inside aria-hidden').toBe(false);
+  });
+
+  /**
+   * The other way focus can be sitting on something the drawer swallows. The
+   * relocation itself detaches the node, so the browser has already blurred
+   * it by the time the drawer is hidden; the invariant that matters is the
+   * same either way.
+   */
+  test('narrowing does not strand focus on a relocated control', async ({ page }) => {
+    await openApp(page);
+    await page.locator('#logout-btn').focus();
+    await expect(page.locator('#logout-btn')).toBeFocused();
+
+    await page.setViewportSize(PHONE);
+    await expect(page.locator('#sidebar')).toHaveAttribute('aria-hidden', 'true');
+
+    expect(await focusIsInsideHiddenSubtree(page), 'focus left inside aria-hidden').toBe(false);
   });
 });

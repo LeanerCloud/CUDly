@@ -707,8 +707,8 @@ export function syncHeaderPlacement(isNarrow: boolean): void {
  *        sidebar aria-hidden="true"
  *        Return focus to the hamburger button
  *
- * Widening past the breakpoint is a third transition, not a close: see
- * releaseDrawerForDesktop.
+ * Crossing the breakpoint in either direction is a third transition, neither
+ * an open nor a close: see applyBreakpointState.
  *
  * Sidebar links also close the drawer (they navigate within the SPA).
  */
@@ -740,20 +740,35 @@ export function setupMobileNav(): void {
   }
 
   /**
-   * Tear the drawer state down on the way past the breakpoint. Above it the
-   * sidebar is the permanently visible navigation, so this differs from
-   * closeDrawer in two ways: it leaves the sidebar in the accessibility tree
-   * rather than marking it aria-hidden, and it moves no focus, because the
-   * hamburger it would focus is display:none at this width.
+   * Put the drawer into the closed state the current breakpoint calls for.
+   * Runs on load and on every crossing, neither of which the user asked for,
+   * so unlike openDrawer and closeDrawer it moves focus only to rescue it.
    *
-   * Unconditional, so a drawer that was closed while narrow does not carry
-   * its aria-hidden across either.
+   * Whether the sidebar belongs in the accessibility tree is what the two
+   * widths disagree about. Above the breakpoint it is the permanently
+   * visible navigation and must stay in it; below, it is a drawer parked
+   * off-screen holding the controls syncHeaderPlacement moves into it, and
+   * everything in there has to leave the tree with it.
+   *
+   * The narrow branch can never be hiding an open drawer: the only crossing
+   * that reaches it comes from the desktop side, where nothing opens one.
    */
-  function releaseDrawerForDesktop(): void {
+  function applyBreakpointState(isNarrow: boolean): void {
+    // body.sidebar-open sets overflow:hidden outside the media query, so a
+    // drawer open across a resize would lock scrolling with no drawer left.
     document.body.classList.remove('sidebar-open');
     hamburger!.setAttribute('aria-expanded', 'false');
-    sidebar!.removeAttribute('aria-hidden');
     if (overlay) overlay.setAttribute('aria-hidden', 'true');
+
+    if (!isNarrow) {
+      sidebar!.removeAttribute('aria-hidden');
+      return;
+    }
+    // Focus survives the crossing when it was already on a sidebar link, and
+    // hiding the subtree under it strands the caret where no screen reader
+    // can follow.
+    if (sidebar!.contains(document.activeElement)) hamburger!.focus();
+    sidebar!.setAttribute('aria-hidden', 'true');
   }
 
   hamburger.addEventListener('click', () => {
@@ -782,11 +797,10 @@ export function setupMobileNav(): void {
   // the breakpoint. Listeners are bound once here, never per relocation.
   const mediaQuery = window.matchMedia(MOBILE_NAV_QUERY);
   syncHeaderPlacement(mediaQuery.matches);
+  applyBreakpointState(mediaQuery.matches);
   mediaQuery.addEventListener('change', event => {
     syncHeaderPlacement(event.matches);
-    // Without this the drawer's scroll lock stays on <body> with no visible
-    // drawer and no hamburger to dismiss it.
-    if (!event.matches) releaseDrawerForDesktop();
+    applyBreakpointState(event.matches);
   });
 
   // Account actions inside the drawer navigate or end the session, so they
