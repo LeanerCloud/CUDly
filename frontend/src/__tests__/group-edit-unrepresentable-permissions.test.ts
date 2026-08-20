@@ -611,5 +611,87 @@ describe('regression: group edit preserves constraints.accounts (#1629)', () => 
       expect(showError).not.toHaveBeenCalled();
       expect(api.updateGroup).toHaveBeenCalledTimes(1);
     });
+
+    /**
+     * The same widening from the typed direction, CodeRabbit's second finding
+     * on this PR. The render-time check above covers a STORED value; this
+     * covers what an operator types.
+     *
+     * "," is non-empty in the box but parseConstraintList reduces it to [],
+     * so the save would send an empty list, and an empty list is "no
+     * restriction" at enforcement. A stray comma would silently remove the
+     * fence. This is MORE reachable than the stored case, which needs data no
+     * shipped code produces; this one needs a typo.
+     */
+    describe('refuses typed input that parses to nothing', () => {
+      const TYPED_NOTHING: Array<[string, string]> = [
+        ['a bare comma', ','],
+        ['a comma padded with spaces', '  ,  '],
+        ['several commas', ',,,'],
+      ];
+
+      test.each(TYPED_NOTHING)('%s refuses the save and names the field', async (_label, typed) => {
+        await openEdit(groupWithAccounts(['acct-prod-1']));
+        accountsInput().value = typed;
+        await clickSave();
+
+        expect(api.updateGroup).not.toHaveBeenCalled();
+        expect(showError).toHaveBeenCalledTimes(1);
+        const message = (showError as jest.Mock).mock.calls[0][0] as string;
+        expect(message).toContain('permission 0');
+        expect(message).toContain('view:history');
+        expect(message).toContain('accounts');
+      });
+
+      test('names the offending dimension, not a different one', async () => {
+        const group = groupWithAccounts(['acct-prod-1']);
+        group.permissions = [{ action: 'view', resource: 'history', constraints: { regions: ['us-east-1'] } }];
+        await openEdit(group);
+        (document.querySelector('.perm-regions') as HTMLInputElement).value = ',';
+        await clickSave();
+
+        expect(api.updateGroup).not.toHaveBeenCalled();
+        const message = (showError as jest.Mock).mock.calls[0][0] as string;
+        expect(message).toContain('regions');
+        expect(message).not.toContain('accounts');
+      });
+
+      // The boundary that must not move: a box the operator empties still
+      // means "no restriction" and must save. Refusing here would make every
+      // unconstrained group uneditable, which is worse than the bug.
+      test('an emptied box still saves as no restriction', async () => {
+        await openEdit(groupWithAccounts(['acct-prod-1']));
+        accountsInput().value = '';
+        await clickSave();
+
+        expect(showError).not.toHaveBeenCalled();
+        expect(savedPermissions()).toEqual([{ action: 'view', resource: 'history' }]);
+      });
+
+      // A box holding only spaces looks identical to an empty one on screen,
+      // so it is treated as empty rather than refused: an error on a field
+      // that appears blank could not be acted on.
+      test('a whitespace-only box is treated as emptied, not refused', async () => {
+        await openEdit(groupWithAccounts(['acct-prod-1']));
+        accountsInput().value = '   ';
+        await clickSave();
+
+        expect(showError).not.toHaveBeenCalled();
+        expect(savedPermissions()).toEqual([{ action: 'view', resource: 'history' }]);
+      });
+
+      // A trailing comma is ordinary typing and still yields a usable entry,
+      // so it must save rather than trip the refusal.
+      test('a trailing comma beside a real value still saves', async () => {
+        await openEdit(groupWithAccounts(['acct-prod-1']));
+        accountsInput().value = 'acct-prod-1, acct-prod-2,';
+        await clickSave();
+
+        expect(showError).not.toHaveBeenCalled();
+        expect(savedPermissions()).toEqual([
+          { action: 'view', resource: 'history', constraints: { accounts: ['acct-prod-1', 'acct-prod-2'] } },
+        ]);
+      });
+    });
   });
 });
