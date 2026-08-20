@@ -5,21 +5,37 @@
  * aria-expanded toggle, focus management, body scroll-lock class.
  */
 
-import { setupMobileNav } from '../app';
+import { setupMobileNav, syncHeaderPlacement } from '../app';
 
 function buildDOM(): void {
   document.body.innerHTML = `
-    <button type="button" class="hamburger" id="hamburger-btn"
-      aria-label="Open navigation menu"
-      aria-controls="sidebar"
-      aria-expanded="false">
-    </button>
+    <header class="app-topbar">
+      <button type="button" class="hamburger" id="hamburger-btn"
+        aria-label="Open navigation menu"
+        aria-controls="sidebar"
+        aria-expanded="false">
+      </button>
+      <div class="app-topbar-brand"><h1>CUDly</h1></div>
+      <div id="topbar-filters" class="app-topbar-filters" aria-label="Global filters"></div>
+      <div id="user-info">
+        <span id="user-email-display"></span>
+        <span id="user-role-display" class="role-badge"></span>
+        <a href="/docs/" target="_blank" class="header-link">API Docs</a>
+        <a id="feedback-link" href="#" class="header-link feedback-link">Feedback</a>
+        <button id="logout-btn">Logout</button>
+      </div>
+    </header>
     <div class="sidebar-overlay" id="sidebar-overlay" aria-hidden="true"></div>
     <aside id="sidebar" aria-label="Primary navigation" aria-hidden="true">
       <a class="tab-btn" href="/home" data-tab="home">Home</a>
       <a class="tab-btn" href="/plans" data-tab="plans">Plans</a>
+      <div class="app-sidebar-extras" id="sidebar-extras"></div>
     </aside>
   `;
+}
+
+function hamburgerBtn(): HTMLButtonElement {
+  return document.getElementById('hamburger-btn') as HTMLButtonElement;
 }
 
 describe('setupMobileNav', () => {
@@ -149,5 +165,82 @@ describe('setupMobileNav', () => {
   test('no-op when sidebar element is missing from DOM', () => {
     document.getElementById('sidebar')!.remove();
     expect(() => setupMobileNav()).not.toThrow();
+  });
+});
+
+/**
+ * Placement of the topbar controls (issue #1779).
+ *
+ * These assert DOM parentage only. Whether the relocated controls are
+ * visible, on-screen and large enough to tap is a layout question jsdom
+ * cannot answer -- tests-e2e/mobile-header-drawer.spec.ts measures that in
+ * a real browser at a 390px viewport.
+ */
+describe('syncHeaderPlacement', () => {
+  beforeEach(buildDOM);
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  const projected = (): HTMLElement[] => [
+    document.getElementById('topbar-filters')!,
+    document.getElementById('user-info')!,
+  ];
+
+  function parentIds(): (string | undefined)[] {
+    return projected().map(el => el.parentElement?.id);
+  }
+
+  test('narrow moves the filters and the account actions into the drawer slot', () => {
+    syncHeaderPlacement(true);
+    expect(parentIds()).toEqual(['sidebar-extras', 'sidebar-extras']);
+  });
+
+  test('widening restores both to the topbar, in header order', () => {
+    syncHeaderPlacement(true);
+    syncHeaderPlacement(false);
+
+    const topbar = document.querySelector<HTMLElement>('.app-topbar')!;
+    expect(projected().every(el => el.parentElement === topbar)).toBe(true);
+    const ids = Array.from(topbar.children).map(el => el.id).filter(Boolean);
+    expect(ids.indexOf('topbar-filters')).toBeLessThan(ids.indexOf('user-info'));
+  });
+
+  test('repeated narrow calls do not re-append the same nodes', () => {
+    syncHeaderPlacement(true);
+    const marker = document.createElement('span');
+    projected()[0]!.appendChild(marker);
+    // A redundant appendChild would tear the subtree out and back in,
+    // dropping focus and closing any open chip popover.
+    syncHeaderPlacement(true);
+    expect(marker.isConnected).toBe(true);
+    expect(document.getElementById('sidebar-extras')!.children).toHaveLength(2);
+  });
+
+  test('no-op when the drawer slot is absent', () => {
+    const topbar = document.querySelector<HTMLElement>('.app-topbar')!;
+    document.getElementById('sidebar-extras')!.remove();
+    expect(() => syncHeaderPlacement(true)).not.toThrow();
+    expect(projected().every(el => el.parentElement === topbar)).toBe(true);
+  });
+
+  test('clicking an account action in the drawer closes it', () => {
+    setupMobileNav();
+    syncHeaderPlacement(true);
+    hamburgerBtn().click();
+    document.getElementById('logout-btn')!.dispatchEvent(
+      new MouseEvent('click', { button: 0, bubbles: true }),
+    );
+    expect(document.body.classList.contains('sidebar-open')).toBe(false);
+  });
+
+  test('using a filter chip in the drawer leaves it open', () => {
+    setupMobileNav();
+    syncHeaderPlacement(true);
+    hamburgerBtn().click();
+    const chip = document.createElement('button');
+    document.getElementById('topbar-filters')!.appendChild(chip);
+    chip.dispatchEvent(new MouseEvent('click', { button: 0, bubbles: true }));
+    expect(document.body.classList.contains('sidebar-open')).toBe(true);
   });
 });

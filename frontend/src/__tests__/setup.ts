@@ -82,6 +82,25 @@ if (typeof globalThis.structuredClone === 'undefined') {
   }) as typeof structuredClone;
 }
 
+// jsdom evaluates no CSS media queries and so ships no window.matchMedia,
+// which setupMobileNav() calls to decide where the topbar controls live.
+// Stub it as never-matching: jsdom has no viewport width to honour, so the
+// desktop branch is the only honest default. The narrow branch is asserted
+// by calling syncHeaderPlacement directly, and measured for real in the
+// Playwright suite, which has actual layout.
+if (typeof window.matchMedia !== 'function') {
+  window.matchMedia = ((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: jest.fn(),
+    removeListener: jest.fn(),
+    addEventListener: jest.fn(),
+    removeEventListener: jest.fn(),
+    dispatchEvent: jest.fn(() => false),
+  })) as unknown as typeof window.matchMedia;
+}
+
 // Mock alert and confirm
 global.alert = jest.fn();
 global.confirm = jest.fn(() => true);

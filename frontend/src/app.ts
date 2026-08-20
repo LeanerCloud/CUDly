@@ -654,6 +654,45 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
 }
 
 /**
+ * Drawer breakpoint. Must stay in lockstep with the `max-width: 768px` block
+ * in styles/responsive.css, which lays these same regions out of the topbar.
+ */
+const MOBILE_NAV_QUERY = '(max-width: 768px)';
+
+/**
+ * Topbar regions with no room in the topbar below the breakpoint, listed in
+ * the order they appear in the header so restoring them re-appends correctly.
+ */
+const DRAWER_PROJECTED_IDS = ['topbar-filters', 'user-info'] as const;
+
+/**
+ * Move the global filter chips and the account actions between the topbar
+ * and the drawer (issue #1779). Relocation rather than duplication: the
+ * chips and the logout/profile handlers are bound to these exact nodes, and
+ * moving a node keeps its listeners and state.
+ *
+ * Idempotent, and a no-op when either endpoint is absent.
+ */
+export function syncHeaderPlacement(isNarrow: boolean): void {
+  const topbar = document.querySelector<HTMLElement>('.app-topbar');
+  const extras = document.getElementById('sidebar-extras');
+  if (!topbar || !extras) return;
+
+  const target = isNarrow ? extras : topbar;
+  const elements = DRAWER_PROJECTED_IDS
+    .map(id => document.getElementById(id))
+    .filter((el): el is HTMLElement => el !== null);
+
+  // Re-append all of them whenever any one is misplaced, so the restored
+  // header keeps DRAWER_PROJECTED_IDS order. Appending an element that is
+  // already in place would tear its subtree out and back in, dropping focus
+  // and closing an open chip popover, so the whole pass is skipped instead.
+  const misplaced = elements.some(el => el.parentElement !== target);
+  if (!misplaced) return;
+  for (const el of elements) target.appendChild(el);
+}
+
+/**
  * Wire the mobile navigation drawer (hamburger button + overlay + Escape).
  *
  * Activates below 768px (CSS hides the hamburger above that breakpoint).
@@ -717,6 +756,30 @@ export function setupMobileNav(): void {
       e.preventDefault();
       closeDrawer();
     }
+  });
+
+  // Projected topbar controls: place them for the current width, then follow
+  // the breakpoint. Listeners are bound once here, never per relocation.
+  const mediaQuery = window.matchMedia(MOBILE_NAV_QUERY);
+  syncHeaderPlacement(mediaQuery.matches);
+  mediaQuery.addEventListener('change', event => {
+    syncHeaderPlacement(event.matches);
+    // Widening past the breakpoint leaves the drawer's scroll lock on <body>
+    // with no visible drawer and no hamburger to dismiss it.
+    if (!event.matches && document.body.classList.contains('sidebar-open')) {
+      closeDrawer();
+    }
+  });
+
+  // Account actions inside the drawer navigate or end the session, so they
+  // close it. Delegated from the slot, which outlives every relocation; the
+  // filter chips are deliberately excluded so picking a filter keeps the
+  // drawer open for the next one.
+  const extras = document.getElementById('sidebar-extras');
+  extras?.addEventListener('click', (e: MouseEvent) => {
+    const target = e.target as HTMLElement | null;
+    if (!target?.closest('#user-info a, #user-info button')) return;
+    if (document.body.classList.contains('sidebar-open')) closeDrawer();
   });
 
   // Clicking any sidebar link closes the drawer (SPA navigation)

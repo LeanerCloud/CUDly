@@ -41,10 +41,41 @@ describe('responsive.css nav wrap rules', () => {
     expect(tabsRule?.[0] ?? '').not.toMatch(/overflow-x/);
   });
 
-  it('wraps #user-info inside the ≤768px block so header children do not overflow', () => {
+  /**
+   * Issue #10 wrapped #user-info at ≤768px to stop it overflowing the
+   * header. That never worked: the topbar is a fixed --cudly-topbar-h box,
+   * so the extra rows painted over the page content instead (issue #1779).
+   * The regions are relocated into the drawer now, and the topbar copies
+   * are laid out away rather than left to paint behind the content.
+   *
+   * Source-text assertions only -- whether the relocated controls are
+   * actually visible and tappable is measured in a real browser by
+   * tests-e2e/mobile-header-drawer.spec.ts.
+   */
+  it('takes #user-info and #topbar-filters out of the topbar at ≤768px', () => {
     const match = css.match(/@media\s*\(max-width:\s*768px\)\s*{([\s\S]*?)\n}/);
     expect(match).not.toBeNull();
     const body = match?.[1] ?? '';
-    expect(body).toMatch(/#user-info\s*{[\s\S]*?flex-wrap:\s*wrap/);
+    expect(body).toMatch(
+      /\.app-topbar\s*>\s*#topbar-filters,\s*\.app-topbar\s*>\s*#user-info\s*{[\s\S]*?display:\s*none/,
+    );
+  });
+
+  it('styles both regions for the drawer slot at ≤768px', () => {
+    const match = css.match(/@media\s*\(max-width:\s*768px\)\s*{([\s\S]*?)\n}/);
+    expect(match).not.toBeNull();
+    const body = match?.[1] ?? '';
+    expect(body).toMatch(/\.app-sidebar-extras\s*{[\s\S]*?display:\s*flex/);
+    expect(body).toMatch(/\.app-sidebar-extras #topbar-filters/);
+    expect(body).toMatch(/\.app-sidebar-extras #user-info/);
+  });
+
+  it('does not stack the topbar into a column at ≤768px', () => {
+    const match = css.match(/@media\s*\(max-width:\s*768px\)\s*{([\s\S]*?)\n}/);
+    expect(match).not.toBeNull();
+    const body = match?.[1] ?? '';
+    // The `header { flex-direction: column }` rule was the overflow source.
+    expect(body).not.toMatch(/(^|\n)\s*header\s*{/);
+    expect(body).toMatch(/\.app-topbar\s*{[\s\S]*?justify-content:\s*flex-start/);
   });
 });

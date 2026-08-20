@@ -87,6 +87,13 @@
                         <span class="sidebar-label">Admin</span>
                     </a>
                 </nav>
+                <!-- Drawer slot for the topbar controls. Below the drawer
+                     breakpoint the topbar has no room for the filter chips
+                     and the account actions, so app.ts:setupMobileNav()
+                     relocates #topbar-filters and #user-info in here, and
+                     back out again above it (issue #1779). Empty on
+                     desktop. -->
+                <div class="app-sidebar-extras" id="sidebar-extras"></div>
             </aside>
             <main class="app-main" id="main-content">
             <!-- Home Tab. Provider/Account filters live in the topbar

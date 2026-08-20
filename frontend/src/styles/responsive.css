@@ -113,11 +113,6 @@ body.sidebar-open {
     overflow: hidden;
 }
 @media (max-width: 768px) {
-    header {
-        flex-direction: column;
-        gap: 1rem;
-    }
-
     .controls-bar {
         flex-direction: column;
     }
@@ -145,11 +140,6 @@ body.sidebar-open {
         white-space: nowrap;
     }
 
-    #user-info {
-        flex-wrap: wrap;
-        justify-content: center;
-    }
-
     .form-row {
         flex-direction: column;
     }
@@ -174,14 +164,27 @@ body.sidebar-open {
         grid-template-columns: 1fr 1fr;
     }
 
-    /* Topbar: show hamburger, wrap filter chips to prevent overflow */
     .hamburger {
         display: inline-flex;
     }
 
-    .app-topbar-filters {
-        flex-wrap: wrap;
-        row-gap: var(--cudly-sp-2);
+    /* Topbar: hamburger + brand only, on one row (issue #1779).
+     *
+     * The topbar is a fixed --cudly-topbar-h box. It used to also carry the
+     * filter chips and the account actions, stacked by a
+     * `header { flex-direction: column }` rule, so every row past the first
+     * overflowed past the gradient and painted its white text straight onto
+     * the page content below. Both regions move into the drawer instead
+     * (app.ts:syncHeaderPlacement); laying them out away here covers the
+     * moment before that script has run. */
+    .app-topbar {
+        justify-content: flex-start;
+        gap: var(--cudly-sp-2);
+    }
+
+    .app-topbar > #topbar-filters,
+    .app-topbar > #user-info {
+        display: none;
     }
 
     /* Sidebar: off-screen by default; slides in when .sidebar-open is on <body> */
@@ -222,6 +225,86 @@ body.sidebar-open {
 
     body.sidebar-open .app-sidebar {
         transform: translateX(0);
+    }
+
+    /* Drawer footer holding the relocated topbar controls (issue #1779).
+     * Pinned to the bottom of the rail so the filter chips open their
+     * popover upwards (chip-select flips when the trigger sits low in the
+     * viewport) instead of off the bottom edge. */
+    .app-sidebar-extras {
+        display: flex;
+        flex-direction: column;
+        gap: var(--cudly-sp-3);
+        margin-top: auto;
+        padding-top: var(--cudly-sp-3);
+        padding-bottom: max(var(--cudly-sp-3), env(safe-area-inset-bottom));
+        border-top: 1px solid var(--cudly-border);
+    }
+
+    .app-sidebar-extras #topbar-filters,
+    .app-sidebar-extras #user-info {
+        flex-direction: column;
+        align-items: stretch;
+        gap: var(--cudly-sp-2);
+        margin: 0;
+    }
+
+    /* Chips fill the rail and clip long account labels rather than
+     * overflowing it; the popover is capped to the rail width for the
+     * same reason. */
+    .app-sidebar-extras .chip-select {
+        width: 100%;
+        min-height: 44px;
+        justify-content: space-between;
+    }
+
+    .app-sidebar-extras .chip-select-value {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .app-sidebar-extras .chip-select-menu {
+        min-width: 0;
+        max-width: 100%;
+        width: 100%;
+    }
+
+    /* A long address has only the rail's width to sit in. */
+    .app-sidebar-extras #user-email-display {
+        overflow-wrap: anywhere;
+    }
+
+    /* The rules below re-colour #user-info, which is authored for the blue
+     * topbar gradient and so invisible on the drawer's light surface. */
+    .app-sidebar-extras .role-badge {
+        align-self: flex-start;
+        margin-left: 0;
+        background: var(--cudly-info-bg);
+        color: var(--cudly-primary);
+    }
+
+    /* Zero the topbar's horizontal padding so the links start on the same
+     * left edge as the chips and the email above them. */
+    .app-sidebar-extras .header-link,
+    .app-sidebar-extras #logout-btn {
+        display: flex;
+        align-items: center;
+        min-height: 44px;
+        padding-left: 0;
+        padding-right: 0;
+        color: var(--cudly-text);
+    }
+
+    .app-sidebar-extras #logout-btn,
+    .app-sidebar-extras #logout-btn:hover {
+        justify-content: center;
+        border-color: var(--cudly-border-strong);
+    }
+
+    .app-sidebar-extras .header-link:hover,
+    .app-sidebar-extras #logout-btn:hover {
+        background: var(--cudly-surface-muted);
     }
 }
 
