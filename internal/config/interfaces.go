@@ -35,11 +35,30 @@ type StoreInterface interface {
 	// prevents the concurrent-write lost-update race of issue #1071.
 	//
 	// It is idempotent in stepNumber: completing a step the plan has already
-	// counted is a no-op. That is what keeps a multi-account ramp step from
-	// advancing twice when an operator retries two separately-failed accounts
-	// of the same step (issue #1669). A step still counts as completed when one
-	// execution for it ran clean, not when every account has bought.
+	// counted reports ErrRampStepAlreadyCounted and writes nothing. That is
+	// what keeps a multi-account ramp step from advancing twice when an
+	// operator retries two separately-failed accounts of the same step (issue
+	// #1669).
+	//
+	// A step counts as complete only when EVERY cloud account the step fanned
+	// out to has bought, not when any one of them has (issue #1861). Until
+	// then it reports ErrRampStepIncomplete, which is a "not yet" rather than a
+	// failure of the purchase that just completed -- the purchase is real and
+	// already recorded; only the plan's position is withheld.
 	CompletePlanStep(ctx context.Context, planID string, stepNumber int) error
+	// GetStuckRampSteps returns, keyed by plan ID, the plan's next ramp step
+	// and how many of that step's executions have a terminal, unsuccessful
+	// latest attempt with no retry in flight -- a ramp CompletePlanStep will
+	// keep refusing to advance until an operator intervenes. Plans with
+	// nothing stuck are absent from the map. Feeds the plan-health
+	// ramp_blocked factor (issue #1861).
+	GetStuckRampSteps(ctx context.Context) (map[string]RampStepBlock, error)
+	// BoughtRampStepsInRange returns the steps in [from, to] of planID that
+	// already have a fan-out unit which bought, ascending. Callers about to
+	// mint executions for a step range use it to refuse a step that is partly
+	// bought, which would otherwise re-fan-out across accounts that already
+	// committed under a fresh idempotency lineage (issue #1861).
+	BoughtRampStepsInRange(ctx context.Context, planID string, from, to int) ([]int, error)
 	// UpdatePurchasePlanTx is the tx-accepting variant of UpdatePurchasePlan.
 	// Used from createPlannedPurchases' WithTx block so the per-row
 	// SavePurchaseExecutionTx writes and the plan's next_execution_date

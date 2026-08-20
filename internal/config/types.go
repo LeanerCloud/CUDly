@@ -403,6 +403,67 @@ const LegacyStatusCanceled = "cancel" + "led"
 // reaper.go) for rows left in approved/running past its threshold.
 const StatusFailed = "failed"
 
+// StatusCompleted / StatusPartiallyCompleted are the two terminal statuses
+// that mean commitment was actually bought. A partially-completed row bought
+// some of its recommendations and failed others (issue #642); it is a real
+// purchase, which is why re-approving one would double-buy.
+const (
+	StatusCompleted          = "completed"
+	StatusPartiallyCompleted = "partially_completed"
+)
+
+// StatusExpired is written when an approval lapsed before anyone acted on it.
+const StatusExpired = "expired"
+
+// The three ramp-step status classes below drive the advance gate in
+// CompletePlanStep and the stuck-ramp report GetStuckRampSteps (issue #1861).
+// They are separate exported lists rather than one, because the gate asks two
+// different questions of the same rows and the health report asks a third:
+//
+//   - RampStepSucceededStatuses answers "did this fan-out unit buy?". A step
+//     no unit bought must not advance the ramp at all.
+//   - RampStepSettledStatuses answers "is this fan-out unit done holding the
+//     step open?". It is deliberately an ALLOWLIST: a status added to the
+//     schema later holds the step open until someone classifies it, which is
+//     the fail-closed direction on a money path.
+//   - RampStepStuckStatuses answers "is this unit stuck rather than in
+//     flight?". Only these produce the plan-health ramp_blocked factor, so a
+//     retry still working its way through pending/running reads as recovery
+//     rather than as a frozen ramp.
+//
+// Canceled counts as settled but neither succeeded nor stuck: to cancel a
+// step's row is an operator deciding that unit will not buy, and that decision
+// is what releases a ramp an unrecoverable account would otherwise freeze.
+// Both spellings are listed for the duration of the expand-contract rename
+// (migration 000089, contract in #1278), same as HealthScoredExecutionStatuses.
+//
+// RampStepSucceededStatuses is the same predicate migration 000098 spells out
+// inline as status IN ('completed','partially_completed') when it decides which
+// rows a sibling has already bought for. The migration is frozen SQL and cannot
+// import this, so the two are kept identical by hand: changing one without the
+// other would make the backfill and the advance gate disagree about what
+// "bought" means.
+var (
+	RampStepSucceededStatuses = []string{StatusCompleted, StatusPartiallyCompleted}
+	RampStepSettledStatuses   = []string{StatusCompleted, StatusPartiallyCompleted, StatusCanceled, LegacyStatusCanceled}
+	RampStepStuckStatuses     = []string{StatusFailed, StatusExpired}
+)
+
+// RampStepBlock reports a plan's next ramp step and how many of that step's
+// executions are stuck on it. Returned by GetStuckRampSteps and rendered by the
+// plan-health ramp_blocked factor (issue #1861).
+//
+// StuckExecutions counts executions rather than accounts because that is what
+// the query can prove: a fanned-out step writes one row per cloud account, so
+// the two coincide for the multi-account plans the factor exists for, but a
+// step that never fanned out (an approval that expired before it ran) has one
+// row standing for the whole step. Naming the count for the rows keeps the
+// tooltip from asserting an account total it did not measure.
+type RampStepBlock struct {
+	StepNumber      int
+	StuckExecutions int
+}
+
 // HealthScoredExecutionStatuses are the execution statuses the plan health
 // score counts (internal/api/plan_health.go). It lives here, in the package
 // that owns both the status constants and the retention sweep, because two

@@ -1581,3 +1581,213 @@ func TestHandler_createPlan_DBErrorOnCreateReturns500WithLog(t *testing.T) {
 	// Raw DB error must NOT be exposed to the caller.
 	assert.NotContains(t, ce.Error(), "connection refused", "internal DB error must not leak to caller")
 }
+
+// TestHandler_listPlans_StuckRampFetchFailureLeavesHealthUnknown pins the
+// fail-closed half of the ramp_blocked wiring (issue #1861). The factor is
+// worth 25 points and only ever subtracts, so a score computed without it is
+// not "slightly optimistic", it is a healthy badge on a plan whose ramp is
+// stopped -- the exact reading the issue was filed about. Withhold the score
+// instead, the same way an unreadable execution-count fetch does.
+func TestHandler_listPlans_StuckRampFetchFailureLeavesHealthUnknown(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+
+	planID := "11111111-1111-1111-1111-111111111111"
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).
+		Return([]config.PurchasePlan{{ID: planID, Name: "Ramping Plan", Enabled: true}}, nil)
+	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses, mock.AnythingOfType("time.Time")).
+		Return(map[string]config.ExecutionStatusCounts{}, nil)
+	mockStore.On("GetStuckRampSteps", ctx).Return(nil, errors.New("connection reset"))
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-token"}}
+
+	result, err := handler.listPlans(ctx, req, map[string]string{})
+	require.NoError(t, err, "an unreadable health input must not fail the Plans page")
+	require.Len(t, result.Plans, 1)
+	assert.Nil(t, result.Plans[0].HealthScore,
+		"a score that cannot see stuck ramps must be absent, not optimistic")
+	assert.Empty(t, result.Plans[0].HealthFactors)
+}
+
+// TestHandler_listPlans_StuckRampProducesTheBlockedFactor is the end-to-end
+// wiring check: a plan the store reports as stuck must come back carrying the
+// ramp_blocked factor rather than the wall-clock behind_schedule proxy.
+func TestHandler_listPlans_StuckRampProducesTheBlockedFactor(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+
+	planID := "11111111-1111-1111-1111-111111111111"
+	quietPlanID := "22222222-2222-2222-2222-222222222222"
+	ramp := config.RampSchedule{
+		Type: "weekly", PercentPerStep: 25, StepIntervalDays: 7,
+		CurrentStep: 2, TotalSteps: 4, StartDate: time.Now().AddDate(0, 0, -28),
+	}
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).
+		Return([]config.PurchasePlan{
+			{ID: planID, Name: "Stuck Plan", Enabled: true, RampSchedule: ramp},
+			{ID: quietPlanID, Name: "Late Plan", Enabled: true, RampSchedule: ramp},
+		}, nil)
+	mockStore.On("CountExecutionsByPlanAndStatus", ctx, planHealthExecutionStatuses, mock.AnythingOfType("time.Time")).
+		Return(map[string]config.ExecutionStatusCounts{}, nil)
+	mockStore.On("GetStuckRampSteps", ctx).
+		Return(map[string]config.RampStepBlock{planID: {StepNumber: 3, StuckExecutions: 1}}, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-token"}}
+
+	result, err := handler.listPlans(ctx, req, map[string]string{})
+	require.NoError(t, err)
+	byID := make(map[string]PlanWithHealth, len(result.Plans))
+	for _, p := range result.Plans {
+		byID[p.ID] = p
+	}
+
+	stuck := byID[planID]
+	require.Len(t, stuck.HealthFactors, 1)
+	assert.Equal(t, HealthFactorRampBlocked, stuck.HealthFactors[0].Code)
+
+	// Same ramp, same clock, not reported stuck: it is merely late. The two
+	// plans differing only in the store's report is what proves the factor is
+	// keyed on the report and not on the schedule.
+	late := byID[quietPlanID]
+	require.Len(t, late.HealthFactors, 1)
+	assert.Equal(t, HealthFactorBehindSchedule, late.HealthFactors[0].Code)
+}
+
+// TestHandler_createPlannedPurchases_RefusesAPartlyBoughtStep is the issue
+// #1861 double-buy guard.
+//
+// The completeness gate holds CurrentStep still while any account of a step is
+// outstanding. An operator looking at a plan that has stopped advancing reaches
+// for "create planned purchases", and createPurchaseExecutionsTx stamps
+// CurrentStep+1 -- the very step some accounts already bought. The row it mints
+// is a ROOT row, so approving it re-fans-out across every account on the plan
+// under a fresh idempotency lineage: the accounts that already committed buy the
+// same commitment a second time, with no provider-side dedupe to catch it.
+func TestHandler_createPlannedPurchases_RefusesAPartlyBoughtStep(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	session := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(session, nil)
+	mockAuth.grantAdmin()
+
+	planID := "11111111-1111-1111-1111-111111111111"
+	mockStore.On("GetPurchasePlan", ctx, planID).Return(&config.PurchasePlan{
+		ID:   planID,
+		Name: "Frozen Ramp",
+		RampSchedule: config.RampSchedule{
+			Type: "weekly", PercentPerStep: 25, StepIntervalDays: 7,
+			CurrentStep: 2, TotalSteps: 4, StartDate: time.Now().AddDate(0, 0, -21),
+		},
+	}, nil)
+	// Step 3 is the frozen step: one account bought it, another has not.
+	mockStore.On("BoughtRampStepsInRange", ctx, planID, 3, 4).Return([]int{3}, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    `{"count":2,"start_date":"2026-09-01"}`,
+	}
+
+	_, err := handler.createPlannedPurchases(ctx, req, planID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "a partly-bought step must map to an HTTP status, not a 500")
+	assert.Equal(t, 409, ce.code)
+	assert.Contains(t, err.Error(), "3")
+	assert.Contains(t, err.Error(), "already been bought")
+
+	// Nothing may be minted, and the plan pointer must not move.
+	mockStore.AssertNotCalled(t, "WithTx", mock.Anything, mock.Anything)
+}
+
+// TestHandler_createPlannedPurchases_AllowsAnUnstartedStep is the positive
+// control: the guard must not block the ordinary case, or it would break
+// scheduling entirely while looking like it works.
+func TestHandler_createPlannedPurchases_AllowsAnUnstartedStep(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	session := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(session, nil)
+	mockAuth.grantAdmin()
+
+	planID := "11111111-1111-1111-1111-111111111111"
+	plan := &config.PurchasePlan{
+		ID:   planID,
+		Name: "Healthy Ramp",
+		RampSchedule: config.RampSchedule{
+			Type: "weekly", PercentPerStep: 25, StepIntervalDays: 7,
+			CurrentStep: 2, TotalSteps: 4, StartDate: time.Now().AddDate(0, 0, -21),
+		},
+	}
+	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
+	mockStore.On("BoughtRampStepsInRange", ctx, planID, 3, 4).Return([]int{}, nil)
+	mockStore.On("SavePurchaseExecutionTx", ctx, mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	mockStore.On("UpdatePurchasePlanTx", ctx, mock.Anything, mock.AnythingOfType("*config.PurchasePlan")).Return(nil).Maybe()
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    `{"count":2,"start_date":"2026-09-01"}`,
+	}
+
+	resp, err := handler.createPlannedPurchases(ctx, req, planID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, resp.Created)
+}
+
+// TestHandler_createPlannedPurchases_FailsClosedWhenTheProbeFails: the guard
+// protects a money path, so an unreadable answer must refuse rather than mint
+// rows that might re-fan-out over accounts that already bought.
+func TestHandler_createPlannedPurchases_FailsClosedWhenTheProbeFails(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	session := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(session, nil)
+	mockAuth.grantAdmin()
+
+	planID := "11111111-1111-1111-1111-111111111111"
+	mockStore.On("GetPurchasePlan", ctx, planID).Return(&config.PurchasePlan{
+		ID: planID, Name: "Frozen Ramp",
+		RampSchedule: config.RampSchedule{
+			Type: "weekly", PercentPerStep: 25, StepIntervalDays: 7,
+			CurrentStep: 2, TotalSteps: 4, StartDate: time.Now().AddDate(0, 0, -21),
+		},
+	}, nil)
+	mockStore.On("BoughtRampStepsInRange", ctx, planID, 3, 3).Return(nil, errors.New("connection reset"))
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    `{"count":1,"start_date":"2026-09-01"}`,
+	}
+
+	_, err := handler.createPlannedPurchases(ctx, req, planID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 503, ce.code)
+	mockStore.AssertNotCalled(t, "WithTx", mock.Anything, mock.Anything)
+}

@@ -79,8 +79,18 @@ func (h *Handler) attachPlanHealth(ctx context.Context, plans []config.PurchaseP
 		return result
 	}
 
+	// A blocked ramp is worth up to 25 points, so a score computed without it
+	// is not a partially-informed score, it is a wrong one -- and it errs
+	// healthy, on plans that are stopped. Withhold every score rather than
+	// publish that, exactly as the counts fetch above does.
+	stuckByPlan, err := h.config.GetStuckRampSteps(ctx)
+	if err != nil {
+		logging.Warnf("listPlans: GetStuckRampSteps failed, plan health reported as unknown: %v", err)
+		return result
+	}
+
 	for i := range plans {
-		score, factors := computePlanHealth(plans[i], now, countsByPlan[plans[i].ID])
+		score, factors := computePlanHealth(plans[i], now, countsByPlan[plans[i].ID], stuckByPlan[plans[i].ID])
 		result[i].HealthScore = &score
 		result[i].HealthFactors = factors
 	}
@@ -344,6 +354,10 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 		return nil, err
 	}
 
+	if err := h.refusePartlyBoughtRampSteps(ctx, plan, planID, req.Count); err != nil {
+		return nil, err
+	}
+
 	// Atomic write: per-row execution inserts and the plan's
 	// next_execution_date bump commit together, or roll back together.
 	// The previous implementation called SavePurchaseExecution outside
@@ -380,6 +394,49 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 	}
 
 	return &CreatePlannedPurchasesResponse{Created: created}, nil
+}
+
+// refusePartlyBoughtRampSteps blocks a create whose steps overlap one an
+// account has already bought (issue #1861).
+//
+// createPurchaseExecutionsTx stamps CurrentStep+1 .. CurrentStep+count. The
+// completeness gate holds CurrentStep still while any account of a step is
+// outstanding, so on a plan an operator is trying to unstick, CurrentStep+1 is
+// the very step that is partly bought. The row minted for it is a ROOT row:
+// approving it re-fans-out across every account on the plan, including the ones
+// that already bought, under a fresh idempotency lineage (the new root's key is
+// a new UUID, and each account's token derives from it), so the provider-side
+// dedupe never engages and the commitment is genuinely bought twice. Per-account
+// retry of the outstanding rows is the operation that actually finishes the step.
+//
+// Fails closed: an unreadable check refuses the create rather than minting rows
+// that might double-buy.
+func (h *Handler) refusePartlyBoughtRampSteps(ctx context.Context, plan *config.PurchasePlan, planID string, count int) error {
+	from := plan.RampSchedule.CurrentStep + 1
+	bought, err := h.config.BoughtRampStepsInRange(ctx, planID, from, from+count-1)
+	if err != nil {
+		logging.Errorf("createPlannedPurchases: BoughtRampStepsInRange failed (plan=%s): %v", planID, err)
+		return NewClientError(503, "could not verify which ramp steps are already bought; try again")
+	}
+	if len(bought) == 0 {
+		return nil
+	}
+	return NewClientError(409, fmt.Sprintf(
+		"ramp step(s) %s of this plan have already been bought by at least one cloud account; "+
+			"retry the outstanding per-account purchases to finish the step instead of scheduling it again",
+		formatRampSteps(bought)))
+}
+
+// formatRampSteps renders step numbers for an operator-facing message.
+func formatRampSteps(steps []int) string {
+	out := ""
+	for i, s := range steps {
+		if i > 0 {
+			out += ", "
+		}
+		out += fmt.Sprintf("%d", s)
+	}
+	return out
 }
 
 // parseCreatePurchasesRequest parses and validates the create purchases request.
