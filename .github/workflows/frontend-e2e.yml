@@ -1,7 +1,16 @@
-name: Frontend E2E (PR)
+name: Frontend E2E
 
 on:
   pull_request:
+    branches:
+      - main
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-e2e.yml"
+  # On main only to populate the browser cache in the default-branch scope: a
+  # cache written by a pull_request run is readable only within that PR, so
+  # without this the first run of every PR misses.
+  push:
     branches:
       - main
     paths:
@@ -12,14 +21,26 @@ permissions:
   contents: read
 
 concurrency:
-  group: frontend-e2e-pr-${{ github.ref }}
-  cancel-in-progress: true
+  group: frontend-e2e-${{ github.ref }}
+  # PRs only. Superseding a push on main would cancel the run that populates
+  # the cache and the one carrying the post-merge signal, which are the two
+  # reasons the push trigger exists.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   playwright:
     name: Playwright Chromium
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Raised from 10 so the install step's own 8-minute cap is always what
+    # fires. Every other step at its worst across all attempts sums to 78s
+    # (75s if you look only at green runs, which understates it, and no sample
+    # exercised the spec-failure path at all), plus roughly 30s for the cache
+    # restore and save. So a full 480s install lands at ~600s: exactly the old
+    # cap, leaving nothing for the job timeout to be a backstop with. And a
+    # job timeout cancels, which is the conclusion #1869 is about. A cap is
+    # not a cost: the median successful job takes 69s, and only pathological
+    # runs ever approach either limit.
+    timeout-minutes: 12
     defaults:
       run:
         working-directory: frontend
@@ -45,8 +66,53 @@ jobs:
       - name: Build
         run: npm run build
 
+      # The resolved version, not the `^1.60.0` range in package.json, so a
+      # floating range cannot silently reuse the previous browser build.
+      - name: Resolve Playwright version
+        id: playwright
+        run: |
+          set -euo pipefail
+          version="$(jq -re '.packages["node_modules/@playwright/test"].version' package-lock.json)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Playwright ${version}"
+
+      # Split restore/save rather than the combined actions/cache, whose save is
+      # a post step gated on `post-if: success()` and so skips the run being
+      # iterated on: the one whose specs are still failing.
+      - name: Restore Chromium
+        id: chromium-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ steps.playwright.outputs.version }}-chromium
+
       - name: Install Chromium
+        # This step timeout is the fix for #1869, where this install wedged
+        # five times on 2026-08-19 (#1864, #1868) and ran until the job cap,
+        # ending each run `cancelled` with every spec skipped. Cancelled is not
+        # failed, so the missing e2e signal showed up as nothing at all. A step
+        # that busts its own timeout FAILS, so a future wedge is a red X naming
+        # this step.
+        #
+        # 8 minutes sits in the gap measured over the last 40 runs and all
+        # their attempts: 39 successful installs, 36 at or under 39s with
+        # outliers at 101s, 140s and 381s, against 5 wedges none under 585s.
+        # Above the healthy maximum, below every wedge, under the job cap.
+        # That gap is also why there is no retry: an attempt capped under 381s
+        # fails healthy runs, and two capped above it do not fit in the job.
+        timeout-minutes: 8
+        # Idempotent on a cache hit: skips the download when the restored
+        # browser is complete and re-fetches when it is not.
         run: npx playwright install --with-deps chromium
+
+      - name: Save Chromium
+        # Skipped on a hit, and on an install failure (an untaken `if:` still
+        # implies success()), so only a complete browser reaches the key.
+        if: steps.chromium-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.chromium-cache.outputs.cache-primary-key }}
 
       - name: Run Playwright tests
         run: npm run test:e2e
