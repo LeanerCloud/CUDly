@@ -165,6 +165,13 @@
     text-overflow: ellipsis;
 }
 
+/* Drawer slot for the relocated topbar controls (issue #1779). Empty and
+ * inert on desktop, where those controls stay in the topbar; the mobile
+ * rules live alongside the drawer block in responsive.css. */
+.app-sidebar-extras {
+    display: none;
+}
+
 .app-main {
     flex: 1;
     padding: var(--cudly-sp-5);
