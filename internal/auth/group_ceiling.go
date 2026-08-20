@@ -122,6 +122,9 @@ func (s *Service) checkGrantCeiling(ctx context.Context, actorUserID string, req
 // deliberately NOT rejected: vocabulary validation is a separate concern
 // (#1629) and rejecting values this endpoint can legitimately already have
 // stored would break edits of existing groups.
+//
+// The values inside a permission's constraint lists get the same treatment;
+// see validateConstraintEntries.
 func validateRequestedPermissions(requested []Permission) error {
 	for i, p := range requested {
 		if strings.TrimSpace(p.Action) == "" {
@@ -133,6 +136,63 @@ func validateRequestedPermissions(requested []Permission) error {
 			return fmt.Errorf(
 				"%w: entry %d has a blank resource (action %q); a blank resource is malformed input, not a request for the %q wildcard",
 				ErrInvalidPermission, i, p.Action, ResourceAll)
+		}
+		if err := validateConstraintEntries(i, p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateConstraintEntries applies the same rule to the values inside a
+// permission's constraint lists, for the same reason.
+//
+// A blank entry and an absent one mean OPPOSITE things at enforcement:
+// matchStringListConstraints reads an empty list as "no restriction on this
+// dimension" (allow everything), while a list holding only "" matches
+// nothing (deny everything). The group-edit form's comma-joined text
+// encoding cannot tell the two apart -- [""] renders blank and re-parses as
+// absent -- so a permission fenced to nothing would come back out of a
+// cosmetic edit fenced to everything. Refusing blanks removes that case,
+// and closes it for API clients that never touch the form too.
+//
+// It does NOT make the encoding lossless in general, and should not be read
+// as claiming that: a stored value carrying leading or trailing spaces, or
+// one containing a comma, still re-parses into something different through
+// the form. Those values are accepted here deliberately -- see the blank
+// definition below -- so this refusal is narrower than "the form can always
+// round-trip what the API stored".
+//
+// Blank means empty after strings.TrimSpace, matching the action/resource
+// rule above. A value that merely CONTAINS whitespace is left alone:
+// enforcement compares these exactly (containsAny), so normalizing or
+// refusing them here would diverge from what the stored value does and
+// would break edits of data this endpoint already accepted.
+//
+// MaxPurchaseAmount has no blank form: zero already means "no cap" on both
+// sides of the comparison, so there is nothing here to disambiguate.
+func validateConstraintEntries(permIndex int, p Permission) error {
+	if p.Constraints == nil {
+		return nil
+	}
+	dimensions := []struct {
+		name   string
+		values []string
+	}{
+		// Named as the API serializes them (APIPermissionConstraint's JSON
+		// tags), so the refusal points at the field the client sent.
+		{"accounts", p.Constraints.AccountIDs},
+		{"providers", p.Constraints.Providers},
+		{"services", p.Constraints.Services},
+		{"regions", p.Constraints.Regions},
+	}
+	for _, dim := range dimensions {
+		for j, value := range dim.values {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf(
+					"%w: entry %d (%s:%s) has a blank %s constraint at position %d; a blank constraint value is malformed input, not an absent restriction",
+					ErrInvalidPermission, permIndex, p.Action, p.Resource, dim.name, j)
+			}
 		}
 	}
 	return nil

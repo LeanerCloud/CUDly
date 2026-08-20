@@ -86,6 +86,22 @@ export function closeGroupModal(): void {
 export async function saveGroup(e: Event): Promise<void> {
   e.preventDefault();
 
+  // Refuse rather than widen. A stored constraint value this form cannot
+  // carry unchanged is flagged when the row is rendered; saving anyway would
+  // re-submit a materially different permission set than the one loaded, and
+  // for a constraint list that means an unintended widening (an empty list is
+  // "no restriction" at enforcement). The group stays uneditable through the
+  // form until the value is repaired via the API or in the database.
+  const blocked = unrepresentablePermissionErrors();
+  if (blocked.length > 0) {
+    showError(
+      `Cannot save: ${blocked.join('; ')}. ` +
+      'Saving would silently drop the restriction, so the edit is refused. ' +
+      'Repair the value through the API or in the database, then reload this page.'
+    );
+    return;
+  }
+
   const name = (document.getElementById('group-name') as HTMLInputElement).value;
   const description = (document.getElementById('group-description') as HTMLTextAreaElement).value;
   const permissions = collectPermissions();
@@ -204,6 +220,18 @@ export function addPermission(permission?: Permission): void {
 
   const permDiv = document.createElement('div');
   permDiv.className = 'permission-item';
+
+  // Record the verdict, not the value: which of this row's constraint lists
+  // hold something the text encoding cannot carry back unchanged. saveGroup
+  // refuses while any row carries this. The attribute lives and dies with the
+  // row, so removing the row clears it and nothing outlives the modal. The
+  // action:resource label is read live from the selects at refusal time rather
+  // than stored here, so it cannot go stale against what the operator sees.
+  const unsafe = unrepresentableDimensions(permission?.constraints);
+  if (unsafe.length > 0) {
+    permDiv.setAttribute('data-unrepresentable', unsafe.join(', '));
+  }
+
   permDiv.innerHTML = `
     <div class="form-row">
       <label>Action:
@@ -220,6 +248,11 @@ export function addPermission(permission?: Permission): void {
     </div>
     <div class="constraints-section">
       <h4>Constraints (Optional)</h4>
+      <div class="form-row">
+        <label>Cloud Account IDs (comma-separated):
+          <input type="text" class="perm-accounts" value="${escapeHtml(permission?.constraints?.accounts?.join(', ') || '')}" placeholder="2f1c8e40-...-uuid, unattributed">
+        </label>
+      </div>
       <div class="form-row">
         <label>Providers (comma-separated):
           <input type="text" class="perm-providers" value="${escapeHtml(permission?.constraints?.providers?.join(', ') || '')}" placeholder="aws, azure, gcp">
@@ -248,6 +281,108 @@ export function addPermission(permission?: Permission): void {
       permDiv.remove();
     });
   }
+}
+
+// The one tokenizer for every comma-separated constraint input. Both the save
+// path and the render-time safety check below go through it, deliberately: if
+// this drops or alters a value, the check must catch it, and sharing the
+// function is what stops the two from drifting apart.
+function parseConstraintList(raw: string): string[] {
+  return raw.split(',').map(s => s.trim()).filter(s => s);
+}
+
+// Names the constraint lists in `constraints` that this form cannot carry
+// back unchanged (issue #1629, raised again by CodeRabbit on PR #1875).
+//
+// The form encodes a list as comma-separated text, and that encoding is not
+// injective. A stored [""] renders blank and re-parses as ABSENT; a stored
+// [","] re-parses as an empty list; a stored [" acct A "] comes back trimmed,
+// which is a different fence, since enforcement compares values exactly. In
+// every case the form would re-submit a materially different restriction than
+// the one it loaded, and for a constraint list "different" means WIDER: an
+// empty list is "no restriction on this dimension" at enforcement
+// (matchStringListConstraints). The refusal in saveGroup is the loud
+// alternative to that silent widening.
+//
+// The test is a round trip through parseConstraintList rather than a
+// hand-written blank check, for two reasons: it is the same predicate the
+// save path uses, so the two cannot disagree; and a per-entry "is it blank"
+// test would MISS [","], whose entry is not blank yet still vanishes, because
+// the split runs before the filter.
+//
+// An absent or empty list is NOT flagged. Both mean "no restriction on this
+// dimension", both are perfectly normal, and refusing them would make
+// ordinary unconstrained groups uneditable.
+// The constraint dimensions the form renders as comma-separated text, each in
+// an input classed `perm-<dimension>`. One list, so the render-time check and
+// the typed-input check below cannot cover different sets.
+const LIST_CONSTRAINT_DIMENSIONS = ['accounts', 'providers', 'services', 'regions'] as const;
+
+function unrepresentableDimensions(constraints: Permission['constraints']): string[] {
+  if (!constraints) return [];
+
+  const unsafe: string[] = [];
+  for (const dimension of LIST_CONSTRAINT_DIMENSIONS) {
+    const values = constraints[dimension];
+    if (!values || values.length === 0) continue;
+    const reparsed = parseConstraintList(values.join(', '));
+    if (reparsed.length !== values.length || reparsed.some((value, i) => value !== values[i])) {
+      unsafe.push(dimension);
+    }
+  }
+  return unsafe;
+}
+
+// Every reason this form must refuse to save, as one message per problem,
+// naming the permission by index and by action:resource and naming the
+// constraint list. Mirrors the specificity of the backend's own refusal in
+// validateConstraintEntries.
+//
+// Two directions, one rule and one error path, because they are the same
+// defect: the form would send a constraint list that says something different
+// from what the operator is looking at, and for a constraint list "different"
+// is WIDER, since an empty list is "no restriction on this dimension" at
+// enforcement.
+//
+//  1. STORED: the loaded value cannot survive the text encoding (flagged when
+//     the row rendered, see unrepresentableDimensions).
+//  2. TYPED: the box holds something, but parseConstraintList reduces it to
+//     nothing -- "," or " , " being the reachable case, since it takes only a
+//     stray comma. Without this the save would send an empty list and silently
+//     remove the fence.
+//
+// Both use parseConstraintList itself as the predicate, never a second
+// implementation of "parses to nothing" that could drift from it.
+//
+// A BLANK box is not an error: it means "no restriction on this dimension",
+// which is ordinary. Blank is measured after trimming, so a box holding only
+// spaces counts as blank -- it is indistinguishable from empty on screen, and
+// erroring on a field that looks empty would be unfixable from the UI.
+function unrepresentablePermissionErrors(): string[] {
+  const permissionsList = document.getElementById('permissions-list');
+  if (!permissionsList) return [];
+
+  const errors: string[] = [];
+  permissionsList.querySelectorAll('.permission-item').forEach((item, index) => {
+    const action = (item.querySelector('.perm-action') as HTMLSelectElement | null)?.value || '';
+    const resource = (item.querySelector('.perm-resource') as HTMLSelectElement | null)?.value || '';
+    const label = `permission ${index} (${action}:${resource})`;
+
+    const stored = (item.getAttribute('data-unrepresentable') || '').split(', ').filter(d => d);
+    if (stored.length > 0) {
+      errors.push(`${label} has a stored "${stored.join(', ')}" constraint value this form cannot represent`);
+    }
+
+    for (const dimension of LIST_CONSTRAINT_DIMENSIONS) {
+      // Already refused for this row on the stored value; do not say it twice.
+      if (stored.includes(dimension)) continue;
+      const raw = (item.querySelector(`.perm-${dimension}`) as HTMLInputElement | null)?.value ?? '';
+      if (raw.trim() !== '' && parseConstraintList(raw).length === 0) {
+        errors.push(`${label} has a "${dimension}" value with no usable entries`);
+      }
+    }
+  });
+  return errors;
 }
 
 /**
@@ -284,17 +419,34 @@ function collectPermissions(): Permission[] {
 
     const permission: Permission = { action, resource };
 
-    // Collect constraints
+    // Collect constraints. Dropping `accounts` here WIDENS the permission
+    // rather than merely losing data: an empty AccountIDs list means "no
+    // restriction on this dimension" at enforcement
+    // (matchStringListConstraints), so a permission scoped to one cloud
+    // account came back out of a cosmetic rename scoped to all of them
+    // (issue #1629).
+    const accounts = (item.querySelector('.perm-accounts') as HTMLInputElement)?.value;
     const providers = (item.querySelector('.perm-providers') as HTMLInputElement)?.value;
     const services = (item.querySelector('.perm-services') as HTMLInputElement)?.value;
     const regions = (item.querySelector('.perm-regions') as HTMLInputElement)?.value;
     const maxAmount = (item.querySelector('.perm-max-amount') as HTMLInputElement)?.value;
 
-    if (providers || services || regions || maxAmount) {
+    if (accounts || providers || services || regions || maxAmount) {
       permission.constraints = {};
-      if (providers) permission.constraints.providers = providers.split(',').map(s => s.trim()).filter(s => s);
-      if (services) permission.constraints.services = services.split(',').map(s => s.trim()).filter(s => s);
-      if (regions) permission.constraints.regions = regions.split(',').map(s => s.trim()).filter(s => s);
+      // Attach a dimension only when it yields at least one entry, so a box
+      // that LOOKS empty produces the same payload as one that IS empty. An
+      // input holding only whitespace would otherwise send [], which means
+      // the same thing at enforcement but makes the request depend on
+      // invisible characters. A box that parses to nothing while holding
+      // something visible never reaches here: saveGroup already refused it.
+      const accountsList = parseConstraintList(accounts || '');
+      const providersList = parseConstraintList(providers || '');
+      const servicesList = parseConstraintList(services || '');
+      const regionsList = parseConstraintList(regions || '');
+      if (accountsList.length > 0) permission.constraints.accounts = accountsList;
+      if (providersList.length > 0) permission.constraints.providers = providersList;
+      if (servicesList.length > 0) permission.constraints.services = servicesList;
+      if (regionsList.length > 0) permission.constraints.regions = regionsList;
       if (maxAmount) {
         const parsed = parseFloat(maxAmount);
         // Reject non-finite or negative values (feedback_nullable_not_zero).
@@ -305,6 +457,11 @@ function collectPermissions(): Permission[] {
         if (Number.isFinite(parsed) && parsed >= 0) {
           permission.constraints.max_amount = parsed;
         }
+      }
+      // Nothing survived: the permission carries no restriction, so send no
+      // constraints object rather than an empty one.
+      if (Object.keys(permission.constraints).length === 0) {
+        delete permission.constraints;
       }
     }
 

@@ -49,9 +49,19 @@ jest.mock('../confirmDialog', () => ({
   confirmDialog: jest.fn().mockResolvedValue(true),
 }));
 
+// Only the toast functions are stubbed; escapeHtml and the rest stay real,
+// because the escaping tests below depend on the genuine implementation.
+jest.mock('../users/utils', () => ({
+  ...jest.requireActual('../users/utils'),
+  showError: jest.fn(),
+  showSuccess: jest.fn(),
+}));
+
 import * as api from '../api';
 import * as groupState from '../groups/state';
 import * as groupModals from '../groups/groupModals';
+import { setupGroupHandlers } from '../groups/handlers';
+import { showError } from '../users/utils';
 import { ALL_ACTIONS, ALL_RESOURCES } from '../permissions';
 
 // The exact seeded Purchaser group permission set (PURCHASER_PERMS in
@@ -280,6 +290,407 @@ describe('regression: group edit no longer drops/widens unrepresentable permissi
         name: 'Breakout',
         description: 'New description',
         permissions: [{ action: payload, resource: payload }],
+      });
+    });
+  });
+});
+
+/**
+ * The constraints axis of the same defect (#1629).
+ *
+ * PermissionConstraints (internal/auth/types.go) carries five dimensions;
+ * the form rendered inputs for four. constraints.accounts had nowhere to
+ * live and collectPermissions() never read one back, so every save dropped
+ * it. That WIDENS the permission: matchStringListConstraints
+ * (internal/auth/service_group.go) treats an empty list as "no restriction
+ * on this dimension", so a permission stored as "manage any scheduled
+ * purchase, but only in acct-prod-1" came back out of a cosmetic rename as
+ * "manage any scheduled purchase, in every cloud account". The backend
+ * grant ceiling does not catch it either: grantCeilingAllows short-circuits
+ * on the caller's admin:*.
+ *
+ * These tests drive the REAL save path -- the submit listener installed by
+ * setupGroupHandlers(), reached by clicking the form's submit button --
+ * rather than calling saveGroup(event) directly. #group-form carries no
+ * novalidate and .perm-resource is `required`, so a direct call bypasses
+ * browser constraint validation and cannot tell whether a fix is on the
+ * path the admin actually uses.
+ */
+describe('regression: group edit preserves constraints.accounts (#1629)', () => {
+  // Mirrors the #group-form markup in index.html: required name input, the
+  // permissions list, and a real submit button.
+  function setUpRealFormDom(): void {
+    document.body.innerHTML = `
+      <div id="group-modal" class="hidden">
+        <span id="group-modal-title"></span>
+        <form id="group-form">
+          <input type="hidden" id="group-id">
+          <input type="text" id="group-name" required>
+          <textarea id="group-description"></textarea>
+          <div id="permissions-list"></div>
+          <button type="submit" class="primary">Save Group</button>
+        </form>
+      </div>
+    `;
+    setupGroupHandlers();
+  }
+
+  function submitButton(): HTMLButtonElement {
+    return document.querySelector('#group-form button[type="submit"]') as HTMLButtonElement;
+  }
+
+  // Clicks Save the way an admin does and waits for saveGroup's promise
+  // chain to settle (the submit listener fires it without awaiting).
+  async function clickSave(): Promise<void> {
+    submitButton().click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+
+  async function openEdit(group: api.APIGroup): Promise<void> {
+    (api.getGroup as jest.Mock).mockResolvedValue(group);
+    await groupModals.openEditGroupModal(group.id);
+  }
+
+  function accountsInput(index = 0): HTMLInputElement {
+    const items = document.querySelectorAll('.permission-item');
+    return items[index]!.querySelector('.perm-accounts') as HTMLInputElement;
+  }
+
+  function savedPermissions(): api.Permission[] {
+    const call = (api.updateGroup as jest.Mock).mock.calls[0];
+    return call[1].permissions as api.Permission[];
+  }
+
+  // A realistic account-scoped operator group. The second permission is the
+  // narrowest form of the bug: accounts is its ONLY constraint, so the old
+  // `if (providers || services || regions || maxAmount)` guard never fired
+  // and the permission round-tripped fully unconstrained.
+  const ACCOUNT_SCOPED_PERMISSIONS: api.Permission[] = [
+    { action: 'update-any', resource: 'purchases', constraints: { accounts: ['acct-prod-1'], max_amount: 5000 } },
+    { action: 'view', resource: 'history', constraints: { accounts: ['acct-prod-1'] } },
+  ];
+
+  function accountScopedGroup(): api.APIGroup {
+    return {
+      id: 'operators-group-id',
+      name: 'Prod Operators',
+      description: 'Old description',
+      permissions: ACCOUNT_SCOPED_PERMISSIONS,
+      created_at: '2024-01-01T00:00:00Z',
+    };
+  }
+
+  beforeEach(() => {
+    setUpRealFormDom();
+    groupState.setCurrentEditingGroup(null);
+    jest.clearAllMocks();
+  });
+
+  test('the harness really goes through browser constraint validation', async () => {
+    // Pins the property the rest of this describe relies on: an invalid form
+    // never reaches saveGroup. Without this, a fix that never runs could pass
+    // every test below.
+    await openEdit(accountScopedGroup());
+    (document.getElementById('group-name') as HTMLInputElement).value = '';
+
+    const form = document.getElementById('group-form') as HTMLFormElement;
+    expect(form.checkValidity()).toBe(false);
+    await clickSave();
+
+    expect(api.updateGroup).not.toHaveBeenCalled();
+  });
+
+  test('an account-scoped permission set survives an edit that only changes the description', async () => {
+    await openEdit(accountScopedGroup());
+    (document.getElementById('group-description') as HTMLTextAreaElement).value = 'New description';
+
+    const form = document.getElementById('group-form') as HTMLFormElement;
+    expect(form.checkValidity()).toBe(true);
+    await clickSave();
+
+    expect(api.updateGroup).toHaveBeenCalledWith('operators-group-id', {
+      name: 'Prod Operators',
+      description: 'New description',
+      permissions: ACCOUNT_SCOPED_PERMISSIONS,
+    });
+
+    // Non-vacuity: "no permission lost its fence" is trivially true of an
+    // empty list, and an empty list is itself one of this bug's outcomes.
+    const saved = savedPermissions();
+    expect(saved).toHaveLength(2);
+    expect(saved.every(p => (p.constraints?.accounts?.length ?? 0) > 0)).toBe(true);
+  });
+
+  test('the stored account fence is rendered into the form, so the admin edits what is actually stored', async () => {
+    await openEdit(accountScopedGroup());
+
+    expect(accountsInput(0).value).toBe('acct-prod-1');
+    expect(accountsInput(1).value).toBe('acct-prod-1');
+  });
+
+  test('narrowing the fence saves exactly what was entered', async () => {
+    const group = accountScopedGroup();
+    group.permissions = [
+      { action: 'update-any', resource: 'purchases', constraints: { accounts: ['acct-prod-1', 'acct-prod-2'] } },
+    ];
+    await openEdit(group);
+
+    accountsInput().value = 'acct-prod-1';
+    await clickSave();
+
+    expect(savedPermissions()).toEqual([
+      { action: 'update-any', resource: 'purchases', constraints: { accounts: ['acct-prod-1'] } },
+    ]);
+  });
+
+  test('clearing one fence removes only that one and is not blocked', async () => {
+    // The other direction: an admin who deliberately clears the field gets an
+    // unconstrained permission, which is what they asked for.
+    //
+    // Only the FIRST row is cleared, and the second is asserted to keep its
+    // fence. "The cleared row has no accounts" is on its own true of a build
+    // that renders the input but never reads it back -- the very defect this
+    // file exists for -- so the assertion is paired with one that such a build
+    // fails. Both are keyed on the outgoing payload rather than on any DOM
+    // hook this change introduces.
+    await openEdit(accountScopedGroup());
+
+    accountsInput(0).value = '';
+    await clickSave();
+
+    const saved = savedPermissions();
+    expect(saved).toHaveLength(2);
+    expect(saved[0]!.constraints?.accounts).toBeUndefined();
+    expect(saved[0]!.constraints?.max_amount).toBe(5000);
+    expect(saved[1]!.constraints?.accounts).toEqual(['acct-prod-1']);
+  });
+
+  test('adding a fence to a previously unconstrained permission saves it', async () => {
+    const group = accountScopedGroup();
+    group.permissions = [{ action: 'view', resource: 'history' }];
+    await openEdit(group);
+
+    accountsInput().value = 'acct-prod-1, acct-prod-2';
+    await clickSave();
+
+    expect(savedPermissions()).toEqual([
+      { action: 'view', resource: 'history', constraints: { accounts: ['acct-prod-1', 'acct-prod-2'] } },
+    ]);
+  });
+
+  test('an account id is escaped on the way into the input and round-trips byte-identically', async () => {
+    // The new value="" attribute is another API string reaching innerHTML.
+    const payload = '"><img src=x onerror=alert(1)>';
+    const group = accountScopedGroup();
+    group.permissions = [{ action: 'view', resource: 'history', constraints: { accounts: [payload] } }];
+    await openEdit(group);
+
+    expect(document.querySelectorAll('img, script, svg, iframe, style').length).toBe(0);
+    expect(accountsInput().value).toBe(payload);
+
+    await clickSave();
+
+    expect(savedPermissions()).toEqual([
+      { action: 'view', resource: 'history', constraints: { accounts: [payload] } },
+    ]);
+  });
+
+  /**
+   * Raised by CodeRabbit on PR #1875 and taken rather than dismissed.
+   *
+   * Representing `accounts` fixes the common case but leaves one open: a
+   * value the comma-separated text encoding cannot carry back unchanged. A
+   * stored [""] renders blank and re-parses as ABSENT; [","] re-parses as an
+   * empty list; [" acct A "] comes back trimmed. Each re-submits a different
+   * restriction than the one loaded, and for a constraint list "different"
+   * means WIDER, because an empty list is "no restriction" at enforcement.
+   * The backend guard cannot catch it either: the form filters the value out
+   * before the request is built, so validateConstraintEntries never sees a
+   * blank to reject.
+   *
+   * The fix detects it when the row renders and refuses the save. A loud
+   * refusal beats a silent widening.
+   *
+   * Every assertion here is keyed on the outgoing payload or on the error
+   * message, never on the `data-unrepresentable` attribute the fix
+   * introduces: a negative keyed on a hook that does not exist pre-fix can
+   * never fail pre-fix.
+   */
+  describe('refuses to save a stored constraint value it cannot represent', () => {
+    function groupWithAccounts(accounts: string[]): api.APIGroup {
+      return {
+        id: 'operators-group-id',
+        name: 'Prod Operators',
+        description: 'Old description',
+        permissions: [{ action: 'view', resource: 'history', constraints: { accounts } }],
+        created_at: '2024-01-01T00:00:00Z',
+      };
+    }
+
+    // Each of these vanishes or mutates through parseConstraintList. The
+    // second is the case a per-entry "is it blank" check would miss: "," is
+    // not blank, but the split runs before the filter, so it still vanishes.
+    const UNREPRESENTABLE: Array<[string, string[]]> = [
+      ['a blank entry (deny-everything becomes allow-everything)', ['']],
+      ['a comma-only entry, which is not blank but still vanishes', [',']],
+      ['a whitespace-padded entry, which would come back as a different fence', [' acct A ']],
+      ['a blank entry beside a real one', ['acct-prod-1', '  ']],
+    ];
+
+    test.each(UNREPRESENTABLE)('%s refuses the save', async (_label, accounts) => {
+      await openEdit(groupWithAccounts(accounts));
+      (document.getElementById('group-description') as HTMLTextAreaElement).value = 'New description';
+
+      // The form is valid, so the browser submits and the handler runs: the
+      // refusal is this code's decision, not constraint validation's.
+      const form = document.getElementById('group-form') as HTMLFormElement;
+      expect(form.checkValidity()).toBe(true);
+      await clickSave();
+
+      expect(api.updateGroup).not.toHaveBeenCalled();
+      expect(showError).toHaveBeenCalledTimes(1);
+      const message = (showError as jest.Mock).mock.calls[0][0] as string;
+      // Names which permission and which constraint list, matching the
+      // specificity of the backend refusal.
+      expect(message).toContain('permission 0');
+      expect(message).toContain('view:history');
+      expect(message).toContain('accounts');
+    });
+
+    test('names every offending permission, by index, when several are unsafe', async () => {
+      const group = groupWithAccounts(['']);
+      group.permissions = [
+        { action: 'view', resource: 'plans' },
+        { action: 'view', resource: 'history', constraints: { accounts: [''] } },
+        { action: 'update-any', resource: 'purchases', constraints: { regions: [' us-east-1 '] } },
+      ];
+      await openEdit(group);
+      await clickSave();
+
+      expect(api.updateGroup).not.toHaveBeenCalled();
+      const message = (showError as jest.Mock).mock.calls[0][0] as string;
+      expect(message).toContain('permission 1 (view:history)');
+      expect(message).toContain('permission 2 (update-any:purchases)');
+      expect(message).toContain('regions');
+      // The clean row is not blamed.
+      expect(message).not.toContain('view:plans');
+    });
+
+    test('removing the offending row unblocks the save', async () => {
+      // The verdict lives on the row, so deleting the row clears it. Removing
+      // the permission outright is an explicit edit, not a silent drop.
+      await openEdit(groupWithAccounts(['']));
+      const removeBtn = document.querySelector('.permission-item .remove-permission-btn') as HTMLButtonElement;
+      removeBtn.click();
+      await clickSave();
+
+      expect(showError).not.toHaveBeenCalled();
+      expect(api.updateGroup).toHaveBeenCalledWith('operators-group-id', {
+        name: 'Prod Operators',
+        description: 'Old description',
+        permissions: [],
+      });
+    });
+
+    // Negative controls, payload-keyed: the refusal must not fire on the
+    // ordinary constraint shapes this form exists to edit. An absent or empty
+    // list both mean "no restriction" and are entirely normal.
+    const REPRESENTABLE: Array<[string, api.Permission]> = [
+      ['a populated list', { action: 'view', resource: 'history', constraints: { accounts: ['acct-prod-1', 'acct-prod-2'] } }],
+      ['an empty list', { action: 'view', resource: 'history', constraints: { accounts: [] } }],
+      ['no constraints at all', { action: 'view', resource: 'history' }],
+      ['a non-list constraint only', { action: 'view', resource: 'history', constraints: { max_amount: 5000 } }],
+    ];
+
+    test.each(REPRESENTABLE)('%s still saves', async (_label, permission) => {
+      const group = groupWithAccounts([]);
+      group.permissions = [permission];
+      await openEdit(group);
+      await clickSave();
+
+      expect(showError).not.toHaveBeenCalled();
+      expect(api.updateGroup).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * The same widening from the typed direction, CodeRabbit's second finding
+     * on this PR. The render-time check above covers a STORED value; this
+     * covers what an operator types.
+     *
+     * "," is non-empty in the box but parseConstraintList reduces it to [],
+     * so the save would send an empty list, and an empty list is "no
+     * restriction" at enforcement. A stray comma would silently remove the
+     * fence. This is MORE reachable than the stored case, which needs data no
+     * shipped code produces; this one needs a typo.
+     */
+    describe('refuses typed input that parses to nothing', () => {
+      const TYPED_NOTHING: Array<[string, string]> = [
+        ['a bare comma', ','],
+        ['a comma padded with spaces', '  ,  '],
+        ['several commas', ',,,'],
+      ];
+
+      test.each(TYPED_NOTHING)('%s refuses the save and names the field', async (_label, typed) => {
+        await openEdit(groupWithAccounts(['acct-prod-1']));
+        accountsInput().value = typed;
+        await clickSave();
+
+        expect(api.updateGroup).not.toHaveBeenCalled();
+        expect(showError).toHaveBeenCalledTimes(1);
+        const message = (showError as jest.Mock).mock.calls[0][0] as string;
+        expect(message).toContain('permission 0');
+        expect(message).toContain('view:history');
+        expect(message).toContain('accounts');
+      });
+
+      test('names the offending dimension, not a different one', async () => {
+        const group = groupWithAccounts(['acct-prod-1']);
+        group.permissions = [{ action: 'view', resource: 'history', constraints: { regions: ['us-east-1'] } }];
+        await openEdit(group);
+        (document.querySelector('.perm-regions') as HTMLInputElement).value = ',';
+        await clickSave();
+
+        expect(api.updateGroup).not.toHaveBeenCalled();
+        const message = (showError as jest.Mock).mock.calls[0][0] as string;
+        expect(message).toContain('regions');
+        expect(message).not.toContain('accounts');
+      });
+
+      // The boundary that must not move: a box the operator empties still
+      // means "no restriction" and must save. Refusing here would make every
+      // unconstrained group uneditable, which is worse than the bug.
+      test('an emptied box still saves as no restriction', async () => {
+        await openEdit(groupWithAccounts(['acct-prod-1']));
+        accountsInput().value = '';
+        await clickSave();
+
+        expect(showError).not.toHaveBeenCalled();
+        expect(savedPermissions()).toEqual([{ action: 'view', resource: 'history' }]);
+      });
+
+      // A box holding only spaces looks identical to an empty one on screen,
+      // so it is treated as empty rather than refused: an error on a field
+      // that appears blank could not be acted on.
+      test('a whitespace-only box is treated as emptied, not refused', async () => {
+        await openEdit(groupWithAccounts(['acct-prod-1']));
+        accountsInput().value = '   ';
+        await clickSave();
+
+        expect(showError).not.toHaveBeenCalled();
+        expect(savedPermissions()).toEqual([{ action: 'view', resource: 'history' }]);
+      });
+
+      // A trailing comma is ordinary typing and still yields a usable entry,
+      // so it must save rather than trip the refusal.
+      test('a trailing comma beside a real value still saves', async () => {
+        await openEdit(groupWithAccounts(['acct-prod-1']));
+        accountsInput().value = 'acct-prod-1, acct-prod-2,';
+        await clickSave();
+
+        expect(showError).not.toHaveBeenCalled();
+        expect(savedPermissions()).toEqual([
+          { action: 'view', resource: 'history', constraints: { accounts: ['acct-prod-1', 'acct-prod-2'] } },
+        ]);
       });
     });
   });
