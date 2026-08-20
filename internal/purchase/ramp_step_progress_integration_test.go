@@ -318,9 +318,11 @@ func TestRampStepAdvancesOncePerStepAcrossPerAccountRetries(t *testing.T) {
 	// write and both leave CurrentStep at 3. Assert on the return value
 	// directly against real DB state rather than against pgxmock.
 	err := f.store.CompletePlanStep(ctx, f.plan.ID, 3)
-	require.ErrorIs(t, err, config.ErrRampStepAlreadyCounted,
-		"a counted step must report already-counted, not a skipped predecessor")
+	require.ErrorIs(t, err, config.ErrRampStepCountedBySibling,
+		"the plan is sitting on step 3, which a sibling of this step counted")
 	require.NotErrorIs(t, err, config.ErrRampStepIncomplete)
+	require.NotErrorIs(t, err, config.ErrRampStepAlreadyCounted,
+		"the ramp has not moved PAST step 3, so this is not the anomalous case")
 
 	// The ramp is not complete, so the plan still points at a next execution.
 	plan, err := f.store.GetPurchasePlan(ctx, f.plan.ID)
@@ -467,8 +469,8 @@ func TestCompletePlanStepIsIdempotentUnderConcurrency(t *testing.T) {
 			advanced++
 			continue
 		}
-		require.ErrorIs(t, err, config.ErrRampStepAlreadyCounted,
-			"a concurrent completion of step 3 either advances or reports already-counted")
+		require.ErrorIs(t, err, config.ErrRampStepCountedBySibling,
+			"a concurrent completion of step 3 either advances or loses to a sibling")
 	}
 	require.Equal(t, racers, seen, "all racers must have reported")
 	require.Equal(t, 1, advanced, "exactly one racer may advance the ramp")
@@ -570,8 +572,8 @@ func TestCompletePlanStepBlocksOnTheRowLockAndSeesTheWinner(t *testing.T) {
 
 	select {
 	case loserErr := <-done:
-		require.ErrorIs(t, loserErr, config.ErrRampStepAlreadyCounted,
-			"the loser of the race must report already-counted, not re-advance")
+		require.ErrorIs(t, loserErr, config.ErrRampStepCountedBySibling,
+			"the loser of the race must report the sibling win, not re-advance")
 	case <-time.After(15 * time.Second):
 		t.Fatal("CompletePlanStep never returned after the row lock was released")
 	}

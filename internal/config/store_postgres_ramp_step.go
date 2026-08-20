@@ -13,17 +13,56 @@ import (
 // per cloud account, and each of those succeeds or fails on its own. The plan
 // has bought the step only when every one of them has. Both the advance gate
 // (CompletePlanStep) and the plan-health stuck-ramp report read that fact out
-// of the same CTE below so they cannot disagree about which plans are frozen.
+// of the same CTEs below so they cannot disagree about which plans are frozen.
 //
 // WHICH ACCOUNTS COUNT
-// The accounts the step actually targeted, taken from the execution rows the
-// fan-out wrote at the time, not from the plan's account list today. A plan's
-// account set changes between steps; those rows do not. Detaching an account
-// from a plan therefore does not release a step that account is holding open --
-// deleting the account itself does, because the cloud_account_id FK is ON
-// DELETE SET NULL (migration 000011) and its rows drop out of the fan-out
-// scope. Short of that, the operator's exits are the ordinary ones: retry the
-// account until it buys, or cancel its row.
+// The execution rows the fan-out wrote at the time, intersected with the
+// accounts the plan still targets. The rows decide WHICH units exist, so an
+// account added later is not retroactively required to have bought an earlier
+// step; the plan's current attachments decide whether a unit still MATTERS, so
+// an account the plan no longer targets stops holding a step open.
+//
+// That intersection is the gate's release valve, and it has to exist. An
+// account can become permanently unable to buy (revoked credentials, closed
+// account, an Azure savings-plans row that purchase.RedriveRefusalReason
+// refuses to retry by design), and a failed row cannot be canceled either --
+// IsCancelable and CancelExecutionAtomic both admit only pending/notified/
+// scheduled. Without the attachment test such a unit would hold its step open
+// forever and the plan would never buy the rest of its ramp: the exact
+// "permanently-failed account freezes the ramp" caveat issue #1861 attached to
+// this design. Detaching the account from the plan (SetPlanAccounts, reachable
+// from the plan-accounts endpoint) is a non-destructive, reversible operator
+// action that says "this plan no longer buys for that account", and it releases
+// the step. Deleting the cloud account works too, because the cloud_account_id
+// FK is ON DELETE SET NULL (migration 000011), but that is plan-wide and
+// destructive.
+//
+// ONCE BOUGHT, ALWAYS BOUGHT
+// A purchase cannot be un-made, so "has this unit bought?" is answered by
+// whether ANY row for it succeeded, never by its latest attempt. Reading it off
+// the latest attempt would let a later failed attempt for an account that
+// already bought re-open the step, and the stuck report would then tell an
+// operator to retry an account that has already bought -- turning a reporting
+// artifact into a duplicate commitment. Latest-attempt semantics apply only to
+// the in-flight / stuck question, which is genuinely about the present.
+//
+// KNOWN GAP 1: the unit set is derived from rows that exist. If
+// executeForAccount buys for an account and then fails to persist its row (the
+// AUDIT LOSS path), that account has no unit and the step can be counted
+// complete without it. Closing it needs the fan-out width recorded durably at
+// fan-out time, which needs a migration; tracked separately. Note the failure
+// needs an audit-loss event, and the same event equally hides a purchase that
+// DID land.
+//
+// KNOWN GAP 2: root and per-account rows are told apart by cloud_account_id,
+// which issue #1537 showed is not reliable for rows written before it landed --
+// purchase.reattachAccountScope exists because per-account rows with no scope
+// are real, and it recognizes them by a colon in the idempotency lineage key,
+// which this has no equivalent of. A step whose only rows are legacy scopeless
+// per-account rows collapses them into one unit and the latest speaks for all
+// of them, which is #1861's own bug for those rows. Such plans have almost
+// always advanced past the affected steps already, so this is documented rather
+// than fixed.
 //
 // WHY NOT DERIVE current_step INSTEAD
 // The alternative in the issue was to stop storing CurrentStep and compute it
@@ -35,75 +74,132 @@ import (
 // non-contiguously it jumps over it, which is the overstatement the
 // skipped-predecessor refusal exists to prevent.
 
+// PARAMETER CONVENTION for the composed queries below: $1 is always
+// RampStepSucceededStatuses, because the shared rampStepUnitCTE reads it. Each
+// query binds its own parameters from $2 on. Changing this means changing every
+// query in this file together.
+
 // The ramp_step CTE names the (plan_id, step_number) pairs a query is about.
-// rampStepLatestAttemptCTE joins against it by that name, so every query below
-// opens with exactly one of these two definitions.
+// rampStepUnitCTE joins against it by that name, so every query below opens
+// with exactly one of these two definitions.
 const (
 	// rampStepScopeOne is the single (plan, step) a completion is about.
 	rampStepScopeOne = `
-	ramp_step AS (SELECT $1::uuid AS plan_id, $2::int AS step_number)`
+	ramp_step AS (SELECT $3::uuid AS plan_id, $4::int AS step_number)`
 
-	// rampStepScopeNextPerPlan is every plan's next uncounted ramp step.
+	// rampStepScopeNextPerPlan is the next uncounted step of every plan that
+	// has a ramp still running.
+	//
+	// The total_steps > 1 test is not an optimization. Without it every plan
+	// is in scope, including "immediate" ones (total_steps 1) whose single
+	// execution is stamped step 1 by default; one ordinary failed purchase on
+	// such a plan would be reported as a blocked ramp step on a plan that has
+	// no ramp, penalizing it for a row the failed_executions factor is already
+	// counting. The current_step < total_steps test drops finished ramps,
+	// which have no next step to block.
 	rampStepScopeNextPerPlan = `
 	ramp_step AS (
 		SELECT p.id AS plan_id,
 		       COALESCE((p.ramp_schedule ->> 'current_step')::int, 0) + 1 AS step_number
-		  FROM purchase_plans p)`
+		  FROM purchase_plans p
+		 WHERE COALESCE((p.ramp_schedule ->> 'total_steps')::int, 1) > 1
+		   AND COALESCE((p.ramp_schedule ->> 'current_step')::int, 0)
+		     < COALESCE((p.ramp_schedule ->> 'total_steps')::int, 1))`
 )
 
-// rampStepLatestAttemptCTE reduces a ramp step's execution rows to one row per
-// fan-out unit: the attempt that currently speaks for that unit.
+// rampStepUnitCTE reduces a ramp step's execution rows to one row per fan-out
+// unit, carrying that unit's current status and whether it has ever bought.
 //
-// Scope. A fanned-out step writes one row per cloud account plus a root row
+// `eligible` drops rows whose cloud account the plan no longer targets (see the
+// release-valve note above). Rows with no account survive: they are root rows,
+// judged below.
+//
+// `unit` picks the scope and the representative row, once per (step, account).
+// Keying on the step as well as the account is only visibly load-bearing for a
+// caller whose ramp_step spans a RANGE of steps -- BoughtRampStepsInRange does
+// -- but it is the correct key regardless: without it one account collapses to
+// a single row across every step in scope, so a step it bought and a step it
+// has merely scheduled become indistinguishable.
+//
+// Scope: a fanned-out step writes one row per cloud account plus a root row
 // carrying no account. The root row's status is an aggregate of its children
 // (partially_completed when some bought, failed when none did), so counting it
 // alongside them would let an all-accounts-failed step stay blocked by its own
-// container forever. When any row for the step names an account, only the
-// account rows count; otherwise the single root row is the unit.
+// container forever, even after every account was retried to success. When any
+// eligible row for the step names an account, only account rows count;
+// otherwise the single root row is the unit. Deriving that test from `eligible`
+// rather than from the raw table matters: a step whose account rows are all
+// detached must fall back to its root row, not end up with no units at all.
 //
-// Latest attempt. Within a unit the ordering picks, in order: a row no retry
-// has superseded (retry_execution_id IS NULL) over one that has, then the most
-// recently written row, then execution_id so the pick is total and stable.
-// Both keys are load-bearing and neither subsumes the other. A retry successor
-// and the predecessor it supersedes are written in one transaction and so
-// share an updated_at, which only the supersession key separates; a re-drive
-// of a failed ROOT row re-fans-out and writes fresh account rows that supersede
-// nothing, which only updated_at separates. Missing either lets a dead attempt
-// speak for an account that has since bought, and freeze the ramp on it.
-const rampStepLatestAttemptCTE = `
-	latest_attempt AS (
-		SELECT DISTINCT ON (e.plan_id, e.cloud_account_id)
-		       e.plan_id, e.step_number, e.status
+// Representative row: the ordering prefers a row no retry has superseded
+// (retry_execution_id IS NULL), then the most recently written, then
+// execution_id so the pick is total and stable (execution_id is unique, so no
+// tie survives). Both leading keys are load-bearing and neither subsumes the
+// other. A retry successor and the predecessor it supersedes are written in one
+// transaction and so share an updated_at, which only the supersession key
+// separates; a re-drive of a failed ROOT row re-fans-out and writes fresh rows
+// that supersede nothing, which only updated_at separates. Missing either lets
+// a dead attempt speak for a unit that has moved on.
+//
+// ever_bought is a window aggregate over the WHOLE unit, deliberately not the
+// representative row: see the "once bought, always bought" note above.
+const rampStepUnitCTE = `
+	eligible AS (
+		SELECT e.plan_id, e.step_number, e.status, e.cloud_account_id,
+		       e.retry_execution_id, e.updated_at, e.execution_id
 		  FROM purchase_executions e
 		  JOIN ramp_step s
 		    ON s.plan_id = e.plan_id AND s.step_number = e.step_number
+		 WHERE e.cloud_account_id IS NULL
+		    OR EXISTS (
+		         SELECT 1
+		           FROM plan_accounts pa
+		          WHERE pa.plan_id = e.plan_id
+		            AND pa.account_id = e.cloud_account_id)
+	),
+	unit AS (
+		SELECT DISTINCT ON (e.plan_id, e.step_number, e.cloud_account_id)
+		       e.plan_id, e.step_number, e.status,
+		       bool_or(e.status = ANY($1))
+		         OVER (PARTITION BY e.plan_id, e.step_number, e.cloud_account_id) AS ever_bought
+		  FROM eligible e
 		 WHERE e.cloud_account_id IS NOT NULL
 		    OR NOT EXISTS (
 		         SELECT 1
-		           FROM purchase_executions f
+		           FROM eligible f
 		          WHERE f.plan_id = e.plan_id
 		            AND f.step_number = e.step_number
 		            AND f.cloud_account_id IS NOT NULL)
-		 ORDER BY e.plan_id, e.cloud_account_id,
+		 ORDER BY e.plan_id, e.step_number, e.cloud_account_id,
 		          (e.retry_execution_id IS NULL) DESC,
 		          e.updated_at DESC,
 		          e.execution_id
 	)`
 
-// rampStepFanOutQuery counts, over one step's fan-out units, how many bought
-// and how many are still holding the step open.
-const rampStepFanOutQuery = `WITH` + rampStepScopeOne + `,` + rampStepLatestAttemptCTE + `
-	SELECT count(*) FILTER (WHERE status = ANY($3)),
-	       count(*) FILTER (WHERE status <> ALL($4))
-	  FROM latest_attempt`
+// rampStepFanOutQuery counts, over one step's fan-out units, how many have
+// bought and how many are still holding the step open. A unit that has bought
+// can never be outstanding, however its latest attempt ended.
+const rampStepFanOutQuery = `WITH` + rampStepScopeOne + `,` + rampStepUnitCTE + `
+	SELECT count(*) FILTER (WHERE ever_bought),
+	       count(*) FILTER (WHERE NOT ever_bought AND status <> ALL($2))
+	  FROM unit`
 
-// stuckRampStepQuery reports every plan whose next ramp step has a fan-out unit
-// sitting in a terminal-but-unsuccessful status with no retry in flight.
-const stuckRampStepQuery = `WITH` + rampStepScopeNextPerPlan + `,` + rampStepLatestAttemptCTE + `
+// stuckRampStepQuery reports every running ramp whose next step has a unit that
+// has never bought and whose latest attempt ended terminally unsuccessful.
+const stuckRampStepQuery = `WITH` + rampStepScopeNextPerPlan + `,` + rampStepUnitCTE + `
 	SELECT plan_id, step_number, count(*)
-	  FROM latest_attempt
-	 WHERE status = ANY($1)
+	  FROM unit
+	 WHERE NOT ever_bought AND status = ANY($2)
 	 GROUP BY plan_id, step_number`
+
+// boughtRampStepsQuery lists the steps in [$3, $4] of plan $2 that already have
+// a unit which bought. Used to keep a new fan-out off a step whose commitment
+// is partly made (issue #1861); see BoughtRampStepsInRange.
+const boughtRampStepsQuery = `WITH
+	ramp_step AS (
+		SELECT $2::uuid AS plan_id, generate_series($3::int, $4::int) AS step_number),` +
+	rampStepUnitCTE + `
+	SELECT DISTINCT step_number FROM unit WHERE ever_bought ORDER BY step_number`
 
 // requireRampStepBought reports whether ramp step stepNumber of planID may be
 // counted, using the transaction the caller already holds the plan row locked
@@ -114,7 +210,7 @@ const stuckRampStepQuery = `WITH` + rampStepScopeNextPerPlan + `,` + rampStepLat
 func requireRampStepBought(ctx context.Context, tx pgx.Tx, planID string, stepNumber int) error {
 	var bought, outstanding int
 	if err := tx.QueryRow(ctx, rampStepFanOutQuery,
-		planID, stepNumber, RampStepSucceededStatuses, RampStepSettledStatuses,
+		RampStepSucceededStatuses, RampStepSettledStatuses, planID, stepNumber,
 	).Scan(&bought, &outstanding); err != nil {
 		return fmt.Errorf("failed to read plan %s ramp step %d fan-out: %w", planID, stepNumber, err)
 	}
@@ -129,9 +225,44 @@ func requireRampStepBought(ctx context.Context, tx pgx.Tx, planID string, stepNu
 	return nil
 }
 
+// BoughtRampStepsInRange returns the steps between from and to (inclusive) of
+// planID that already have a fan-out unit which bought, ascending.
+//
+// It exists so a caller about to mint executions for a range of steps can
+// refuse to target one that is partly bought. That became reachable with the
+// completeness gate: a step stays uncounted while an account is outstanding, so
+// CurrentStep stops moving, and the plan-scoped create endpoint keeps stamping
+// CurrentStep+1 -- the same step. Approving the result re-fans-out across every
+// account including the ones that already bought, under a fresh idempotency
+// lineage whose derived tokens miss the provider-side dedupe entirely, so it is
+// a genuine duplicate commitment rather than a no-op.
+func (s *PostgresStore) BoughtRampStepsInRange(ctx context.Context, planID string, from, to int) ([]int, error) {
+	if from > to {
+		return nil, fmt.Errorf("bought ramp steps of plan %s: range %d-%d is empty", planID, from, to)
+	}
+	rows, err := s.db.Query(ctx, boughtRampStepsQuery, RampStepSucceededStatuses, planID, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query bought ramp steps of plan %s: %w", planID, err)
+	}
+	defer rows.Close()
+
+	var steps []int
+	for rows.Next() {
+		var step int
+		if err := rows.Scan(&step); err != nil {
+			return nil, fmt.Errorf("failed to scan bought ramp step: %w", err)
+		}
+		steps = append(steps, step)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read bought ramp steps of plan %s: %w", planID, err)
+	}
+	return steps, nil
+}
+
 // GetStuckRampSteps returns, keyed by plan ID, the plan's next ramp step and
-// how many of that step's executions are stuck on it -- their latest
-// attempt reached a terminal status without buying and no retry is in flight.
+// how many of that step's units are stuck on it -- never bought, latest attempt
+// terminal and unsuccessful, no retry in flight.
 //
 // Derived on every read rather than stamped on a row when the advance was
 // refused, which is what makes it safe to score a plan's health on: a stamped
@@ -143,7 +274,7 @@ func requireRampStepBought(ctx context.Context, tx pgx.Tx, planID string, stepNu
 // Plans with nothing stuck are absent from the map rather than present with a
 // zero, so a caller cannot confuse "healthy" with "not reported".
 func (s *PostgresStore) GetStuckRampSteps(ctx context.Context) (map[string]RampStepBlock, error) {
-	rows, err := s.db.Query(ctx, stuckRampStepQuery, RampStepStuckStatuses)
+	rows, err := s.db.Query(ctx, stuckRampStepQuery, RampStepSucceededStatuses, RampStepStuckStatuses)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query stuck ramp steps: %w", err)
 	}

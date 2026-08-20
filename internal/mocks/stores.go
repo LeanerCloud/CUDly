@@ -218,6 +218,26 @@ func (m *MockConfigStore) GetStuckRampSteps(ctx context.Context) (map[string]con
 	return v, args.Error(1)
 }
 
+// BoughtRampStepsInRange mocks the partly-bought ramp-step probe. Unregistered
+// by default so the many create-purchases tests that predate the probe keep
+// exercising the create path: no bought steps in range is the shape of a plan
+// whose next steps are still unstarted, which is what those tests set up.
+func (m *MockConfigStore) BoughtRampStepsInRange(ctx context.Context, planID string, from, to int) ([]int, error) {
+	m.record("BoughtRampStepsInRange", ctx, planID, from, to)
+	if !isExpected(&m.Mock, "BoughtRampStepsInRange") {
+		return nil, nil
+	}
+	args := m.Called(ctx, planID, from, to)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).([]int)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected []int, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
 // UpdatePurchasePlanTx mocks the UpdatePurchasePlanTx operation. Falls
 // back to UpdatePurchasePlan when no expectation is registered so tests
 // that don't care about the Tx variant stay green -- same pattern as

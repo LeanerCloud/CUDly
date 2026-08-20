@@ -660,8 +660,14 @@ func (s *PostgresStore) CompletePlanStep(ctx context.Context, planID string, ste
 // the caller's transaction, so the read-modify-write cannot lose an update.
 func advanceRampStep(ctx context.Context, tx pgx.Tx, plan *PurchasePlan, stepNumber int) error {
 	switch {
-	case plan.RampSchedule.CurrentStep >= stepNumber:
-		return fmt.Errorf("%w: plan %s is on ramp step %d and cannot count step %d again",
+	case plan.RampSchedule.CurrentStep == stepNumber:
+		// A sibling of this very step advanced the ramp first. The step is
+		// counted and nothing is wrong, so this stays distinguishable from the
+		// case below: only that one is worth recording against the execution.
+		return fmt.Errorf("%w: plan %s is already on ramp step %d",
+			ErrRampStepCountedBySibling, plan.ID, stepNumber)
+	case plan.RampSchedule.CurrentStep > stepNumber:
+		return fmt.Errorf("%w: plan %s is on ramp step %d, past the completing step %d",
 			ErrRampStepAlreadyCounted, plan.ID, plan.RampSchedule.CurrentStep, stepNumber)
 	case plan.RampSchedule.CurrentStep != stepNumber-1:
 		return fmt.Errorf("refusing to advance plan %s from ramp step %d to %d: step(s) %d-%d never completed",

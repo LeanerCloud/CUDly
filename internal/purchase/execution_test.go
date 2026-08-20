@@ -522,15 +522,15 @@ func TestExecuteAndFinalize_RefusedRampAdvanceIsRecordedOnTheRow(t *testing.T) {
 	mockStore.AssertNotCalled(t, "CompletePlanStep", mock.Anything, mock.Anything, mock.Anything)
 }
 
-// TestExecuteAndFinalize_IncompleteRampStepIsNotStampedOnTheRow is the
-// counterpart guard for issue #1861: a step still waiting on its other accounts
-// is the ordinary shape of a multi-account fan-out being repaired one account
-// at a time, and it stops being true the moment the last account buys. Stamping
-// it would leave a permanent note describing a ramp that has since advanced,
-// and would flip a cleanly-completed row into History's audit-gap rendering,
-// which keys on a non-empty Error. Plan health derives that state live instead
-// (config.GetStuckRampSteps).
-func TestExecuteAndFinalize_IncompleteRampStepIsNotStampedOnTheRow(t *testing.T) {
+// runRampAdvanceOutcome drives executeAndFinalize for a plan-attributed
+// execution whose ramp advance the store declines with declineErr, and returns
+// the last execution row that reached the store.
+//
+// Shared by the cases below because what separates them is only which sentinel
+// CompletePlanStep returns; duplicating the whole fan-out fixture per case would
+// bury that one line.
+func runRampAdvanceOutcome(t *testing.T, execID string, declineErr error) config.PurchaseExecution {
+	t.Helper()
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
@@ -540,7 +540,7 @@ func TestExecuteAndFinalize_IncompleteRampStepIsNotStampedOnTheRow(t *testing.T)
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	exec := &config.PurchaseExecution{
-		ExecutionID: "exec-incomplete-step",
+		ExecutionID: execID,
 		PlanID:      "plan-multi",
 		Status:      "running",
 		StepNumber:  3,
@@ -560,8 +560,7 @@ func TestExecuteAndFinalize_IncompleteRampStepIsNotStampedOnTheRow(t *testing.T)
 	mockStore.GetPlanAccountsFn = func(_ context.Context, _ string) ([]config.CloudAccount, error) {
 		return nil, nil
 	}
-	mockStore.On("CompletePlanStep", mock.Anything, "plan-multi", 3).
-		Return(fmt.Errorf("%w: 1 account(s) of plan plan-multi ramp step 3 have not bought", config.ErrRampStepIncomplete))
+	mockStore.On("CompletePlanStep", mock.Anything, "plan-multi", 3).Return(declineErr)
 	mockStore.On("SavePurchaseHistory", mock.Anything, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil).Maybe()
 	mockEmail.On("SendPurchaseConfirmation", mock.Anything, mock.AnythingOfType("email.NotificationData")).Return(nil).Maybe()
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil).Maybe()
@@ -578,14 +577,58 @@ func TestExecuteAndFinalize_IncompleteRampStepIsNotStampedOnTheRow(t *testing.T)
 	}
 
 	require.NoError(t, manager.executeAndFinalize(ctx, exec),
-		"a step waiting on a sibling account must not fail the purchase that just completed")
-
+		"a declined ramp advance must never fail the purchase that just completed")
 	require.NotEmpty(t, saves, "the terminal save must reach the store")
-	final := saves[len(saves)-1]
+	mockStore.AssertCalled(t, "CompletePlanStep", mock.Anything, "plan-multi", 3)
+	return saves[len(saves)-1]
+}
+
+// TestExecuteAndFinalize_IncompleteRampStepIsNotStampedOnTheRow is the
+// counterpart guard for issue #1861: a step still waiting on its other accounts
+// is the ordinary shape of a multi-account fan-out being repaired one account
+// at a time, and it stops being true the moment the last account buys. Stamping
+// it would leave a permanent note describing a ramp that has since advanced,
+// and would flip a cleanly-completed row into History's audit-gap rendering,
+// which keys on a non-empty Error. Plan health derives that state live instead
+// (config.GetStuckRampSteps).
+func TestExecuteAndFinalize_IncompleteRampStepIsNotStampedOnTheRow(t *testing.T) {
+	final := runRampAdvanceOutcome(t, "exec-incomplete-step",
+		fmt.Errorf("%w: 1 account(s) of plan plan-multi ramp step 3 have not bought", config.ErrRampStepIncomplete))
+
 	assert.Equal(t, "completed", final.Status)
 	assert.NotContains(t, final.Error, "ramp not advanced",
 		"a transient wait must leave no note that will outlive it")
-	mockStore.AssertCalled(t, "CompletePlanStep", mock.Anything, "plan-multi", 3)
+}
+
+// TestExecuteAndFinalize_SiblingCountedStepIsNotStampedOnTheRow closes the
+// second half of the same hazard. When the last two accounts of a step finish
+// together, one advances the ramp and the other is told the step is already
+// counted -- routine, and the step WAS counted, so nothing is wrong with that
+// purchase. Stamping it would put "ramp not advanced" on a clean row and make
+// History announce that the purchase's history record could not be saved.
+func TestExecuteAndFinalize_SiblingCountedStepIsNotStampedOnTheRow(t *testing.T) {
+	final := runRampAdvanceOutcome(t, "exec-sibling-counted",
+		fmt.Errorf("%w: plan plan-multi is already on ramp step 3", config.ErrRampStepCountedBySibling))
+
+	assert.Equal(t, "completed", final.Status)
+	assert.NotContains(t, final.Error, "ramp not advanced",
+		"losing a race to a sibling of the same step is not an anomaly worth recording")
+}
+
+// TestExecuteAndFinalize_PassedStepIsStampedOnTheRow is the positive control for
+// the two above: the discrimination has to keep recording the case issue #1861
+// actually asks for. A row completing a step the ramp moved PAST bought
+// commitment the plan counted earlier and will never count again, and that is
+// invisible everywhere else once the Lambda log ages out.
+func TestExecuteAndFinalize_PassedStepIsStampedOnTheRow(t *testing.T) {
+	final := runRampAdvanceOutcome(t, "exec-passed-step",
+		fmt.Errorf("%w: plan plan-multi is on ramp step 5, past the completing step 3", config.ErrRampStepAlreadyCounted))
+
+	assert.Equal(t, "completed", final.Status,
+		"the purchase completed; only the plan's progress accounting did not")
+	assert.Contains(t, final.Error, "ramp not advanced",
+		"a step the ramp has passed must survive on the row, not only in the log")
+	assert.Contains(t, final.Error, "past the completing step 3")
 }
 
 func TestManager_GetAWSAccountID_Success(t *testing.T) {

@@ -57,6 +57,10 @@ func (m *mockConfigStoreForHealth) GetStuckRampSteps(_ context.Context) (map[str
 	return nil, nil
 }
 
+func (m *mockConfigStoreForHealth) BoughtRampStepsInRange(_ context.Context, _ string, _, _ int) ([]int, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStoreForHealth) UpdatePurchasePlanTx(_ context.Context, _ pgx.Tx, _ *config.PurchasePlan) error {
 	return nil
 }

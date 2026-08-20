@@ -53,6 +53,12 @@ type StoreInterface interface {
 	// nothing stuck are absent from the map. Feeds the plan-health
 	// ramp_blocked factor (issue #1861).
 	GetStuckRampSteps(ctx context.Context) (map[string]RampStepBlock, error)
+	// BoughtRampStepsInRange returns the steps in [from, to] of planID that
+	// already have a fan-out unit which bought, ascending. Callers about to
+	// mint executions for a step range use it to refuse a step that is partly
+	// bought, which would otherwise re-fan-out across accounts that already
+	// committed under a fresh idempotency lineage (issue #1861).
+	BoughtRampStepsInRange(ctx context.Context, planID string, from, to int) ([]int, error)
 	// UpdatePurchasePlanTx is the tx-accepting variant of UpdatePurchasePlan.
 	// Used from createPlannedPurchases' WithTx block so the per-row
 	// SavePurchaseExecutionTx writes and the plan's next_execution_date

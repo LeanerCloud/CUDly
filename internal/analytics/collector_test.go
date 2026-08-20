@@ -168,6 +168,10 @@ func (m *mockConfigStore) GetStuckRampSteps(_ context.Context) (map[string]confi
 	return nil, nil
 }
 
+func (m *mockConfigStore) BoughtRampStepsInRange(_ context.Context, _ string, _, _ int) ([]int, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStore) UpdatePurchasePlanTx(ctx context.Context, _ pgx.Tx, plan *config.PurchasePlan) error {
 	return nil
 }

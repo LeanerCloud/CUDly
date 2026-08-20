@@ -1666,3 +1666,128 @@ func TestHandler_listPlans_StuckRampProducesTheBlockedFactor(t *testing.T) {
 	require.Len(t, late.HealthFactors, 1)
 	assert.Equal(t, HealthFactorBehindSchedule, late.HealthFactors[0].Code)
 }
+
+// TestHandler_createPlannedPurchases_RefusesAPartlyBoughtStep is the issue
+// #1861 double-buy guard.
+//
+// The completeness gate holds CurrentStep still while any account of a step is
+// outstanding. An operator looking at a plan that has stopped advancing reaches
+// for "create planned purchases", and createPurchaseExecutionsTx stamps
+// CurrentStep+1 -- the very step some accounts already bought. The row it mints
+// is a ROOT row, so approving it re-fans-out across every account on the plan
+// under a fresh idempotency lineage: the accounts that already committed buy the
+// same commitment a second time, with no provider-side dedupe to catch it.
+func TestHandler_createPlannedPurchases_RefusesAPartlyBoughtStep(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	session := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(session, nil)
+	mockAuth.grantAdmin()
+
+	planID := "11111111-1111-1111-1111-111111111111"
+	mockStore.On("GetPurchasePlan", ctx, planID).Return(&config.PurchasePlan{
+		ID:   planID,
+		Name: "Frozen Ramp",
+		RampSchedule: config.RampSchedule{
+			Type: "weekly", PercentPerStep: 25, StepIntervalDays: 7,
+			CurrentStep: 2, TotalSteps: 4, StartDate: time.Now().AddDate(0, 0, -21),
+		},
+	}, nil)
+	// Step 3 is the frozen step: one account bought it, another has not.
+	mockStore.On("BoughtRampStepsInRange", ctx, planID, 3, 4).Return([]int{3}, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    `{"count":2,"start_date":"2026-09-01"}`,
+	}
+
+	_, err := handler.createPlannedPurchases(ctx, req, planID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "a partly-bought step must map to an HTTP status, not a 500")
+	assert.Equal(t, 409, ce.code)
+	assert.Contains(t, err.Error(), "3")
+	assert.Contains(t, err.Error(), "already been bought")
+
+	// Nothing may be minted, and the plan pointer must not move.
+	mockStore.AssertNotCalled(t, "WithTx", mock.Anything, mock.Anything)
+}
+
+// TestHandler_createPlannedPurchases_AllowsAnUnstartedStep is the positive
+// control: the guard must not block the ordinary case, or it would break
+// scheduling entirely while looking like it works.
+func TestHandler_createPlannedPurchases_AllowsAnUnstartedStep(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	session := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(session, nil)
+	mockAuth.grantAdmin()
+
+	planID := "11111111-1111-1111-1111-111111111111"
+	plan := &config.PurchasePlan{
+		ID:   planID,
+		Name: "Healthy Ramp",
+		RampSchedule: config.RampSchedule{
+			Type: "weekly", PercentPerStep: 25, StepIntervalDays: 7,
+			CurrentStep: 2, TotalSteps: 4, StartDate: time.Now().AddDate(0, 0, -21),
+		},
+	}
+	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
+	mockStore.On("BoughtRampStepsInRange", ctx, planID, 3, 4).Return([]int{}, nil)
+	mockStore.On("SavePurchaseExecutionTx", ctx, mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	mockStore.On("UpdatePurchasePlanTx", ctx, mock.Anything, mock.AnythingOfType("*config.PurchasePlan")).Return(nil).Maybe()
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    `{"count":2,"start_date":"2026-09-01"}`,
+	}
+
+	resp, err := handler.createPlannedPurchases(ctx, req, planID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, resp.Created)
+}
+
+// TestHandler_createPlannedPurchases_FailsClosedWhenTheProbeFails: the guard
+// protects a money path, so an unreadable answer must refuse rather than mint
+// rows that might re-fan-out over accounts that already bought.
+func TestHandler_createPlannedPurchases_FailsClosedWhenTheProbeFails(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	session := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(session, nil)
+	mockAuth.grantAdmin()
+
+	planID := "11111111-1111-1111-1111-111111111111"
+	mockStore.On("GetPurchasePlan", ctx, planID).Return(&config.PurchasePlan{
+		ID: planID, Name: "Frozen Ramp",
+		RampSchedule: config.RampSchedule{
+			Type: "weekly", PercentPerStep: 25, StepIntervalDays: 7,
+			CurrentStep: 2, TotalSteps: 4, StartDate: time.Now().AddDate(0, 0, -21),
+		},
+	}, nil)
+	mockStore.On("BoughtRampStepsInRange", ctx, planID, 3, 3).Return(nil, errors.New("connection reset"))
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    `{"count":1,"start_date":"2026-09-01"}`,
+	}
+
+	_, err := handler.createPlannedPurchases(ctx, req, planID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 503, ce.code)
+	mockStore.AssertNotCalled(t, "WithTx", mock.Anything, mock.Anything)
+}

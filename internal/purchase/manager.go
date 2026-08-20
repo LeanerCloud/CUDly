@@ -263,19 +263,25 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 // reads as daysUntil < 0 and stops notifying that plan. Such a stall is not
 // self-correcting, and a logging.Errorf was its only trace.
 //
-// A step still waiting on its other accounts (issue #1861) is the exception and
-// is deliberately NOT stamped. It is the ordinary shape of a partially-failed
-// multi-account step being repaired one account at a time, and it stops being
-// true the moment the last account buys -- a note written here would outlive the
-// fact and describe a ramp that has since advanced. That state is derived live
-// instead, by config.GetStuckRampSteps for the plan-health ramp_blocked factor.
+// Two outcomes are deliberately NOT stamped, because both are ordinary and
+// neither stays true (issue #1861). A step still waiting on its other accounts
+// is the shape of a partially-failed multi-account step being repaired one
+// account at a time, and it stops being true the moment the last account buys.
+// A step a sibling execution counted moments earlier is the shape of that
+// step's last two accounts finishing together, and it means the step WAS
+// counted. A note for either would outlive the fact and, worse, would flip a
+// cleanly-completed row into History's audit-gap rendering, which keys on a
+// non-empty Error and would then tell the operator the purchase's history
+// record could not be saved. The waiting state is derived live instead, by
+// config.GetStuckRampSteps for the plan-health ramp_blocked factor.
 //
 // The status stays "completed": the purchase did complete, and only the plan's
 // progress accounting did not. Recovery is deliberately not scheduled here; this
 // records the fact so History shows it and an operator can act on it.
 func (m *Manager) recordRampAdvanceRefusal(ctx context.Context, exec *config.PurchaseExecution, cause error) {
-	if errors.Is(cause, config.ErrRampStepIncomplete) {
-		logging.Warnf("Plan %s ramp step %d not advanced yet: %v", exec.PlanID, exec.StepNumber, cause)
+	if errors.Is(cause, config.ErrRampStepIncomplete) || errors.Is(cause, config.ErrRampStepCountedBySibling) {
+		logging.Warnf("Plan %s ramp step %d not advanced by execution %s: %v",
+			exec.PlanID, exec.StepNumber, exec.ExecutionID, cause)
 		return
 	}
 	logging.Errorf("Failed to update plan progress: %v", cause)
