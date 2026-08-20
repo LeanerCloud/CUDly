@@ -84,9 +84,9 @@ credential_encryption_key = "REPLACE_WITH_64_CHAR_HEX_STRING"
 max_account_parallelism = 10
 
 # AWS account IDs this deployment itself calls sts:AssumeRole against.
-# Listing an account here is what authorises it at IAM; onboarding it is still
+# Listing an account here is what authorizes it at IAM; onboarding it is still
 # a separate step in the app. Leave empty and no cross-account sts:AssumeRole
-# grant is created at all — the grant used to be scoped by role name only,
+# grant is created at all. The grant used to be scoped by role name only,
 # which matched a CUDly role in every AWS account rather than in yours (#1636).
 # Add every linked account before switching a single-account deployment to
 # multi-account, or collection from the new account fails with AccessDenied.

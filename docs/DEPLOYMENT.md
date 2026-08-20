@@ -617,7 +617,7 @@ cross-account until you do.
 
 Both render an `aws:ResourceAccount` condition onto the grant. An account that is not listed is
 denied by IAM, not merely by the app's account selection. Leaving the setting empty creates **no
-cross-account grant at all** — that is the intended fail-closed default, not an oversight.
+cross-account grant at all**, which is the intended fail-closed default rather than an oversight.
 
 For accounts using `bastion` auth mode, list the **bastion's** account ID rather than the target's.
 Only the first hop runs on the deployment's own identity; the bastion assumes into the target on its

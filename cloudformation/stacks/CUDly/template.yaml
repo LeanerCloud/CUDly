@@ -151,8 +151,8 @@ Parameters:
       unconditional grant let the hub assume any CUDly* role in any AWS
       account, so a mis-selected account produced a successful purchase in the
       wrong account rather than an AccessDenied (#1636). For bastion-mode
-      accounts list the bastion's account, not the target's — only the first
-      hop runs on this stack's identity. UPGRADING AN EXISTING STACK WITHOUT
+      accounts list the bastion's account, not the target's, because only the
+      first hop runs on this stack's identity. UPGRADING AN EXISTING STACK WITHOUT
       SETTING THIS REMOVES THE GRANT, and multi-account collection then fails
       with AccessDenied until the accounts are listed.
 
