@@ -198,6 +198,26 @@ func (m *MockConfigStore) CompletePlanStep(ctx context.Context, planID string, s
 	return args.Error(0)
 }
 
+// GetStuckRampSteps mocks the stuck-ramp report backing plan health.
+// Unregistered by default so the many tests that only care about the health
+// score's execution counts stay green: no stuck steps is the shape of a plan
+// with nothing wrong with it.
+func (m *MockConfigStore) GetStuckRampSteps(ctx context.Context) (map[string]config.RampStepBlock, error) {
+	m.record("GetStuckRampSteps", ctx)
+	if !isExpected(&m.Mock, "GetStuckRampSteps") {
+		return map[string]config.RampStepBlock{}, nil
+	}
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(map[string]config.RampStepBlock)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected map[string]config.RampStepBlock, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
 // UpdatePurchasePlanTx mocks the UpdatePurchasePlanTx operation. Falls
 // back to UpdatePurchasePlan when no expectation is registered so tests
 // that don't care about the Tx variant stay green -- same pattern as

@@ -19,6 +19,7 @@ const (
 	HealthFactorOverdue            PlanHealthFactorCode = "overdue"
 	HealthFactorFailedExecutions   PlanHealthFactorCode = "failed_executions"
 	HealthFactorCanceledExecutions PlanHealthFactorCode = "canceled_executions"
+	HealthFactorRampBlocked        PlanHealthFactorCode = "ramp_blocked"
 	HealthFactorStalled            PlanHealthFactorCode = "stalled"
 	HealthFactorBehindSchedule     PlanHealthFactorCode = "behind_schedule"
 	HealthFactorDisabledMidway     PlanHealthFactorCode = "disabled_midway"
@@ -46,6 +47,11 @@ const (
 	penaltyStalled         = 15
 	penaltyBehindSchedule  = 20
 	penaltyDisabledMidway  = 25
+
+	// A blocked ramp outranks behind_schedule because it is a diagnosis
+	// rather than an observation: the plan is not late, it is stopped, and it
+	// stays stopped until an operator acts on the execution that failed.
+	penaltyRampBlocked = 25
 
 	// maxCountedFailedExecs / maxCountedCanceledExecs cap how many rows
 	// count toward their respective penalty, so a plan with a long failure
@@ -113,12 +119,12 @@ var planHealthExecutionStatuses = config.HealthScoredExecutionStatuses
 // historical failure/cancellation rows and a disabled toggle-off after
 // completion are expected end-of-life noise, not signals an operator
 // should chase.
-func computePlanHealth(plan config.PurchasePlan, now time.Time, counts config.ExecutionStatusCounts) (int, []PlanHealthFactor) {
+func computePlanHealth(plan config.PurchasePlan, now time.Time, counts config.ExecutionStatusCounts, block config.RampStepBlock) (int, []PlanHealthFactor) {
 	if plan.RampSchedule.TotalSteps > 0 && plan.RampSchedule.IsComplete() {
 		return planHealthScoreMax, nil
 	}
 
-	factors := collectPlanHealthFactors(plan, now, counts)
+	factors := collectPlanHealthFactors(plan, now, counts, block)
 
 	score := planHealthScoreMax
 	for _, f := range factors {
@@ -132,10 +138,18 @@ func computePlanHealth(plan config.PurchasePlan, now time.Time, counts config.Ex
 
 // collectPlanHealthFactors runs every per-factor check and returns the
 // subset that applies to plan, in table order (overdue, failed_executions,
-// canceled_executions, then the mutually-exclusive stalled/behind_schedule
-// pair, then disabled_midway). Split out from computePlanHealth so each
-// factor stays an independent, individually testable function.
-func collectPlanHealthFactors(plan config.PurchasePlan, now time.Time, counts config.ExecutionStatusCounts) []PlanHealthFactor {
+// canceled_executions, then the mutually-exclusive
+// ramp_blocked/stalled/behind_schedule group, then disabled_midway). Split out
+// from computePlanHealth so each factor stays an independent, individually
+// testable function.
+//
+// ramp_blocked pre-empts the schedule factors rather than adding to them.
+// Wall-clock drift is what stalled/behind_schedule measure, and a blocked ramp
+// always produces that drift, so reporting both would name the symptom
+// alongside the cause and read as two independent problems. Which one an
+// operator sees is exactly the distinction issue #1861 asked for: a plan that
+// is merely late looks nothing like a plan whose next step cannot complete.
+func collectPlanHealthFactors(plan config.PurchasePlan, now time.Time, counts config.ExecutionStatusCounts, block config.RampStepBlock) []PlanHealthFactor {
 	var factors []PlanHealthFactor
 	if f, ok := overdueFactor(plan, now); ok {
 		factors = append(factors, f)
@@ -146,13 +160,33 @@ func collectPlanHealthFactors(plan config.PurchasePlan, now time.Time, counts co
 	if f, ok := canceledExecutionsFactor(counts); ok {
 		factors = append(factors, f)
 	}
-	if f, ok := scheduleFactor(plan, now); ok {
+	if f, ok := rampBlockedFactor(block); ok {
+		factors = append(factors, f)
+	} else if f, ok := scheduleFactor(plan, now); ok {
 		factors = append(factors, f)
 	}
 	if f, ok := disabledMidwayFactor(plan); ok {
 		factors = append(factors, f)
 	}
 	return factors
+}
+
+// rampBlockedFactor: the plan's next ramp step has executions that failed with
+// no retry in flight, one per cloud account once the step has fanned out, so
+// CompletePlanStep will keep refusing to count that step (issue #1861). Derived
+// per request from the execution rows rather than from a stored marker, so it
+// clears itself as soon as the account retries successfully or its row is
+// canceled.
+func rampBlockedFactor(block config.RampStepBlock) (PlanHealthFactor, bool) {
+	if block.StuckExecutions <= 0 {
+		return PlanHealthFactor{}, false
+	}
+	return PlanHealthFactor{
+		Code:    HealthFactorRampBlocked,
+		Penalty: penaltyRampBlocked,
+		Note: fmt.Sprintf("ramp step %d cannot complete: %d execution(s) failed it with no retry in flight",
+			block.StepNumber, block.StuckExecutions),
+	}, true
 }
 
 // overdueFactor: enabled AND next_execution_date < now.

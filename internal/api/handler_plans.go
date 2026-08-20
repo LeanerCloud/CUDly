@@ -79,8 +79,18 @@ func (h *Handler) attachPlanHealth(ctx context.Context, plans []config.PurchaseP
 		return result
 	}
 
+	// A blocked ramp is worth up to 25 points, so a score computed without it
+	// is not a partially-informed score, it is a wrong one -- and it errs
+	// healthy, on plans that are stopped. Withhold every score rather than
+	// publish that, exactly as the counts fetch above does.
+	stuckByPlan, err := h.config.GetStuckRampSteps(ctx)
+	if err != nil {
+		logging.Warnf("listPlans: GetStuckRampSteps failed, plan health reported as unknown: %v", err)
+		return result
+	}
+
 	for i := range plans {
-		score, factors := computePlanHealth(plans[i], now, countsByPlan[plans[i].ID])
+		score, factors := computePlanHealth(plans[i], now, countsByPlan[plans[i].ID], stuckByPlan[plans[i].ID])
 		result[i].HealthScore = &score
 		result[i].HealthFactors = factors
 	}

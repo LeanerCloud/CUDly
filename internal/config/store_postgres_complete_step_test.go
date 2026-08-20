@@ -15,10 +15,18 @@ package config
 // accounts of one step advanced the ramp twice and the plan reported itself a
 // step further along than the commitment it had bought.
 //
+// The #1861 bug: even counted once, a step counted as complete as soon as ONE
+// of its accounts bought, so an operator repairing a multi-account step one
+// account at a time moved the plan to "step N done" while the others had
+// bought nothing for step N.
+//
 // These tests pin the fix's contract:
 //   - the read happens inside a transaction (Begin) and carries FOR UPDATE,
 //   - completing step N from CurrentStep N-1 persists CurrentStep = N,
-//   - completing a step the ramp already passed writes nothing at all,
+//   - completing a step the ramp already passed writes nothing and reports
+//     ErrRampStepAlreadyCounted,
+//   - completing a step whose fan-out still has an outstanding account, or
+//     which nothing bought, writes nothing and reports ErrRampStepIncomplete,
 //   - completing a step more than one beyond CurrentStep is refused,
 //   - a non-positive step is refused before the transaction is opened,
 //   - a plan deleted mid-race is tolerated (returns nil, no spurious error),
@@ -104,6 +112,17 @@ func completeStepUpdateArgs(wantStep int, staleUpdatedAt time.Time, wantNextNil 
 	return args
 }
 
+// expectFanOut registers the ramp step's fan-out tally that CompletePlanStep
+// consults before advancing (issue #1861): how many of the step's units bought
+// and how many are still holding it open. The pattern requires the DISTINCT ON
+// reduction, so a store that stopped taking the latest attempt per account --
+// and therefore let a dead attempt block or a stale one pass -- fails to match.
+func expectFanOut(mock pgxmock.PgxPoolIface, planID string, stepNumber, bought, outstanding int) {
+	mock.ExpectQuery(`WITH[\s\S]*DISTINCT ON \(e\.plan_id, e\.cloud_account_id\)[\s\S]*FROM latest_attempt`).
+		WithArgs(planID, stepNumber, RampStepSucceededStatuses, RampStepSettledStatuses).
+		WillReturnRows(pgxmock.NewRows([]string{"bought", "outstanding"}).AddRow(bought, outstanding))
+}
+
 // rampPlanRows builds a single purchase_plans row carrying ramp, with
 // updated_at seeded to stale so a test can assert the store refreshes it.
 func rampPlanRows(t *testing.T, planID string, ramp RampSchedule, now, stale time.Time, nextExec sql.NullTime) *pgxmock.Rows {
@@ -143,12 +162,65 @@ func TestPGXMock_CompletePlanStep_LocksAndAdvances(t *testing.T) {
 	mock.ExpectQuery(`SELECT[\s\S]*FROM purchase_plans[\s\S]*WHERE id = \$1 FOR UPDATE`).
 		WithArgs("plan-123").
 		WillReturnRows(rampPlanRows(t, "plan-123", ramp, now, stale, sql.NullTime{Valid: false}))
+	expectFanOut(mock, "plan-123", 2, 3, 0)
 	mock.ExpectExec(`UPDATE purchase_plans`).
 		WithArgs(completeStepUpdateArgs(2, stale, false)...).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 
 	require.NoError(t, store.CompletePlanStep(ctx, "plan-123", 2))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_CompletePlanStep_OutstandingAccountBlocksAdvance is the issue
+// #1861 guard at the store boundary: the fan-out tally reports an account that
+// has not bought, so the plan row must not be written at all. pgxmock fails the
+// test if an UPDATE is issued, because no ExpectExec is registered.
+func TestPGXMock_CompletePlanStep_OutstandingAccountBlocksAdvance(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	now := time.Now().Truncate(time.Second)
+	stale := now.AddDate(0, 0, -30)
+	ramp := RampSchedule{Type: "weekly", PercentPerStep: 25, StepIntervalDays: 7, CurrentStep: 1, TotalSteps: 4, StartDate: now}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT[\s\S]*FROM purchase_plans[\s\S]*WHERE id = \$1 FOR UPDATE`).
+		WithArgs("plan-multi").
+		WillReturnRows(rampPlanRows(t, "plan-multi", ramp, now, stale, sql.NullTime{Valid: false}))
+	expectFanOut(mock, "plan-multi", 2, 2, 1)
+	mock.ExpectRollback()
+
+	err := store.CompletePlanStep(ctx, "plan-multi", 2)
+	require.ErrorIs(t, err, ErrRampStepIncomplete,
+		"one account of a 3-account step has not bought, so the step is not complete")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_CompletePlanStep_StepNothingBoughtIsRefused pins the fail-closed
+// half of the tally. An empty or all-unsuccessful fan-out satisfies "nothing is
+// outstanding" vacuously, so a guard that only checked outstanding would wave
+// through a step no purchase ever landed for.
+func TestPGXMock_CompletePlanStep_StepNothingBoughtIsRefused(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	now := time.Now().Truncate(time.Second)
+	stale := now.AddDate(0, 0, -30)
+	ramp := RampSchedule{Type: "weekly", PercentPerStep: 25, StepIntervalDays: 7, CurrentStep: 1, TotalSteps: 4, StartDate: now}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT[\s\S]*FROM purchase_plans[\s\S]*WHERE id = \$1 FOR UPDATE`).
+		WithArgs("plan-empty").
+		WillReturnRows(rampPlanRows(t, "plan-empty", ramp, now, stale, sql.NullTime{Valid: false}))
+	expectFanOut(mock, "plan-empty", 2, 0, 0)
+	mock.ExpectRollback()
+
+	err := store.CompletePlanStep(ctx, "plan-empty", 2)
+	require.ErrorIs(t, err, ErrRampStepIncomplete)
+	assert.Contains(t, err.Error(), "bought anything")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -171,10 +243,11 @@ func TestPGXMock_CompletePlanStep_AlreadyCountedStepWritesNothing(t *testing.T) 
 	mock.ExpectQuery(`SELECT[\s\S]*FROM purchase_plans[\s\S]*WHERE id = \$1 FOR UPDATE`).
 		WithArgs("plan-123").
 		WillReturnRows(rampPlanRows(t, "plan-123", ramp, now, stale, sql.NullTime{Valid: true, Time: now}))
-	mock.ExpectCommit()
+	mock.ExpectRollback()
 
-	require.NoError(t, store.CompletePlanStep(ctx, "plan-123", 3),
-		"re-completing a counted step is a no-op, not an error")
+	err := store.CompletePlanStep(ctx, "plan-123", 3)
+	require.ErrorIs(t, err, ErrRampStepAlreadyCounted,
+		"re-completing a counted step is reported, not silently dropped")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

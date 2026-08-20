@@ -3,6 +3,7 @@ package purchase
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -519,6 +520,72 @@ func TestExecuteAndFinalize_RefusedRampAdvanceIsRecordedOnTheRow(t *testing.T) {
 		"the recorded note must name the plan whose ramp stalled")
 
 	mockStore.AssertNotCalled(t, "CompletePlanStep", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestExecuteAndFinalize_IncompleteRampStepIsNotStampedOnTheRow is the
+// counterpart guard for issue #1861: a step still waiting on its other accounts
+// is the ordinary shape of a multi-account fan-out being repaired one account
+// at a time, and it stops being true the moment the last account buys. Stamping
+// it would leave a permanent note describing a ramp that has since advanced,
+// and would flip a cleanly-completed row into History's audit-gap rendering,
+// which keys on a non-empty Error. Plan health derives that state live instead
+// (config.GetStuckRampSteps).
+func TestExecuteAndFinalize_IncompleteRampStepIsNotStampedOnTheRow(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+	mockFactory := new(MockProviderFactory)
+	mockProviderInst := new(MockProvider)
+	mockServiceClient := new(MockServiceClient)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	exec := &config.PurchaseExecution{
+		ExecutionID: "exec-incomplete-step",
+		PlanID:      "plan-multi",
+		Status:      "running",
+		StepNumber:  3,
+		Recommendations: []config.RecommendationRecord{
+			{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, UpfrontCost: 300, Selected: true},
+		},
+	}
+
+	var saves []config.PurchaseExecution
+	mockStore.SavePurchaseExecutionFn = func(_ context.Context, e *config.PurchaseExecution) error {
+		saves = append(saves, *e)
+		return nil
+	}
+	mockStore.GetPurchasePlanFn = func(_ context.Context, id string) (*config.PurchasePlan, error) {
+		return &config.PurchasePlan{ID: id, Name: "Multi Plan"}, nil
+	}
+	mockStore.GetPlanAccountsFn = func(_ context.Context, _ string) ([]config.CloudAccount, error) {
+		return nil, nil
+	}
+	mockStore.On("CompletePlanStep", mock.Anything, "plan-multi", 3).
+		Return(fmt.Errorf("%w: 1 account(s) of plan plan-multi ramp step 3 have not bought", config.ErrRampStepIncomplete))
+	mockStore.On("SavePurchaseHistory", mock.Anything, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil).Maybe()
+	mockEmail.On("SendPurchaseConfirmation", mock.Anything, mock.AnythingOfType("email.NotificationData")).Return(nil).Maybe()
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil).Maybe()
+	mockProviderInst.On("GetServiceClient", mock.Anything, common.ServiceEC2, mock.Anything).Return(mockServiceClient, nil).Maybe()
+	mockServiceClient.On("PurchaseCommitment", mock.Anything, mock.Anything, mock.Anything).
+		Return(common.PurchaseResult{Success: true, CommitmentID: "ri-ok"}, nil).Maybe()
+
+	manager := &Manager{
+		config:          mockStore,
+		email:           mockEmail,
+		providerFactory: mockFactory,
+		credStore:       awsAccessKeyCredStore(),
+		dashboardURL:    "https://dashboard.example.com",
+	}
+
+	require.NoError(t, manager.executeAndFinalize(ctx, exec),
+		"a step waiting on a sibling account must not fail the purchase that just completed")
+
+	require.NotEmpty(t, saves, "the terminal save must reach the store")
+	final := saves[len(saves)-1]
+	assert.Equal(t, "completed", final.Status)
+	assert.NotContains(t, final.Error, "ramp not advanced",
+		"a transient wait must leave no note that will outlive it")
+	mockStore.AssertCalled(t, "CompletePlanStep", mock.Anything, "plan-multi", 3)
 }
 
 func TestManager_GetAWSAccountID_Success(t *testing.T) {

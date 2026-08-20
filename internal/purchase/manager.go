@@ -246,29 +246,39 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 	}
 	if execErr == nil {
 		if err := m.updatePlanProgress(ctx, exec); err != nil {
-			logging.Errorf("Failed to update plan progress: %v", err)
 			m.recordRampAdvanceRefusal(ctx, exec, err)
 		}
 	}
 	return execErr
 }
 
-// recordRampAdvanceRefusal stamps a refused ramp advance onto the execution row
-// that just completed, so the decision outlives the log retention window.
+// recordRampAdvanceRefusal reports a ramp advance that did not happen, stamping
+// it onto the execution row that just completed when the outcome is permanent
+// so the decision outlives the log retention window.
 //
 // The refusal paths are new in issue #1669: the previous blind CurrentStep++
 // could not decline, so a purchase always moved the ramp. Now money can be spent
-// on a step the plan then declines to count (an unknown step_number, or a step
-// more than one beyond CurrentStep), and CompletePlanStep returning before its
-// write leaves next_execution_date stale, which shouldNotifyPlan reads as
-// daysUntil < 0 and stops notifying that plan. A stall is therefore not
+// on a step the plan then declines to count, and CompletePlanStep returning
+// before its write leaves next_execution_date stale, which shouldNotifyPlan
+// reads as daysUntil < 0 and stops notifying that plan. Such a stall is not
 // self-correcting, and a logging.Errorf was its only trace.
 //
+// A step still waiting on its other accounts (issue #1861) is the exception and
+// is deliberately NOT stamped. It is the ordinary shape of a partially-failed
+// multi-account step being repaired one account at a time, and it stops being
+// true the moment the last account buys -- a note written here would outlive the
+// fact and describe a ramp that has since advanced. That state is derived live
+// instead, by config.GetStuckRampSteps for the plan-health ramp_blocked factor.
+//
 // The status stays "completed": the purchase did complete, and only the plan's
-// progress accounting did not. Recovery is deliberately NOT scheduled here (see
-// issue #1861); this records the fact so History shows it and an operator can
-// act on it.
+// progress accounting did not. Recovery is deliberately not scheduled here; this
+// records the fact so History shows it and an operator can act on it.
 func (m *Manager) recordRampAdvanceRefusal(ctx context.Context, exec *config.PurchaseExecution, cause error) {
+	if errors.Is(cause, config.ErrRampStepIncomplete) {
+		logging.Warnf("Plan %s ramp step %d not advanced yet: %v", exec.PlanID, exec.StepNumber, cause)
+		return
+	}
+	logging.Errorf("Failed to update plan progress: %v", cause)
 	exec.Error = appendErrNote(exec.Error, fmt.Sprintf("ramp not advanced: %v", cause))
 	if saveErr := m.config.SavePurchaseExecution(ctx, exec); saveErr != nil {
 		logging.Errorf("AUDIT LOSS: failed to persist ramp-advance refusal for execution %s: %v",
