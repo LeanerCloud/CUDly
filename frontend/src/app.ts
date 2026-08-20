@@ -707,6 +707,9 @@ export function syncHeaderPlacement(isNarrow: boolean): void {
  *        sidebar aria-hidden="true"
  *        Return focus to the hamburger button
  *
+ * Widening past the breakpoint is a third transition, not a close: see
+ * releaseDrawerForDesktop.
+ *
  * Sidebar links also close the drawer (they navigate within the SPA).
  */
 export function setupMobileNav(): void {
@@ -734,6 +737,23 @@ export function setupMobileNav(): void {
     sidebar!.setAttribute('aria-hidden', 'true');
     if (overlay) overlay.setAttribute('aria-hidden', 'true');
     hamburger!.focus();
+  }
+
+  /**
+   * Tear the drawer state down on the way past the breakpoint. Above it the
+   * sidebar is the permanently visible navigation, so this differs from
+   * closeDrawer in two ways: it leaves the sidebar in the accessibility tree
+   * rather than marking it aria-hidden, and it moves no focus, because the
+   * hamburger it would focus is display:none at this width.
+   *
+   * Unconditional, so a drawer that was closed while narrow does not carry
+   * its aria-hidden across either.
+   */
+  function releaseDrawerForDesktop(): void {
+    document.body.classList.remove('sidebar-open');
+    hamburger!.setAttribute('aria-expanded', 'false');
+    sidebar!.removeAttribute('aria-hidden');
+    if (overlay) overlay.setAttribute('aria-hidden', 'true');
   }
 
   hamburger.addEventListener('click', () => {
@@ -764,11 +784,9 @@ export function setupMobileNav(): void {
   syncHeaderPlacement(mediaQuery.matches);
   mediaQuery.addEventListener('change', event => {
     syncHeaderPlacement(event.matches);
-    // Widening past the breakpoint leaves the drawer's scroll lock on <body>
-    // with no visible drawer and no hamburger to dismiss it.
-    if (!event.matches && document.body.classList.contains('sidebar-open')) {
-      closeDrawer();
-    }
+    // Without this the drawer's scroll lock stays on <body> with no visible
+    // drawer and no hamburger to dismiss it.
+    if (!event.matches) releaseDrawerForDesktop();
   });
 
   // Account actions inside the drawer navigate or end the session, so they

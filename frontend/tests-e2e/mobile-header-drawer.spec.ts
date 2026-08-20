@@ -22,6 +22,9 @@ import { mockApi, seedAuth } from './fixtures/recs';
 /* iPhone 12/13/14 logical width, the viewport quoted in the report. */
 const PHONE = { width: 390, height: 844 };
 
+/* Comfortably past the 768px drawer breakpoint. */
+const DESKTOP = { width: 1280, height: 900 };
+
 /* Apple HIG / WCAG 2.5.8 minimum touch target, enforced repo-wide. */
 const MIN_TOUCH_PX = 44;
 
@@ -213,7 +216,7 @@ test.describe('phone viewport', () => {
     await openApp(page);
     await expect(page.locator('#sidebar #user-info')).toHaveCount(1);
 
-    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.setViewportSize(DESKTOP);
     await expect(page.locator('.app-topbar > #user-info')).toHaveCount(1);
     await expect(page.locator('.app-topbar > #topbar-filters')).toHaveCount(1);
 
@@ -226,5 +229,62 @@ test.describe('phone viewport', () => {
     expect(userInfo.bottom, 'user actions paint inside the topbar').toBeLessThanOrEqual(
       topbar.bottom + 1,
     );
+  });
+
+  /**
+   * Widening while the drawer is open must not carry the drawer's closed
+   * state onto the desktop layout. Above the breakpoint #sidebar is the
+   * permanently visible navigation, so marking it aria-hidden removes the
+   * entire nav for screen-reader users while it is plainly on screen, and
+   * handing focus back to the hamburger strands the caret on a control CSS
+   * hides at this width.
+   */
+  test('widening with the drawer open leaves the desktop sidebar exposed', async ({ page }) => {
+    await openApp(page);
+    await openDrawer(page);
+
+    await page.setViewportSize(DESKTOP);
+    await expect(page.locator('.app-topbar > #user-info')).toHaveCount(1);
+
+    const sidebar = page.locator('#sidebar');
+    await expect(sidebar, 'desktop sidebar is painted').toBeVisible();
+    await expect(sidebar, 'desktop sidebar is not marked hidden').not.toHaveAttribute(
+      'aria-hidden',
+      'true',
+    );
+    // Role queries match only nodes that reach the accessibility tree, so
+    // this fails however the aside came to be excluded from it.
+    await expect(
+      page.getByRole('complementary', { name: 'Primary navigation' }),
+      'desktop sidebar reaches the accessibility tree',
+    ).toHaveCount(1);
+
+    const active = await page.evaluate(() => {
+      const el = document.activeElement as HTMLElement | null;
+      return { id: el?.id ?? '', rendered: (el?.getClientRects().length ?? 0) > 0 };
+    });
+    expect(active.rendered, `focus rests on a rendered element (id "${active.id}")`).toBe(true);
+
+    await expect(page.locator('body'), 'scroll-lock class dropped').not.toHaveClass(
+      /sidebar-open/,
+    );
+    const overflow = await page.evaluate(() => getComputedStyle(document.body).overflow);
+    expect(overflow, 'body scroll released').not.toBe('hidden');
+  });
+
+  /**
+   * The same stale state is reachable without the drawer being open at the
+   * moment of the resize: closing it while narrow is what sets aria-hidden,
+   * and nothing cleared it on the way up.
+   */
+  test('a drawer closed while narrow does not carry aria-hidden to desktop', async ({ page }) => {
+    await openApp(page);
+    await openDrawer(page);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#sidebar')).toHaveAttribute('aria-hidden', 'true');
+
+    await page.setViewportSize(DESKTOP);
+    await expect(page.locator('#sidebar')).not.toHaveAttribute('aria-hidden', 'true');
+    await expect(page.getByRole('complementary', { name: 'Primary navigation' })).toHaveCount(1);
   });
 });
