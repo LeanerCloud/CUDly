@@ -74,6 +74,29 @@ const ACCESSIBLE_DRAWER_CONTENT: ReadonlyArray<readonly [AriaRole, string]> = [
   ['button', 'Logout'],
 ];
 
+/**
+ * Presses Tab `presses` times and returns a label for every stop that landed
+ * inside the sidebar. Measured at this viewport with the drawer closed: the
+ * order returns to the skip link after 19 presses, so 25 walks a full cycle
+ * and a little more. An empty result therefore means the drawer is skipped,
+ * not merely further down the order than we looked.
+ */
+const TAB_CYCLE_PRESSES = 25;
+
+async function tabStopsInsideDrawer(page: Page): Promise<string[]> {
+  const stops: string[] = [];
+  for (let i = 0; i < TAB_CYCLE_PRESSES; i++) {
+    await page.keyboard.press('Tab');
+    const stop = await page.evaluate(() => {
+      const el = document.activeElement as HTMLElement | null;
+      if (!el || !document.getElementById('sidebar')?.contains(el)) return null;
+      return el.id || (el.textContent ?? '').trim().slice(0, 30) || el.tagName;
+    });
+    if (stop !== null) stops.push(stop);
+  }
+  return stops;
+}
+
 /** True when the caret sits in a subtree no screen reader will follow. */
 async function focusIsInsideHiddenSubtree(page: Page): Promise<boolean> {
   return page.evaluate(() => {
@@ -313,6 +336,13 @@ test.describe('phone viewport', () => {
     await page.setViewportSize(DESKTOP);
     await expect(page.locator('#sidebar')).not.toHaveAttribute('aria-hidden', 'true');
     await expect(page.getByRole('complementary', { name: 'Primary navigation' })).toHaveCount(1);
+
+    // Keyboard reach has to come back too, and this is the one path that
+    // carries a closed drawer's inert up to the desktop side. Focus into an
+    // inert subtree is dropped, so this lands on <body> if it survived.
+    const firstLink = page.locator('#sidebar .tab-btn').first();
+    await firstLink.focus();
+    await expect(firstLink, 'desktop sidebar is keyboard reachable').toBeFocused();
   });
 
   /**
@@ -335,6 +365,32 @@ test.describe('phone viewport', () => {
     for (const [role, name] of ACCESSIBLE_DRAWER_CONTENT) {
       await expect(page.getByRole(role, { name }), `${name} is reachable`).toHaveCount(1);
     }
+  });
+
+  /**
+   * aria-hidden governs the accessibility tree and nothing else. Neither it
+   * nor the off-screen transform takes the closed drawer's links and buttons
+   * out of sequential keyboard navigation, so without inert a keyboard user
+   * tabs into controls they cannot see, in a subtree that by then exposes no
+   * accessible name. That pairing is the WCAG failure, not just untidiness.
+   */
+  test('the closed drawer is out of the tab order', async ({ page }) => {
+    await openApp(page);
+
+    expect(await tabStopsInsideDrawer(page), 'tab stops inside the closed drawer').toEqual([]);
+
+    // Reachable once open, rather than locked away for good: one Tab from
+    // the hamburger is the first sidebar link.
+    await openDrawer(page);
+    await page.locator('#hamburger-btn').focus();
+    await page.keyboard.press('Tab');
+    await expect(page.locator('#sidebar .tab-btn').first()).toBeFocused();
+
+    // And closing it again puts the drawer back out of reach, which is the
+    // closeDrawer path rather than the breakpoint one.
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#hamburger-btn')).toHaveAttribute('aria-expanded', 'false');
+    expect(await tabStopsInsideDrawer(page), 'tab stops after closing').toEqual([]);
   });
 });
 

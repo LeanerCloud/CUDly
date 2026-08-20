@@ -699,13 +699,19 @@ export function syncHeaderPlacement(isNarrow: boolean): void {
  *
  * Open:  body.classList.add('sidebar-open')
  *        hamburger aria-expanded="true"
- *        sidebar aria-hidden="false"
+ *        sidebar aria-hidden="false", inert cleared
  *        Focus first focusable link in the sidebar
  *
  * Close: body.classList.remove('sidebar-open')
  *        hamburger aria-expanded="false"
- *        sidebar aria-hidden="true"
+ *        sidebar aria-hidden="true", inert set
  *        Return focus to the hamburger button
+ *
+ * A closed drawer needs both attributes and they always move together.
+ * aria-hidden takes it out of the accessibility tree; inert takes it out of
+ * sequential keyboard navigation, which neither aria-hidden nor the
+ * off-screen transform affects. With only the first, tabbing walks into
+ * controls that are invisible and expose no accessible name.
  *
  * Crossing the breakpoint in either direction is a third transition, neither
  * an open nor a close: see applyBreakpointState.
@@ -722,6 +728,9 @@ export function setupMobileNav(): void {
     document.body.classList.add('sidebar-open');
     hamburger!.setAttribute('aria-expanded', 'true');
     sidebar!.setAttribute('aria-hidden', 'false');
+    // Before the focus below, not after: focus into an inert subtree is
+    // dropped silently and the caret would land on <body>.
+    sidebar!.removeAttribute('inert');
     if (overlay) overlay.setAttribute('aria-hidden', 'false');
 
     // Focus the first focusable element in the sidebar
@@ -735,6 +744,7 @@ export function setupMobileNav(): void {
     document.body.classList.remove('sidebar-open');
     hamburger!.setAttribute('aria-expanded', 'false');
     sidebar!.setAttribute('aria-hidden', 'true');
+    sidebar!.setAttribute('inert', '');
     if (overlay) overlay.setAttribute('aria-hidden', 'true');
     hamburger!.focus();
   }
@@ -744,11 +754,11 @@ export function setupMobileNav(): void {
    * Runs on load and on every crossing, neither of which the user asked for,
    * so unlike openDrawer and closeDrawer it moves focus only to rescue it.
    *
-   * Whether the sidebar belongs in the accessibility tree is what the two
-   * widths disagree about. Above the breakpoint it is the permanently
-   * visible navigation and must stay in it; below, it is a drawer parked
-   * off-screen holding the controls syncHeaderPlacement moves into it, and
-   * everything in there has to leave the tree with it.
+   * Whether the sidebar is reachable at all is what the two widths disagree
+   * about. Above the breakpoint it is the permanently visible navigation and
+   * must stay both in the accessibility tree and in the tab order; below, it
+   * is a drawer parked off-screen holding the controls syncHeaderPlacement
+   * moves into it, and everything in there has to leave both with it.
    *
    * The narrow branch can never be hiding an open drawer: the only crossing
    * that reaches it comes from the desktop side, where nothing opens one.
@@ -762,13 +772,16 @@ export function setupMobileNav(): void {
 
     if (!isNarrow) {
       sidebar!.removeAttribute('aria-hidden');
+      sidebar!.removeAttribute('inert');
       return;
     }
     // Focus survives the crossing when it was already on a sidebar link, and
     // hiding the subtree under it strands the caret where no screen reader
-    // can follow.
+    // can follow. Chromium does not blur it for us when inert lands, so this
+    // has to run first.
     if (sidebar!.contains(document.activeElement)) hamburger!.focus();
     sidebar!.setAttribute('aria-hidden', 'true');
+    sidebar!.setAttribute('inert', '');
   }
 
   hamburger.addEventListener('click', () => {
