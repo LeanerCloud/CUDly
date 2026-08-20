@@ -349,12 +349,12 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 		return nil, err
 	}
 
-	plan, err := h.getPlanForPurchaseCreation(ctx, planID)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := h.refusePartlyBoughtRampSteps(ctx, plan, planID, req.Count); err != nil {
+	// Validation only: this answers the 404 (and maps storage errors to a clean
+	// message) before a transaction is opened. The plan it returns is
+	// deliberately discarded -- it is an unlocked snapshot whose ramp position
+	// can be stale by the time the inserts run, and the authoritative read
+	// happens under the ramp lock inside the transaction below (issue #1861).
+	if _, err := h.getPlanForPurchaseCreation(ctx, planID); err != nil {
 		return nil, err
 	}
 
@@ -380,15 +380,9 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 	creator := resolveCreatorUserID(session)
 	created := 0
 	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
-		n, txErr := h.createPurchaseExecutionsTx(ctx, tx, plan, planID, req.Count, startDate, creator)
-		if txErr != nil {
-			return txErr
-		}
-		if planErr := h.updatePlanNextExecutionDateTx(ctx, tx, plan, startDate); planErr != nil {
-			return planErr
-		}
+		n, txErr := h.createPlannedPurchasesTx(ctx, tx, planID, req.Count, startDate, creator)
 		created = n
-		return nil
+		return txErr
 	}); err != nil {
 		return nil, err
 	}
@@ -396,8 +390,44 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 	return &CreatePlannedPurchasesResponse{Created: created}, nil
 }
 
-// refusePartlyBoughtRampSteps blocks a create whose steps overlap one an
-// account has already bought (issue #1861).
+// createPlannedPurchasesTx is the transactional body of createPlannedPurchases:
+// take the per-plan ramp lock, decide against the state that lock protects, and
+// write, all before anyone else can read it.
+//
+// The lock is the point. The step range derives from the plan's CurrentStep and
+// the "is this step already covered" test reads the executions of those steps,
+// so both inputs are exactly the state a concurrent completion or a concurrent
+// create mutates. Read either outside the lock and the check becomes advisory:
+// two creates both see the step free and each mints a root row for it, and
+// approving both re-fans-out over accounts that already bought. CompletePlanStep
+// takes this same lock, so a completion cannot interleave either.
+func (h *Handler) createPlannedPurchasesTx(ctx context.Context, tx pgx.Tx, planID string, count int, startDate time.Time, creator *string) (int, error) {
+	plan, err := h.config.LockPurchasePlanTx(ctx, tx, planID)
+	if err != nil {
+		logging.Errorf("createPlannedPurchases: LockPurchasePlanTx failed (plan=%s): %v", planID, err)
+		return 0, NewClientError(503, "could not lock the plan for scheduling; try again")
+	}
+	if plan == nil {
+		return 0, NewClientError(404, "plan not found")
+	}
+
+	if refuseErr := h.refuseOccupiedRampSteps(ctx, tx, plan, planID, count); refuseErr != nil {
+		return 0, refuseErr
+	}
+
+	created, createErr := h.createPurchaseExecutionsTx(ctx, tx, plan, planID, count, startDate, creator)
+	if createErr != nil {
+		return 0, createErr
+	}
+	if planErr := h.updatePlanNextExecutionDateTx(ctx, tx, plan, startDate); planErr != nil {
+		return 0, planErr
+	}
+	return created, nil
+}
+
+// refuseOccupiedRampSteps blocks a create whose steps overlap one that is
+// already covered (issue #1861). Must be called with the plan's ramp lock held
+// for the same transaction, which createPlannedPurchasesTx does.
 //
 // createPurchaseExecutionsTx stamps CurrentStep+1 .. CurrentStep+count. The
 // completeness gate holds CurrentStep still while any account of a step is
@@ -411,20 +441,20 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 //
 // Fails closed: an unreadable check refuses the create rather than minting rows
 // that might double-buy.
-func (h *Handler) refusePartlyBoughtRampSteps(ctx context.Context, plan *config.PurchasePlan, planID string, count int) error {
+func (h *Handler) refuseOccupiedRampSteps(ctx context.Context, tx pgx.Tx, plan *config.PurchasePlan, planID string, count int) error {
 	from := plan.RampSchedule.CurrentStep + 1
-	bought, err := h.config.BoughtRampStepsInRange(ctx, planID, from, from+count-1)
+	occupied, err := h.config.OccupiedRampStepsInRangeTx(ctx, tx, planID, from, from+count-1)
 	if err != nil {
-		logging.Errorf("createPlannedPurchases: BoughtRampStepsInRange failed (plan=%s): %v", planID, err)
-		return NewClientError(503, "could not verify which ramp steps are already bought; try again")
+		logging.Errorf("createPlannedPurchases: OccupiedRampStepsInRangeTx failed (plan=%s): %v", planID, err)
+		return NewClientError(503, "could not verify which ramp steps are already covered; try again")
 	}
-	if len(bought) == 0 {
+	if len(occupied) == 0 {
 		return nil
 	}
 	return NewClientError(409, fmt.Sprintf(
-		"ramp step(s) %s of this plan have already been bought by at least one cloud account; "+
-			"retry the outstanding per-account purchases to finish the step instead of scheduling it again",
-		formatRampSteps(bought)))
+		"ramp step(s) %s of this plan already have purchase executions that bought or are still in flight; "+
+			"finish or cancel those instead of scheduling the same step again",
+		formatRampSteps(occupied)))
 }
 
 // formatRampSteps renders step numbers for an operator-facing message.

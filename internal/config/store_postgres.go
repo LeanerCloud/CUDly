@@ -634,13 +634,12 @@ func (s *PostgresStore) CompletePlanStep(ctx context.Context, planID string, ste
 		return fmt.Errorf("cannot complete ramp step %d of plan %s: step numbers are 1-based", stepNumber, planID)
 	}
 	return s.WithTx(ctx, func(tx pgx.Tx) error {
-		row := tx.QueryRow(ctx, purchasePlanSelectCols+` WHERE id = $1 FOR UPDATE`, planID)
-		plan, err := scanPurchasePlanRow(row)
+		plan, err := s.LockPurchasePlanTx(ctx, tx, planID)
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return nil
-			}
-			return fmt.Errorf("failed to lock purchase plan %s: %w", planID, err)
+			return err
+		}
+		if plan == nil {
+			return nil
 		}
 
 		// A finished ramp cannot be extended by a trailing execution, but it
@@ -653,6 +652,28 @@ func (s *PostgresStore) CompletePlanStep(ctx context.Context, planID string, ste
 		}
 		return s.persistRampPosition(ctx, tx, plan)
 	})
+}
+
+// LockPurchasePlanTx reads a purchase plan under a row lock held for the rest
+// of tx. It is the single definition of "the per-plan ramp lock": every path
+// that reads a plan's ramp position in order to write against it calls THIS
+// method, so completions and creations serialize against each other rather than
+// each racing on its own read. CompletePlanStep below is one caller; the
+// create-planned-purchases handler is the other.
+//
+// Returns (nil, nil) when the plan does not exist, which callers must handle
+// explicitly: CompletePlanStep treats it as a benign race it cannot control,
+// the create path turns it into a 404.
+func (s *PostgresStore) LockPurchasePlanTx(ctx context.Context, tx pgx.Tx, planID string) (*PurchasePlan, error) {
+	plan, err := scanPurchasePlanRow(
+		tx.QueryRow(ctx, purchasePlanSelectCols+` WHERE id = $1 FOR UPDATE`, planID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to lock purchase plan %s: %w", planID, err)
+	}
+	return plan, nil
 }
 
 // advanceRampStep moves plan's in-memory ramp position to stepNumber, or

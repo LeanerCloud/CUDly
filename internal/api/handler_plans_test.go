@@ -1697,7 +1697,9 @@ func TestHandler_createPlannedPurchases_RefusesAPartlyBoughtStep(t *testing.T) {
 		},
 	}, nil)
 	// Step 3 is the frozen step: one account bought it, another has not.
-	mockStore.On("BoughtRampStepsInRange", ctx, planID, 3, 4).Return([]int{3}, nil)
+	mockStore.On("OccupiedRampStepsInRangeTx", ctx, mock.Anything, planID, 3, 4).Return([]int{3}, nil)
+	mockStore.On("SavePurchaseExecutionTx", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockStore.On("UpdatePurchasePlanTx", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
@@ -1711,10 +1713,15 @@ func TestHandler_createPlannedPurchases_RefusesAPartlyBoughtStep(t *testing.T) {
 	require.True(t, ok, "a partly-bought step must map to an HTTP status, not a 500")
 	assert.Equal(t, 409, ce.code)
 	assert.Contains(t, err.Error(), "3")
-	assert.Contains(t, err.Error(), "already been bought")
+	assert.Contains(t, err.Error(), "already have purchase executions")
 
-	// Nothing may be minted, and the plan pointer must not move.
-	mockStore.AssertNotCalled(t, "WithTx", mock.Anything, mock.Anything)
+	// The transaction now wraps the check, so WithTx running is expected; what
+	// must not happen is a row being minted or the plan pointer moving. Both
+	// are registered with .Maybe() so the mock would ALLOW the call: without
+	// that, AssertNotCalled would be asserting against a call that could only
+	// have failed the test anyway, and would pass for the wrong reason.
+	mockStore.AssertNotCalled(t, "SavePurchaseExecutionTx", mock.Anything, mock.Anything, mock.Anything)
+	mockStore.AssertNotCalled(t, "UpdatePurchasePlanTx", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestHandler_createPlannedPurchases_AllowsAnUnstartedStep is the positive
@@ -1740,7 +1747,7 @@ func TestHandler_createPlannedPurchases_AllowsAnUnstartedStep(t *testing.T) {
 		},
 	}
 	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
-	mockStore.On("BoughtRampStepsInRange", ctx, planID, 3, 4).Return([]int{}, nil)
+	mockStore.On("OccupiedRampStepsInRangeTx", ctx, mock.Anything, planID, 3, 4).Return([]int{}, nil)
 	mockStore.On("SavePurchaseExecutionTx", ctx, mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	mockStore.On("UpdatePurchasePlanTx", ctx, mock.Anything, mock.AnythingOfType("*config.PurchasePlan")).Return(nil).Maybe()
 
@@ -1776,7 +1783,9 @@ func TestHandler_createPlannedPurchases_FailsClosedWhenTheProbeFails(t *testing.
 			CurrentStep: 2, TotalSteps: 4, StartDate: time.Now().AddDate(0, 0, -21),
 		},
 	}, nil)
-	mockStore.On("BoughtRampStepsInRange", ctx, planID, 3, 3).Return(nil, errors.New("connection reset"))
+	mockStore.On("OccupiedRampStepsInRangeTx", ctx, mock.Anything, planID, 3, 3).Return(nil, errors.New("connection reset"))
+	mockStore.On("SavePurchaseExecutionTx", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockStore.On("UpdatePurchasePlanTx", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
@@ -1789,5 +1798,6 @@ func TestHandler_createPlannedPurchases_FailsClosedWhenTheProbeFails(t *testing.
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
 	assert.Equal(t, 503, ce.code)
-	mockStore.AssertNotCalled(t, "WithTx", mock.Anything, mock.Anything)
+	mockStore.AssertNotCalled(t, "SavePurchaseExecutionTx", mock.Anything, mock.Anything, mock.Anything)
+	mockStore.AssertNotCalled(t, "UpdatePurchasePlanTx", mock.Anything, mock.Anything, mock.Anything)
 }

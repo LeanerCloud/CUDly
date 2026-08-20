@@ -173,6 +173,24 @@ func (f *rampFixture) currentStep(ctx context.Context, t *testing.T) int {
 
 func (f *rampFixture) acct(i int) *string { return &f.accounts[i] }
 
+// occupied runs the create-side probe the way its caller must: inside a
+// transaction that already holds the plan's ramp lock.
+func (f *rampFixture) occupied(ctx context.Context, t *testing.T, from, to int) ([]int, error) {
+	t.Helper()
+	var steps []int
+	err := f.store.WithTx(ctx, func(tx pgx.Tx) error {
+		locked, lockErr := f.store.LockPurchasePlanTx(ctx, tx, f.planID)
+		if lockErr != nil {
+			return lockErr
+		}
+		require.NotNil(t, locked, "the fixture plan must exist")
+		var qErr error
+		steps, qErr = f.store.OccupiedRampStepsInRangeTx(ctx, tx, f.planID, from, to)
+		return qErr
+	})
+	return steps, err
+}
+
 // TestRampGate_DetachingAnAccountReleasesTheStep is the release valve issue
 // #1861 requires option 2 to have, and the one the first cut of this fix
 // documented but did not implement.
@@ -424,78 +442,88 @@ func TestStuckRampSteps_RetryInFlightIsNotStuck(t *testing.T) {
 		"the gate still waits for the retry to land")
 }
 
-// TestBoughtRampStepsInRange_FindsThePartlyBoughtStep backs the create-purchases
-// guard: the step an operator would re-schedule while the ramp is frozen is the
-// one an account has already bought, and re-fanning it out double-buys.
-func TestBoughtRampStepsInRange_FindsThePartlyBoughtStep(t *testing.T) {
-	ctx := context.Background()
-	f := newRampFixture(ctx, t, 2, 2, 4)
-
-	f.row(ctx, t, 3, f.acct(0), StatusCompleted)
-	f.row(ctx, t, 3, f.acct(1), StatusFailed)
-
-	bought, err := f.store.BoughtRampStepsInRange(ctx, f.planID, 3, 5)
-	require.NoError(t, err)
-	assert.Equal(t, []int{3}, bought)
-
-	// Step 4 has no rows at all, so a create that starts there is fine.
-	bought, err = f.store.BoughtRampStepsInRange(ctx, f.planID, 4, 5)
-	require.NoError(t, err)
-	assert.Empty(t, bought)
-}
-
-// TestBoughtRampStepsInRange_SeparatesStepsOfTheSameAccount pins the step key
-// in the unit reduction. The range query is the only caller whose scope spans
-// more than one step, so without step_number in the DISTINCT ON and the
-// PARTITION BY, one account collapses to a single row across the whole range:
-// the step it bought and the step it merely has scheduled become one unit, and
-// the answer is whichever row happened to sort first.
+// TestOccupiedRampSteps_SeparatesStepsOfTheSameAccount pins the step key in the
+// unit reduction. The range query is the only caller whose scope spans more
+// than one step, so without step_number in the DISTINCT ON and the PARTITION
+// BY, one account collapses to a single row across the whole range and the two
+// steps become one unit.
 //
-// Account A bought step 3 and has a pending row for step 4. Only step 3 is
-// bought. Reporting step 4 would refuse a legitimate create; reporting step 3
-// only when the ordering happens to favor it is worse, because it is the
-// double-buy guard that goes quiet.
-func TestBoughtRampStepsInRange_SeparatesStepsOfTheSameAccount(t *testing.T) {
+// Account A bought step 3; its only step-4 row was canceled, which is settled
+// without buying and therefore leaves step 4 free to schedule. Only step 3 is
+// occupied. Collapse the two steps into one unit and the account's ever_bought
+// leaks across, reporting step 4 as occupied and refusing a legitimate create.
+func TestOccupiedRampSteps_SeparatesStepsOfTheSameAccount(t *testing.T) {
 	ctx := context.Background()
 	f := newRampFixture(ctx, t, 1, 2, 6)
 
 	// The step-4 row is written second and sorts last by execution_id, so it
 	// wins every tie-break the reduction has if the step key is missing.
 	f.rowWithID(ctx, t, "00000000-0000-4000-8000-000000000003", 3, f.acct(0), StatusCompleted)
-	f.rowWithID(ctx, t, "ffffffff-ffff-4fff-8fff-fffffffffff4", 4, f.acct(0), "pending")
+	f.rowWithID(ctx, t, "ffffffff-ffff-4fff-8fff-fffffffffff4", 4, f.acct(0), StatusCanceled)
 
-	bought, err := f.store.BoughtRampStepsInRange(ctx, f.planID, 3, 5)
+	occupied, err := f.occupied(ctx, t, 3, 5)
 	require.NoError(t, err)
-	assert.Equal(t, []int{3}, bought,
-		"only the step the account actually bought may be reported")
+	assert.Equal(t, []int{3}, occupied,
+		"step 3 bought, step 4 canceled: only step 3 is occupied")
 }
 
-// TestBoughtRampStepsInRange_RejectsAnInvertedRange: generate_series over an
+// TestOccupiedRampSteps_LiveRowOccupiesTheStep is the half of the predicate the
+// concurrent-create guard depends on. A pending row bought nothing, so the
+// bought test alone does not see it, yet a second create for that step mints a
+// second root row and approving both double-buys.
+func TestOccupiedRampSteps_LiveRowOccupiesTheStep(t *testing.T) {
+	ctx := context.Background()
+	f := newRampFixture(ctx, t, 1, 2, 6)
+
+	f.row(ctx, t, 3, nil, "pending")
+
+	occupied, err := f.occupied(ctx, t, 3, 4)
+	require.NoError(t, err)
+	assert.Equal(t, []int{3}, occupied,
+		"a step already scheduled must not be scheduled again")
+}
+
+// TestOccupiedRampSteps_CanceledStepIsFree keeps the guard from turning a
+// cancel into a dead end: a step whose units all settled without buying has
+// nothing bought and nothing in flight, so rescheduling it is the intended
+// recovery.
+func TestOccupiedRampSteps_CanceledStepIsFree(t *testing.T) {
+	ctx := context.Background()
+	f := newRampFixture(ctx, t, 1, 2, 6)
+
+	f.row(ctx, t, 3, f.acct(0), StatusCanceled)
+
+	occupied, err := f.occupied(ctx, t, 3, 4)
+	require.NoError(t, err)
+	assert.Empty(t, occupied)
+}
+
+// TestOccupiedRampSteps_RejectsAnInvertedRange: generate_series over an
 // inverted range yields no rows, so a silent empty answer would read as "no
-// step is bought" and wave the create through. A guard on a money path must not
-// fail open on a nonsense argument.
-func TestBoughtRampStepsInRange_RejectsAnInvertedRange(t *testing.T) {
+// step is occupied" and wave the create through. A guard on a money path must
+// not fail open on a nonsense argument.
+func TestOccupiedRampSteps_RejectsAnInvertedRange(t *testing.T) {
 	ctx := context.Background()
 	f := newRampFixture(ctx, t, 1, 2, 6)
 	f.row(ctx, t, 3, f.acct(0), StatusCompleted)
 
-	_, err := f.store.BoughtRampStepsInRange(ctx, f.planID, 5, 3)
-	require.Error(t, err, "an inverted range must error, not report nothing bought")
+	_, err := f.occupied(ctx, t, 5, 3)
+	require.Error(t, err, "an inverted range must error, not report nothing occupied")
 }
 
-// TestBoughtRampStepsInRange_IgnoresDetachedAccounts keeps the create guard on
-// the same predicate as the gate: once the plan stops targeting an account, its
+// TestOccupiedRampSteps_IgnoresDetachedAccounts keeps the create guard on the
+// same predicate as the gate: once the plan stops targeting an account, its
 // rows stop speaking for the plan in both places.
-func TestBoughtRampStepsInRange_IgnoresDetachedAccounts(t *testing.T) {
+func TestOccupiedRampSteps_IgnoresDetachedAccounts(t *testing.T) {
 	ctx := context.Background()
 	f := newRampFixture(ctx, t, 2, 2, 4)
 
 	f.row(ctx, t, 3, f.acct(0), StatusCompleted)
 	require.NoError(t, f.store.SetPlanAccounts(ctx, f.planID, f.accounts[1:]))
 
-	bought, err := f.store.BoughtRampStepsInRange(ctx, f.planID, 3, 5)
+	occupied, err := f.occupied(ctx, t, 3, 5)
 	require.NoError(t, err)
-	assert.Empty(t, bought,
+	assert.Empty(t, occupied,
 		"the only row that bought belongs to an account the plan no longer targets")
 }
 

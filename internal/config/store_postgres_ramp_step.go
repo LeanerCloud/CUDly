@@ -116,10 +116,10 @@ const (
 //
 // `unit` picks the scope and the representative row, once per (step, account).
 // Keying on the step as well as the account is only visibly load-bearing for a
-// caller whose ramp_step spans a RANGE of steps -- BoughtRampStepsInRange does
-// -- but it is the correct key regardless: without it one account collapses to
-// a single row across every step in scope, so a step it bought and a step it
-// has merely scheduled become indistinguishable.
+// caller whose ramp_step spans a RANGE of steps -- OccupiedRampStepsInRangeTx
+// does -- but it is the correct key regardless: without it one account collapses
+// into a single row across every step in scope, so a step it bought and a step
+// it has merely scheduled become indistinguishable.
 //
 // Scope: a fanned-out step writes one row per cloud account plus a root row
 // carrying no account. The root row's status is an aggregate of its children
@@ -192,14 +192,20 @@ const stuckRampStepQuery = `WITH` + rampStepScopeNextPerPlan + `,` + rampStepUni
 	 WHERE NOT ever_bought AND status = ANY($2)
 	 GROUP BY plan_id, step_number`
 
-// boughtRampStepsQuery lists the steps in [$3, $4] of plan $2 that already have
-// a unit which bought. Used to keep a new fan-out off a step whose commitment
-// is partly made (issue #1861); see BoughtRampStepsInRange.
-const boughtRampStepsQuery = `WITH
+// occupiedRampStepsQuery lists the steps in [$4, $5] of plan $3 that already
+// have a unit which bought or is still working. Used to keep a new fan-out off
+// a step that is already covered (issue #1861); see
+// OccupiedRampStepsInRangeTx.
+const occupiedRampStepsQuery = `WITH
 	ramp_step AS (
-		SELECT $2::uuid AS plan_id, generate_series($3::int, $4::int) AS step_number),` +
+		SELECT $3::uuid AS plan_id, generate_series($4::int, $5::int) AS step_number),` +
 	rampStepUnitCTE + `
-	SELECT DISTINCT step_number FROM unit WHERE ever_bought ORDER BY step_number`
+	SELECT step_number
+	  FROM unit
+	 GROUP BY step_number
+	HAVING count(*) FILTER (WHERE ever_bought) > 0
+	    OR count(*) FILTER (WHERE NOT ever_bought AND status <> ALL($2)) > 0
+	 ORDER BY step_number`
 
 // requireRampStepBought reports whether ramp step stepNumber of planID may be
 // counted, using the transaction the caller already holds the plan row locked
@@ -225,24 +231,43 @@ func requireRampStepBought(ctx context.Context, tx pgx.Tx, planID string, stepNu
 	return nil
 }
 
-// BoughtRampStepsInRange returns the steps between from and to (inclusive) of
-// planID that already have a fan-out unit which bought, ascending.
+// OccupiedRampStepsInRangeTx returns the steps between from and to (inclusive)
+// of planID that already have a fan-out unit which bought or is still working,
+// ascending. It runs in the caller's transaction so the answer can be acted on
+// atomically; see the lock requirement below.
 //
 // It exists so a caller about to mint executions for a range of steps can
-// refuse to target one that is partly bought. That became reachable with the
-// completeness gate: a step stays uncounted while an account is outstanding, so
-// CurrentStep stops moving, and the plan-scoped create endpoint keeps stamping
-// CurrentStep+1 -- the same step. Approving the result re-fans-out across every
-// account including the ones that already bought, under a fresh idempotency
-// lineage whose derived tokens miss the provider-side dedupe entirely, so it is
-// a genuine duplicate commitment rather than a no-op.
-func (s *PostgresStore) BoughtRampStepsInRange(ctx context.Context, planID string, from, to int) ([]int, error) {
+// refuse to target one that is already covered. Both halves of the predicate
+// are load-bearing and neither subsumes the other:
+//
+//   - A step some account BOUGHT must not get a fresh root row. The completeness
+//     gate holds CurrentStep still while an account is outstanding, so the
+//     plan-scoped create endpoint keeps stamping CurrentStep+1, the same step.
+//     Approving that row re-fans-out across every account including the ones
+//     that already bought, under a fresh idempotency lineage whose derived
+//     tokens miss the provider-side dedupe entirely: a genuine duplicate
+//     commitment, not a no-op.
+//   - A step that already has a LIVE unit must not get a second one either. Two
+//     concurrent creates both find nothing bought, and each mints its own root
+//     row for the same step; approving both double-buys exactly as above. The
+//     first create's own pending row is what the second must see, and it is not
+//     "bought", so the bought half alone cannot stop it.
+//
+// A step whose units all settled without buying (canceled) is NOT occupied: the
+// operator abandoned it and rescheduling it is the intended recovery.
+//
+// CALLER CONTRACT: hold LockPurchasePlanTx on planID for the same transaction
+// before calling this and until the resulting inserts commit. Without that lock
+// the answer is advisory -- two callers read it concurrently, both see the step
+// free and both insert.
+func (s *PostgresStore) OccupiedRampStepsInRangeTx(ctx context.Context, tx pgx.Tx, planID string, from, to int) ([]int, error) {
 	if from > to {
-		return nil, fmt.Errorf("bought ramp steps of plan %s: range %d-%d is empty", planID, from, to)
+		return nil, fmt.Errorf("occupied ramp steps of plan %s: range %d-%d is empty", planID, from, to)
 	}
-	rows, err := s.db.Query(ctx, boughtRampStepsQuery, RampStepSucceededStatuses, planID, from, to)
+	rows, err := tx.Query(ctx, occupiedRampStepsQuery,
+		RampStepSucceededStatuses, RampStepSettledStatuses, planID, from, to)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query bought ramp steps of plan %s: %w", planID, err)
+		return nil, fmt.Errorf("failed to query occupied ramp steps of plan %s: %w", planID, err)
 	}
 	defer rows.Close()
 
@@ -250,12 +275,12 @@ func (s *PostgresStore) BoughtRampStepsInRange(ctx context.Context, planID strin
 	for rows.Next() {
 		var step int
 		if err := rows.Scan(&step); err != nil {
-			return nil, fmt.Errorf("failed to scan bought ramp step: %w", err)
+			return nil, fmt.Errorf("failed to scan occupied ramp step: %w", err)
 		}
 		steps = append(steps, step)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed to read bought ramp steps of plan %s: %w", planID, err)
+		return nil, fmt.Errorf("failed to read occupied ramp steps of plan %s: %w", planID, err)
 	}
 	return steps, nil
 }

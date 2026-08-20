@@ -218,16 +218,38 @@ func (m *MockConfigStore) GetStuckRampSteps(ctx context.Context) (map[string]con
 	return v, args.Error(1)
 }
 
-// BoughtRampStepsInRange mocks the partly-bought ramp-step probe. Unregistered
-// by default so the many create-purchases tests that predate the probe keep
-// exercising the create path: no bought steps in range is the shape of a plan
-// whose next steps are still unstarted, which is what those tests set up.
-func (m *MockConfigStore) BoughtRampStepsInRange(ctx context.Context, planID string, from, to int) ([]int, error) {
-	m.record("BoughtRampStepsInRange", ctx, planID, from, to)
-	if !isExpected(&m.Mock, "BoughtRampStepsInRange") {
+// LockPurchasePlanTx mocks the per-plan ramp lock. Falls back to
+// GetPurchasePlan when no expectation is registered, so tests that only care
+// about what the transaction writes keep working: the lock is a concurrency
+// property, and a mock cannot hold one anyway. The real contract is measured
+// against Postgres in the api integration tests.
+func (m *MockConfigStore) LockPurchasePlanTx(ctx context.Context, tx pgx.Tx, planID string) (*config.PurchasePlan, error) {
+	m.record("LockPurchasePlanTx", ctx, tx, planID)
+	if !isExpected(&m.Mock, "LockPurchasePlanTx") {
+		return m.GetPurchasePlan(ctx, planID)
+	}
+	args := m.Called(ctx, tx, planID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(*config.PurchasePlan)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *config.PurchasePlan, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
+// OccupiedRampStepsInRangeTx mocks the already-covered ramp-step probe.
+// Unregistered by default so the many create-purchases tests that predate the
+// probe keep exercising the create path: no occupied steps in range is the
+// shape of a plan whose next steps are still unscheduled, which is what those
+// tests set up.
+func (m *MockConfigStore) OccupiedRampStepsInRangeTx(ctx context.Context, tx pgx.Tx, planID string, from, to int) ([]int, error) {
+	m.record("OccupiedRampStepsInRangeTx", ctx, tx, planID, from, to)
+	if !isExpected(&m.Mock, "OccupiedRampStepsInRangeTx") {
 		return nil, nil
 	}
-	args := m.Called(ctx, planID, from, to)
+	args := m.Called(ctx, tx, planID, from, to)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

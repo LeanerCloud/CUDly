@@ -2761,9 +2761,13 @@ components:
               maximum: 100
               description: >
                 0-100 plan health score. Green >= 80, amber 50-79, red < 50.
-                Null when the score could not be computed (the plan's
-                execution counts were unavailable); clients must render that
-                as "unknown" rather than substituting a default.
+                Null when the score could not be computed because one of its
+                required inputs was unavailable: the plan's execution counts,
+                or the stuck-ramp report that ramp_blocked is derived from.
+                Every factor only ever subtracts, so a score computed without
+                one of them would read healthier than the plan is; the whole
+                score is withheld instead. Clients must render null as
+                "unknown" rather than substituting a default.
             health_factors:
               type: array
               items:

@@ -35,10 +35,19 @@ type StoreInterface interface {
 	// prevents the concurrent-write lost-update race of issue #1071.
 	//
 	// It is idempotent in stepNumber: completing a step the plan has already
-	// counted reports ErrRampStepAlreadyCounted and writes nothing. That is
-	// what keeps a multi-account ramp step from advancing twice when an
-	// operator retries two separately-failed accounts of the same step (issue
-	// #1669).
+	// counted writes nothing. Which sentinel says so depends on where the ramp
+	// sits relative to the completing step, and callers branch on the
+	// difference (purchase.recordRampAdvanceRefusal does):
+	//
+	//   - CurrentStep == stepNumber reports ErrRampStepCountedBySibling. This
+	//     is the issue #1669 scenario: an operator retries two separately-failed
+	//     accounts of one ramp step, and the second completion finds the ramp
+	//     already sitting on that step because the first advanced it. The step
+	//     WAS counted, so this is routine and is not recorded against the
+	//     execution.
+	//   - CurrentStep > stepNumber reports ErrRampStepAlreadyCounted. The ramp
+	//     moved past the step earlier, so this purchase bought commitment the
+	//     plan will never count. That is an anomaly and IS recorded.
 	//
 	// A step counts as complete only when EVERY cloud account the step fanned
 	// out to has bought, not when any one of them has (issue #1861). Until
@@ -53,12 +62,21 @@ type StoreInterface interface {
 	// nothing stuck are absent from the map. Feeds the plan-health
 	// ramp_blocked factor (issue #1861).
 	GetStuckRampSteps(ctx context.Context) (map[string]RampStepBlock, error)
-	// BoughtRampStepsInRange returns the steps in [from, to] of planID that
-	// already have a fan-out unit which bought, ascending. Callers about to
-	// mint executions for a step range use it to refuse a step that is partly
-	// bought, which would otherwise re-fan-out across accounts that already
-	// committed under a fresh idempotency lineage (issue #1861).
-	BoughtRampStepsInRange(ctx context.Context, planID string, from, to int) ([]int, error)
+	// LockPurchasePlanTx reads a plan under a row lock held for the rest of tx.
+	// It is the per-plan ramp lock CompletePlanStep takes, exposed so a caller
+	// that reads a plan's ramp position and then writes against it does so
+	// atomically with respect to concurrent completions and creations.
+	// Returns (nil, nil) when the plan does not exist.
+	LockPurchasePlanTx(ctx context.Context, tx pgx.Tx, planID string) (*PurchasePlan, error)
+	// OccupiedRampStepsInRangeTx returns the steps in [from, to] of planID that
+	// already have a fan-out unit which bought or is still working, ascending.
+	// Callers about to mint executions for a step range use it to refuse a step
+	// that is already covered, which would otherwise re-fan-out across accounts
+	// that already committed under a fresh idempotency lineage (issue #1861).
+	// Requires the caller to hold LockPurchasePlanTx on planID in the same
+	// transaction; without it the answer is advisory and two concurrent callers
+	// both see the step free.
+	OccupiedRampStepsInRangeTx(ctx context.Context, tx pgx.Tx, planID string, from, to int) ([]int, error)
 	// UpdatePurchasePlanTx is the tx-accepting variant of UpdatePurchasePlan.
 	// Used from createPlannedPurchases' WithTx block so the per-row
 	// SavePurchaseExecutionTx writes and the plan's next_execution_date
