@@ -221,6 +221,11 @@ export function addPermission(permission?: Permission): void {
     <div class="constraints-section">
       <h4>Constraints (Optional)</h4>
       <div class="form-row">
+        <label>Cloud Account IDs (comma-separated):
+          <input type="text" class="perm-accounts" value="${escapeHtml(permission?.constraints?.accounts?.join(', ') || '')}" placeholder="2f1c8e40-...-uuid, unattributed">
+        </label>
+      </div>
+      <div class="form-row">
         <label>Providers (comma-separated):
           <input type="text" class="perm-providers" value="${escapeHtml(permission?.constraints?.providers?.join(', ') || '')}" placeholder="aws, azure, gcp">
         </label>
@@ -284,14 +289,21 @@ function collectPermissions(): Permission[] {
 
     const permission: Permission = { action, resource };
 
-    // Collect constraints
+    // Collect constraints. Dropping `accounts` here WIDENS the permission
+    // rather than merely losing data: an empty AccountIDs list means "no
+    // restriction on this dimension" at enforcement
+    // (matchStringListConstraints), so a permission scoped to one cloud
+    // account came back out of a cosmetic rename scoped to all of them
+    // (issue #1629).
+    const accounts = (item.querySelector('.perm-accounts') as HTMLInputElement)?.value;
     const providers = (item.querySelector('.perm-providers') as HTMLInputElement)?.value;
     const services = (item.querySelector('.perm-services') as HTMLInputElement)?.value;
     const regions = (item.querySelector('.perm-regions') as HTMLInputElement)?.value;
     const maxAmount = (item.querySelector('.perm-max-amount') as HTMLInputElement)?.value;
 
-    if (providers || services || regions || maxAmount) {
+    if (accounts || providers || services || regions || maxAmount) {
       permission.constraints = {};
+      if (accounts) permission.constraints.accounts = accounts.split(',').map(s => s.trim()).filter(s => s);
       if (providers) permission.constraints.providers = providers.split(',').map(s => s.trim()).filter(s => s);
       if (services) permission.constraints.services = services.split(',').map(s => s.trim()).filter(s => s);
       if (regions) permission.constraints.regions = regions.split(',').map(s => s.trim()).filter(s => s);
