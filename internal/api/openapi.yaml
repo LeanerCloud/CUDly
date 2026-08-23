@@ -2761,9 +2761,13 @@ components:
               maximum: 100
               description: >
                 0-100 plan health score. Green >= 80, amber 50-79, red < 50.
-                Null when the score could not be computed (the plan's
-                execution counts were unavailable); clients must render that
-                as "unknown" rather than substituting a default.
+                Null when the score could not be computed because one of its
+                required inputs was unavailable: the plan's execution counts,
+                or the stuck-ramp report that ramp_blocked is derived from.
+                Every factor only ever subtracts, so a score computed without
+                one of them would read healthier than the plan is; the whole
+                score is withheld instead. Clients must render null as
+                "unknown" rather than substituting a default.
             health_factors:
               type: array
               items:
@@ -2780,10 +2784,15 @@ components:
             (failed_executions, canceled_executions) count only executions
             that entered that state within the trailing execution-retention
             window (30 days), not over all history, so they describe the
-            plan's recent behaviour rather than its lifetime record. The
-            remaining codes are derived from the plan's current attributes
-            and ramp schedule and are not time-windowed.
-          enum: [overdue, failed_executions, canceled_executions, stalled, behind_schedule, disabled_midway]
+            plan's recent behaviour rather than its lifetime record.
+            ramp_blocked is derived from the execution rows of the plan's next
+            ramp step, not time-windowed, and pre-empts stalled /
+            behind_schedule: it means the step cannot complete because one of
+            its executions (one per cloud account, once the step has fanned
+            out) failed with no retry in flight, as opposed to the plan merely
+            running late. The remaining codes are derived from the plan's
+            current attributes and ramp schedule.
+          enum: [overdue, failed_executions, canceled_executions, ramp_blocked, stalled, behind_schedule, disabled_midway]
         penalty:
           type: integer
           description: Points subtracted from 100 by this factor.

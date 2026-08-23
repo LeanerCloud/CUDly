@@ -79,8 +79,18 @@ func (h *Handler) attachPlanHealth(ctx context.Context, plans []config.PurchaseP
 		return result
 	}
 
+	// A blocked ramp is worth up to 25 points, so a score computed without it
+	// is not a partially-informed score, it is a wrong one -- and it errs
+	// healthy, on plans that are stopped. Withhold every score rather than
+	// publish that, exactly as the counts fetch above does.
+	stuckByPlan, err := h.config.GetStuckRampSteps(ctx)
+	if err != nil {
+		logging.Warnf("listPlans: GetStuckRampSteps failed, plan health reported as unknown: %v", err)
+		return result
+	}
+
 	for i := range plans {
-		score, factors := computePlanHealth(plans[i], now, countsByPlan[plans[i].ID])
+		score, factors := computePlanHealth(plans[i], now, countsByPlan[plans[i].ID], stuckByPlan[plans[i].ID])
 		result[i].HealthScore = &score
 		result[i].HealthFactors = factors
 	}
@@ -339,8 +349,12 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 		return nil, err
 	}
 
-	plan, err := h.getPlanForPurchaseCreation(ctx, planID)
-	if err != nil {
+	// Validation only: this answers the 404 (and maps storage errors to a clean
+	// message) before a transaction is opened. The plan it returns is
+	// deliberately discarded -- it is an unlocked snapshot whose ramp position
+	// can be stale by the time the inserts run, and the authoritative read
+	// happens under the ramp lock inside the transaction below (issue #1861).
+	if _, err := h.getPlanForPurchaseCreation(ctx, planID); err != nil {
 		return nil, err
 	}
 
@@ -366,20 +380,93 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 	creator := resolveCreatorUserID(session)
 	created := 0
 	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
-		n, txErr := h.createPurchaseExecutionsTx(ctx, tx, plan, planID, req.Count, startDate, creator)
-		if txErr != nil {
-			return txErr
-		}
-		if planErr := h.updatePlanNextExecutionDateTx(ctx, tx, plan, startDate); planErr != nil {
-			return planErr
-		}
+		n, txErr := h.createPlannedPurchasesTx(ctx, tx, planID, req.Count, startDate, creator)
 		created = n
-		return nil
+		return txErr
 	}); err != nil {
 		return nil, err
 	}
 
 	return &CreatePlannedPurchasesResponse{Created: created}, nil
+}
+
+// createPlannedPurchasesTx is the transactional body of createPlannedPurchases:
+// take the per-plan ramp lock, decide against the state that lock protects, and
+// write, all before anyone else can read it.
+//
+// The lock is the point. The step range derives from the plan's CurrentStep and
+// the "is this step already covered" test reads the executions of those steps,
+// so both inputs are exactly the state a concurrent completion or a concurrent
+// create mutates. Read either outside the lock and the check becomes advisory:
+// two creates both see the step free and each mints a root row for it, and
+// approving both re-fans-out over accounts that already bought. CompletePlanStep
+// takes this same lock, so a completion cannot interleave either.
+func (h *Handler) createPlannedPurchasesTx(ctx context.Context, tx pgx.Tx, planID string, count int, startDate time.Time, creator *string) (int, error) {
+	plan, err := h.config.LockPurchasePlanTx(ctx, tx, planID)
+	if err != nil {
+		logging.Errorf("createPlannedPurchases: LockPurchasePlanTx failed (plan=%s): %v", planID, err)
+		return 0, NewClientError(503, "could not lock the plan for scheduling; try again")
+	}
+	if plan == nil {
+		return 0, NewClientError(404, "plan not found")
+	}
+
+	if refuseErr := h.refuseOccupiedRampSteps(ctx, tx, plan, planID, count); refuseErr != nil {
+		return 0, refuseErr
+	}
+
+	created, createErr := h.createPurchaseExecutionsTx(ctx, tx, plan, planID, count, startDate, creator)
+	if createErr != nil {
+		return 0, createErr
+	}
+	if planErr := h.updatePlanNextExecutionDateTx(ctx, tx, plan, startDate); planErr != nil {
+		return 0, planErr
+	}
+	return created, nil
+}
+
+// refuseOccupiedRampSteps blocks a create whose steps overlap one that is
+// already covered (issue #1861). Must be called with the plan's ramp lock held
+// for the same transaction, which createPlannedPurchasesTx does.
+//
+// createPurchaseExecutionsTx stamps CurrentStep+1 .. CurrentStep+count. The
+// completeness gate holds CurrentStep still while any account of a step is
+// outstanding, so on a plan an operator is trying to unstick, CurrentStep+1 is
+// the very step that is partly bought. The row minted for it is a ROOT row:
+// approving it re-fans-out across every account on the plan, including the ones
+// that already bought, under a fresh idempotency lineage (the new root's key is
+// a new UUID, and each account's token derives from it), so the provider-side
+// dedupe never engages and the commitment is genuinely bought twice. Per-account
+// retry of the outstanding rows is the operation that actually finishes the step.
+//
+// Fails closed: an unreadable check refuses the create rather than minting rows
+// that might double-buy.
+func (h *Handler) refuseOccupiedRampSteps(ctx context.Context, tx pgx.Tx, plan *config.PurchasePlan, planID string, count int) error {
+	from := plan.RampSchedule.CurrentStep + 1
+	occupied, err := h.config.OccupiedRampStepsInRangeTx(ctx, tx, planID, from, from+count-1)
+	if err != nil {
+		logging.Errorf("createPlannedPurchases: OccupiedRampStepsInRangeTx failed (plan=%s): %v", planID, err)
+		return NewClientError(503, "could not verify which ramp steps are already covered; try again")
+	}
+	if len(occupied) == 0 {
+		return nil
+	}
+	return NewClientError(409, fmt.Sprintf(
+		"ramp step(s) %s of this plan already have purchase executions that bought or are still in flight; "+
+			"finish or cancel those instead of scheduling the same step again",
+		formatRampSteps(occupied)))
+}
+
+// formatRampSteps renders step numbers for an operator-facing message.
+func formatRampSteps(steps []int) string {
+	out := ""
+	for i, s := range steps {
+		if i > 0 {
+			out += ", "
+		}
+		out += fmt.Sprintf("%d", s)
+	}
+	return out
 }
 
 // parseCreatePurchasesRequest parses and validates the create purchases request.

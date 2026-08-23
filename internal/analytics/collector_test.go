@@ -164,6 +164,18 @@ func (m *mockConfigStore) CompletePlanStep(ctx context.Context, planID string, s
 	return nil
 }
 
+func (m *mockConfigStore) GetStuckRampSteps(_ context.Context) (map[string]config.RampStepBlock, error) {
+	return nil, nil
+}
+
+func (m *mockConfigStore) LockPurchasePlanTx(_ context.Context, _ pgx.Tx, _ string) (*config.PurchasePlan, error) {
+	return nil, nil
+}
+
+func (m *mockConfigStore) OccupiedRampStepsInRangeTx(_ context.Context, _ pgx.Tx, _ string, _, _ int) ([]int, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStore) UpdatePurchasePlanTx(ctx context.Context, _ pgx.Tx, plan *config.PurchasePlan) error {
 	return nil
 }
