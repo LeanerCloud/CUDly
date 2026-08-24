@@ -410,7 +410,7 @@ func TestApplyRecommendationFilters_SavingsPlanRegion(t *testing.T) {
 // "us-east-1 only" filter and reach the purchase path, to be bought in
 // whatever region the service client resolved. This test fails on the
 // empty-region-means-agnostic version and passes with the
-// CommitmentSavingsPlan-gated isRegionAgnostic.
+// CommitmentSavingsPlan-gated IsRegionAgnostic.
 func TestApplyRecommendationFilters_RegionlessReservationNotExempt(t *testing.T) {
 	regionlessRI := common.Recommendation{
 		Account:        "111",
@@ -453,12 +453,12 @@ func TestApplyRecommendationFilters_RegionlessReservationNotExempt(t *testing.T)
 // empty effective region, i.e. a region-less reservation (see
 // TestApplyRecommendationFilters_RegionlessReservationNotExempt for why those
 // exist). An account-level Savings Plan would NOT pin this: it
-// short-circuits on isRegionAgnostic before the map is ever consulted, so
+// short-circuits on IsRegionAgnostic before the map is ever consulted, so
 // that subtest would pass with or without the blank skip and prove nothing.
 func TestApplyRecommendationFilters_BlankRegionEntryIsNotAMatcher(t *testing.T) {
 	// Not region-agnostic (a reservation), but carries no region because
-	// Cost Explorer omitted the field. effectiveRegion is "" and
-	// isRegionAgnostic is false, so this rec reaches the map lookup.
+	// Cost Explorer omitted the field. EffectiveRegion is "" and
+	// IsRegionAgnostic is false, so this rec reaches the map lookup.
 	regionlessRI := common.Recommendation{
 		Account:        "111",
 		CommitmentType: common.CommitmentReservedInstance,
@@ -504,7 +504,7 @@ func TestApplyRecommendationFilters_BlankRegionEntryIsNotAMatcher(t *testing.T) 
 // in whatever region the service client resolved -- the same defect, one plan
 // type over.
 //
-// This test fails on the CommitmentSavingsPlan-only isRegionAgnostic and
+// This test fails on the CommitmentSavingsPlan-only IsRegionAgnostic and
 // passes once the exemption also requires isAccountLevelSPPlanType.
 func TestApplyRecommendationFilters_RegionlessEC2InstanceSPNotExempt(t *testing.T) {
 	// An EC2Instance SP whose CE payload carried no region: region-scoped,
