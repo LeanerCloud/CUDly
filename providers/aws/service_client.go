@@ -144,8 +144,15 @@ func filterByAccounts(recs []common.Recommendation, accounts []string) []common.
 // genuinely region-agnostic (Details.Region stays "" for them), so this
 // still returns "" for those, and IsRegionAgnostic is what decides that such
 // a rec is exempt from region filtering (see #1495).
+//
+// The Details fallback is confined to ProviderAWS. common.SavingsPlanDetails
+// is a shared type that Azure's savingsplans client also asserts on, so
+// exporting this predicate (#1582) made it reachable with a non-AWS rec whose
+// Details mean something else. Only AWS builds Savings Plans recommendations
+// today and parser_sp.go stamps ProviderAWS on every one, so the gate changes
+// no behaviour now; it keeps the AWS-only reading from outliving that invariant.
 func EffectiveRegion(rec common.Recommendation) string {
-	if rec.Region != "" {
+	if rec.Region != "" || rec.Provider != common.ProviderAWS {
 		return rec.Region
 	}
 	if sp, ok := rec.Details.(*common.SavingsPlanDetails); ok && sp != nil {
@@ -186,8 +193,13 @@ func EffectiveRegion(rec common.Recommendation) string {
 // unknown (nil Details, a non-SavingsPlanDetails payload, a plan type this
 // build has never heard of) stays region-scoped and is filtered
 // conservatively rather than exempted.
+//
+// ProviderAWS is required for the same reason EffectiveRegion requires it:
+// this exemption is a statement about AWS Savings Plans products, and both
+// common.CommitmentSavingsPlan and common.SavingsPlanDetails are shared types
+// another provider could populate with different semantics.
 func IsRegionAgnostic(rec common.Recommendation) bool {
-	if rec.CommitmentType != common.CommitmentSavingsPlan || EffectiveRegion(rec) != "" {
+	if rec.Provider != common.ProviderAWS || rec.CommitmentType != common.CommitmentSavingsPlan || EffectiveRegion(rec) != "" {
 		return false
 	}
 	sp, ok := rec.Details.(*common.SavingsPlanDetails)

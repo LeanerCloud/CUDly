@@ -539,6 +539,7 @@ func TestApplyFilters_DropExtendedSupport(t *testing.T) {
 func TestApplyFilters_SavingsPlansRegionFilters(t *testing.T) {
 	ec2SP := func(region string) common.Recommendation {
 		return common.Recommendation{
+			Provider:       common.ProviderAWS,
 			Service:        common.ServiceSavingsPlansEC2Instance,
 			CommitmentType: common.CommitmentSavingsPlan,
 			Count:          1,
@@ -551,6 +552,7 @@ func TestApplyFilters_SavingsPlansRegionFilters(t *testing.T) {
 	}
 	computeSP := func() common.Recommendation {
 		return common.Recommendation{
+			Provider:       common.ProviderAWS,
 			Service:        common.ServiceSavingsPlansCompute,
 			CommitmentType: common.CommitmentSavingsPlan,
 			Count:          1,

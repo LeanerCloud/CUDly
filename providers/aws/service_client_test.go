@@ -352,12 +352,14 @@ func TestApplyRecommendationFilters_SavingsPlanRegion(t *testing.T) {
 	accountLevelSP := common.Recommendation{
 		Account:        "111",
 		Region:         "",
+		Provider:       common.ProviderAWS,
 		CommitmentType: common.CommitmentSavingsPlan,
 		Details:        &common.SavingsPlanDetails{PlanType: "Compute"},
 	}
 	ec2InstanceSP := common.Recommendation{
 		Account:        "222",
 		Region:         "",
+		Provider:       common.ProviderAWS,
 		CommitmentType: common.CommitmentSavingsPlan,
 		Details:        &common.SavingsPlanDetails{PlanType: "EC2Instance", Region: "us-east-1"},
 	}
@@ -511,6 +513,7 @@ func TestApplyRecommendationFilters_RegionlessEC2InstanceSPNotExempt(t *testing.
 	// but with nothing to match a region filter against.
 	regionlessEC2SP := common.Recommendation{
 		Account:        "111",
+		Provider:       common.ProviderAWS,
 		CommitmentType: common.CommitmentSavingsPlan,
 		Details:        &common.SavingsPlanDetails{PlanType: "EC2Instance"},
 	}
@@ -532,6 +535,7 @@ func TestApplyRecommendationFilters_RegionlessEC2InstanceSPNotExempt(t *testing.
 		for _, planType := range []string{"Compute", "SageMaker", "Database"} {
 			accountLevelSP := common.Recommendation{
 				Account:        "111",
+				Provider:       common.ProviderAWS,
 				CommitmentType: common.CommitmentSavingsPlan,
 				Details:        &common.SavingsPlanDetails{PlanType: planType},
 			}
@@ -548,6 +552,7 @@ func TestApplyRecommendationFilters_RegionlessEC2InstanceSPNotExempt(t *testing.
 		// conservative direction is to filter it, not to exempt it.
 		unknownSP := common.Recommendation{
 			Account:        "111",
+			Provider:       common.ProviderAWS,
 			CommitmentType: common.CommitmentSavingsPlan,
 			Details:        &common.SavingsPlanDetails{PlanType: "SomeFutureSP"},
 		}
@@ -559,6 +564,7 @@ func TestApplyRecommendationFilters_RegionlessEC2InstanceSPNotExempt(t *testing.
 	t.Run("an SP carrying no Details at all is not exempt", func(t *testing.T) {
 		noDetailsSP := common.Recommendation{
 			Account:        "111",
+			Provider:       common.ProviderAWS,
 			CommitmentType: common.CommitmentSavingsPlan,
 		}
 		got := applyRecommendationFilters([]common.Recommendation{noDetailsSP},
@@ -569,6 +575,7 @@ func TestApplyRecommendationFilters_RegionlessEC2InstanceSPNotExempt(t *testing.
 	t.Run("an EC2Instance SP that DOES carry its region is filtered on that region", func(t *testing.T) {
 		ec2SPInUsEast := common.Recommendation{
 			Account:        "111",
+			Provider:       common.ProviderAWS,
 			CommitmentType: common.CommitmentSavingsPlan,
 			Details:        &common.SavingsPlanDetails{PlanType: "EC2Instance", Region: "us-east-1"},
 		}
@@ -579,5 +586,58 @@ func TestApplyRecommendationFilters_RegionlessEC2InstanceSPNotExempt(t *testing.
 		dropped := applyRecommendationFilters([]common.Recommendation{ec2SPInUsEast},
 			common.RecommendationParams{Region: "eu-west-1"})
 		assert.Empty(t, dropped, "a non-matching region must still be dropped")
+	})
+}
+
+// TestRegionHelpers_NonAWSRecommendation pins the provider gate on the two
+// exported region helpers.
+//
+// While they were package-private they could only ever see recommendations the
+// AWS parsers built, so "these Details are AWS Savings Plans Details" held by
+// construction. Exporting them for the CLI (#1582) removed that guarantee: any
+// caller can now pass any recommendation. common.CommitmentSavingsPlan and
+// common.SavingsPlanDetails are shared types, and Azure already type-asserts on
+// SavingsPlanDetails in its own savingsplans client, so the shape below is one
+// an exported helper must handle even though no Azure code builds a Savings
+// Plans *recommendation* today.
+func TestRegionHelpers_NonAWSRecommendation(t *testing.T) {
+	nonAWSSP := common.Recommendation{
+		Provider:       common.ProviderAzure,
+		CommitmentType: common.CommitmentSavingsPlan,
+		Details:        &common.SavingsPlanDetails{PlanType: "Compute", Region: "eastus"},
+	}
+
+	t.Run("EffectiveRegion does not read Details of a non-AWS rec", func(t *testing.T) {
+		assert.Empty(t, EffectiveRegion(nonAWSSP),
+			"a non-AWS recommendation must report its own Region, not an AWS-shaped reading of Details")
+	})
+
+	t.Run("EffectiveRegion returns a non-AWS rec's own Region unchanged", func(t *testing.T) {
+		withRegion := nonAWSSP
+		withRegion.Region = "westeurope"
+		assert.Equal(t, "westeurope", EffectiveRegion(withRegion))
+	})
+
+	t.Run("IsRegionAgnostic is false for a non-AWS rec", func(t *testing.T) {
+		// Deliberately region-less. Given a populated Details.Region the
+		// EffectiveRegion(rec) != "" arm rejects the rec on its own and the
+		// provider gate is never reached, so the assertion would hold with or
+		// without the gate and prove nothing. Every other arm has to pass for
+		// this case to have teeth: CommitmentSavingsPlan, an empty effective
+		// region, and an account-level plan type.
+		nonAWSAccountLevelSP := common.Recommendation{
+			Provider:       common.ProviderAzure,
+			CommitmentType: common.CommitmentSavingsPlan,
+			Details:        &common.SavingsPlanDetails{PlanType: "Compute"},
+		}
+		assert.False(t, IsRegionAgnostic(nonAWSAccountLevelSP),
+			"the account-level exemption is a statement about AWS Savings Plans products")
+	})
+
+	t.Run("the same rec on ProviderAWS still gets the AWS reading", func(t *testing.T) {
+		awsSP := nonAWSSP
+		awsSP.Provider = common.ProviderAWS
+		assert.Equal(t, "eastus", EffectiveRegion(awsSP),
+			"the gate must not change behaviour for AWS recs, or it would break the #1582 fix")
 	})
 }
