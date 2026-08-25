@@ -150,3 +150,14 @@ docs/generated/
 
 # Graphify knowledge graph output — regenerated locally, not committed
 graphify-out/
+
+# MCPB bundle staging: release.yml stages GoReleaser's per-platform
+# cudly-mcp binaries into mcpb/server/<os>-<arch>/ before packing (see
+# .github/workflows/release.yml). Only the two launch scripts are checked
+# in; the binaries are release artifacts, never source.
+mcpb/server/*/cudly-mcp
+mcpb/server/*/cudly-mcp.exe
+*.mcpb
+
+# GoReleaser's local output directory (see .goreleaser.yml)
+/dist/
