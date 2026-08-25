@@ -649,7 +649,7 @@ func buildExistingCommitmentsMap(commitments []common.Commitment) map[string]int
 
 	for _rvc := range commitments {
 		c := commitments[_rvc]
-		normalizedEngine := normalizeEngineName(c.Engine)
+		normalizedEngine := common.NormalizeEngineName(c.Engine)
 		key := fmt.Sprintf("%s|%s|%s", c.ResourceType, c.Region, normalizedEngine)
 		existingMap[key] += c.Count
 		log.Printf("    [DuplicateChecker] Recent RI: key=%s count=%d startDate=%s (raw engine=%s)",
@@ -680,7 +680,7 @@ func adjustRecommendationsAgainstExisting(recs []common.Recommendation, existing
 
 // adjustSingleRecommendation adjusts a single recommendation based on existing commitments.
 func adjustSingleRecommendation(rec common.Recommendation, existingMap map[string]int) common.Recommendation {
-	engine := getEngineFromRecommendation(rec)
+	engine := common.EngineFromDetails(rec.Details)
 	key := fmt.Sprintf("%s|%s|%s", rec.ResourceType, rec.Region, engine)
 	existingCount := existingMap[key]
 
@@ -702,76 +702,6 @@ func adjustSingleRecommendation(rec common.Recommendation, existingMap map[strin
 	}
 
 	return adjusted
-}
-
-// getEngineFromRecommendation extracts the engine from recommendation details.
-// DatabaseDetails/CacheDetails are always pointers (every producer -- AWS,
-// Azure, the CSV loader, and the JSON codec -- constructs them that way); see
-// pkg/common/service_details_codec.go's package doc for the pointer
-// invariant. The nil-pointer guards are not dead code: `rec.Details == nil`
-// only catches an untyped nil, so a typed nil (a (*common.DatabaseDetails)(nil)
-// stored in the interface) reaches the switch and would panic on the field
-// read. Returning blank matches the sibling helpers (extractDeployment and
-// extractEngine in multi_service_csv.go, rdsEngineDeploymentFromRec in the
-// AWS coverage package), which already guard the same way.
-func getEngineFromRecommendation(rec common.Recommendation) string {
-	if rec.Details == nil {
-		return ""
-	}
-	var engine string
-	switch details := rec.Details.(type) {
-	case *common.DatabaseDetails:
-		if details == nil {
-			return ""
-		}
-		engine = details.Engine
-	case *common.CacheDetails:
-		if details == nil {
-			return ""
-		}
-		engine = details.Engine
-	default:
-		return ""
-	}
-	return normalizeEngineName(engine)
-}
-
-// engineNameMap maps database engine names to a consistent normalized format.
-// AWS RIs use: "aurora-postgresql", "aurora-mysql", "mysql", "postgres"
-// Cost Explorer uses: "Aurora PostgreSQL", "Aurora MySQL", "MySQL", "PostgreSQL".
-var engineNameMap = map[string]string{
-	// Cost Explorer format -> normalized
-	"Aurora PostgreSQL": "aurora-postgresql",
-	"Aurora MySQL":      "aurora-mysql",
-	"MySQL":             "mysql",
-	"PostgreSQL":        "postgresql",
-	"MariaDB":           "mariadb",
-	"Oracle":            "oracle",
-	"SQL Server":        "sqlserver",
-	// Already normalized (from AWS RIs)
-	"aurora-postgresql": "aurora-postgresql",
-	"aurora-mysql":      "aurora-mysql",
-	"mysql":             "mysql",
-	"postgresql":        "postgresql",
-	"postgres":          "postgresql",
-	"mariadb":           "mariadb",
-	"oracle-se":         "oracle",
-	"oracle-se1":        "oracle",
-	"oracle-se2":        "oracle",
-	"oracle-ee":         "oracle",
-	"sqlserver-se":      "sqlserver",
-	"sqlserver-ee":      "sqlserver",
-	"sqlserver-ex":      "sqlserver",
-	"sqlserver-web":     "sqlserver",
-}
-
-// normalizeEngineName normalizes database engine names to a consistent format.
-func normalizeEngineName(engine string) string {
-	if normalized, ok := engineNameMap[engine]; ok {
-		return normalized
-	}
-	// Return lowercase as fallback
-	return strings.ToLower(engine)
 }
 
 // AdjustRecommendationsForExistingRIs is an alias for AdjustRecommendationsForExisting.
