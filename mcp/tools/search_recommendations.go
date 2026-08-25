@@ -14,6 +14,19 @@ import (
 
 const searchRecommendationsName = "cudly_search_recommendations"
 
+const searchRecommendationsTitle = "Search commitment recommendations"
+
+// searchRecommendationsAnnotations is read-only/open-world (it reaches a
+// live Cost Explorer/Advisor/Recommender API), but deliberately does NOT
+// claim IdempotentHint -- see readOnlyAnnotations' doc comment for why the
+// hint doesn't gate anything for a read-only tool per spec. The reason this
+// tool still calls it out: an AWS search fans out to up to 6 Cost Explorer
+// requests (searchCombos below) and AWS bills those per request, so a
+// client that inferred "safe to retry freely" from a stray idempotent-style
+// hint would be invited into a free-retry billing loop. openWorld=true
+// because every search call reaches a live cloud provider API.
+var searchRecommendationsAnnotations = readOnlyAnnotations(searchRecommendationsTitle, true)
+
 // searchRecommendationsDescription ships in the tool schema, so the model
 // reads it as the contract for what calling this costs. It states the
 // guarantee that matters (nothing is ever bought) without claiming the call is
@@ -71,6 +84,7 @@ func (t *searchRecommendationsTool) Descriptor() Descriptor {
 	return Descriptor{
 		Name:        searchRecommendationsName,
 		Description: searchRecommendationsDescription,
+		Annotations: searchRecommendationsAnnotations,
 		Action:      "search",
 		ExamplePrompts: []string{
 			"Search for AWS EC2 RI recommendations in us-east-1",
@@ -102,6 +116,7 @@ func (t *searchRecommendationsTool) Register(s *mcp.Server) error {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        searchRecommendationsName,
 		Description: searchRecommendationsDescription,
+		Annotations: searchRecommendationsAnnotations,
 		InputSchema: schema,
 	}, t.handle)
 	return nil

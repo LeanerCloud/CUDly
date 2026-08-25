@@ -93,6 +93,15 @@ func NewAWSMemoryDBRIPurchaseTool() Registration {
 	})
 }
 
+// title returns the human-readable Title for this spec's purchase tool,
+// e.g. "Purchase AWS OpenSearch Reserved Instances" -- shared between
+// Descriptor() and Register() so the two can never disagree, the same
+// drift protection every individually-defined purchase tool's package-level
+// Title constant gets.
+func (t *simpleAWSRIPurchaseTool) title() string {
+	return fmt.Sprintf("Purchase AWS %s Reserved Instances", t.spec.displayName)
+}
+
 func (t *simpleAWSRIPurchaseTool) Descriptor() Descriptor {
 	return Descriptor{
 		Name:     t.spec.name,
@@ -104,6 +113,7 @@ func (t *simpleAWSRIPurchaseTool) Descriptor() Descriptor {
 				"Always call with dry_run=true first (the default) to validate your parameters before "+
 				"committing; a dry_run response never contacts AWS and never spends money.",
 			t.spec.displayName),
+		Annotations:         purchaseAnnotations(t.title()),
 		RealPurchaseEnabled: true,
 		ExamplePrompts:      t.spec.examplePrompts,
 	}
@@ -128,6 +138,7 @@ func (t *simpleAWSRIPurchaseTool) Register(s *mcp.Server) error {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        t.spec.name,
 		Description: desc,
+		Annotations: purchaseAnnotations(t.title()),
 		InputSchema: schema,
 	}, t.handle)
 	return nil

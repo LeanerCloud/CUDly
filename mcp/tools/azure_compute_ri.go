@@ -13,6 +13,10 @@ import (
 
 const azureComputeRIPurchaseName = "cudly_azure_compute_ri_purchase"
 
+const azureComputeRIPurchaseTitle = "Purchase an Azure VM Reserved Instance"
+
+var azureComputeRIPurchaseAnnotations = purchaseAnnotations(azureComputeRIPurchaseTitle)
+
 // azureComputeRIPurchaseDescription documents Azure's actual billing-plan
 // contract: providers/azure/services/compute/client.go's buildReservationBody
 // sends properties.billingPlan (armreservations.ReservationBillingPlan --
@@ -62,6 +66,7 @@ func (t *azureComputeRIPurchaseTool) Descriptor() Descriptor {
 		Product:             "compute",
 		Action:              "ri_purchase",
 		Description:         azureComputeRIPurchaseDescription,
+		Annotations:         azureComputeRIPurchaseAnnotations,
 		RealPurchaseEnabled: true,
 		ExamplePrompts: []string{
 			"Preview buying 2 Standard_D2s_v3 Azure VM RIs in eastus for 3 years",
@@ -89,6 +94,7 @@ func (t *azureComputeRIPurchaseTool) Register(s *mcp.Server) error {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        azureComputeRIPurchaseName,
 		Description: azureComputeRIPurchaseDescription,
+		Annotations: azureComputeRIPurchaseAnnotations,
 		InputSchema: schema,
 	}, t.handle)
 	return nil

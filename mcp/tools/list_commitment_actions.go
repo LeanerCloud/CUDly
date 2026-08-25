@@ -8,6 +8,15 @@ import (
 
 const listCommitmentActionsName = "cudly_list_commitment_actions"
 
+const listCommitmentActionsTitle = "List available commitment actions"
+
+// listCommitmentActionsAnnotations is the one honest closed-world tool in
+// this server: it only ever reads the in-process descriptors slice built at
+// startup (NewServer), never a live cloud API, so openWorld=false -- unlike
+// every other read-only tool here (cudly_search_recommendations), which
+// reaches out to a provider.
+var listCommitmentActionsAnnotations = readOnlyAnnotations(listCommitmentActionsTitle, false)
+
 const listCommitmentActionsDescription = "List every CUDly commitment-purchase and search tool available on this " +
 	"MCP server, including which ones can execute a REAL purchase (money-affecting) versus which are " +
 	"search/preview-only, plus example prompts for each. This tool never spends money and takes no parameters -- " +
@@ -56,6 +65,7 @@ func ListCommitmentActionsDescriptor() Descriptor {
 	return Descriptor{
 		Name:        listCommitmentActionsName,
 		Description: listCommitmentActionsDescription,
+		Annotations: listCommitmentActionsAnnotations,
 		ExamplePrompts: []string{
 			"What CUDly tools are available?",
 			"Which purchase tools can spend real money right now?",
@@ -76,6 +86,7 @@ func (t *listCommitmentActionsTool) Register(s *mcp.Server) error {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        listCommitmentActionsName,
 		Description: listCommitmentActionsDescription,
+		Annotations: listCommitmentActionsAnnotations,
 		InputSchema: schema,
 	}, t.handle)
 	return nil
@@ -84,11 +95,19 @@ func (t *listCommitmentActionsTool) Register(s *mcp.Server) error {
 func (t *listCommitmentActionsTool) handle(_ context.Context, _ *mcp.CallToolRequest, _ listCommitmentActionsArgs) (*mcp.CallToolResult, listCommitmentActionsResult, error) {
 	actions := make([]ActionEntry, 0, len(t.descriptors))
 	for _, d := range t.descriptors {
-		// ActionEntry's fields are identical in name, type, and order to
-		// Descriptor's -- only the json tags differ -- so a direct
-		// conversion is equivalent to (and clearer than) a field-by-field
-		// struct literal.
-		actions = append(actions, ActionEntry(d))
+		// Descriptor carries fields (e.g. Annotations) that this catalog
+		// does not surface -- ListTools is the source of truth for MCP
+		// annotations, not this tool -- so ActionEntry is built field by
+		// field rather than by direct struct conversion.
+		actions = append(actions, ActionEntry{
+			Name:                d.Name,
+			Provider:            d.Provider,
+			Product:             d.Product,
+			Action:              d.Action,
+			Description:         d.Description,
+			RealPurchaseEnabled: d.RealPurchaseEnabled,
+			ExamplePrompts:      d.ExamplePrompts,
+		})
 	}
 	return nil, listCommitmentActionsResult{Actions: actions}, nil
 }

@@ -17,6 +17,10 @@ import (
 
 const awsSavingsPlansPurchaseName = "cudly_aws_savingsplans_purchase"
 
+const awsSavingsPlansPurchaseTitle = "Purchase an AWS Savings Plan"
+
+var awsSavingsPlansPurchaseAnnotations = purchaseAnnotations(awsSavingsPlansPurchaseTitle)
+
 const awsSavingsPlansPurchaseDescription = "Purchase an AWS Savings Plan (Compute, EC2Instance, SageMaker, or " +
 	"Database). THIS SPENDS REAL MONEY when dry_run=false and confirm=true. Always call with dry_run=true " +
 	"first (the default) to validate your parameters before committing; a dry_run response never contacts AWS " +
@@ -65,6 +69,7 @@ func (t *awsSavingsPlansPurchaseTool) Descriptor() Descriptor {
 		Product:             "savingsplans",
 		Action:              "purchase",
 		Description:         awsSavingsPlansPurchaseDescription,
+		Annotations:         awsSavingsPlansPurchaseAnnotations,
 		RealPurchaseEnabled: true,
 		ExamplePrompts: []string{
 			"Preview a $10/hour Compute Savings Plan, 3-year no-upfront",
@@ -89,6 +94,7 @@ func (t *awsSavingsPlansPurchaseTool) Register(s *mcp.Server) error {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        awsSavingsPlansPurchaseName,
 		Description: awsSavingsPlansPurchaseDescription,
+		Annotations: awsSavingsPlansPurchaseAnnotations,
 		InputSchema: schema,
 	}, t.handle)
 	return nil
