@@ -86,7 +86,7 @@ Add an entry to your client's MCP server config. For Claude Code, this is `~/.cl
 
 ## Use with OpenAI Codex CLI
 
-Codex CLI reads MCP server definitions from `~/.codex/config.toml` (or a project-scoped `.codex/config.toml`), under a `[mcp_servers.<name>]` table -- same `command`/`args`/`env` shape as Claude Code's `mcpServers` JSON, different file format:
+Codex CLI reads MCP server definitions from `~/.codex/config.toml`, under a `[mcp_servers.<name>]` table -- same `command`/`args`/`env` shape as Claude Code's `mcpServers` JSON, different file format. A project-scoped `.codex/config.toml` works the same way, but only if you have marked that project directory as trusted in Codex CLI -- an untrusted project's `.codex/` layer is silently ignored, so if `cudly` doesn't show up, register it in `~/.codex/config.toml` instead (or trust the project).
 
 ```toml
 [mcp_servers.cudly]
