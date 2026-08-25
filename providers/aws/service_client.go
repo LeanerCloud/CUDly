@@ -132,7 +132,7 @@ func filterByAccounts(recs []common.Recommendation, accounts []string) []common.
 	return filtered
 }
 
-// effectiveRegion returns the region to use for region-filter matching.
+// EffectiveRegion returns the region to use for region-filter matching.
 // Savings Plans recommendations never populate the top-level rec.Region
 // (GetSavingsPlansPurchaseRecommendation is account-level and carries no
 // region parameter -- see applyRecommendationFilters); EC2Instance Savings
@@ -142,10 +142,17 @@ func filterByAccounts(recs []common.Recommendation, accounts []string) []common.
 // EC2Instance SP recs on their real region instead of dropping them via an
 // always-empty top-level Region. Compute/SageMaker/Database SP recs are
 // genuinely region-agnostic (Details.Region stays "" for them), so this
-// still returns "" for those, and isRegionAgnostic is what decides that such
+// still returns "" for those, and IsRegionAgnostic is what decides that such
 // a rec is exempt from region filtering (see #1495).
-func effectiveRegion(rec common.Recommendation) string {
-	if rec.Region != "" {
+//
+// The Details fallback is confined to ProviderAWS. common.SavingsPlanDetails
+// is a shared type that Azure's savingsplans client also asserts on, so
+// exporting this predicate (#1582) made it reachable with a non-AWS rec whose
+// Details mean something else. Only AWS builds Savings Plans recommendations
+// today and parser_sp.go stamps ProviderAWS on every one, so the gate changes
+// no behaviour now; it keeps the AWS-only reading from outliving that invariant.
+func EffectiveRegion(rec common.Recommendation) string {
+	if rec.Region != "" || rec.Provider != common.ProviderAWS {
 		return rec.Region
 	}
 	if sp, ok := rec.Details.(*common.SavingsPlanDetails); ok && sp != nil {
@@ -154,7 +161,7 @@ func effectiveRegion(rec common.Recommendation) string {
 	return ""
 }
 
-// isRegionAgnostic reports whether rec legitimately belongs to no single
+// IsRegionAgnostic reports whether rec legitimately belongs to no single
 // region and must therefore be exempt from both region filters: an
 // account-level Savings Plan (Compute/SageMaker/Database), which
 // GetSavingsPlansPurchaseRecommendation returns without any region because
@@ -186,8 +193,13 @@ func effectiveRegion(rec common.Recommendation) string {
 // unknown (nil Details, a non-SavingsPlanDetails payload, a plan type this
 // build has never heard of) stays region-scoped and is filtered
 // conservatively rather than exempted.
-func isRegionAgnostic(rec common.Recommendation) bool {
-	if rec.CommitmentType != common.CommitmentSavingsPlan || effectiveRegion(rec) != "" {
+//
+// ProviderAWS is required for the same reason EffectiveRegion requires it:
+// this exemption is a statement about AWS Savings Plans products, and both
+// common.CommitmentSavingsPlan and common.SavingsPlanDetails are shared types
+// another provider could populate with different semantics.
+func IsRegionAgnostic(rec common.Recommendation) bool {
+	if rec.Provider != common.ProviderAWS || rec.CommitmentType != common.CommitmentSavingsPlan || EffectiveRegion(rec) != "" {
 		return false
 	}
 	sp, ok := rec.Details.(*common.SavingsPlanDetails)
@@ -236,14 +248,14 @@ func regionSet(regions []string) map[string]bool {
 
 // filterByIncludedRegions filters recommendations to only included regions.
 // Region-agnostic recommendations (account-level Savings Plans -- see
-// isRegionAgnostic) are always kept: an include filter narrows region-scoped
+// IsRegionAgnostic) are always kept: an include filter narrows region-scoped
 // recs, it must not silently drop recs that belong to no region at all.
 func filterByIncludedRegions(recs []common.Recommendation, regions []string) []common.Recommendation {
 	regionMap := regionSet(regions)
 
 	filtered := make([]common.Recommendation, 0, len(recs))
 	for _, rec := range recs {
-		if isRegionAgnostic(rec) || regionMap[effectiveRegion(rec)] {
+		if IsRegionAgnostic(rec) || regionMap[EffectiveRegion(rec)] {
 			filtered = append(filtered, rec)
 		}
 	}
@@ -253,14 +265,14 @@ func filterByIncludedRegions(recs []common.Recommendation, regions []string) []c
 
 // filterByExcludedRegions filters out recommendations from excluded regions.
 // Region-agnostic recommendations (account-level Savings Plans -- see
-// isRegionAgnostic) are never excluded: they do not belong to any of the
+// IsRegionAgnostic) are never excluded: they do not belong to any of the
 // excluded regions.
 func filterByExcludedRegions(recs []common.Recommendation, regions []string) []common.Recommendation {
 	regionMap := regionSet(regions)
 
 	filtered := make([]common.Recommendation, 0, len(recs))
 	for _, rec := range recs {
-		if isRegionAgnostic(rec) || !regionMap[effectiveRegion(rec)] {
+		if IsRegionAgnostic(rec) || !regionMap[EffectiveRegion(rec)] {
 			filtered = append(filtered, rec)
 		}
 	}
