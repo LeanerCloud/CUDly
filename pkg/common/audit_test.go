@@ -149,13 +149,15 @@ func TestCheckAuditLogWritable_WritablePath(t *testing.T) {
 	assert.NoError(t, CheckAuditLogWritable(path))
 }
 
+// The unwritable path is a child of a regular file rather than a 0555
+// directory: a root process ignores the permission bits, so a chmod-based
+// case would pass vacuously in root-based CI.
 func TestCheckAuditLogWritable_UnwritablePath(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	require.NoError(t, os.Chmod(dir, 0555))
-	t.Cleanup(func() { _ = os.Chmod(dir, 0755) })
+	notADir := filepath.Join(t.TempDir(), "regular-file")
+	require.NoError(t, os.WriteFile(notADir, []byte("x"), 0600))
 
-	path := filepath.Join(dir, "audit.jsonl")
+	path := filepath.Join(notADir, "audit.jsonl")
 	err := CheckAuditLogWritable(path)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), path)

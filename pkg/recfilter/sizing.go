@@ -69,7 +69,9 @@ func ApplyCoverage(recs []common.Recommendation, coverage float64, logf Logf, dr
 			adjusted = common.ScaleRecommendationCosts(adjusted, sizedRatio)
 			adjusted.Count = newCount
 			result = append(result, adjusted)
-		} else if drops != nil {
+		} else {
+			// No nil guard: DropSummary.Add is nil-receiver safe, and every
+			// other drop site in this package relies on that.
 			drops.Add(common.DropTargetSizedToZero, 1)
 		}
 	}

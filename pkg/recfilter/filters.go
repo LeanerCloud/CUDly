@@ -66,42 +66,38 @@ func (f Filters) IncludesInstanceType(instanceType string) bool {
 	return true
 }
 
-// IncludesEngine checks if a recommendation should be included based on engine filters.
+// IncludesEngine checks if a recommendation should be included based on engine
+// filters.
+//
+// Both sides of the comparison are normalized. Normalizing only the
+// recommendation would leave the filter list holding whatever spelling the
+// operator typed, so --include-engines=postgres would silently fail to match a
+// recommendation whose engine normalizes to "postgresql". NormalizeEngineName
+// lowercases anything it does not recognize, so unknown engines keep the
+// case-insensitive matching this had before.
 func (f Filters) IncludesEngine(rec *common.Recommendation) bool {
-	// Extract engine from recommendation.
 	engine := common.EngineFromDetails(rec.Details)
 	if engine == "" {
-		// If no engine info, include by default unless there's an include list.
+		// No engine info: include by default unless there's an include list.
 		return len(f.IncludeEngines) == 0
 	}
-
-	// Normalize engine name to lowercase for comparison.
 	engine = strings.ToLower(engine)
 
-	// If include list is specified, engine must be in it.
-	if len(f.IncludeEngines) > 0 {
-		found := false
-		for _, e := range f.IncludeEngines {
-			if strings.EqualFold(e, engine) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
+	if len(f.IncludeEngines) > 0 && !matchesEngine(f.IncludeEngines, engine) {
+		return false
+	}
+	return !matchesEngine(f.ExcludeEngines, engine)
+}
+
+// matchesEngine reports whether any filter entry normalizes to engine, which
+// the caller has already normalized.
+func matchesEngine(filters []string, engine string) bool {
+	for _, e := range filters {
+		if common.NormalizeEngineName(e) == engine {
+			return true
 		}
 	}
-
-	// If exclude list is specified, engine must not be in it.
-	if len(f.ExcludeEngines) > 0 {
-		for _, e := range f.ExcludeEngines {
-			if strings.EqualFold(e, engine) {
-				return false
-			}
-		}
-	}
-
-	return true
+	return false
 }
 
 // IncludesPoolSize filters out RI recommendations for pools whose

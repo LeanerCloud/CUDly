@@ -19,6 +19,15 @@ func TestIncludesEngine_CEAndRISpellingsBothMatch(t *testing.T) {
 		{"RI spelling rec, CE-normalized filter", "aurora-postgresql", []string{"aurora-postgresql"}, true},
 		{"postgres rec, postgresql filter", "postgres", []string{"postgresql"}, true},
 		{"PostgreSQL rec, postgresql filter", "PostgreSQL", []string{"postgresql"}, true},
+		// The reciprocal direction: the filter carries the alias and the
+		// recommendation the canonical name. Matching only after normalizing
+		// the recommendation would miss every one of these.
+		{"postgresql rec, postgres filter", "postgresql", []string{"postgres"}, true},
+		{"aurora-postgresql rec, CE spelling filter", "aurora-postgresql", []string{"Aurora PostgreSQL"}, true},
+		{"sqlserver rec, sqlserver-se filter", "sqlserver", []string{"sqlserver-se"}, true},
+		{"oracle rec, oracle-ee filter", "oracle", []string{"oracle-ee"}, true},
+		{"unrecognized engine still matches case-insensitively", "Db2", []string{"DB2"}, true},
+		{"unrelated engine does not match", "mysql", []string{"postgres"}, false},
 	}
 
 	for _, tt := range tests {
@@ -56,6 +65,17 @@ func TestIncludesRegion_ExcludeBeatsInclude(t *testing.T) {
 func TestIncludesInstanceType_ExcludeBeatsInclude(t *testing.T) {
 	f := Filters{IncludeInstanceTypes: []string{"db.t3.micro"}, ExcludeInstanceTypes: []string{"db.t3.micro"}}
 	assert.False(t, f.IncludesInstanceType("db.t3.micro"))
+}
+
+// Exclude entries are normalized on the same axis as include entries: an
+// operator excluding "postgres" must not still get "postgresql" rows.
+func TestIncludesEngine_ExcludeNormalizesAliases(t *testing.T) {
+	f := Filters{ExcludeEngines: []string{"postgres"}}
+	rec := common.Recommendation{Details: &common.DatabaseDetails{Engine: "PostgreSQL"}}
+	assert.False(t, f.IncludesEngine(&rec))
+
+	other := common.Recommendation{Details: &common.DatabaseDetails{Engine: "mysql"}}
+	assert.True(t, f.IncludesEngine(&other))
 }
 
 func TestIncludesEngine_ExcludeBeatsInclude(t *testing.T) {
