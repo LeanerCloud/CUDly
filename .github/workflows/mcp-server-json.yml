@@ -1,0 +1,68 @@
+name: MCP server.json
+
+# Validates server.json (the MCP Registry listing manifest, see
+# docs/plans/mcp/05-store.md Phase B) on every PR that touches it, and gates
+# tag pushes on server.json's version matching the tag -- the registry
+# rejects republishing a version, so a mismatch here must fail loud rather
+# than let release.yml silently publish the wrong metadata.
+
+on:
+  pull_request:
+    paths:
+      - "server.json"
+      - ".github/workflows/mcp-server-json.yml"
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-schema:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch the MCP Registry server.json schema
+        run: |
+          set -euo pipefail
+          schema_url=$(jq -r '.["$schema"]' server.json)
+          if [[ -z "$schema_url" || "$schema_url" == "null" ]]; then
+            echo "::error::server.json is missing a \$schema field"
+            exit 1
+          fi
+          curl -sSfL "$schema_url" -o /tmp/server.schema.json
+
+      - name: Validate server.json against the schema
+        run: npx --yes ajv-cli@5 validate -s /tmp/server.schema.json -d server.json --spec=draft7 --strict=false
+
+  assert-version-matches-tag:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: validate-schema
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assert server.json version matches the pushed tag
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/v}"
+          server_version=$(jq -r '.version' server.json)
+          if [[ "$tag" != "$server_version" ]]; then
+            echo "::error::server.json version ($server_version) does not match tag v$tag." \
+                 "Bump server.json's version (and, for the MCPB package entry," \
+                 "packages[].identifier and packages[].fileSha256) in the release PR before tagging -- this never rewrites the file for you."
+            exit 1
+          fi
+          echo "server.json version ($server_version) matches tag v$tag"
