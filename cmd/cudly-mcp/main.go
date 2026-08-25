@@ -20,13 +20,17 @@ import (
 	_ "github.com/LeanerCloud/CUDly/providers/gcp"
 )
 
-// version is overridable at build time via:
+// Version is overridable at build time via:
 //
-//	go build -ldflags "-X main.version=1.2.3" ./cmd/cudly-mcp
-var version = "dev"
+//	go build -ldflags "-X main.Version=1.2.3" ./cmd/cudly-mcp
+//
+// `make build-mcp` sets it from the same $(LDFLAGS)/$(VERSION) the other
+// binaries (build-server, ...) use, so a release build's tag flows through to
+// the MCP initialize response's Implementation.Version.
+var Version = "dev"
 
 func main() {
-	server, err := cudlymcp.NewServer(version)
+	server, err := cudlymcp.NewServer(Version)
 	if err != nil {
 		log.Fatalf("cudly-mcp: failed to build server: %v", err)
 	}
