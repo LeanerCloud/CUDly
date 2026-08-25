@@ -26,7 +26,13 @@ import (
 )
 
 const (
-	buildTimeout = 2 * time.Minute
+	// buildTimeout must cover a genuinely cold build: the "Unit Tests" CI job
+	// runs this test with a fresh module/build cache for the non-race build
+	// flavor (the preceding `go test -race` step only warms the race-enabled
+	// cache), so this recompiles the full AWS/Azure/GCP SDK dependency tree
+	// from scratch on shared CI hardware. That measured over 2 minutes in CI
+	// (see PR #1891); 5 minutes leaves headroom without masking a real hang.
+	buildTimeout = 5 * time.Minute
 	runTimeout   = 15 * time.Second
 
 	// injectedTestVersion stands in for a release tag; any value distinct
