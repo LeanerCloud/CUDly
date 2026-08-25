@@ -141,6 +141,39 @@ func TestNewAuditRecord_Fields(t *testing.T) {
 	assert.WithinDuration(t, time.Now().UTC(), ar.Timestamp, 5*time.Second)
 }
 
+func TestCheckAuditLogWritable_WritablePath(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+
+	assert.NoError(t, CheckAuditLogWritable(path))
+}
+
+func TestCheckAuditLogWritable_UnwritablePath(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	require.NoError(t, os.Chmod(dir, 0555))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0755) })
+
+	path := filepath.Join(dir, "audit.jsonl")
+	err := CheckAuditLogWritable(path)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), path)
+}
+
+func TestCheckAuditLogWritable_DoesNotTruncateExistingContent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("line1\n"), 0644))
+
+	require.NoError(t, CheckAuditLogWritable(path))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "line1\n", string(data))
+}
+
 func TestTermMonths(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
