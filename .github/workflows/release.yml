@@ -20,6 +20,18 @@ name: Release cudly-mcp
 # .github/workflows/mcp-server-json.yml's own check rather than calling it
 # via workflow_call, so the two workflows stay independently triggerable,
 # reviewable, and mergeable (they land as separate PRs).
+#
+# SECURITY: this is the first tag-triggered workflow in this repo, and its
+# publishing jobs (goreleaser, mcpb, publish-registry) hold `contents: write`
+# / `id-token: write`. They are bound to the `release` environment below, but
+# per #1660's finding (which this repeats for tags, not environments): an
+# `environment:` binding alone is NOT a reviewer gate until protection rules
+# are configured out-of-band, and GitHub auto-creates a referenced
+# environment bare (no reviewers) on first use. Nothing today also restricts
+# who can push a `v*` tag -- the repo has a branch ruleset
+# (protect-default-branch) but no tag ruleset. Tracked in #1896: configuring
+# required reviewers on `release` and adding a `v*` tag-protection ruleset
+# are both repo-admin actions outside what this workflow file can enforce.
 
 on:
   push:
@@ -89,6 +101,7 @@ jobs:
   goreleaser:
     needs: test
     runs-on: ubuntu-latest
+    environment: release # see the SECURITY note above and #1896
     permissions:
       contents: write # create the GitHub Release and upload its binaries
     outputs:
@@ -125,6 +138,7 @@ jobs:
   mcpb:
     needs: goreleaser
     runs-on: ubuntu-latest
+    environment: release # see the SECURITY note above and #1896
     permissions:
       contents: write # upload the .mcpb bundle as an extra release asset
     outputs:
@@ -162,8 +176,12 @@ jobs:
             install -m 0755 "/tmp/cudly-mcp-bin/cudly-mcp_${combo}" "$dir/cudly-mcp"
           done
 
+      # Packed under $RUNNER_TEMP, not the checkout root: this is a scratch
+      # release artifact, not source, and every step below in this same job
+      # can reach it by the same literal path (no cross-job propagation --
+      # $GITHUB_ENV isn't needed within a single job).
       - name: Pack the MCPB bundle (full edition -- all tools)
-        run: npx --yes "@anthropic-ai/mcpb@${MCPB_CLI_VERSION}" pack mcpb cudly-mcp-full.mcpb
+        run: npx --yes "@anthropic-ai/mcpb@${MCPB_CLI_VERSION}" pack mcpb "$RUNNER_TEMP/cudly-mcp-full.mcpb"
 
       - name: Upload the MCPB bundle to the GitHub Release
         id: pack
@@ -173,15 +191,17 @@ jobs:
           REPO_SLUG: ${{ github.repository }}
         run: |
           set -euo pipefail
-          sha=$(sha256sum cudly-mcp-full.mcpb | cut -d' ' -f1)
+          bundle="$RUNNER_TEMP/cudly-mcp-full.mcpb"
+          sha=$(sha256sum "$bundle" | cut -d' ' -f1)
           # --repo omitted: gh infers it from this checkout's git remote.
-          gh release upload "$RELEASE_TAG" cudly-mcp-full.mcpb --clobber
+          gh release upload "$RELEASE_TAG" "$bundle" --clobber
           echo "sha256=$sha" >> "$GITHUB_OUTPUT"
           echo "asset_url=https://github.com/${REPO_SLUG}/releases/download/${RELEASE_TAG}/cudly-mcp-full.mcpb" >> "$GITHUB_OUTPUT"
 
   publish-registry:
     needs: mcpb
     runs-on: ubuntu-latest
+    environment: release # see the SECURITY note above and #1896
     permissions:
       id-token: write # GitHub OIDC auth to the MCP Registry -- no long-lived secret
       contents: read
@@ -194,18 +214,23 @@ jobs:
       # server.json in git carries a placeholder fileSha256/identifier (see
       # its own comment history) until a real release exists to hash; patch
       # in the values this run just produced before publishing. This never
-      # writes back to the repository -- only the ephemeral runner's checkout.
+      # writes back to the repository -- only the ephemeral runner's checkout
+      # -- and the final `server.json` intentionally stays at the checkout
+      # root: mcp-publisher publish reads ./server.json from the working
+      # directory by default. Only the scratch intermediate file lives under
+      # $RUNNER_TEMP.
       - name: Patch server.json with this release's MCPB asset
         env:
           MCPB_SHA256: ${{ needs.mcpb.outputs.sha256 }}
           MCPB_ASSET_URL: ${{ needs.mcpb.outputs.asset_url }}
         run: |
           set -euo pipefail
+          patched="$RUNNER_TEMP/server.json.tmp"
           jq --arg sha "$MCPB_SHA256" \
              --arg url "$MCPB_ASSET_URL" \
              '.packages[0].fileSha256 = $sha | .packages[0].identifier = $url' \
-             server.json > server.json.tmp
-          mv server.json.tmp server.json
+             server.json > "$patched"
+          mv "$patched" server.json
 
       - name: Install mcp-publisher
         run: |
