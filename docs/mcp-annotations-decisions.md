@@ -104,21 +104,35 @@ and every purchase tool (reaches a live provider purchase API).
 
 ## Enforcement
 
-- `mcp/tools/registry.go`'s `readOnlyAnnotations`/`purchaseAnnotations`
-  helpers are the only two constructors for `Descriptor.Annotations`, so a
-  new tool that forgets to call one fails to compile with a nil-pointer
-  panic risk visible in review, not a silent gap.
-- `mcp/annotations_test.go`'s `TestToolAnnotationsMatchDescriptor` is the
-  drift test: it drives a real `ListTools` call over the in-memory MCP
-  transport and asserts the live `Annotations` on the wire equal each tool's
-  `Descriptor().Annotations`, so a `Register()` that falls out of sync with
-  `Descriptor()` fails CI.
-- `mcp/annotations_test.go`'s `TestToolAnnotationsValueAssertions` is a
-  table-driven sweep, derived from `Descriptor.Action` rather than a
-  hardcoded tool-name list, asserting: `Annotations` is never nil;
-  `DestructiveHint`/`OpenWorldHint` are never nil pointers; every tool whose
-  `Action` contains `"purchase"` is `ReadOnlyHint=false` and
-  `DestructiveHint=true`; every `Title` is non-empty, differs from the
-  tool's snake_case `Name`, and contains no underscore. A future 12th
-  purchase tool that adds `"purchase"` to its `Action` inherits this check
-  automatically -- it cannot dodge D1/A5 by omission.
+`Descriptor.Annotations` is a plain, optional `*mcp.ToolAnnotations` field --
+nothing at the Go type level stops a new tool from leaving it nil or
+building one by hand instead of calling `readOnlyAnnotations`/
+`purchaseAnnotations`, so none of this is compiler-enforced. The guarantee
+is carried entirely by `mcp/annotations_test.go`, run in CI on every push:
+
+- `TestToolAnnotationsMatchDescriptor` is the drift test: it drives a real
+  `ListTools` call over the in-memory MCP transport and asserts, in both
+  directions, that the live `Annotations` on the wire equal each tool's
+  `Descriptor().Annotations` -- tool counts must match, every live tool
+  must have a matching `Descriptor`, and every `Descriptor` must have a
+  matching live tool. The bidirectional check matters because a tool
+  registered directly against `*gosdk.Server` outside the
+  `Descriptor`/`Register` contract would never appear in the descriptor
+  side of a one-directional comparison, and could ship unsafe or missing
+  annotations without this test noticing.
+- `TestToolAnnotationsValueAssertions` is a table-driven sweep, derived from
+  `Descriptor.Action` rather than a hardcoded tool-name list (so a future
+  12th purchase tool inherits the check automatically), asserting the
+  concrete required value of every hint per role, not just that a value is
+  present: `Annotations`/`DestructiveHint`/`OpenWorldHint` are never nil;
+  every tool whose `Action` contains `"purchase"` is `ReadOnlyHint=false`,
+  `DestructiveHint=true` (D1), `IdempotentHint=false` (A5), and
+  `OpenWorldHint=true`; the search tool (`Action == "search"`) is
+  `ReadOnlyHint=true`, `DestructiveHint=false`, `OpenWorldHint=true`; the
+  catalog tool (the one remaining role, `Action == ""`) is
+  `ReadOnlyHint=true`, `DestructiveHint=false`, `OpenWorldHint=false`; and
+  every `Title` is non-empty, differs from the tool's snake_case `Name`, and
+  contains no underscore. Asserting concrete values (not just "is set")
+  matters because `TestToolAnnotationsMatchDescriptor` alone would pass a
+  purchase tool that mistakenly set `IdempotentHint=true`, as long as
+  `Descriptor` and the live registration agreed on that same wrong value.
