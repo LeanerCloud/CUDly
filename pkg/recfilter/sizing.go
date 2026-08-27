@@ -97,17 +97,21 @@ func ApplyCoverage(recs []common.Recommendation, coverage float64, logf Logf, dr
 //
 // RIs (existing-aware, per-pool, strict-target):
 //
-//	gap            = targetPct - ExistingCoveragePct      (percentage points)
-//	remaining_gap  = 100 - ExistingCoveragePct            (percentage points)
-//	n_target       = floor(rec.Count * gap / remaining_gap)
+//	gap      = targetPct - ExistingCoveragePct           (percentage points)
+//	avg      = AverageInstancesUsedPerHour               (instances)
+//	n_target = floor(avg * gap / 100)
 //
-//	The formula scales AWS's per-account-incremental rec.Count by the
-//	fraction of the current-to-100% gap we want to fill. For example
-//	with existing=50% and target=80%: gap=30, remaining_gap=50, so we
-//	buy 30/50 = 60% of AWS's rec.Count. Anchoring to rec.Count (which
-//	AWS computed per-linked-account) is more robust in multi-account
-//	orgs than scaling against avg, since CE's ExistingCoveragePct is
-//	org-wide averaged and mixes accounts together.
+//	The buy is anchored on the pool's own average demand and the absolute
+//	gap to target: target%-existing% of avg instances. For example with
+//	avg=10, existing=50% and target=80%: gap=30, so n_target=floor(3)=3.
+//
+//	An earlier version anchored on AWS's rec.Count
+//	(floor(rec.Count * gap / (100-existing))). That under-bought when AWS
+//	sized rec.Count for less than full coverage, and when CE's org-wide
+//	ExistingCoveragePct disagreed with rec.Count's per-account derivation.
+//	Both inputs of the current formula come from GetReservationCoverage, so
+//	the buy lines up with the AWS console's reservations-coverage report.
+//	rec.Count survives only as the denominator of the cost-scaling ratio.
 //
 //	If gap <= 0 (existing already at/above target) → drop with INFO log.
 //	If n_target == 0 (gap too small to fit one RI) → drop with INFO log.
@@ -119,7 +123,8 @@ func ApplyCoverage(recs []common.Recommendation, coverage float64, logf Logf, dr
 //
 //	ExistingCoveragePct is sourced from CE GetReservationCoverage in the
 //	same pool; zero means "no signal" and the formula reduces to
-//	floor(rec.Count * target/100) — i.e. plain target% of AWS's count.
+//	floor(avg * target/100) — i.e. plain target% of the pool's average
+//	hourly demand.
 //	For RDS the coverage lookup keys by (region, instance_type, engine).
 //	Floor (rather than ceil or round) gives strict "at-most-target"
 //	sizing. Pools too small to approximate the target meaningfully
