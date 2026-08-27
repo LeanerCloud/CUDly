@@ -83,14 +83,26 @@ func isRecentActiveCommitment(c common.Commitment, cutoffTime time.Time) bool {
 	return (c.State == "active" || c.State == "payment-pending") && c.StartDate.After(cutoffTime)
 }
 
-// buildExistingCommitmentsMap builds a map of commitments by resource type, region, and engine.
+// dedupeKey builds the duplicate-identity key shared by
+// buildExistingCommitmentsMap and adjustSingleRecommendation. Both call
+// sites MUST build the key through this function: a Single-AZ and a
+// Multi-AZ RDS commitment/recommendation are priced and provisioned
+// differently and do not cover each other's demand, so deployment has to
+// be part of the identity or the two keys can drift and silently
+// suppress (or fail to suppress) the wrong recommendation.
+func dedupeKey(resourceType, region, engine, deployment string) string {
+	return fmt.Sprintf("%s|%s|%s|%s", resourceType, region, engine, deployment)
+}
+
+// buildExistingCommitmentsMap builds a map of commitments by resource type, region, engine, and deployment.
 func buildExistingCommitmentsMap(commitments []common.Commitment, logf Logf) map[string]int {
 	existingMap := make(map[string]int)
 
 	for _rvc := range commitments {
 		c := commitments[_rvc]
 		normalizedEngine := common.NormalizeEngineName(c.Engine)
-		key := fmt.Sprintf("%s|%s|%s", c.ResourceType, c.Region, normalizedEngine)
+		normalizedDeployment := common.NormalizeDeploymentName(c.Deployment)
+		key := dedupeKey(c.ResourceType, c.Region, normalizedEngine, normalizedDeployment)
 		existingMap[key] += c.Count
 		logf.printf("    [DuplicateChecker] Recent RI: key=%s count=%d startDate=%s (raw engine=%s)",
 			key, c.Count, c.StartDate.Format("2006-01-02 15:04:05"), c.Engine)
@@ -121,7 +133,8 @@ func adjustRecommendationsAgainstExisting(recs []common.Recommendation, existing
 // adjustSingleRecommendation adjusts a single recommendation based on existing commitments.
 func adjustSingleRecommendation(rec common.Recommendation, existingMap map[string]int, logf Logf) common.Recommendation {
 	engine := common.EngineFromDetails(rec.Details)
-	key := fmt.Sprintf("%s|%s|%s", rec.ResourceType, rec.Region, engine)
+	deployment := common.NormalizeDeploymentName(common.DeploymentFromDetails(rec.Details))
+	key := dedupeKey(rec.ResourceType, rec.Region, engine, deployment)
 	existingCount := existingMap[key]
 
 	if existingCount >= rec.Count {

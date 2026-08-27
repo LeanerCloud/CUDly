@@ -208,3 +208,98 @@ func TestAdjustRecommendationsForExisting_LogfReceivesDecisionTrail(t *testing.T
 	}
 	assert.True(t, found)
 }
+
+// TestAdjustRecommendationsForExisting_SingleAZCommitmentDoesNotSuppressMultiAZRec
+// is a regression test for a duplicate-identity key that omitted the RDS
+// deployment dimension. A recent Single-AZ commitment must not reduce or
+// drop a Multi-AZ recommendation for the same instance type/region/engine:
+// the two are priced and provisioned differently and do not cover each
+// other's demand.
+func TestAdjustRecommendationsForExisting_SingleAZCommitmentDoesNotSuppressMultiAZRec(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	client := &fakeServiceClient{commitments: []common.Commitment{
+		{ResourceType: "db.r5.large", Region: "us-east-1", Engine: "mysql", Deployment: "single-az", Count: 5, State: "active", StartDate: time.Now().Add(-1 * time.Hour)},
+	}}
+	rec := common.Recommendation{
+		ResourceType: "db.r5.large", Region: "us-east-1", Count: 5,
+		Details: &common.DatabaseDetails{Engine: "mysql", AZConfig: "multi-az"},
+	}
+
+	d := NewDuplicateChecker(0)
+	passed, filtered, err := d.AdjustRecommendationsForExisting(ctx, []common.Recommendation{rec}, client)
+
+	require.NoError(t, err)
+	assert.Empty(t, filtered)
+	require.Len(t, passed, 1)
+	assert.Equal(t, rec.Count, passed[0].Count)
+}
+
+// TestAdjustRecommendationsForExisting_MultiAZCommitmentDoesNotSuppressSingleAZRec
+// is the mirror direction of the above: a recent Multi-AZ commitment must
+// not suppress a Single-AZ recommendation.
+func TestAdjustRecommendationsForExisting_MultiAZCommitmentDoesNotSuppressSingleAZRec(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	client := &fakeServiceClient{commitments: []common.Commitment{
+		{ResourceType: "db.r5.large", Region: "us-east-1", Engine: "mysql", Deployment: "multi-az", Count: 5, State: "active", StartDate: time.Now().Add(-1 * time.Hour)},
+	}}
+	rec := common.Recommendation{
+		ResourceType: "db.r5.large", Region: "us-east-1", Count: 5,
+		Details: &common.DatabaseDetails{Engine: "mysql", AZConfig: "single-az"},
+	}
+
+	d := NewDuplicateChecker(0)
+	passed, filtered, err := d.AdjustRecommendationsForExisting(ctx, []common.Recommendation{rec}, client)
+
+	require.NoError(t, err)
+	assert.Empty(t, filtered)
+	require.Len(t, passed, 1)
+	assert.Equal(t, rec.Count, passed[0].Count)
+}
+
+// TestAdjustRecommendationsForExisting_SingleAZCommitmentStillSuppressesSingleAZRec
+// is the positive control: matching deployment on both sides must still
+// dedupe, so the fix above does not simply disable deduplication for RDS.
+func TestAdjustRecommendationsForExisting_SingleAZCommitmentStillSuppressesSingleAZRec(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	client := &fakeServiceClient{commitments: []common.Commitment{
+		{ResourceType: "db.r5.large", Region: "us-east-1", Engine: "mysql", Deployment: "single-az", Count: 5, State: "active", StartDate: time.Now().Add(-1 * time.Hour)},
+	}}
+	rec := common.Recommendation{
+		ResourceType: "db.r5.large", Region: "us-east-1", Count: 5,
+		Details: &common.DatabaseDetails{Engine: "mysql", AZConfig: "single-az"},
+	}
+
+	d := NewDuplicateChecker(0)
+	passed, filtered, err := d.AdjustRecommendationsForExisting(ctx, []common.Recommendation{rec}, client)
+
+	require.NoError(t, err)
+	assert.Empty(t, passed)
+	require.Len(t, filtered, 1)
+}
+
+// TestAdjustRecommendationsForExisting_NonRDSCommitmentStillDeduplicates
+// guards the non-RDS path: a commitment/recommendation pair with no
+// deployment dimension at all (e.g. EC2) must still land on the same key
+// and dedupe, so adding deployment to the key doesn't regress non-RDS
+// resource types that never populate it.
+func TestAdjustRecommendationsForExisting_NonRDSCommitmentStillDeduplicates(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	client := &fakeServiceClient{commitments: []common.Commitment{
+		{ResourceType: "m5.large", Region: "us-east-1", Count: 5, State: "active", StartDate: time.Now().Add(-1 * time.Hour)},
+	}}
+	rec := common.Recommendation{
+		ResourceType: "m5.large", Region: "us-east-1", Count: 5,
+		Details: &common.ComputeDetails{Platform: "linux"},
+	}
+
+	d := NewDuplicateChecker(0)
+	passed, filtered, err := d.AdjustRecommendationsForExisting(ctx, []common.Recommendation{rec}, client)
+
+	require.NoError(t, err)
+	assert.Empty(t, passed)
+	require.Len(t, filtered, 1)
+}
