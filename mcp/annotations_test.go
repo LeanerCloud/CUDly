@@ -148,6 +148,9 @@ func TestToolAnnotationsValueAssertions(t *testing.T) {
 				assert.Truef(t, d.Annotations.ReadOnlyHint, "tool %q is the search tool so must be ReadOnlyHint=true", d.Name)
 				assert.Falsef(t, *d.Annotations.DestructiveHint,
 					"tool %q is the search tool so must be DestructiveHint=false", d.Name)
+				assert.Falsef(t, d.Annotations.IdempotentHint,
+					"tool %q is the search tool so must be IdempotentHint=false: each search bills Cost Explorer "+
+						"per request, so claiming idempotency invites a free-retry billing loop", d.Name)
 				assert.Truef(t, *d.Annotations.OpenWorldHint,
 					"tool %q is the search tool so must be OpenWorldHint=true: it reaches a live Cost Explorer/"+
 						"Advisor/Recommender API", d.Name)
@@ -157,6 +160,7 @@ func TestToolAnnotationsValueAssertions(t *testing.T) {
 				// the descriptors slice NewServer built at startup, never a live cloud API).
 				assert.Truef(t, d.Annotations.ReadOnlyHint, "tool %q must be ReadOnlyHint=true", d.Name)
 				assert.Falsef(t, *d.Annotations.DestructiveHint, "tool %q must be DestructiveHint=false", d.Name)
+				assert.Falsef(t, d.Annotations.IdempotentHint, "tool %q must be IdempotentHint=false", d.Name)
 				assert.Falsef(t, *d.Annotations.OpenWorldHint,
 					"tool %q is the in-process catalog tool so must be OpenWorldHint=false", d.Name)
 			}
