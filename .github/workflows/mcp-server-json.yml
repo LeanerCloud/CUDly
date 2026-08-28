@@ -32,12 +32,13 @@ jobs:
       - name: Fetch the MCP Registry server.json schema
         run: |
           set -euo pipefail
-          schema_url=$(jq -r '.["$schema"]' server.json)
-          if [[ -z "$schema_url" || "$schema_url" == "null" ]]; then
-            echo "::error::server.json is missing a \$schema field"
+          expected_schema_url="https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json"
+          if ! jq -e --arg expected "$expected_schema_url" \
+            '.["$schema"] | type == "string" and . == $expected' server.json >/dev/null; then
+            echo "::error::server.json must declare the official MCP Registry \$schema URL"
             exit 1
           fi
-          curl -sSfL "$schema_url" -o /tmp/server.schema.json
+          curl -sSfL "$expected_schema_url" -o /tmp/server.schema.json
 
       - name: Validate server.json against the schema
         run: npx --yes ajv-cli@5 validate -s /tmp/server.schema.json -d server.json --spec=draft7 --strict=false
