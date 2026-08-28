@@ -717,7 +717,7 @@ func TestApplyFilters_MinPoolSizeMultiRegionMatchesPreExtractionBehaviour(t *tes
 			resultOld := applyFiltersPreExtraction(makeRecs(), &toolCfg, make(map[string][]InstanceEngineVersion), make(map[string]MajorEngineVersionInfo), region, dropsOld)
 
 			assert.Equal(t, resultOld, resultNew,
-				"region %s: refactored applyFilters diverged from the pre-extraction oracle -- the ApplyMinPoolSize extraction changed observable CLI filtering behaviour", region)
+				"region %s: refactored applyFilters diverged from the pre-extraction oracle -- the ApplyMinPoolSize extraction changed observable CLI filtering behavior", region)
 			assert.Equal(t, dropsOld.FormatOneLine(), dropsNew.FormatOneLine(),
 				"region %s: drop summaries diverged between pre- and post-extraction implementations", region)
 			assert.Equal(t, dropsOld.Total(), dropsNew.Total(),
@@ -742,7 +742,7 @@ func TestApplyFilters_MinPoolSizeMultiRegionMatchesPreExtractionBehaviour(t *tes
 	require.Equal(t, totalDropMinPoolSizeOld, totalDropMinPoolSizeNew,
 		"old and new implementations must agree on the summed multi-region --min-pool-size drop count")
 
-	// Pre-existing behaviour, identical in both implementations (not introduced
+	// Pre-existing behavior, identical in both implementations (not introduced
 	// by the ApplyMinPoolSize extraction): each per-region call re-scans the
 	// FULL recommendation set passed to it, not a per-region subset, so a
 	// below-threshold recommendation from one region is re-counted as dropped
