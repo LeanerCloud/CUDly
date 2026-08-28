@@ -12,6 +12,10 @@ import (
 
 const gcpComputeEngineCUDPurchaseName = "cudly_gcp_computeengine_cud_purchase"
 
+const gcpComputeEngineCUDPurchaseTitle = "Purchase a GCP Compute Engine Committed Use Discount"
+
+var gcpComputeEngineCUDPurchaseAnnotations = purchaseAnnotations(gcpComputeEngineCUDPurchaseTitle)
+
 const gcpComputeEngineCUDPurchaseDescription = "Purchase a GCP Compute Engine Committed Use Discount (CUD). THIS " +
 	"SPENDS REAL MONEY when dry_run=false and confirm=true. Always call with dry_run=true first (the default) " +
 	"to validate your parameters before committing; a dry_run response never contacts GCP and never spends " +
@@ -59,6 +63,7 @@ func (t *gcpComputeEngineCUDPurchaseTool) Descriptor() Descriptor {
 		Product:             "computeengine",
 		Action:              "cud_purchase",
 		Description:         gcpComputeEngineCUDPurchaseDescription,
+		Annotations:         gcpComputeEngineCUDPurchaseAnnotations,
 		RealPurchaseEnabled: true,
 		ExamplePrompts: []string{
 			"Preview a 3-year CUD for 8 vCPUs and 32 GB memory in us-central1",
@@ -79,6 +84,7 @@ func (t *gcpComputeEngineCUDPurchaseTool) Register(s *mcp.Server) error {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        gcpComputeEngineCUDPurchaseName,
 		Description: gcpComputeEngineCUDPurchaseDescription,
+		Annotations: gcpComputeEngineCUDPurchaseAnnotations,
 		InputSchema: schema,
 	}, t.handle)
 	return nil

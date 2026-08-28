@@ -12,6 +12,10 @@ import (
 
 const awsRDSRIPurchaseName = "cudly_aws_rds_ri_purchase"
 
+const awsRDSRIPurchaseTitle = "Purchase AWS RDS Reserved Instances"
+
+var awsRDSRIPurchaseAnnotations = purchaseAnnotations(awsRDSRIPurchaseTitle)
+
 const awsRDSRIPurchaseDescription = "Purchase AWS RDS Reserved Instances. THIS SPENDS REAL MONEY when " +
 	"dry_run=false and confirm=true. Always call with dry_run=true first (the default) to validate your " +
 	"parameters before committing; a dry_run response never contacts AWS and never spends money."
@@ -52,6 +56,7 @@ func (t *awsRDSRIPurchaseTool) Descriptor() Descriptor {
 		Product:             "rds",
 		Action:              "ri_purchase",
 		Description:         awsRDSRIPurchaseDescription,
+		Annotations:         awsRDSRIPurchaseAnnotations,
 		RealPurchaseEnabled: true,
 		ExamplePrompts: []string{
 			"Preview buying 2 db.r6g.large multi-az postgres RDS RIs in us-east-1 for 3 years",
@@ -74,6 +79,7 @@ func (t *awsRDSRIPurchaseTool) Register(s *mcp.Server) error {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        awsRDSRIPurchaseName,
 		Description: awsRDSRIPurchaseDescription,
+		Annotations: awsRDSRIPurchaseAnnotations,
 		InputSchema: schema,
 	}, t.handle)
 	return nil

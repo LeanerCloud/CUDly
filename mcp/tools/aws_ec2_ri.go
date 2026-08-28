@@ -13,6 +13,10 @@ import (
 
 const awsEC2RIPurchaseName = "cudly_aws_ec2_ri_purchase"
 
+const awsEC2RIPurchaseTitle = "Purchase AWS EC2 Reserved Instances"
+
+var awsEC2RIPurchaseAnnotations = purchaseAnnotations(awsEC2RIPurchaseTitle)
+
 const awsEC2RIPurchaseDescription = "Purchase AWS EC2 Reserved Instances. THIS SPENDS REAL MONEY when " +
 	"dry_run=false and confirm=true. Always call with dry_run=true first (the default) to validate your " +
 	"parameters before committing; a dry_run response never contacts AWS and never spends money. Search first " +
@@ -56,6 +60,7 @@ func (t *awsEC2RIPurchaseTool) Descriptor() Descriptor {
 		Product:             "ec2",
 		Action:              "ri_purchase",
 		Description:         awsEC2RIPurchaseDescription,
+		Annotations:         awsEC2RIPurchaseAnnotations,
 		RealPurchaseEnabled: true,
 		ExamplePrompts: []string{
 			"Preview buying 3 m5.large 3-year no-upfront RIs in us-east-1",
@@ -79,6 +84,7 @@ func (t *awsEC2RIPurchaseTool) Register(s *mcp.Server) error {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        awsEC2RIPurchaseName,
 		Description: awsEC2RIPurchaseDescription,
+		Annotations: awsEC2RIPurchaseAnnotations,
 		InputSchema: schema,
 	}, t.handle)
 	return nil

@@ -11,8 +11,6 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/provider"
 )
 
-func boolPtr(b bool) *bool { return &b }
-
 func validEC2Args() ec2RIPurchaseArgs {
 	return ec2RIPurchaseArgs{
 		AWSProfile:    "test-profile",

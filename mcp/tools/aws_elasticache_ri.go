@@ -12,6 +12,10 @@ import (
 
 const awsElastiCacheRIPurchaseName = "cudly_aws_elasticache_ri_purchase"
 
+const awsElastiCacheRIPurchaseTitle = "Purchase AWS ElastiCache Reserved Cache Nodes"
+
+var awsElastiCacheRIPurchaseAnnotations = purchaseAnnotations(awsElastiCacheRIPurchaseTitle)
+
 const awsElastiCacheRIPurchaseDescription = "Purchase AWS ElastiCache Reserved Cache Nodes. THIS SPENDS REAL " +
 	"MONEY when dry_run=false and confirm=true. Always call with dry_run=true first (the default) to validate " +
 	"your parameters before committing; a dry_run response never contacts AWS and never spends money."
@@ -49,6 +53,7 @@ func (t *awsElastiCacheRIPurchaseTool) Descriptor() Descriptor {
 		Product:             "elasticache",
 		Action:              "ri_purchase",
 		Description:         awsElastiCacheRIPurchaseDescription,
+		Annotations:         awsElastiCacheRIPurchaseAnnotations,
 		RealPurchaseEnabled: true,
 		ExamplePrompts: []string{
 			"Preview buying 3 cache.r6g.large redis ElastiCache RIs in us-east-1 for 1 year",
@@ -71,6 +76,7 @@ func (t *awsElastiCacheRIPurchaseTool) Register(s *mcp.Server) error {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        awsElastiCacheRIPurchaseName,
 		Description: awsElastiCacheRIPurchaseDescription,
+		Annotations: awsElastiCacheRIPurchaseAnnotations,
 		InputSchema: schema,
 	}, t.handle)
 	return nil
