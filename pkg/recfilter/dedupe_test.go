@@ -79,6 +79,36 @@ func TestAdjustRecommendationsForExisting_EngineNormalizationCollides(t *testing
 	assert.Len(t, filtered, 1)
 }
 
+func TestAdjustRecommendationsForExisting_UppercaseRecognizedAliasCollides(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	client := &fakeServiceClient{commitments: []common.Commitment{
+		{
+			ResourceType: "db.r5.large",
+			Region:       "us-east-1",
+			Engine:       "AURORA POSTGRESQL",
+			Deployment:   "single-az",
+			Count:        1,
+			State:        "active",
+			StartDate:    time.Now().Add(-1 * time.Hour),
+		},
+	}}
+	rec := common.Recommendation{
+		ResourceType: "db.r5.large",
+		Region:       "us-east-1",
+		Count:        1,
+		Details:      &common.DatabaseDetails{Engine: "aurora-postgresql", AZConfig: "single-az"},
+	}
+
+	d := NewDuplicateChecker(0)
+	passed, filtered, err := d.AdjustRecommendationsForExisting(ctx, []common.Recommendation{rec}, client)
+
+	require.NoError(t, err)
+	assert.Empty(t, passed)
+	assert.Len(t, filtered, 1)
+}
+
 func TestAdjustRecommendationsForExisting_FullCoverageDrops(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

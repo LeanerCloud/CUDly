@@ -9,6 +9,8 @@ import (
 )
 
 func TestIncludesEngine_CEAndRISpellingsBothMatch(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name           string
 		recEngine      string
@@ -35,6 +37,47 @@ func TestIncludesEngine_CEAndRISpellingsBothMatch(t *testing.T) {
 			f := Filters{IncludeEngines: tt.includeEngines}
 			rec := common.Recommendation{Details: &common.DatabaseDetails{Engine: tt.recEngine}}
 			assert.Equal(t, tt.expected, f.IncludesEngine(&rec))
+		})
+	}
+}
+
+func TestIncludesEngine_UppercaseRecognizedAliasFilters(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		recEngine      string
+		includeEngines []string
+		excludeEngines []string
+		want           bool
+	}{
+		{
+			name:           "uppercase aurora postgresql include matches canonical recommendation",
+			recEngine:      "aurora-postgresql",
+			includeEngines: []string{"AURORA POSTGRESQL"},
+			want:           true,
+		},
+		{
+			name:           "uppercase aurora postgresql exclude removes canonical recommendation",
+			recEngine:      "aurora-postgresql",
+			excludeEngines: []string{"AURORA POSTGRESQL"},
+			want:           false,
+		},
+		{
+			name:           "uppercase postgres short alias include matches postgresql recommendation",
+			recEngine:      "postgresql",
+			includeEngines: []string{"POSTGRES"},
+			want:           true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := Filters{IncludeEngines: tt.includeEngines, ExcludeEngines: tt.excludeEngines}
+			rec := common.Recommendation{Details: &common.DatabaseDetails{Engine: tt.recEngine}}
+			assert.Equal(t, tt.want, f.IncludesEngine(&rec))
 		})
 	}
 }
