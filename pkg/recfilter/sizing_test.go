@@ -250,6 +250,18 @@ func TestApplyTargetCoverage_ProjectionsClampTo100(t *testing.T) {
 		assert.LessOrEqual(t, out[0].ProjectedCoverage, 100.0)
 		assert.Equal(t, 100.0, out[0].ProjectedCoverage)
 	})
+
+	t.Run("Nonzero existing coverage keeps only the remaining target gap", func(t *testing.T) {
+		t.Parallel()
+		// avg=10, target=80, existing=50: gap=30, nTarget=floor(10*30/100)=3.
+		// The kept recommendation should size only the uncovered gap.
+		rec := mkRI(10, 10, 50)
+		out := ApplyTargetCoverage([]common.Recommendation{rec}, 80, nil, nil)
+		require.Len(t, out, 1)
+		assert.Equal(t, 3, out[0].Count)
+		assert.Equal(t, 80.0, out[0].ProjectedCoverage)
+		assert.InDelta(t, 300.0, out[0].CommitmentCost, 0.001)
+	})
 }
 
 // TestApplyTargetCoverage_CountZeroNoNaNOrInf covers the rec.Count==0
