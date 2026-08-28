@@ -1,8 +1,8 @@
 # MCP tool annotations -- decisions
 
 This repo has no existing ADR/`docs/decisions/` convention (checked at
-implementation time: no `docs/adr/`, `docs/decisions/`, or `specs/`
-directory), so this rationale lives here instead of in a numbered ADR.
+implementation time: no `docs/adr/` or `docs/decisions/` directory), so
+this rationale lives here instead of in a numbered ADR.
 Context: `docs/plans/mcp/05-store.md` Phase A and `docs/plans/mcp/00-scope.md`
 §6 (not checked into this repo -- local planning notes for the MCP
 store-readiness workstream).
