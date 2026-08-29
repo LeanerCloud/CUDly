@@ -141,6 +141,41 @@ func TestNewAuditRecord_Fields(t *testing.T) {
 	assert.WithinDuration(t, time.Now().UTC(), ar.Timestamp, 5*time.Second)
 }
 
+func TestCheckAuditLogWritable_WritablePath(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+
+	assert.NoError(t, CheckAuditLogWritable(path))
+}
+
+// The unwritable path is a child of a regular file rather than a 0555
+// directory: a root process ignores the permission bits, so a chmod-based
+// case would pass vacuously in root-based CI.
+func TestCheckAuditLogWritable_UnwritablePath(t *testing.T) {
+	t.Parallel()
+	notADir := filepath.Join(t.TempDir(), "regular-file")
+	require.NoError(t, os.WriteFile(notADir, []byte("x"), 0600))
+
+	path := filepath.Join(notADir, "audit.jsonl")
+	err := CheckAuditLogWritable(path)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), path)
+}
+
+func TestCheckAuditLogWritable_DoesNotTruncateExistingContent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("line1\n"), 0644))
+
+	require.NoError(t, CheckAuditLogWritable(path))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "line1\n", string(data))
+}
+
 func TestTermMonths(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

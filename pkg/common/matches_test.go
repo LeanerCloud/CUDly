@@ -70,6 +70,27 @@ func TestMatches_NormalizedEngine(t *testing.T) {
 	assert.True(t, Matches(rec, c))
 }
 
+func TestMatches_UppercaseRecognizedCommitmentAlias(t *testing.T) {
+	t.Parallel()
+
+	rec := Recommendation{
+		Provider:     ProviderAWS,
+		Region:       "us-east-1",
+		Service:      ServiceRDS,
+		ResourceType: "db.r5.large",
+		Details:      &DatabaseDetails{Engine: "aurora-postgresql"},
+	}
+	c := Commitment{
+		Provider:     ProviderAWS,
+		Region:       "us-east-1",
+		Service:      ServiceRDS,
+		ResourceType: "db.r5.large",
+		Engine:       "AURORA POSTGRESQL",
+	}
+
+	assert.True(t, Matches(rec, c))
+}
+
 func TestMatches_NoDetails(t *testing.T) {
 	t.Parallel()
 	// Compute recommendations have no engine — both sides normalize to ""

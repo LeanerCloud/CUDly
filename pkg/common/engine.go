@@ -7,20 +7,17 @@ import "strings"
 // Cost Explorer uses: "Aurora PostgreSQL", "Aurora MySQL", "MySQL", "PostgreSQL"
 var engineNameMap = map[string]string{
 	// Cost Explorer format -> normalized
-	"Aurora PostgreSQL": "aurora-postgresql",
-	"Aurora MySQL":      "aurora-mysql",
-	"MySQL":             "mysql",
-	"PostgreSQL":        "postgresql",
-	"MariaDB":           "mariadb",
-	"Oracle":            "oracle",
-	"SQL Server":        "sqlserver",
+	"aurora postgresql": "aurora-postgresql",
+	"aurora mysql":      "aurora-mysql",
+	"mysql":             "mysql",
+	"postgresql":        "postgresql",
+	"mariadb":           "mariadb",
+	"oracle":            "oracle",
+	"sql server":        "sqlserver",
 	// Already normalized (from AWS RIs)
 	"aurora-postgresql": "aurora-postgresql",
 	"aurora-mysql":      "aurora-mysql",
-	"mysql":             "mysql",
-	"postgresql":        "postgresql",
 	"postgres":          "postgresql",
-	"mariadb":           "mariadb",
 	"oracle-se":         "oracle",
 	"oracle-se1":        "oracle",
 	"oracle-se2":        "oracle",
@@ -34,10 +31,11 @@ var engineNameMap = map[string]string{
 // NormalizeEngineName normalizes database engine names to a consistent format.
 // Returns lowercase of the input as a fallback when the engine is not recognized.
 func NormalizeEngineName(engine string) string {
-	if normalized, ok := engineNameMap[engine]; ok {
-		return normalized
+	normalized := strings.ToLower(engine)
+	if normalizedEngine, ok := engineNameMap[normalized]; ok {
+		return normalizedEngine
 	}
-	return strings.ToLower(engine)
+	return normalized
 }
 
 // EngineFromDetails extracts and normalizes the engine name from
