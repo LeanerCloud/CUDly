@@ -84,6 +84,22 @@ Add an entry to your client's MCP server config. For Claude Code, this is `~/.cl
 
 `env` is optional -- omit it entirely to rely on whatever ambient credentials are already active in the shell that launches the client, or set only the provider(s) you actually use.
 
+## Use with OpenAI Codex CLI
+
+Codex CLI reads MCP server definitions from `~/.codex/config.toml`, under a `[mcp_servers.<name>]` table -- same `command`/`args`/`env` shape as Claude Code's `mcpServers` JSON, different file format. A project-scoped `.codex/config.toml` works the same way, but only if you have marked that project directory as trusted in Codex CLI -- an untrusted project's `.codex/` layer is silently ignored, so if `cudly` doesn't show up, register it in `~/.codex/config.toml` instead (or trust the project).
+
+```toml
+[mcp_servers.cudly]
+command = "/absolute/path/to/cudly-mcp"
+args = []
+
+[mcp_servers.cudly.env]
+AWS_PROFILE = "my-aws-profile"
+AZURE_SUBSCRIPTION_ID = "00000000-0000-0000-0000-000000000000"
+```
+
+`CUDLY_MCP_ENABLE_REAL_PURCHASES` is deliberately omitted from this example -- leave it unset until you have exercised the dry-run path against this client and are ready to let it spend money; see [Safety model](#safety-model).
+
 ## Worked example
 
 A typical session searches for a recommendation, previews the purchase, then executes it:
