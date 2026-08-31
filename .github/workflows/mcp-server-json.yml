@@ -11,6 +11,7 @@ on:
     paths:
       - "server.json"
       - ".github/workflows/mcp-server-json.yml"
+      - ".github/scripts/server-json-validator/**"
   push:
     tags: ["v*"]
   workflow_dispatch:
@@ -40,8 +41,12 @@ jobs:
           fi
           curl -sSfL "$expected_schema_url" -o /tmp/server.schema.json
 
+      - name: Install server.json validator dependencies
+        working-directory: .github/scripts/server-json-validator
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
       - name: Validate server.json against the schema
-        run: npx --yes ajv-cli@5 validate -s /tmp/server.schema.json -d server.json --spec=draft7 --strict=false
+        run: node .github/scripts/server-json-validator/validate.cjs /tmp/server.schema.json server.json
 
   assert-version-matches-tag:
     if: startsWith(github.ref, 'refs/tags/v')
