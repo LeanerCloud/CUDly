@@ -1,0 +1,80 @@
+name: MCP server.json
+
+# Validates server.json (the MCP Registry listing manifest) on every PR that
+# touches it, and gates tag pushes on server.json's version matching the tag.
+# The registry rejects republishing a version, so a mismatch here must fail
+# loud rather than let release automation publish the wrong metadata.
+
+on:
+  pull_request:
+    paths:
+      - "server.json"
+      - ".github/workflows/mcp-server-json.yml"
+      - ".github/scripts/server-json-validator/**"
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-schema:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch the MCP Registry server.json schema
+        run: |
+          set -euo pipefail
+          expected_schema_url="https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json"
+          expected_registry_name="io.github.LeanerCloud/cudly-mcp"
+          if ! jq -e --arg expected "$expected_schema_url" \
+            '.["$schema"] | type == "string" and . == $expected' server.json >/dev/null; then
+            echo "::error::server.json must declare the official MCP Registry \$schema URL"
+            exit 1
+          fi
+          if ! jq -e --arg expected "$expected_registry_name" \
+            '.name | type == "string" and . == $expected' server.json >/dev/null; then
+            echo "::error::server.json name must be $expected_registry_name"
+            exit 1
+          fi
+          curl -sSfL --connect-timeout 10 --max-time 30 \
+            "$expected_schema_url" -o /tmp/server.schema.json
+
+      - name: Install server.json validator dependencies
+        working-directory: .github/scripts/server-json-validator
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Validate server.json against the schema
+        run: node .github/scripts/server-json-validator/validate.cjs /tmp/server.schema.json server.json
+
+  assert-version-matches-tag:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: validate-schema
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assert server.json version matches the pushed tag
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/v}"
+          server_version=$(jq -r '.version' server.json)
+          if [[ "$tag" != "$server_version" ]]; then
+            echo "::error::server.json version ($server_version) does not match tag v$tag." \
+                 "Correct server.json.version in the release commit before creating or recreating the tag;" \
+                 "this workflow never rewrites the file."
+            exit 1
+          fi
+          echo "server.json version ($server_version) matches tag v$tag"
