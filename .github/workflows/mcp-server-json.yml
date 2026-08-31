@@ -34,9 +34,15 @@ jobs:
         run: |
           set -euo pipefail
           expected_schema_url="https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json"
+          expected_registry_name="io.github.LeanerCloud/cudly-mcp"
           if ! jq -e --arg expected "$expected_schema_url" \
             '.["$schema"] | type == "string" and . == $expected' server.json >/dev/null; then
             echo "::error::server.json must declare the official MCP Registry \$schema URL"
+            exit 1
+          fi
+          if ! jq -e --arg expected "$expected_registry_name" \
+            '.name | type == "string" and . == $expected' server.json >/dev/null; then
+            echo "::error::server.json name must be $expected_registry_name"
             exit 1
           fi
           curl -sSfL "$expected_schema_url" -o /tmp/server.schema.json
