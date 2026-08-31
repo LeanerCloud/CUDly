@@ -3,7 +3,7 @@ name: MCP server.json
 # Validates server.json (the MCP Registry listing manifest) on every PR that
 # touches it, and gates tag pushes on server.json's version matching the tag.
 # The registry rejects republishing a version, so a mismatch here must fail
-# loud rather than let release.yml silently publish the wrong metadata.
+# loud rather than let release automation publish the wrong metadata.
 
 on:
   pull_request:
@@ -44,7 +44,8 @@ jobs:
             echo "::error::server.json name must be $expected_registry_name"
             exit 1
           fi
-          curl -sSfL "$expected_schema_url" -o /tmp/server.schema.json
+          curl -sSfL --connect-timeout 10 --max-time 30 \
+            "$expected_schema_url" -o /tmp/server.schema.json
 
       - name: Install server.json validator dependencies
         working-directory: .github/scripts/server-json-validator
@@ -72,8 +73,8 @@ jobs:
           server_version=$(jq -r '.version' server.json)
           if [[ "$tag" != "$server_version" ]]; then
             echo "::error::server.json version ($server_version) does not match tag v$tag." \
-                 "Bump server.json's version (and, for the MCPB package entry," \
-                 "packages[].identifier and packages[].fileSha256) in the release PR before tagging -- this never rewrites the file for you."
+                 "Correct server.json.version in the release commit before creating or recreating the tag;" \
+                 "this workflow never rewrites the file."
             exit 1
           fi
           echo "server.json version ($server_version) matches tag v$tag"
