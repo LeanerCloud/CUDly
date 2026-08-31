@@ -1,10 +1,9 @@
 name: MCP server.json
 
-# Validates server.json (the MCP Registry listing manifest, see
-# docs/plans/mcp/05-store.md Phase B) on every PR that touches it, and gates
-# tag pushes on server.json's version matching the tag -- the registry
-# rejects republishing a version, so a mismatch here must fail loud rather
-# than let release.yml silently publish the wrong metadata.
+# Validates server.json (the MCP Registry listing manifest) on every PR that
+# touches it, and gates tag pushes on server.json's version matching the tag.
+# The registry rejects republishing a version, so a mismatch here must fail
+# loud rather than let release.yml silently publish the wrong metadata.
 
 on:
   pull_request:

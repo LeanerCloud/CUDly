@@ -23,13 +23,6 @@
           "isRequired": false,
           "isSecret": false,
           "format": "string"
-        },
-        {
-          "name": "CUDLY_MCP_AUDIT_LOG",
-          "description": "Overrides the JSONL audit log path for purchase attempts; set to an empty string to disable audit logging. See mcp/README.md for the current default path.",
-          "isRequired": false,
-          "isSecret": false,
-          "format": "filepath"
         }
       ]
     }
