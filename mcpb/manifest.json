@@ -1,0 +1,54 @@
+{
+  "manifest_version": "0.3",
+  "name": "cudly-mcp",
+  "version": "0.1.0",
+  "description": "Search and buy AWS/Azure/GCP reserved capacity (RIs, Savings Plans, CUDs) from Claude Desktop.",
+  "author": {
+    "name": "LeanerCloud",
+    "url": "https://cudly.io"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LeanerCloud/CUDly"
+  },
+  "license": "OSL-3.0",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/linux-launch.sh",
+    "mcp_config": {
+      "command": "${__dirname}/server/linux-launch.sh",
+      "args": [],
+      "env": {
+        "CUDLY_MCP_ENABLE_REAL_PURCHASES": "${user_config.enable_real_purchases}"
+      },
+      "platform_overrides": {
+        "darwin": {
+          "command": "${__dirname}/server/darwin-launch.sh",
+          "args": [],
+          "env": {
+            "CUDLY_MCP_ENABLE_REAL_PURCHASES": "${user_config.enable_real_purchases}"
+          }
+        },
+        "linux": {
+          "command": "${__dirname}/server/linux-launch.sh",
+          "args": [],
+          "env": {
+            "CUDLY_MCP_ENABLE_REAL_PURCHASES": "${user_config.enable_real_purchases}"
+          }
+        }
+      }
+    }
+  },
+  "user_config": {
+    "enable_real_purchases": {
+      "type": "boolean",
+      "title": "Enable real purchases",
+      "description": "DANGER: turns on cudly-mcp's ability to execute REAL, money-spending cloud purchases (AWS Reserved Instances, Savings Plans, Azure Reservations, GCP CUDs) when a client explicitly requests dry_run=false and confirm=true. Leave this off until you have exercised the dry-run path and are ready to let it spend real money.",
+      "default": false,
+      "required": false
+    }
+  },
+  "privacy_policies": [
+    "https://cudly.io/privacy"
+  ]
+}

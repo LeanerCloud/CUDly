@@ -1,0 +1,244 @@
+name: Release cudly-mcp
+
+# Triggered by pushing a v* tag (see mcp/README.md and
+# docs/plans/mcp/05-store.md Phase B4). This workflow is machinery only as
+# added: no tag has been created and nothing has been published by the PR
+# that introduces this file. The pipeline was instead verified locally --
+# `goreleaser release --snapshot --clean --skip=publish` for the build, and
+# `npx @anthropic-ai/mcpb pack mcpb` against locally staged placeholder
+# binaries for the bundle step -- see that PR's description for the exact
+# commands and output.
+#
+# Pipeline: consistency gate (server.json and mcpb/manifest.json versions
+# both match the tag -- fails loud, never silently rewrites either file) ->
+# test -> GoReleaser (raw darwin/linux, amd64/arm64 binaries, GitHub
+# Release) -> MCPB pack (full edition, all tools) uploaded as an extra
+# release asset -> mcp-publisher publish to the MCP Registry via GitHub
+# OIDC (no long-lived registry secret).
+#
+# The tag-version check here deliberately duplicates
+# .github/workflows/mcp-server-json.yml's own check rather than calling it
+# via workflow_call, so the two workflows stay independently triggerable,
+# reviewable, and mergeable (they land as separate PRs).
+#
+# SECURITY: this is the first tag-triggered workflow in this repo, and its
+# publishing jobs (goreleaser, mcpb, publish-registry) hold `contents: write`
+# / `id-token: write`. They are bound to the `release` environment below, but
+# per #1660's finding (which this repeats for tags, not environments): an
+# `environment:` binding alone is NOT a reviewer gate until protection rules
+# are configured out-of-band, and GitHub auto-creates a referenced
+# environment bare (no reviewers) on first use. Nothing today also restricts
+# who can push a `v*` tag -- the repo has a branch ruleset
+# (protect-default-branch) but no tag ruleset. Tracked in #1896: configuring
+# required reviewers on `release` and adding a `v*` tag-protection ruleset
+# are both repo-admin actions outside what this workflow file can enforce.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  MCPB_CLI_VERSION: "2.1.2" # @anthropic-ai/mcpb on npm; pinned, never @latest
+
+jobs:
+  consistency-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assert server.json and mcpb/manifest.json versions match the pushed tag
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/v}"
+
+          server_version=$(jq -r '.version' server.json)
+          if [[ "$tag" != "$server_version" ]]; then
+            echo "::error::server.json version ($server_version) does not match tag v$tag." \
+                 "Bump server.json's version (and packages[].identifier/fileSha256 for the MCPB entry) in the release PR before tagging."
+            exit 1
+          fi
+
+          manifest_version=$(jq -r '.version' mcpb/manifest.json)
+          if [[ "$tag" != "$manifest_version" ]]; then
+            echo "::error::mcpb/manifest.json version ($manifest_version) does not match tag v$tag."
+            exit 1
+          fi
+
+          echo "server.json and mcpb/manifest.json both match tag v$tag"
+
+  test:
+    needs: consistency-gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          # This workflow only runs off a v* tag push, so its runtime cache
+          # would be a persistent, cross-run artifact reachable by anything
+          # that can push a tag -- disable it rather than risk poisoning a
+          # release build's module cache.
+          cache: false
+
+      - name: Test the MCP server
+        run: go test ./mcp/... ./cmd/cudly-mcp/...
+
+  goreleaser:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: release # see the SECURITY note above and #1896
+    permissions:
+      contents: write # create the GitHub Release and upload its binaries
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0 # GoReleaser needs full history/tags for its changelog and git-state checks
+          persist-credentials: false
+
+      - id: tag
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          # This workflow only runs off a v* tag push, so its runtime cache
+          # would be a persistent, cross-run artifact reachable by anything
+          # that can push a tag -- disable it rather than risk poisoning a
+          # release build's module cache.
+          cache: false
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  mcpb:
+    needs: goreleaser
+    runs-on: ubuntu-latest
+    environment: release # see the SECURITY note above and #1896
+    permissions:
+      contents: write # upload the .mcpb bundle as an extra release asset
+    outputs:
+      sha256: ${{ steps.pack.outputs.sha256 }}
+      asset_url: ${{ steps.pack.outputs.asset_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download this release's GoReleaser binaries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.goreleaser.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/cudly-mcp-bin
+          # --repo omitted: gh infers it from this checkout's git remote.
+          gh release download "$RELEASE_TAG" \
+            --pattern 'cudly-mcp_*' --dir /tmp/cudly-mcp-bin
+
+      - name: Verify downloaded binaries against GoReleaser's own checksums
+        run: |
+          set -euo pipefail
+          cd /tmp/cudly-mcp-bin
+          sha256sum -c cudly-mcp_checksums.txt
+
+      - name: Stage per-platform binaries into the MCPB bundle layout
+        run: |
+          set -euo pipefail
+          for combo in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
+            dir="mcpb/server/${combo/_/-}"
+            mkdir -p "$dir"
+            install -m 0755 "/tmp/cudly-mcp-bin/cudly-mcp_${combo}" "$dir/cudly-mcp"
+          done
+
+      # Packed under $RUNNER_TEMP, not the checkout root: this is a scratch
+      # release artifact, not source, and every step below in this same job
+      # can reach it by the same literal path (no cross-job propagation --
+      # $GITHUB_ENV isn't needed within a single job).
+      - name: Pack the MCPB bundle (full edition -- all tools)
+        run: npx --yes "@anthropic-ai/mcpb@${MCPB_CLI_VERSION}" pack mcpb "$RUNNER_TEMP/cudly-mcp-full.mcpb"
+
+      - name: Upload the MCPB bundle to the GitHub Release
+        id: pack
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.goreleaser.outputs.tag }}
+          REPO_SLUG: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/cudly-mcp-full.mcpb"
+          sha=$(sha256sum "$bundle" | cut -d' ' -f1)
+          # --repo omitted: gh infers it from this checkout's git remote.
+          gh release upload "$RELEASE_TAG" "$bundle" --clobber
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "asset_url=https://github.com/${REPO_SLUG}/releases/download/${RELEASE_TAG}/cudly-mcp-full.mcpb" >> "$GITHUB_OUTPUT"
+
+  publish-registry:
+    needs: mcpb
+    runs-on: ubuntu-latest
+    environment: release # see the SECURITY note above and #1896
+    permissions:
+      id-token: write # GitHub OIDC auth to the MCP Registry -- no long-lived secret
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      # server.json in git carries a placeholder fileSha256/identifier (see
+      # its own comment history) until a real release exists to hash; patch
+      # in the values this run just produced before publishing. This never
+      # writes back to the repository -- only the ephemeral runner's checkout
+      # -- and the final `server.json` intentionally stays at the checkout
+      # root: mcp-publisher publish reads ./server.json from the working
+      # directory by default. Only the scratch intermediate file lives under
+      # $RUNNER_TEMP.
+      - name: Patch server.json with this release's MCPB asset
+        env:
+          MCPB_SHA256: ${{ needs.mcpb.outputs.sha256 }}
+          MCPB_ASSET_URL: ${{ needs.mcpb.outputs.asset_url }}
+        run: |
+          set -euo pipefail
+          patched="$RUNNER_TEMP/server.json.tmp"
+          jq --arg sha "$MCPB_SHA256" \
+             --arg url "$MCPB_ASSET_URL" \
+             '.packages[0].fileSha256 = $sha | .packages[0].identifier = $url' \
+             server.json > "$patched"
+          mv "$patched" server.json
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" \
+            | tar xz mcp-publisher
+
+      - name: Authenticate to the MCP Registry (GitHub OIDC)
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish to the MCP Registry
+        run: ./mcp-publisher publish
