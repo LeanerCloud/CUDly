@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -28,11 +29,36 @@ import (
 // TestExecutePurchaseRealPurchaseGate is the one test that deliberately
 // overrides this default, and it does so non-parallel (see its doc comment)
 // so no parallel test in this package ever observes a transient override.
+//
+// It also pins EnvAuditLog to a path inside a run-scoped temp directory.
+// Auditing is on by default (see EnvAuditLog), so without this every test in
+// this file that calls ExecutePurchase would append to the developer's real
+// ~/.local/state/cudly/mcp-audit.jsonl. Individual tests that need to assert
+// on audit file contents override this with their own t.Setenv.
 func TestMain(m *testing.M) {
 	if err := os.Setenv(EnvEnableRealPurchases, "1"); err != nil {
-		panic(err)
+		log.Printf("enable real purchases for MCP tests: %v", err)
+		os.Exit(1)
 	}
-	os.Exit(m.Run())
+
+	auditDir, err := os.MkdirTemp("", "cudly-mcp-audit-testmain")
+	if err != nil {
+		log.Printf("create MCP tool audit test directory: %v", err)
+		os.Exit(1)
+	}
+	if err := os.Setenv(EnvAuditLog, filepath.Join(auditDir, "mcp-audit.jsonl")); err != nil {
+		log.Printf("set MCP tool audit log test path: %v", err)
+		if cleanupErr := os.RemoveAll(auditDir); cleanupErr != nil {
+			log.Printf("remove MCP tool audit test directory after setup failure: %v", cleanupErr)
+		}
+		os.Exit(1)
+	}
+
+	// os.Exit skips deferred calls, so the temp dir is removed explicitly
+	// before exiting rather than via defer.
+	code := m.Run()
+	os.RemoveAll(auditDir)
+	os.Exit(code)
 }
 
 // fakeServiceClient is a minimal provider.ServiceClient test double. Only
@@ -70,6 +96,22 @@ func (f *fakeServiceClient) GetValidResourceTypes(_ context.Context) ([]string, 
 }
 
 var _ provider.ServiceClient = (*fakeServiceClient)(nil)
+
+func captureStandardLogger(t *testing.T, fn func()) string {
+	t.Helper()
+
+	var buf bytes.Buffer
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	}()
+
+	fn()
+	return buf.String()
+}
 
 // testRecommendation mirrors what a real purchase tool's *FromArgs
 // constructor actually builds: none of them populate
@@ -776,46 +818,31 @@ func TestCredentialScopeResolution(t *testing.T) {
 	})
 }
 
-// TestExecutePurchaseAuditLogging pins the MCP server's only record of a
-// real purchase. The CLI path emits a common.AuditRecord per purchase
-// (cmd/multi_service.go) and the web path persists a purchase_executions row
-// carrying the approval history; this server has neither, so before these
-// log lines an operator asking "what did the assistant actually buy?" had
-// nothing at all to read.
+// TestExecutePurchaseAuditLogging pins the MCP server's stderr diagnostic
+// trail for a real purchase. The durable JSONL audit log is covered
+// separately in audit_test.go.
 //
-// It also pins that a preview stays silent (it contacts no provider and
-// spends nothing, so logging every dry run would bury the real purchases)
-// and that the idempotency token is masked rather than written in full.
+// It also pins that a preview emits no purchase diagnostics on stderr and that
+// the idempotency token is masked rather than written in full.
+// recordPurchaseAudit still runs; TestUnwritablePathWarnsAndDoesNotChangeResult
+// covers its "mcp audit log" warning when the audit path cannot be written.
 func TestExecutePurchaseAuditLogging(t *testing.T) {
 	// Not parallel: this test swaps the shared standard-logger output.
-	capture := func(fn func()) string {
-		var buf bytes.Buffer
-		prevOut, prevFlags := log.Writer(), log.Flags()
-		log.SetOutput(&buf)
-		log.SetFlags(0)
-		defer func() {
-			log.SetOutput(prevOut)
-			log.SetFlags(prevFlags)
-		}()
-		fn()
-		return buf.String()
-	}
-
 	rec := testRecommendation()
 
 	t.Run("a preview logs nothing", func(t *testing.T) {
-		out := capture(func() {
+		out := captureStandardLogger(t, func() {
 			_, err := ExecutePurchase(context.Background(), PurchaseRequest{
 				Region: "us-east-1", Recommendation: rec, DryRun: true,
 			})
 			require.NoError(t, err)
 		})
-		assert.Empty(t, out, "a dry run spends nothing and must not pollute the purchase audit trail")
+		assert.Empty(t, out, "a dry run spends nothing and must not pollute the stderr purchase diagnostic trail")
 	})
 
 	t.Run("a real purchase logs the attempt and the outcome", func(t *testing.T) {
 		fake := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: true, CommitmentID: "ri-abc123"}}
-		out := capture(func() {
+		out := captureStandardLogger(t, func() {
 			_, err := ExecutePurchase(context.Background(), PurchaseRequest{
 				Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true,
 				CredentialScope: "subscription-a",
@@ -837,7 +864,7 @@ func TestExecutePurchaseAuditLogging(t *testing.T) {
 
 	t.Run("a failed purchase logs the failure", func(t *testing.T) {
 		fake := &fakeServiceClient{purchaseErr: errors.New("insufficient capacity")}
-		out := capture(func() {
+		out := captureStandardLogger(t, func() {
 			_, err := ExecutePurchase(context.Background(), PurchaseRequest{
 				Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true, CredentialScope: "test-scope",
 				ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake, nil },
@@ -858,7 +885,7 @@ func TestExecutePurchaseAuditLogging(t *testing.T) {
 	// result.Success.
 	t.Run("a provider-reported failure is never logged as OK", func(t *testing.T) {
 		fake := &fakeServiceClient{purchaseResult: common.PurchaseResult{Success: false, Error: nil}}
-		out := capture(func() {
+		out := captureStandardLogger(t, func() {
 			_, err := ExecutePurchase(context.Background(), PurchaseRequest{
 				Region: "us-east-1", Recommendation: rec, DryRun: false, Confirm: true, CredentialScope: "test-scope",
 				ResolveClient: func(_ context.Context) (provider.ServiceClient, error) { return fake, nil },
@@ -869,6 +896,51 @@ func TestExecutePurchaseAuditLogging(t *testing.T) {
 			"Success=false must be logged as a failure even with a nil result.Error")
 		assert.NotContains(t, out, "mcp purchase OK")
 	})
+}
+
+// TestExecutePurchaseContradictoryProviderResultIsFailure pins the
+// contradictory provider result found in review: a provider can return a
+// nil Go error while embedding a non-nil result.Error alongside
+// Success=true. Every consumer-facing signal must still classify that as a
+// failed purchase.
+func TestExecutePurchaseContradictoryProviderResultIsFailure(t *testing.T) {
+	// Not parallel: this test swaps the shared standard-logger output and
+	// sets a process environment override for the audit path.
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	t.Setenv(EnvAuditLog, path)
+
+	injectedErr := errors.New("provider returned contradictory success with error detail")
+	fake := &fakeServiceClient{purchaseResult: common.PurchaseResult{
+		Success:      true,
+		CommitmentID: "ri-contradictory",
+		Error:        injectedErr,
+	}}
+
+	var resp *PurchaseResponse
+	out := captureStandardLogger(t, func() {
+		var err error
+		resp, err = ExecutePurchase(context.Background(), PurchaseRequest{
+			Region: "us-east-1", Recommendation: testRecommendation(), DryRun: false, Confirm: true,
+			CredentialScope: "test-scope",
+			ResolveClient:   func(_ context.Context) (provider.ServiceClient, error) { return fake, nil },
+		})
+		require.NoError(t, err, "provider-level contradictory result must surface via the structured response")
+	})
+
+	require.NotNil(t, resp)
+	assert.False(t, resp.Success)
+	assert.Equal(t, injectedErr.Error(), resp.Error)
+	assert.Nil(t, resp.Archera)
+	assert.Contains(t, out, "mcp purchase FAILED")
+	assert.Contains(t, out, injectedErr.Error())
+	assert.NotContains(t, out, "mcp purchase OK")
+
+	lines := readAuditLines(t, path)
+	require.Len(t, lines, 1)
+	var record common.AuditRecord
+	require.NoError(t, json.Unmarshal([]byte(lines[0]), &record))
+	assert.Equal(t, "error", record.Status)
+	assert.Equal(t, injectedErr.Error(), record.ErrorMessage)
 }
 
 // TestResolveDryRunConfirm pins the shared default resolution now used by
