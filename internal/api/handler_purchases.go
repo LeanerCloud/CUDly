@@ -1626,7 +1626,10 @@ func (h *Handler) retryPurchase(ctx context.Context, req *events.LambdaFunctionU
 	// relaunch another user's over-cap failed purchase that the retrying
 	// session's OWN constraints would deny, and constraints tightened after
 	// the original submission would never apply on replay (adversarial
-	// review follow-up to #1210).
+	// review follow-up to #1210). failedExec.Recommendations carry the
+	// store-derived prices stamped at submit time
+	// (priceRecommendationsFromStore), so this re-check never sees
+	// client-supplied numbers.
 	if constraintErr := h.enforcePurchaseConstraints(ctx, session, failedExec.Recommendations); constraintErr != nil {
 		return nil, constraintErr
 	}
@@ -2100,6 +2103,11 @@ func (h *Handler) getPurchaseDetails(ctx context.Context, req *events.LambdaFunc
 
 // ExecutePurchaseRequest represents the request to execute purchases.
 type ExecutePurchaseRequest struct {
+	// Recommendations are matched against the stored recommendation set on
+	// (provider, cloud_account_id, service, region, resource_type, engine,
+	// term, payment). Only count, recommended_count and selected are taken
+	// from the request; id, details and every cost field are replaced from
+	// the stored row scaled by count (priceRecommendationsFromStore, #1905).
 	Recommendations []config.RecommendationRecord `json:"recommendations"`
 	// CapacityPercent is what fraction (1..100) of the originally-
 	// recommended counts the user chose in the bulk Purchase flow.
@@ -2169,16 +2177,17 @@ func (h *Handler) validateExecutePurchaseRequest(ctx context.Context, req *event
 	if err := validateCapacityConsistency(execReq.Recommendations, execReq.CapacityPercent); err != nil {
 		return ExecutePurchaseRequest{}, nil, nil, err
 	}
-	// Enforce the per-permission Constraints (MaxPurchaseAmount, Providers,
-	// Services, Regions, AccountIDs) configured on the granting
-	// execute:purchases permission (SEC-01, issue #1141). Runs after the
-	// per-rec validation above so provider tokens are already normalized.
-	// Each recommendation must individually be granted by a permission; the
-	// amount cap is checked against the batch's total commitment (upfront
-	// plus recurring, see recTotalCommitment) so it cannot be evaded by
-	// splitting a large purchase across recs or by a no-upfront commitment
-	// whose real cost is entirely recurring.
-	if err := h.enforcePurchaseConstraints(ctx, session, execReq.Recommendations); err != nil {
+	// Price every rec from the stored recommendation set, then enforce the
+	// per-permission Constraints (MaxPurchaseAmount, Providers, Services,
+	// Regions, AccountIDs) on the granting execute:purchases permission
+	// (SEC-01, issue #1141) against those store-derived values. Runs after
+	// the per-rec validation above so provider and payment tokens are
+	// canonical before the identity match, and after the scope check so an
+	// out-of-scope account is refused as 403 before any pricing lookup. The
+	// client's own upfront_cost / monthly_cost / savings / details are never
+	// used (issue #1905): a purchaser under a MaxPurchaseAmount cap could
+	// otherwise state any number and buy at list price.
+	if err := h.priceAndEnforcePurchaseConstraints(ctx, session, execReq.Recommendations); err != nil {
 		return ExecutePurchaseRequest{}, nil, nil, err
 	}
 	return execReq, session, adjustments, nil
@@ -2191,7 +2200,10 @@ func (h *Handler) validateExecutePurchaseRequest(ctx context.Context, req *event
 // Shared by the direct-execute request validation and the retry path
 // (retryPurchase) so both re-derive and check the exact same Constraints
 // (SEC-01, issue #1141; adversarial review follow-up to #1210 -- the retry
-// path previously skipped this check entirely).
+// path previously skipped this check entirely). The web execute path
+// reaches this through priceAndEnforcePurchaseConstraints, so recs carry
+// store-derived costs; the retry path enforces against the persisted row,
+// which was priced when it was written.
 func (h *Handler) enforcePurchaseConstraints(ctx context.Context, session *Session, recs []config.RecommendationRecord) error {
 	constraintSets := purchaseConstraintSets(recs)
 	if err := requireNonZeroCommitment(constraintSets); err != nil {
@@ -2251,7 +2263,9 @@ func purchaseConstraintSets(recs []config.RecommendationRecord) []auth.Permissio
 // same *12 convention used throughout this package. A nil MonthlyCost
 // (all-upfront commitments have no recurring charge) or a non-positive
 // Term (can't be converted to months) contribute nothing to the recurring
-// leg, matching the Term<=0 handling elsewhere in this package.
+// leg, matching the Term<=0 handling elsewhere in this package. On the web
+// execute path the two cost fields are the store-derived values written by
+// priceRecommendationsFromStore.
 func recTotalCommitment(rec *config.RecommendationRecord) float64 {
 	total := rec.UpfrontCost
 	if rec.Term > 0 && rec.MonthlyCost != nil {
@@ -2341,7 +2355,10 @@ func (h *Handler) finalizePurchaseStatus(ctx context.Context, execution *config.
 	return "failed"
 }
 
-// validateAndTotalRecommendations validates each recommendation and returns totals.
+// validateAndTotalRecommendations validates each recommendation and returns
+// totals. Runs on store-derived recs for the web path and on the persisted
+// row for retry; the negative and $10M guards stay as the sanity check for
+// both.
 func validateAndTotalRecommendations(recs []config.RecommendationRecord) (upfront, savings float64, err error) {
 	const maxAmount = 10_000_000 // $10M sanity cap
 	for i := range recs {

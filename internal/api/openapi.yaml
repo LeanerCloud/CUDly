@@ -466,6 +466,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
 
   /api/purchases/approve/{id}:
     parameters:
@@ -2848,6 +2850,13 @@ components:
             $ref: '#/components/schemas/RecommendationRecord'
           minItems: 1
           maxItems: 1000
+          description: >
+            Each item must match a recommendation in the current recommendation set on
+            (provider, cloud_account_id, service, region, resource_type, engine, term,
+            payment). Only count, recommended_count and selected are honoured; id, details,
+            upfront_cost, monthly_cost and savings are replaced server-side from the stored
+            recommendation scaled by count, and the spend-cap check, execution record and
+            approval email use those values. Savings plan items must keep the recommended count.
 
     ExecutePurchaseResponse:
       type: object
