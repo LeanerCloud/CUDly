@@ -30,6 +30,19 @@ echo -e "${GREEN}✓ git-secrets is installed${NC}"
 echo ""
 
 # Install git hooks
+#
+# git-secrets 1.3.0's install_hook() writes and chmods the hook file, then
+# reports success via a `say` call it never defines as a function. On macOS
+# that resolves to /usr/bin/say (the text-to-speech binary) and exits 0 by
+# accident; on Linux there is no such binary, so it's "command not found"
+# and `git secrets --install -f` returns non-zero even though every hook
+# file was already written correctly. Define `say` as a no-op here and
+# export it so the exported function is visible in the git-secrets child
+# process on both platforms, making the real hook-writing exit status the
+# one that reaches the check below.
+say() { :; }
+export -f say
+
 echo "Installing git-secrets hooks..."
 if git secrets --install -f; then
     echo -e "${GREEN}✓ Git hooks installed${NC}"
