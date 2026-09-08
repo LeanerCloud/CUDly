@@ -1620,3 +1620,69 @@ func TestPolicyDocumentsUseLiteralActionAndResourceLists(t *testing.T) {
 		t.Fatalf("scanned zero statements across %v; this guard would pass vacuously", files)
 	}
 }
+
+// kmsDataPlaneActions are the KMS operations that read or write ciphertext,
+// or (CreateGrant) delegate the right to. No resource in terraform/modules
+// needs the deploy role to call any of them: the only CMK the modules create
+// on the AWS path (modules/compute/aws/lambda/signing-key.tf) is an
+// asymmetric SIGN_VERIFY key that cannot serve Encrypt, Decrypt or
+// GenerateDataKey at all, and every other encrypted resource (RDS storage,
+// Secrets Manager secrets, ECR, the S3 state bucket, Lambda environment
+// variables) uses an AWS managed key whose own key policy authorizes account
+// principals through the owning service, so no IAM grant is needed. An
+// unconditioned Allow of any of these therefore protects nothing CUDly owns
+// and, because customer managed keys carry a default key policy that
+// delegates to IAM, reaches every CMK in the shared account (#1969). A grant
+// gated on aws:ResourceTag/Project, the KMSMutateTaggedOnly convention in
+// policy_compute.tf, or on kms:GrantIsForAWSResource for CreateGrant, still
+// passes this guard if a CUDly symmetric key ever needs one.
+var kmsDataPlaneActions = []string{
+	"kms:CreateGrant",
+	"kms:Decrypt",
+	"kms:Encrypt",
+	"kms:GenerateDataKey",
+	"kms:GenerateDataKeyPair",
+	"kms:GenerateDataKeyPairWithoutPlaintext",
+	"kms:GenerateDataKeyWithoutPlaintext",
+	"kms:ReEncryptFrom",
+	"kms:ReEncryptTo",
+}
+
+// TestKMSDataPlaneActionsAreNotUnconditionallyGranted is the KMS counterpart of
+// TestBoundaryGatedActionsAreNotUnconditionallyGranted: every deploy-role
+// identity policy in this directory may grant a kmsDataPlaneActions entry only
+// under a Condition. policy_boundary.tf is skipped on purpose: its
+// WorkloadServiceCeiling allows kms:* by design and, being a permissions
+// boundary, grants nothing on its own.
+func TestKMSDataPlaneActionsAreNotUnconditionallyGranted(t *testing.T) {
+	scanned := 0
+	for _, f := range append(guardedPolicyFiles(t), iamFile) {
+		if f == boundaryFile {
+			continue
+		}
+		t.Run(f, func(t *testing.T) {
+			stmts := extractStatementBlocks(readPolicySource(t, f))
+			if len(stmts) == 0 {
+				t.Fatalf("%s: found zero Statement objects; the statement splitter in this test is broken and would otherwise pass vacuously", f)
+			}
+			for _, stmt := range stmts {
+				scanned++
+				if !effectIsAllowPattern.MatchString(stmt) || statementConditionBody(stmt) != "" {
+					continue
+				}
+				granted := extractActionListActions(stmt)
+				if n := countActionListStrings(stmt); n != len(granted) {
+					t.Errorf("%s: statement %q has %d Action entries but this test could parse only %d of them; an entry it cannot read is still granted by IAM, so it may be a KMS data-plane grant this guard never sees", f, statementSid(stmt), n, len(granted))
+				}
+				for _, action := range kmsDataPlaneActions {
+					if actionPermitted(granted, action) {
+						t.Errorf("%s: statement %q grants %s with no Condition. Customer managed keys delegate to IAM by default, so this reaches every CMK in the account, not just CUDly's (#1969). Nothing on the deploy path needs it; if a CUDly symmetric key ever does, gate the grant on aws:ResourceTag/Project like KMSMutateTaggedOnly in policy_compute.tf (and CreateGrant additionally on kms:GrantIsForAWSResource)", f, statementSid(stmt), action)
+					}
+				}
+			}
+		})
+	}
+	if scanned == 0 {
+		t.Fatalf("scanned zero statements; this guard would pass vacuously")
+	}
+}
