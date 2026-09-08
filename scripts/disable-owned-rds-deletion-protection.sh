@@ -45,7 +45,7 @@
 # branch below is driven by the payload:
 #
 #   state              | -json         | jq length | jq -er .value | handled as
-#   -------------------|---------------|-----------|---------------|------------
+#   -------------------+---------------+-----------+---------------+------------
 #   no state file      | {}            | 0         | exit 1        | skip, exit 0
 #   state, no outputs  | {}            | 0         | exit 1        | skip, exit 0
 #   key absent         | {...} w/o key | >=1       | exit 1        | exit 1, remedy
@@ -97,7 +97,14 @@ if [[ ! -d "$STATE_DIR" ]]; then
 fi
 
 OUTPUTS_JSON="$(terraform -chdir="$STATE_DIR" output -json)"
-if [[ "$(jq -r 'length' <<<"$OUTPUTS_JSON")" -eq 0 ]]; then
+# On its own line, not inlined into the `if` test: a jq failure inside
+# `"$(jq ...)"` there would substitute an empty string, and `[[ "" -eq 0 ]]`
+# evaluates true, treating a broken `terraform output` (non-JSON on stdout)
+# the same as zero outputs -- a silent "already destroyed" exit. Assigned to
+# its own variable, the failing command substitution's exit status is the
+# assignment statement's own exit status, so `set -e` catches it here.
+OUTPUTS_LENGTH="$(jq -r 'length' <<<"$OUTPUTS_JSON")"
+if [[ "$OUTPUTS_LENGTH" -eq 0 ]]; then
   echo "State has no outputs; the stack is already destroyed and there is no RDS instance to unprotect."
   exit 0
 fi
