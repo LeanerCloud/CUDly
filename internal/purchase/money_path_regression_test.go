@@ -9,6 +9,8 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -605,4 +607,102 @@ func TestRootKeyStillFansOutThroughExecutePurchase(t *testing.T) {
 		"acct-A": "root-lineage:acct-A",
 		"acct-B": "root-lineage:acct-B",
 	}, perAccountKey, "every plan account must still be purchased under its own per-account lineage key")
+}
+
+// TestPlanLessExecutionRefusesAmbiguousAccountScope is the #1902 (audit
+// A05-001 / A05-002) regression guard. A plan-less execution whose SELECTED
+// recommendations span two cloud accounts, or mix attributed and unattributed
+// recs, must fail before any provider client is built. Pre-fix the resolver
+// returned a nil provider config for both shapes and the factory built a
+// client from the host's ambient credentials, so every commitment was bought
+// in the CUDly host account and history was stamped with the ambient STS
+// identity. Every collaborator below is registered with .Maybe() so a pre-fix
+// run reaches the assertions instead of panicking inside the rec fan-out
+// goroutines; the AssertNotCalled lines are what fail pre-fix.
+func TestPlanLessExecutionRefusesAmbiguousAccountScope(t *testing.T) {
+	const hostAccount = "999999999999" // ambient STS identity; must never reach history
+	acctA, acctB := "acct-a", "acct-b"
+
+	cases := []struct {
+		name        string
+		recs        []config.RecommendationRecord
+		wantInError []string
+	}{
+		{
+			name: "two distinct accounts",
+			recs: []config.RecommendationRecord{
+				{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, UpfrontCost: 100, Savings: 20, Selected: true, CloudAccountID: &acctA},
+				{Provider: "aws", Service: "ec2", ResourceType: "m5.xlarge", Region: "us-east-1", Count: 1, UpfrontCost: 200, Savings: 40, Selected: true, CloudAccountID: &acctB},
+			},
+			wantInError: []string{"do not resolve to a single cloud account", "2 cloud accounts (acct-a, acct-b)"},
+		},
+		{
+			name: "attributed and unattributed mixed",
+			recs: []config.RecommendationRecord{
+				{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, UpfrontCost: 100, Savings: 20, Selected: true, CloudAccountID: &acctA},
+				{Provider: "aws", Service: "ec2", ResourceType: "m5.xlarge", Region: "us-east-1", Count: 1, UpfrontCost: 200, Savings: 40, Selected: true},
+			},
+			wantInError: []string{"do not resolve to a single cloud account", "1 selected recommendation(s) carry no cloud_account_id while 1 target account acct-a"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			mockStore := new(MockConfigStore)
+			mockEmail := new(MockEmailSender)
+			mockSTS := new(MockSTSClient)
+			mockFactory := new(MockProviderFactory)
+			mockProviderInst := new(MockProvider)
+			mockServiceClient := new(MockServiceClient)
+
+			exec := &config.PurchaseExecution{
+				ExecutionID:     "exec-1902-" + tc.name,
+				PlanID:          "", // plan-less: direct execute / approval of a web submission
+				Source:          common.PurchaseSourceWeb,
+				Recommendations: tc.recs,
+			}
+
+			// Everything a pre-fix run would touch, all optional, so the run
+			// completes and the negative assertions below carry the failure.
+			mockStore.On("GetCloudAccount", ctx, mock.AnythingOfType("string")).
+				Return(&config.CloudAccount{ID: acctA, Provider: "aws", AWSAuthMode: "access_keys", ExternalID: "111111111111"}, nil).Maybe()
+			mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil).Maybe()
+			mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil).Maybe()
+			mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).
+				Return(&sts.GetCallerIdentityOutput{Account: aws.String(hostAccount)}, nil).Maybe()
+			mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil).Maybe()
+			mockProviderInst.On("GetServiceClient", mock.Anything, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil).Maybe()
+			mockServiceClient.On("PurchaseCommitment", mock.Anything, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).
+				Return(common.PurchaseResult{Success: true, CommitmentID: "ri-1902"}, nil).Maybe()
+
+			manager := &Manager{
+				config:          mockStore,
+				email:           mockEmail,
+				stsClient:       mockSTS,
+				providerFactory: mockFactory,
+				credStore:       awsAccessKeyCredStore(),
+				dashboardURL:    "https://dashboard.example.com",
+			}
+
+			err := manager.executePurchase(ctx, exec)
+
+			require.Error(t, err, "a plan-less batch that does not resolve to one account must be refused")
+			for _, want := range tc.wantInError {
+				assert.Contains(t, err.Error(), want)
+			}
+			// The money-path facts: no provider client of any kind was built
+			// (ambient or per-account), nothing was bought, nothing was stamped
+			// on history, no confirmation went out, no account was even looked up.
+			mockFactory.AssertNotCalled(t, "CreateAndValidateProvider", mock.Anything, mock.Anything, mock.Anything)
+			mockServiceClient.AssertNotCalled(t, "PurchaseCommitment", mock.Anything, mock.Anything, mock.Anything)
+			mockStore.AssertNotCalled(t, "SavePurchaseHistory", mock.Anything, mock.Anything)
+			mockStore.AssertNotCalled(t, "GetCloudAccount", mock.Anything, mock.Anything)
+			mockEmail.AssertNotCalled(t, "SendPurchaseConfirmation", mock.Anything, mock.Anything)
+			for i := range exec.Recommendations {
+				assert.False(t, exec.Recommendations[i].Purchased, "rec %d must not be marked purchased", i)
+				assert.Empty(t, exec.Recommendations[i].PurchaseID)
+			}
+		})
+	}
 }

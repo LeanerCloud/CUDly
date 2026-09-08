@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -26,8 +27,11 @@ import (
 // When the plan has associated cloud accounts and a credential store is configured,
 // it fans out execution in parallel — one goroutine per account, each with its own
 // PurchaseExecution record tagged with cloud_account_id.
-// If no accounts are configured or no credential store is available, it falls back
-// to single-account execution using ambient credentials.
+// If no accounts are configured or no credential store is available, it takes the
+// single-account path, which resolves credentials from the recommendations' own
+// cloud account and refuses a batch spanning more than one (see #1902). Only a
+// batch whose selected recommendations carry no account at all falls back to
+// ambient credentials.
 // executePurchase runs the purchase for a single execution. When the plan has
 // associated cloud accounts it fans out via executeMultiAccount (which saves its
 // own per-account records); otherwise it runs the single-account path. The root
@@ -39,9 +43,10 @@ func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExec
 	// with no associated plan. PlanID is empty and the Postgres UUID
 	// column rejects "" with SQLSTATE 22P02, so skip the plan/accounts
 	// fetch entirely and synthesize a placeholder plan whose Name is the
-	// only field downstream history/notification code reads. By
-	// definition direct-execute purchases target a single account, so
-	// fall straight through to the legacy single-account path.
+	// only field downstream history/notification code reads. Direct-execute
+	// purchases target exactly one account: resolveSingleAccountProvider
+	// refuses a batch whose selected recs span accounts (#1902), so fall
+	// straight through to the single-account path.
 	var plan *config.PurchasePlan
 	if exec.PlanID == "" {
 		plan = &config.PurchasePlan{Name: "Direct purchase"}
@@ -351,9 +356,12 @@ func applyAccountOutcome(acctExec *config.PurchaseExecution, purchaseErrors []st
 // caller to fall back to the ambient AWS STS identity.
 //
 // The account is taken from exec.CloudAccountID when set (plan-with-single-
-// account executions), or derived from the shared cloud_account_id on the
-// recommendations when all selected recs agree on exactly one account (direct-
-// execute purchases where PlanID is empty and exec.CloudAccountID is nil).
+// account executions), or derived from the shared cloud_account_id of the
+// SELECTED recommendations (direct-execute purchases where PlanID is empty and
+// exec.CloudAccountID is nil). When the selected recs span more than one
+// account, or mix attributed and unattributed recs, this returns
+// errAmbiguousAccountScope: the single-account path cannot honor such a
+// batch and must never fall back to ambient credentials for it (#1902).
 //
 // A non-nil error means a target account was identified but could not be
 // resolved (lookup failed, the account does not exist, or credentials could
@@ -370,7 +378,11 @@ func (m *Manager) resolveSingleAccountProvider(ctx context.Context, exec *config
 
 	cloudAccountID := exec.CloudAccountID
 	if cloudAccountID == nil {
-		cloudAccountID = singleCloudAccountIDFromRecs(exec.Recommendations)
+		var scopeErr error
+		cloudAccountID, scopeErr = SingleCloudAccountIDFromRecs(exec.Recommendations)
+		if scopeErr != nil {
+			return nil, "", fmt.Errorf("execution %s: %w", exec.ExecutionID, scopeErr)
+		}
 	}
 	if cloudAccountID == nil {
 		return nil, "", nil
@@ -863,26 +875,49 @@ func indexKeys(idx []int) []string {
 	return out
 }
 
-// singleCloudAccountIDFromRecs returns the shared cloud_account_id when
-// all recommendations in the slice agree on exactly one non-empty account ID.
-// Returns nil when the slice is empty, all IDs are absent, or more than one
-// distinct ID is present (the caller falls back to ambient credentials in the
-// first two cases and to fan-out in the last).
-func singleCloudAccountIDFromRecs(recs []config.RecommendationRecord) *string {
+// errAmbiguousAccountScope is returned when the selected recommendations of a
+// plan-less execution do not resolve to exactly one cloud account. The
+// single-account path cannot honor such a batch: buying it under ambient
+// credentials (the pre-#1902 behavior) purchases every commitment in the
+// CUDly host account and stamps the ambient identity on history (#646).
+var errAmbiguousAccountScope = errors.New("selected recommendations do not resolve to a single cloud account")
+
+// SingleCloudAccountIDFromRecs returns the cloud_account_id shared by every
+// SELECTED recommendation, nil when no selected recommendation carries one
+// (the ambient single-account deployment), and errAmbiguousAccountScope when
+// the selected recs span more than one account or mix attributed and
+// unattributed entries (#1902). Only selected recs count: they are the recs
+// the money moves for (processPurchaseRecommendations buys selectedIndices).
+// Exported so the API boundary (validateExecutePurchaseRecommendations)
+// applies the identical rule before an execution row exists.
+func SingleCloudAccountIDFromRecs(recs []config.RecommendationRecord) (*string, error) {
+	var ids []string
 	var found *string
+	selected, unattributed := 0, 0
 	for i := range recs {
-		id := recs[i].CloudAccountID
-		if id == nil || *id == "" {
+		rec := &recs[i]
+		if !rec.Selected {
 			continue
 		}
-		if found == nil {
-			found = id
-		} else if *found != *id {
-			// More than one distinct account — not the single-account path.
-			return nil
+		selected++
+		if rec.CloudAccountID == nil || *rec.CloudAccountID == "" {
+			unattributed++
+			continue
+		}
+		if !slices.Contains(ids, *rec.CloudAccountID) {
+			ids = append(ids, *rec.CloudAccountID)
+			found = rec.CloudAccountID
 		}
 	}
-	return found
+	switch {
+	case len(ids) > 1:
+		return nil, fmt.Errorf("%w: %d selected recommendation(s) target %d cloud accounts (%s); submit one purchase per account",
+			errAmbiguousAccountScope, selected, len(ids), strings.Join(ids, ", "))
+	case len(ids) == 1 && unattributed > 0:
+		return nil, fmt.Errorf("%w: %d selected recommendation(s) carry no cloud_account_id while %d target account %s",
+			errAmbiguousAccountScope, unattributed, selected-unattributed, ids[0])
+	}
+	return found, nil
 }
 
 // savePurchaseHistory persists one purchase_history row for a successful

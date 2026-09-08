@@ -4010,6 +4010,65 @@ func TestHandler_executePurchase_DirectExec_ExecuteOwn_Owner(t *testing.T) {
 	assert.Equal(t, true, resultMap["direct_execute"])
 }
 
+// TestHandler_executePurchase_MultiAccountBatch_Rejected is the #1902 boundary
+// guard: a web execute request whose recommendations span two cloud accounts
+// is refused with a 400 naming both accounts before an execution row is
+// persisted, in both submit modes. The executor enforces the same rule
+// (purchase.SingleCloudAccountIDFromRecs); this test pins the early refusal so
+// a multi-account batch never becomes a pending row that fails at approval.
+func TestHandler_executePurchase_MultiAccountBatch_Rejected(t *testing.T) {
+	const multiAccountBody = `{
+  "recommendations": [
+    {"id": "rec-a", "provider": "aws", "service": "ec2", "region": "us-east-1", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": 500.0, "savings": 100.0, "selected": true, "cloud_account_id": "acct-a"},
+    {"id": "rec-b", "provider": "aws", "service": "ec2", "region": "us-east-1", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": 700.0, "savings": 120.0, "selected": true, "cloud_account_id": "acct-b"}
+  ]%s
+}`
+	cases := []struct {
+		name      string
+		modeField string
+	}{
+		{name: "direct mode", modeField: `, "execute_mode": "direct"`},
+		{name: "approval mode", modeField: ``},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			mockStore := new(MockConfigStore)
+			mockAuth := new(MockAuthService)
+			mockPurchase := new(MockPurchaseManager)
+			t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+			session := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+			mockAuth.On("ValidateSession", ctx, "admin-token").Return(session, nil)
+			mockAuth.On("HasPermissionAPI", ctx, session.UserID, "execute", "purchases").Return(true, nil)
+			mockAuth.allowConstraintChecks()
+			mockAuth.On("GetAllowedAccountsAPI", ctx, session.UserID).Return([]string{}, nil)
+			// Registered as optional so a pre-fix run (which persists the row,
+			// then direct-executes or emails) fails on the assertions below
+			// rather than on an unexpected-call panic.
+			mockAuth.On("HasPermissionAPI", ctx, session.UserID, "execute-any", "purchases").Return(true, nil).Maybe()
+			mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil).Maybe()
+			mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil).Maybe()
+			mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil).Maybe()
+			mockPurchase.On("ApproveAndExecute", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+			handler := &Handler{config: mockStore, auth: mockAuth, purchase: mockPurchase}
+			req := &events.LambdaFunctionURLRequest{
+				Headers: map[string]string{"Authorization": "Bearer admin-token"},
+				Body:    fmt.Sprintf(multiAccountBody, tc.modeField),
+			}
+			_, err := handler.executePurchase(ctx, req)
+			require.Error(t, err)
+			ce, ok := IsClientError(err)
+			require.True(t, ok, "expected a clientError, got: %v", err)
+			assert.Equal(t, 400, ce.code)
+			assert.Contains(t, ce.Error(), "2 cloud accounts (acct-a, acct-b)")
+			mockStore.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
+			mockPurchase.AssertNotCalled(t, "ApproveAndExecute", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		})
+	}
+}
+
 // TestHandler_executePurchase_DirectExec_FourEyesOn_DeniesSelfExecute is the
 // true end-to-end regression test for the HIGH finding on PR #1500's
 // adversarial review: execute_mode="direct" bypassed 4-eyes mode entirely

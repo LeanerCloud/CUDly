@@ -1579,15 +1579,20 @@ func TestExecutePurchase_SingleAccount_AccountNotFound(t *testing.T) {
 }
 
 // TestSingleCloudAccountIDFromRecs covers the helper that derives a shared
-// cloud_account_id from a recommendation slice.
+// cloud_account_id from the SELECTED recommendations of a plan-less
+// execution, and the #1902 ambiguous-scope errors it returns for the
+// multi-account and mixed attributed/unattributed shapes.
 func TestSingleCloudAccountIDFromRecs(t *testing.T) {
 	aid1 := "acct-1"
 	aid2 := "acct-2"
+	aid3 := "acct-3"
 
 	tests := []struct {
-		want *string
-		name string
-		recs []config.RecommendationRecord
+		want    *string
+		name    string
+		recs    []config.RecommendationRecord
+		wantErr bool
+		wantMsg string
 	}{
 		{
 			name: "empty slice returns nil",
@@ -1595,50 +1600,83 @@ func TestSingleCloudAccountIDFromRecs(t *testing.T) {
 			want: nil,
 		},
 		{
-			name: "all nil account IDs returns nil",
+			name: "all unattributed returns nil",
 			recs: []config.RecommendationRecord{
-				{CloudAccountID: nil},
-				{CloudAccountID: nil},
+				{Selected: true, CloudAccountID: nil},
+				{Selected: true, CloudAccountID: nil},
 			},
 			want: nil,
 		},
 		{
-			name: "single rec with account ID returns it",
+			name: "single attributed rec returns it",
 			recs: []config.RecommendationRecord{
-				{CloudAccountID: &aid1},
+				{Selected: true, CloudAccountID: &aid1},
 			},
 			want: &aid1,
 		},
 		{
-			name: "all recs share same account ID returns it",
+			name: "all recs share one account",
 			recs: []config.RecommendationRecord{
-				{CloudAccountID: &aid1},
-				{CloudAccountID: &aid1},
+				{Selected: true, CloudAccountID: &aid1},
+				{Selected: true, CloudAccountID: &aid1},
 			},
 			want: &aid1,
 		},
 		{
-			name: "mixed nil and same non-nil returns the non-nil ID",
+			name: "unselected rec from another account is ignored",
 			recs: []config.RecommendationRecord{
-				{CloudAccountID: nil},
-				{CloudAccountID: &aid1},
-				{CloudAccountID: &aid1},
+				{Selected: true, CloudAccountID: &aid1},
+				{Selected: false, CloudAccountID: &aid2},
 			},
 			want: &aid1,
 		},
 		{
-			name: "two distinct account IDs returns nil (multi-account, not this path)",
+			name: "only unselected recs returns nil",
 			recs: []config.RecommendationRecord{
-				{CloudAccountID: &aid1},
-				{CloudAccountID: &aid2},
+				{Selected: false, CloudAccountID: &aid1},
 			},
 			want: nil,
+		},
+		{
+			name: "two distinct accounts is an error",
+			recs: []config.RecommendationRecord{
+				{Selected: true, CloudAccountID: &aid1},
+				{Selected: true, CloudAccountID: &aid2},
+			},
+			wantErr: true,
+			wantMsg: "2 cloud accounts (acct-1, acct-2)",
+		},
+		{
+			name: "mixed attributed and unattributed is an error",
+			recs: []config.RecommendationRecord{
+				{Selected: true, CloudAccountID: nil},
+				{Selected: true, CloudAccountID: &aid1},
+			},
+			wantErr: true,
+			wantMsg: "carry no cloud_account_id",
+		},
+		{
+			name: "three distinct accounts lists all three in order",
+			recs: []config.RecommendationRecord{
+				{Selected: true, CloudAccountID: &aid1},
+				{Selected: true, CloudAccountID: &aid2},
+				{Selected: true, CloudAccountID: &aid3},
+			},
+			wantErr: true,
+			wantMsg: "(acct-1, acct-2, acct-3)",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := singleCloudAccountIDFromRecs(tc.recs)
+			got, err := SingleCloudAccountIDFromRecs(tc.recs)
+			if tc.wantErr {
+				require.ErrorIs(t, err, errAmbiguousAccountScope)
+				assert.Contains(t, err.Error(), tc.wantMsg)
+				assert.Nil(t, got)
+				return
+			}
+			require.NoError(t, err)
 			if tc.want == nil {
 				assert.Nil(t, got)
 			} else {
