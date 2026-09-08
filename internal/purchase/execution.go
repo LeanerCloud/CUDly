@@ -27,8 +27,11 @@ import (
 // When the plan has associated cloud accounts and a credential store is configured,
 // it fans out execution in parallel — one goroutine per account, each with its own
 // PurchaseExecution record tagged with cloud_account_id.
-// If no accounts are configured or no credential store is available, it falls back
-// to single-account execution using ambient credentials.
+// If no accounts are configured or no credential store is available, it takes the
+// single-account path, which resolves credentials from the recommendations' own
+// cloud account and refuses a batch spanning more than one (see #1902). Only a
+// batch whose selected recommendations carry no account at all falls back to
+// ambient credentials.
 // executePurchase runs the purchase for a single execution. When the plan has
 // associated cloud accounts it fans out via executeMultiAccount (which saves its
 // own per-account records); otherwise it runs the single-account path. The root
@@ -357,7 +360,7 @@ func applyAccountOutcome(acctExec *config.PurchaseExecution, purchaseErrors []st
 // SELECTED recommendations (direct-execute purchases where PlanID is empty and
 // exec.CloudAccountID is nil). When the selected recs span more than one
 // account, or mix attributed and unattributed recs, this returns
-// errAmbiguousAccountScope: the single-account path cannot honour such a
+// errAmbiguousAccountScope: the single-account path cannot honor such a
 // batch and must never fall back to ambient credentials for it (#1902).
 //
 // A non-nil error means a target account was identified but could not be
@@ -874,8 +877,8 @@ func indexKeys(idx []int) []string {
 
 // errAmbiguousAccountScope is returned when the selected recommendations of a
 // plan-less execution do not resolve to exactly one cloud account. The
-// single-account path cannot honour such a batch: buying it under ambient
-// credentials (the pre-#1902 behaviour) purchases every commitment in the
+// single-account path cannot honor such a batch: buying it under ambient
+// credentials (the pre-#1902 behavior) purchases every commitment in the
 // CUDly host account and stamps the ambient identity on history (#646).
 var errAmbiguousAccountScope = errors.New("selected recommendations do not resolve to a single cloud account")
 
