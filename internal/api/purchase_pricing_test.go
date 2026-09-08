@@ -229,6 +229,56 @@ func TestHandler_executePurchase_UnknownRecommendationRefused(t *testing.T) {
 	mockStore.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
 }
 
+// TestHandler_executePurchase_CrossAccountMismatchRefused is a handler-level
+// companion to TestRecIdentityKey_TupleSemantics' "a different account
+// yields a different key" subtest: that pure unit test proves recIdentityKey
+// includes the account, but not that the scope check and the key agree end
+// to end, through the real handler, on what "account" means (a mutation
+// that dropped CloudAccountID from recIdentityKey would still pass an
+// unrestricted admin session's scope check). Stored recommendations exist
+// only under account A; the request claims the identical resource under
+// account B. The mismatch must be refused with 409 before anything is
+// persisted or the provider is contacted.
+func TestHandler_executePurchase_CrossAccountMismatchRefused(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	mockPurchase := new(MockPurchaseManager)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	t.Cleanup(func() { mockPurchase.AssertExpectations(t) })
+
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdminPurchaser()
+
+	// Registered .Maybe(): see TestHandler_executePurchase_UnknownRecommendationRefused.
+	mockStore.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil).Maybe()
+	mockStore.On("GetPendingExecutions", mock.Anything).Return([]config.PurchaseExecution{}, nil).Maybe()
+	mockStore.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockPurchase.On("ApproveAndExecute", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	accountA := "111111111111"
+	expectStoredRecs(mockStore, config.RecommendationRecord{
+		Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large",
+		CloudAccountID: &accountA, Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 100,
+	})
+
+	handler := &Handler{config: mockStore, auth: mockAuth, purchase: mockPurchase}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    `{"recommendations":[{"id":"rec-1","provider":"aws","service":"ec2","region":"us-east-1","resource_type":"m5.large","cloud_account_id":"222222222222","count":1,"term":1,"payment":"all-upfront","upfront_cost":100,"savings":10}]}`,
+	}
+	_, err := handler.executePurchase(ctx, req)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a clientError, got: %v", err)
+	assert.Equal(t, 409, ce.code)
+	assert.Contains(t, ce.Error(), "not in the current recommendation set")
+	mockStore.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
+	mockPurchase.AssertNotCalled(t, "ApproveAndExecute", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
 // TestHandler_executePurchase_StoredRecWithoutPriceRefused: a matched stored
 // row that carries no usable price is refused with 409.
 func TestHandler_executePurchase_StoredRecWithoutPriceRefused(t *testing.T) {
@@ -478,6 +528,34 @@ func TestPriceFromStored_ScalesByCountAndKeepsStoredIdentity(t *testing.T) {
 		assert.Empty(t, out.PurchaseID)
 		assert.Empty(t, out.Error)
 	})
+}
+
+// TestLoadStoredRecommendationIndex_CaseFoldCollisionRefused: the store's
+// unique index on the identity tuple (migration 000043) is case-sensitive on
+// provider and payment, while recIdentityKey folds their case. Two stored
+// rows differing only in case therefore collide under the fold even though
+// the index allowed both rows to exist; the index build must refuse rather
+// than silently keep whichever row inserted last (unreachable today because
+// the scheduler always writes lowercase, but this is a money path and must
+// fail loud rather than pick a row on a broken assumption).
+func TestLoadStoredRecommendationIndex_CaseFoldCollisionRefused(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	mockStore.On("ListStoredRecommendations", mock.Anything, config.RecommendationFilter{Provider: "aws"}).Return([]config.RecommendationRecord{
+		{ID: "lower-id", Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large", Term: 1, Payment: "all-upfront", Count: 1, UpfrontCost: 100},
+		{ID: "upper-id", Provider: "AWS", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large", Term: 1, Payment: "ALL-UPFRONT", Count: 1, UpfrontCost: 200},
+	}, nil)
+
+	handler := &Handler{config: mockStore}
+	_, err := handler.loadStoredRecommendationIndex(ctx, []config.RecommendationRecord{
+		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large", Term: 1, Payment: "all-upfront"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "more than one row for identity key")
+	_, isClient := IsClientError(err)
+	assert.False(t, isClient, "an index invariant violation is a server-side bug, not a client error")
 }
 
 // TestRecIdentityKey_TupleSemantics pins the identity-tuple contract:

@@ -2853,10 +2853,12 @@ components:
           description: >
             Each item must match a recommendation in the current recommendation set on
             (provider, cloud_account_id, service, region, resource_type, engine, term,
-            payment). Only count, recommended_count and selected are honoured; id, details,
-            upfront_cost, monthly_cost and savings are replaced server-side from the stored
-            recommendation scaled by count, and the spend-cap check, execution record and
-            approval email use those values. Savings plan items must keep the recommended count.
+            payment). Only count, recommended_count and selected are honoured; every other
+            field (including id, details, upfront_cost, monthly_cost, savings,
+            on_demand_cost, purchased, purchase_id and error) is replaced server-side from
+            the stored recommendation, with the cost fields scaled by count. The spend-cap
+            check, execution record and approval email use those replaced values. Savings
+            plan items must keep the recommended count.
 
     ExecutePurchaseResponse:
       type: object

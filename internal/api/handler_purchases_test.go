@@ -2202,10 +2202,14 @@ func TestHandler_executePurchase_Success(t *testing.T) {
 	// The #644 idempotency lookup queries pending executions before creating.
 	// No prior pending row → not a duplicate → proceeds to create.
 	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
-	// #1905: recs are now priced from the stored recommendation set.
+	// #1905: recs are now priced from the stored recommendation set. The two
+	// rows need distinct identity tuples (ResourceType here) — the real store
+	// can never hold two rows under the same tuple (migration 000043's unique
+	// index), and an identical-tuple fixture would trip the loadStoredRecommendationIndex
+	// duplicate-key guard.
 	expectStoredRecs(mockStore,
-		config.RecommendationRecord{Provider: "aws", Service: "ec2", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 100, Savings: 50},
-		config.RecommendationRecord{Provider: "aws", Service: "ec2", Count: 2, Term: 1, Payment: "all-upfront", UpfrontCost: 200, Savings: 100},
+		config.RecommendationRecord{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 100, Savings: 50},
+		config.RecommendationRecord{Provider: "aws", Service: "ec2", ResourceType: "m5.xlarge", Count: 2, Term: 1, Payment: "all-upfront", UpfrontCost: 200, Savings: 100},
 	)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -2214,7 +2218,7 @@ func TestHandler_executePurchase_Success(t *testing.T) {
 		Headers: map[string]string{
 			"Authorization": "Bearer admin-token",
 		},
-		Body: `{"recommendations": [{"id": "rec-1", "provider": "aws", "service": "ec2", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": 100.0, "savings": 50.0}, {"id": "rec-2", "provider": "aws", "service": "ec2", "count": 2, "term": 1, "payment": "all-upfront", "upfront_cost": 200.0, "savings": 100.0}]}`,
+		Body: `{"recommendations": [{"id": "rec-1", "provider": "aws", "service": "ec2", "resource_type": "m5.large", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": 100.0, "savings": 50.0}, {"id": "rec-2", "provider": "aws", "service": "ec2", "resource_type": "m5.xlarge", "count": 2, "term": 1, "payment": "all-upfront", "upfront_cost": 200.0, "savings": 100.0}]}`,
 	}
 	result, err := handler.executePurchase(ctx, req)
 	require.NoError(t, err)

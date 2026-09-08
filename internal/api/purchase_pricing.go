@@ -56,7 +56,14 @@ func (h *Handler) priceRecommendationsFromStore(ctx context.Context, recs []conf
 // loadStoredRecommendationIndex reads the stored rows for every provider in
 // the batch (one query per distinct provider, at most three) and indexes
 // them by identity tuple. The store's unique index on the same tuple
-// (migration 000043) guarantees one row per key.
+// (migration 000043) guarantees one row per key only when provider and
+// payment are byte-identical: the index is case-sensitive on both columns,
+// while recIdentityKey folds their case, so two rows differing only in case
+// would collide here (unreachable today because the scheduler always writes
+// lowercase, but not guaranteed by the index itself). Rather than silently
+// picking whichever row wins the map insert, a collision is refused: this is
+// a money path, and the caller (priceRecommendationsFromStore) must never
+// price a purchase off an arbitrarily chosen row.
 func (h *Handler) loadStoredRecommendationIndex(ctx context.Context, recs []config.RecommendationRecord) (map[string]config.RecommendationRecord, error) {
 	index := make(map[string]config.RecommendationRecord)
 	seen := make(map[string]bool)
@@ -71,7 +78,11 @@ func (h *Handler) loadStoredRecommendationIndex(ctx context.Context, recs []conf
 			return nil, fmt.Errorf("load stored recommendations for %s: %w", provider, err)
 		}
 		for j := range rows {
-			index[recIdentityKey(&rows[j])] = rows[j]
+			key := recIdentityKey(&rows[j])
+			if _, dup := index[key]; dup {
+				return nil, fmt.Errorf("stored recommendations for %s contain more than one row for identity key %q", provider, key)
+			}
+			index[key] = rows[j]
 		}
 	}
 	return index, nil
