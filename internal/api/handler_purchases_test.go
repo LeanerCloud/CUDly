@@ -2202,6 +2202,15 @@ func TestHandler_executePurchase_Success(t *testing.T) {
 	// The #644 idempotency lookup queries pending executions before creating.
 	// No prior pending row → not a duplicate → proceeds to create.
 	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
+	// #1905: recs are now priced from the stored recommendation set. The two
+	// rows need distinct identity tuples (ResourceType here) — the real store
+	// can never hold two rows under the same tuple (migration 000043's unique
+	// index), and an identical-tuple fixture would trip the loadStoredRecommendationIndex
+	// duplicate-key guard.
+	expectStoredRecs(mockStore,
+		config.RecommendationRecord{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 100, Savings: 50},
+		config.RecommendationRecord{Provider: "aws", Service: "ec2", ResourceType: "m5.xlarge", Count: 2, Term: 1, Payment: "all-upfront", UpfrontCost: 200, Savings: 100},
+	)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -2209,7 +2218,7 @@ func TestHandler_executePurchase_Success(t *testing.T) {
 		Headers: map[string]string{
 			"Authorization": "Bearer admin-token",
 		},
-		Body: `{"recommendations": [{"id": "rec-1", "provider": "aws", "service": "ec2", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": 100.0, "savings": 50.0}, {"id": "rec-2", "provider": "aws", "service": "ec2", "count": 2, "term": 1, "payment": "all-upfront", "upfront_cost": 200.0, "savings": 100.0}]}`,
+		Body: `{"recommendations": [{"id": "rec-1", "provider": "aws", "service": "ec2", "resource_type": "m5.large", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": 100.0, "savings": 50.0}, {"id": "rec-2", "provider": "aws", "service": "ec2", "resource_type": "m5.xlarge", "count": 2, "term": 1, "payment": "all-upfront", "upfront_cost": 200.0, "savings": 100.0}]}`,
 	}
 	result, err := handler.executePurchase(ctx, req)
 	require.NoError(t, err)
@@ -2283,6 +2292,7 @@ func TestHandler_executePurchase_EmptyRecommendations(t *testing.T) {
 
 func TestHandler_executePurchase_NegativeUpfrontCost(t *testing.T) {
 	ctx := context.Background()
+	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
 	adminSession := &Session{
@@ -2292,8 +2302,14 @@ func TestHandler_executePurchase_NegativeUpfrontCost(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdminPurchaser()
+	// #1905: the client's upfront_cost is now ignored; a negative cost on
+	// the STORED row is what must be refused (the client value can no
+	// longer poison the check).
+	expectStoredRecs(mockStore, config.RecommendationRecord{
+		Provider: "aws", Service: "ec2", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: -100,
+	})
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{config: mockStore, auth: mockAuth}
 
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{
@@ -2304,11 +2320,12 @@ func TestHandler_executePurchase_NegativeUpfrontCost(t *testing.T) {
 	result, err := handler.executePurchase(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "negative upfront cost")
+	assert.Contains(t, err.Error(), "no usable price")
 }
 
 func TestHandler_executePurchase_NegativeSavings(t *testing.T) {
 	ctx := context.Background()
+	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
 	adminSession := &Session{
@@ -2318,14 +2335,23 @@ func TestHandler_executePurchase_NegativeSavings(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdminPurchaser()
+	// #1905: pricing passes (stored upfront/count are usable); the negative
+	// savings on the stored row still trips the validateAndTotalRecommendations
+	// guard the same as before. The request itself carries a VALID savings
+	// value (50.0) so this only fails because the stored row's savings (-50)
+	// governs, not because the client's own number happens to be negative
+	// too (CodeRabbit finding on #2073).
+	expectStoredRecs(mockStore, config.RecommendationRecord{
+		Provider: "aws", Service: "ec2", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 100, Savings: -50,
+	})
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{config: mockStore, auth: mockAuth}
 
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{
 			"Authorization": "Bearer admin-token",
 		},
-		Body: `{"recommendations": [{"id": "rec-1", "provider": "aws", "service": "ec2", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": 100.0, "savings": -50.0}]}`,
+		Body: `{"recommendations": [{"id": "rec-1", "provider": "aws", "service": "ec2", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": 100.0, "savings": 50.0}]}`,
 	}
 	result, err := handler.executePurchase(ctx, req)
 	assert.Error(t, err)
@@ -2372,6 +2398,7 @@ func TestHandler_executePurchase_TooManyRecommendations(t *testing.T) {
 
 func TestHandler_executePurchase_ExceedsMaxAmount(t *testing.T) {
 	ctx := context.Background()
+	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
 	adminSession := &Session{
@@ -2381,14 +2408,22 @@ func TestHandler_executePurchase_ExceedsMaxAmount(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdminPurchaser()
+	// #1905: the $10M sanity guard now fires against the stored cost. The
+	// request itself carries a VALID upfront_cost (100.0, well under the
+	// sanity limit) so this only fails because the stored row's cost
+	// ($15M) governs, not because the client's own number also exceeds
+	// the limit (CodeRabbit finding on #2073).
+	expectStoredRecs(mockStore, config.RecommendationRecord{
+		Provider: "aws", Service: "ec2", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 15_000_000, Savings: 50,
+	})
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{config: mockStore, auth: mockAuth}
 
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{
 			"Authorization": "Bearer admin-token",
 		},
-		Body: `{"recommendations": [{"id": "rec-1", "provider": "aws", "service": "ec2", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": 15000000.0, "savings": 50.0}]}`,
+		Body: `{"recommendations": [{"id": "rec-1", "provider": "aws", "service": "ec2", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": 100.0, "savings": 50.0}]}`,
 	}
 	result, err := handler.executePurchase(ctx, req)
 	assert.Error(t, err)
@@ -2411,6 +2446,9 @@ func TestHandler_executePurchase_SaveError(t *testing.T) {
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(errors.New("database error"))
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
+	expectStoredRecs(mockStore, config.RecommendationRecord{
+		Provider: "aws", Service: "ec2", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 100, Savings: 50,
+	})
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -3674,6 +3712,10 @@ func setupDirectExecMocks(ctx context.Context, store *MockConfigStore) {
 	store.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	store.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 	store.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
+	// #1905: directExecRecBody's rec-1 is now priced from the stored set.
+	expectStoredRecs(store, config.RecommendationRecord{
+		ID: "rec-1", Provider: "aws", Service: "ec2", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 500, Savings: 100,
+	})
 }
 
 // TestHandler_executePurchase_DirectExec_NoPermission verifies the fail-closed
@@ -3767,6 +3809,11 @@ func TestHandler_executePurchase_PermissionConstraintsDenied(t *testing.T) {
 				assert.ObjectsAreEqual([]string{"ec2"}, sets[1].Services) &&
 				assert.ObjectsAreEqual([]string{"eu-west-1"}, sets[1].Regions)
 		})).Return(false, nil)
+	// #1905: constraint sets are now built from the stored costs.
+	expectStoredRecs(mockStore,
+		config.RecommendationRecord{Provider: "aws", Service: "ec2", Region: "us-east-1", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 3000, Savings: 50},
+		config.RecommendationRecord{Provider: "aws", Service: "ec2", Region: "eu-west-1", Count: 2, Term: 1, Payment: "all-upfront", UpfrontCost: 2500, Savings: 100},
+	)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
@@ -3823,6 +3870,12 @@ func TestHandler_executePurchase_NoUpfrontBatch_TotalCommitmentEnforced(t *testi
 		mock.MatchedBy(func(sets []auth.PermissionConstraints) bool {
 			return len(sets) == 1 && sets[0].MaxPurchaseAmount == wantTotalCommitment
 		})).Return(false, nil)
+	// #1905: the total-commitment constraint is now built from the stored
+	// upfront/monthly cost.
+	expectStoredRecs(mockStore, config.RecommendationRecord{
+		Provider: "aws", Service: "ec2", Region: "us-east-1", Count: 1, Term: 3, Payment: "no-upfront",
+		UpfrontCost: 0, MonthlyCost: float64Ptr(600), Savings: 50,
+	})
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
@@ -3881,6 +3934,10 @@ func TestHandler_executePurchase_UserAPIKeyConstraintsDenied(t *testing.T) {
 			}
 			return sets[0].MaxPurchaseAmount == 500.0
 		})).Return(false, nil)
+	// #1905: the constraint set is now built from the stored cost.
+	expectStoredRecs(mockStore, config.RecommendationRecord{
+		Provider: "aws", Service: "ec2", Region: "us-east-1", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 500, Savings: 50,
+	})
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
@@ -4107,6 +4164,10 @@ func TestHandler_executePurchase_DirectExec_FourEyesOn_DeniesSelfExecute(t *test
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
 	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
+	// #1905: directExecRecBody's rec-1 is now priced from the stored set.
+	expectStoredRecs(mockStore, config.RecommendationRecord{
+		ID: "rec-1", Provider: "aws", Service: "ec2", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 500, Savings: 100,
+	})
 	// enforceFourEyesPolicy re-loads the (freshly-created, randomly-ID'd)
 	// execution to read CreatedByUserID; the real one always carries the
 	// direct-executor's own UUID (see comment above), which is what makes

@@ -363,6 +363,12 @@ func TestHandler_executePurchase_SurfacesPaymentAdjustments(t *testing.T) {
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
+	// #1905: both recs canonicalise to azure/vm/monthly before pricing, so
+	// they both match this one stored row; the second rec's client
+	// upfront_cost is ignored.
+	expectStoredRecs(mockStore, config.RecommendationRecord{
+		Provider: "azure", Service: "vm", Count: 1, Term: 1, Payment: "monthly", UpfrontCost: 100, Savings: 50,
+	})
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -413,6 +419,9 @@ func TestHandler_executePurchase_NoAdjustmentsWhenCanonical(t *testing.T) {
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
+	expectStoredRecs(mockStore, config.RecommendationRecord{
+		Provider: "azure", Service: "vm", Count: 1, Term: 1, Payment: "monthly", UpfrontCost: 100, Savings: 50,
+	})
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 

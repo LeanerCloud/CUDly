@@ -711,6 +711,11 @@ func TestPerAccountPerms_ExecutePurchase_AllowedAccountAccepted(t *testing.T) {
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
 	}
+	// #1905: the rec is now priced from the stored recommendation set.
+	accA := permsAccA
+	expectStoredRecs(mockStore, config.RecommendationRecord{
+		Provider: "aws", Service: "ec2", CloudAccountID: &accA, Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 100, Savings: 10,
+	})
 
 	handler := &Handler{
 		auth:   scopedAuthMock(ctx),
