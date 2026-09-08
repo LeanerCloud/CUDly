@@ -4111,9 +4111,16 @@ export interface FanOutBucket {
 // the modal closes.
 let currentFanOutBuckets: FanOutBucket[] | null = null;
 
+// The renderer promises "This bucket will be skipped" from exactly this
+// check (renderFanOutBucketSection); submit and totals must agree with it
+// (issue #1904) so a bucket the UI marks skipped is never posted.
+function isSubmittableBucket(b: FanOutBucket): boolean {
+  return isBucketPaymentCompatible(b.recs, b.payment);
+}
+
 export function getFanOutBuckets(): FanOutBucket[] | null {
   if (!currentFanOutBuckets) return null;
-  return currentFanOutBuckets.map((b) => ({
+  return currentFanOutBuckets.filter(isSubmittableBucket).map((b) => ({
     ...b,
     // Deep-copy the per-rec map so callers can't mutate module state.
     perRecPayments: b.perRecPayments ? new Map(b.perRecPayments) : undefined,
@@ -4321,17 +4328,43 @@ async function openFanOutModal(
   while (container.firstChild) container.removeChild(container.firstChild);
 
   const summary = document.createElement('div');
+  summary.id = 'fanout-summary';
   summary.className = 'form-section fanout-summary';
+  renderFanOutSummary(summary, buckets);
+  container.appendChild(summary);
+
+  for (const b of buckets) {
+    container.appendChild(renderFanOutBucketSection(b));
+  }
+
+  openModal(modal);
+}
+
+// renderFanOutSummary rebuilds the fan-out modal's header — title, email
+// count, skipped-bucket note, and totals — from the submittable subset
+// (issue #1904), so what the user sees here matches exactly what
+// getFanOutBuckets() returns to app.ts on submit. Also disables the
+// Execute button when nothing is submittable.
+function renderFanOutSummary(summary: HTMLElement, buckets: FanOutBucket[]): void {
+  while (summary.firstChild) summary.removeChild(summary.firstChild);
+
+  const submittable = buckets.filter(isSubmittableBucket);
+  const skipped = buckets.length - submittable.length;
+
   const summaryTitle = document.createElement('h3');
   summaryTitle.textContent = `Bulk purchase — ${buckets.length} bucket${buckets.length === 1 ? '' : 's'}`;
   summary.appendChild(summaryTitle);
 
   const emailNote = document.createElement('p');
   emailNote.className = 'fanout-email-note';
-  emailNote.textContent = `Will send ${buckets.length} approval email${buckets.length === 1 ? '' : 's'} — one per bucket.`;
+  let emailText = `Will send ${submittable.length} approval email${submittable.length === 1 ? '' : 's'} — one per bucket.`;
+  if (skipped > 0) {
+    emailText += ` ${skipped} incompatible bucket${skipped === 1 ? '' : 's'} will be skipped.`;
+  }
+  emailNote.textContent = emailText;
   summary.appendChild(emailNote);
 
-  const totals = computeFanOutTotals(buckets);
+  const totals = computeFanOutTotals(submittable);
   const totalLine = (label: string, value: string, cls = ''): HTMLParagraphElement => {
     const p = document.createElement('p');
     const strong = document.createElement('strong');
@@ -4346,13 +4379,23 @@ async function openFanOutModal(
   summary.appendChild(totalLine('Total commitments', String(totals.totalCount)));
   summary.appendChild(totalLine('Total upfront', formatCurrency(totals.totalUpfront)));
   summary.appendChild(totalLine(`Total savings ${periodSuffix(fanOutPeriod)}`, formatCostForPeriod(totals.totalSavings, fanOutPeriod), 'savings'));
-  container.appendChild(summary);
 
-  for (const b of buckets) {
-    container.appendChild(renderFanOutBucketSection(b));
+  const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
+  if (executeBtn) {
+    executeBtn.disabled = submittable.length === 0;
+    executeBtn.title = submittable.length === 0 ? 'No compatible buckets to submit' : '';
   }
+}
 
-  openModal(modal);
+// refreshFanOutSummary re-renders #fanout-summary from currentFanOutBuckets.
+// Called after a bucket's Payment change so a user who repairs a skipped
+// bucket sees the email count, skipped note, and totals follow immediately
+// (issue #1904) rather than only on the next modal open.
+function refreshFanOutSummary(): void {
+  if (!currentFanOutBuckets) return;
+  const summary = document.getElementById('fanout-summary');
+  if (!summary) return;
+  renderFanOutSummary(summary, currentFanOutBuckets);
 }
 
 function computeFanOutTotals(buckets: FanOutBucket[]): { totalCount: number; totalUpfront: number; totalSavings: number } {
@@ -4437,6 +4480,10 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
     }
     b.payment = next;
     renderStatus();
+    // Issue #1904: a payment fix here can move this bucket in or out of the
+    // submittable set, so the header's email count, skipped note, totals,
+    // and Execute-enabled state must follow immediately.
+    refreshFanOutSummary();
     // Re-sync any visible per-rec selects whose ids are NOT explicit
     // overrides: those rows follow the bucket default, so their displayed
     // value must track the new bucket payment. Rows with an explicit

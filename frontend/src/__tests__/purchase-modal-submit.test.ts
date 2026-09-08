@@ -152,6 +152,7 @@ import {
   openPurchaseModal,
   getPurchaseModalRecommendations,
   clearPurchaseModalRecommendations,
+  getFanOutBuckets,
   clearFanOutBuckets,
   loadRecommendations,
 } from '../recommendations';
@@ -436,5 +437,123 @@ describe('Issue #1903: purchase modal re-prices on Term/Payment change', () => {
     termSelect.dispatchEvent(new Event('change'));
 
     expect(document.querySelector('.direct-execute-warning')?.textContent).toContain('12,000.00');
+  });
+});
+
+// ── #1904: fan-out modal skips incompatible buckets ──────────────────────────
+
+describe('Issue #1904: fan-out modal skips incompatible buckets', () => {
+  function buildFanOutRows(): LocalRecommendation[] {
+    return [
+      {
+        id: 'ec2-1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',
+        region: 'us-east-1', resource_type: 'm5.large', term: 1, payment: 'no-upfront',
+        count: 1, upfront_cost: 0, monthly_cost: 100, savings: 50,
+      },
+      {
+        id: 'rds-3', provider: 'aws', cloud_account_id: 'a1', service: 'rds',
+        region: 'us-east-1', resource_type: 'db.r5.large', term: 3, payment: undefined,
+        count: 1, upfront_cost: 1000, savings: 200,
+      },
+    ];
+  }
+
+  test('T8 skipped bucket is not submitted and not totalled', async () => {
+    const [ec2Rec, rdsRec] = buildFanOutRows();
+    (api.getConfig as jest.Mock).mockResolvedValue({ global: { default_payment: 'no-upfront' } });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {}, recommendations: [ec2Rec, rdsRec], regions: [],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([ec2Rec, rdsRec]);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue([ec2Rec, rdsRec]);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['ec2-1', 'rds-3']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+
+    const errorSections = document.querySelectorAll('.fanout-bucket-error');
+    expect(errorSections).toHaveLength(1);
+    expect(errorSections[0]!.textContent).toContain('will be skipped');
+
+    const summaryText = document.getElementById('fanout-summary')!.textContent ?? '';
+    expect(summaryText).toContain('Will send 1 approval email');
+    expect(summaryText).toContain('1 incompatible bucket will be skipped');
+
+    const totalUpfrontLine = Array.from(document.querySelectorAll('#fanout-summary p'))
+      .find((p) => p.textContent?.startsWith('Total upfront'))!;
+    expect(totalUpfrontLine.querySelector('strong')!.textContent).toBe(formatCurrency(0));
+    const totalCommitmentsLine = Array.from(document.querySelectorAll('#fanout-summary p'))
+      .find((p) => p.textContent?.startsWith('Total commitments'))!;
+    expect(totalCommitmentsLine.querySelector('strong')!.textContent).toBe('1');
+
+    (document.getElementById('execute-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+
+    expect(api.executePurchase).toHaveBeenCalledTimes(1);
+    const body = (api.executePurchase as jest.Mock).mock.calls[0]![0] as Array<Record<string, unknown>>;
+    for (const rec of body) {
+      expect(rec['service']).toBe('ec2');
+      expect(rec['id']).not.toBe('rds-3');
+    }
+  });
+
+  test('T9 repairing the bucket un-skips it everywhere', async () => {
+    const [ec2Rec, rdsRec] = buildFanOutRows();
+    (api.getConfig as jest.Mock).mockResolvedValue({ global: { default_payment: 'no-upfront' } });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {}, recommendations: [ec2Rec, rdsRec], regions: [],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([ec2Rec, rdsRec]);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue([ec2Rec, rdsRec]);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['ec2-1', 'rds-3']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+
+    const rdsSection = Array.from(document.querySelectorAll<HTMLElement>('.fanout-bucket'))
+      .find((s) => s.querySelector('.fanout-bucket-error') != null)!;
+    const rdsPaymentSelect = rdsSection.querySelector<HTMLSelectElement>('.fanout-bucket-payment')!;
+    rdsPaymentSelect.value = 'partial-upfront';
+    rdsPaymentSelect.dispatchEvent(new Event('change'));
+
+    expect(rdsSection.querySelector('.fanout-bucket-ok')).not.toBeNull();
+    const summaryText = document.getElementById('fanout-summary')!.textContent ?? '';
+    expect(summaryText).toContain('Will send 2 approval emails');
+    expect(summaryText).not.toContain('skipped');
+    const totalUpfrontLine = Array.from(document.querySelectorAll('#fanout-summary p'))
+      .find((p) => p.textContent?.startsWith('Total upfront'))!;
+    expect(totalUpfrontLine.querySelector('strong')!.textContent).toBe(formatCurrency(1000));
+
+    (document.getElementById('execute-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+
+    expect(api.executePurchase).toHaveBeenCalledTimes(2);
+  });
+
+  test('T10 nothing submittable disables Execute', async () => {
+    const [, rdsRec] = buildFanOutRows();
+    (api.getConfig as jest.Mock).mockResolvedValue({ global: { default_payment: 'no-upfront' } });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {}, recommendations: [rdsRec], regions: [],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([rdsRec]);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue([rdsRec]);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['rds-3']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+
+    const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement;
+    expect(executeBtn.disabled).toBe(true);
+    expect(getFanOutBuckets()).toEqual([]);
+    expect(document.getElementById('fanout-summary')!.textContent).toContain('Will send 0 approval emails');
+
+    executeBtn.click();
+    await flush();
+
+    expect(api.executePurchase).not.toHaveBeenCalled();
   });
 });
