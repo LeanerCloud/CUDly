@@ -3,9 +3,9 @@
 #
 # Shared awk helper functions for the guard suites that scan workflow and shell
 # sources for what a step actually runs: test-ecr-delete-selection.sh,
-# test-rds-deletion-protection-scope.sh and test-aws-tfstate-platform-key.sh.
-# Sourced, not executed; it defines one variable, AWK_CODE_FUNCS, to be
-# prepended to an awk program.
+# test-rds-deletion-protection-scope.sh, test-aws-tfstate-platform-key.sh and
+# test-cloud-sql-delete-scope.sh. Sourced, not executed; it defines one
+# variable, AWK_CODE_FUNCS, to be prepended to an awk program.
 #
 # Shared rather than copied because these functions encode the rule that
 # separates code that RUNS a command from prose that only mentions it, and every
@@ -54,7 +54,7 @@
 # build_swept_scripts SCRIPTS_DIR
 #
 # Sets SWEPT_SCRIPTS to every `*.sh` anywhere under SCRIPTS_DIR, at any depth,
-# excluding the three guard suites themselves.
+# excluding the four guard suites themselves.
 #
 # Discovered rather than named file by file, in every suite, because naming the
 # scripts already known to be guarded is the same defect the suites exist to
@@ -96,7 +96,7 @@ build_swept_scripts() {
   while IFS= read -r -d '' candidate; do
     case "$(basename "$candidate")" in
       test-rds-deletion-protection-scope.sh | test-ecr-delete-selection.sh | \
-        test-aws-tfstate-platform-key.sh) continue ;;
+        test-aws-tfstate-platform-key.sh | test-cloud-sql-delete-scope.sh) continue ;;
     esac
     SWEPT_SCRIPTS+=("$candidate")
   done < <(find "$dir" -type f -name '*.sh' -print0 2>/dev/null | sort -z)
