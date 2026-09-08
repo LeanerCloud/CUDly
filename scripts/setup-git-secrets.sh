@@ -54,7 +54,7 @@ git secrets --add 'aws(.{0,20})?['\''"][0-9a-zA-Z/+]{40}['\''"]'       # AWS Cre
 
 # GCP patterns
 git secrets --add 'type.*service_account'                               # GCP Service Account JSON
-git secrets --add 'AIza[0-9A-Za-z-_]{35}'                              # GCP API Key
+git secrets --add 'AIza[0-9A-Za-z_-]{35}'                              # GCP API Key
 
 # Azure patterns
 git secrets --add 'DefaultEndpointsProtocol=https'                      # Azure Connection String
