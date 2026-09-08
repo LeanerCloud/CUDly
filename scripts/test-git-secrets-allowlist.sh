@@ -120,17 +120,31 @@ run_case "untruncated PKCS8 body" 1 e.json \
 run_case "corrected GCP API key range" 1 f.txt \
     "$AIZA"
 
-# Negative control for the setup-script allowlist entries below: a secret
-# appended to a DIFFERENT git-secrets registration line in that file (the
-# GCP one, not one of the three that legitimately self-match) must still be
-# caught. A prefix-only entry anchored on just "git secrets --add '" would
-# hide this too -- the exact #1972 hole, reintroduced at the scale of one
-# file. Mutates the tracked copy of the setup script in place at its real
-# path, since the allowlist entries are anchored on that path; restores the
-# pristine copy afterward so the later self-scan case below sees it intact.
+# Negative controls for the setup-script allowlist entries below, each
+# closing one instance of the same class of hole (#1972 reintroduced at
+# the scale of one file) that a narrower-but-still-wrong anchor leaves
+# open. Both mutate the tracked copy of the setup script in place at its
+# real path, since the allowlist entries are anchored on that path, and
+# restore the pristine copy afterward so the later self-scan case below
+# sees it intact.
+
+# A secret appended to a DIFFERENT git-secrets registration line in that
+# file (the GCP one, not one of the three that legitimately self-match)
+# must still be caught. A prefix-only entry anchored on just "git secrets
+# --add '" would hide this.
 run_case "secret appended to an unrelated registration line stays caught" 1 \
     scripts/setup-git-secrets.sh \
     "$(sed "s/# GCP API Key\$/# GCP API Key ${KEY}/" "$REPO_ROOT/scripts/setup-git-secrets.sh")"
+cp "$REPO_ROOT/scripts/setup-git-secrets.sh" scripts/setup-git-secrets.sh
+
+# A secret appended to the END of one of the three self-matching lines
+# THEMSELVES must also still be caught. An entry anchored on the path and
+# pattern but missing a trailing $ would stop matching at the end of the
+# pattern it names and let anything appended after it through, which is a
+# narrower version of the same hole the entry above closes.
+run_case "secret appended to a self-matching line itself stays caught" 1 \
+    scripts/setup-git-secrets.sh \
+    "$(sed "s/# PostgreSQL\$/# PostgreSQL ${KEY}/" "$REPO_ROOT/scripts/setup-git-secrets.sh")"
 cp "$REPO_ROOT/scripts/setup-git-secrets.sh" scripts/setup-git-secrets.sh
 
 # Must scan clean (exit 0): what the tree contains, and what the allowlist
@@ -138,8 +152,6 @@ cp "$REPO_ROOT/scripts/setup-git-secrets.sh" scripts/setup-git-secrets.sh
 run_staged_case "setup script's own self-matching lines" 0 scripts/setup-git-secrets.sh
 run_case "GCP type marker alone, no key material" 0 g.json \
     '{"type": "service_account", "project_id": "p"}'
-run_case "Go format-string DSN" 0 h.go \
-    '"postgres://%s:%s@%s:%d/%s?sslmode=%s",'
 run_case "truncated PEM in a struct literal" 0 i.go \
     'PrivateKey: "'"$PEM"'\n...",'
 run_case "truncated PEM in a JSON literal" 0 j.go \

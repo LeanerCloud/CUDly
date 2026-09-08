@@ -931,8 +931,7 @@ jobs:
 
   # Self-test for the git-secrets allowlist (#1972): asserts, through the
   # real pre-commit hook scan path, that secret-shaped fixtures are still
-  # caught and that the documented false positives still scan clean. Not
-  # part of ci-success yet, so it cannot block unrelated PRs while it beds in.
+  # caught and that the documented false positives still scan clean.
   git-secrets-allowlist:
     name: git-secrets allowlist self-test
     runs-on: ubuntu-latest
@@ -1110,6 +1109,7 @@ jobs:
       - azure-role-parity
       - aws-iam-parity
       - gcp-secret-scope
+      - git-secrets-allowlist
       - ecr-delete-selection
       - rds-deletion-protection-scope
       - aws-tfstate-platform-key

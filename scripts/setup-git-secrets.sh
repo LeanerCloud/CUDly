@@ -32,14 +32,21 @@ echo ""
 # Install git hooks
 #
 # git-secrets 1.3.0's install_hook() writes and chmods the hook file, then
-# reports success via a `say` call it never defines as a function. On macOS
-# that resolves to /usr/bin/say (the text-to-speech binary) and exits 0 by
-# accident; on Linux there is no such binary, so it's "command not found"
-# and `git secrets --install -f` returns non-zero even though every hook
-# file was already written correctly. Define `say` as a no-op here and
-# export it so the exported function is visible in the git-secrets child
-# process on both platforms, making the real hook-writing exit status the
-# one that reaches the check below.
+# reports success via a `say` call. `say` was never its own function:
+# git-secrets sources git's git-sh-setup and relied on `say` being defined
+# there (introduced in git-sh-setup.sh in 2009). Git removed it in commit
+# 5b893f7d81 ("git-sh-setup.sh: remove 'say' function, change last users"),
+# first shipped in Git 2.38 (2022), because it was undocumented and unused
+# within git's own tree, breaking git-secrets as an unintended side effect
+# of a git upgrade rather than a git-secrets regression. On macOS the bare
+# `say` call resolves to /usr/bin/say (the text-to-speech binary) instead
+# and exits 0 by accident; on Linux (or on a new-enough git anywhere) there
+# is no such fallback, so it's "command not found" and `git secrets
+# --install -f` returns non-zero even though every hook file was already
+# written correctly. Define `say` as a no-op here and export it so the
+# exported function is visible in the git-secrets child process on both
+# platforms, making the real hook-writing exit status the one that reaches
+# the check below.
 say() { :; }
 export -f say
 

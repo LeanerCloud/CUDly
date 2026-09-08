@@ -54,10 +54,15 @@
 # and three of them (Azure connection string, PostgreSQL and MySQL DSN
 # detectors, verified empirically -- MongoDB's does not) match their own
 # registration line. Each entry below is anchored on the path, the line
-# number, AND the full added pattern, not just the "git secrets --add '"
-# command prefix -- a prefix-only anchor would whitelist a secret appended
-# to ANY registration line in this file, which is exactly the #1972 hole
-# this allowlist exists to close, reintroduced at the scale of one file.
+# number, AND the entire line as it appears in that file (including the
+# trailing comment), with a trailing $ -- not just the "git secrets --add
+# '" command prefix, and not just the added pattern with the anchor left
+# open at the end. A prefix-only anchor whitelists a secret appended to
+# ANY registration line in this file; an anchor missing the trailing $
+# whitelists a secret appended to the END of one of these three specific
+# lines. Both are the #1972 hole reintroduced at a smaller scale, and both
+# were caught only by a fixture exercising exactly that mutation -- add
+# one for any future entry in this block that isn't already covered.
 #
 # Each entry below also replaces one letter of its own trigger substring
 # with a single-character bracket expression, e.g. "Protoco[l]" for
@@ -68,15 +73,10 @@
 # suppress (confirmed empirically: without this, the .gitallowed
 # self-scan case below fails -- and note this comment must not spell any
 # of those spans out literally either, for the same reason).
-^scripts/setup-git-secrets\.sh:[0-9]+:git secrets --add 'DefaultEndpointsProtoco[l]=https'
-^scripts/setup-git-secrets\.sh:[0-9]+:git secrets --add 'postgre[s]://\[\^:\]\+:\[\^@\]\+@'
-^scripts/setup-git-secrets\.sh:[0-9]+:git secrets --add 'mysq[l]://\[\^:\]\+:\[\^@\]\+@'
+^scripts/setup-git-secrets\.sh:[0-9]+:git secrets --add 'DefaultEndpointsProtoco[l]=https'                      # Azure Connection String$
+^scripts/setup-git-secrets\.sh:[0-9]+:git secrets --add 'postgre[s]://\[\^:\]\+:\[\^@\]\+@'                           # PostgreSQL$
+^scripts/setup-git-secrets\.sh:[0-9]+:git secrets --add 'mysq[l]://\[\^:\]\+:\[\^@\]\+@'                              # MySQL$
 # Truncated PEM fixtures in cmd/configure_test.go: a PEM header followed by
 # "\n..." is never a key body. Written without "BEGIN" so this line itself
 # does not trip the PEM detector.
 PRIVATE KEY-----\\n(MIIEvQIBADANBg)?\.\.\.
-# Go format-string DSN (fmt.Sprintf with "%s" in the credential position,
-# e.g. building a connection string from parsed config). Not currently
-# present in the tree, but a recurring, benign Go idiom the DSN detectors
-# must not flag; scripts/test-git-secrets-allowlist.sh exercises it.
-postgres://%s:%s@
