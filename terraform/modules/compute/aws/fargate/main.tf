@@ -347,7 +347,12 @@ resource "aws_iam_role_policy" "ri_exchange" {
           "ec2:AcceptReservedInstancesExchangeQuote",
           "ec2:PurchaseReservedInstancesOffering",
           "ec2:DescribeInstanceTypeOfferings",
+          "ec2:DescribeInstanceTypes",
           "ec2:DescribeRegions",
+          # EC2 RI Marketplace listings (sell path)
+          "ec2:CreateReservedInstancesListing",
+          "ec2:DescribeReservedInstancesListings",
+          "ec2:CancelReservedInstancesListing",
           # RDS reserved instances
           "rds:DescribeReservedDBInstances",
           "rds:DescribeReservedDBInstancesOfferings",
@@ -361,15 +366,19 @@ resource "aws_iam_role_policy" "ri_exchange" {
           "es:DescribeReservedInstances",
           "es:DescribeReservedInstanceOfferings",
           "es:PurchaseReservedInstanceOffering",
+          "es:AddTags",
           # Redshift reserved nodes
           "redshift:DescribeReservedNodes",
           "redshift:DescribeReservedNodeOfferings",
           "redshift:PurchaseReservedNodeOffering",
+          "redshift:DescribeTags",
+          "redshift:CreateTags",
           # MemoryDB reserved nodes
           "memorydb:DescribeReservedNodes",
           "memorydb:DescribeReservedNodesOfferings",
           "memorydb:PurchaseReservedNodesOffering",
           # Cost Explorer
+          "ce:GetCostAndUsage",
           "ce:GetReservationUtilization",
           "ce:GetReservationPurchaseRecommendation",
           "ce:GetReservationCoverage",
@@ -383,6 +392,14 @@ resource "aws_iam_role_policy" "ri_exchange" {
           "savingsplans:CreateSavingsPlan",
         ]
         Resource = "*"
+      },
+      {
+        # Post-purchase tagging of EC2 RIs (tagReservedInstance in
+        # providers/aws/services/ec2/client.go). Unlike the purchase and
+        # describe actions above, this one supports resource-level scoping.
+        Effect   = "Allow"
+        Action   = ["ec2:CreateTags"]
+        Resource = "arn:aws:ec2:*:*:reserved-instances/*"
       }
     ]
   })
