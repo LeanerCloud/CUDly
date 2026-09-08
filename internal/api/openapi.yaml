@@ -467,7 +467,25 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '409':
-          $ref: '#/components/responses/Conflict'
+          description: >
+            One of two conflict families. Idempotency: an identical submit
+            already holds the idempotency claim, so THIS request was not
+            executed (see the shared Conflict response for how to interpret
+            that case). Stored-recommendation conflict (#1905): a
+            recommendation in the request does not match any row in the
+            current stored recommendation set (it was purchased, superseded,
+            or never existed), two requested recommendations resolve to the
+            same identity key, a matched stored row has no usable price to
+            derive the spend cap from, or a Savings Plan's requested count
+            does not equal the stored recommended count. Recovery differs by
+            cause: for the idempotency case, verify the earlier submit's
+            outcome with the provider before resubmitting; for a
+            stored-recommendation conflict, refresh the recommendation set
+            and resubmit with the current data.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /api/purchases/approve/{id}:
     parameters:
@@ -2622,8 +2640,28 @@ components:
           type: string
         engine:
           type: string
+        cloud_account_id:
+          type: string
+          nullable: true
+          description: >
+            The cloud account this recommendation belongs to. Matched
+            against the stored recommendation set together with provider,
+            service, region, resource_type, engine, term and payment
+            (#1905); an account-scoped recommendation cannot be resolved
+            without it. Null or omitted only for recommendations that are
+            not tied to a specific account.
         count:
           type: integer
+        recommended_count:
+          type: integer
+          description: >
+            The pre-scaling count originally recommended, before any
+            Capacity % scaling was applied to produce count. Optional:
+            omitted or 0 means "not supplied" and the capacity-consistency
+            check is skipped for this recommendation. For a Savings Plan,
+            the stored value of this field is also the count that count
+            must equal, since Savings Plans are priced by hourly commitment
+            rather than by count.
         term:
           type: integer
         payment:

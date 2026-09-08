@@ -2337,7 +2337,10 @@ func TestHandler_executePurchase_NegativeSavings(t *testing.T) {
 	mockAuth.grantAdminPurchaser()
 	// #1905: pricing passes (stored upfront/count are usable); the negative
 	// savings on the stored row still trips the validateAndTotalRecommendations
-	// guard the same as before.
+	// guard the same as before. The request itself carries a VALID savings
+	// value (50.0) so this only fails because the stored row's savings (-50)
+	// governs, not because the client's own number happens to be negative
+	// too (CodeRabbit finding on #2073).
 	expectStoredRecs(mockStore, config.RecommendationRecord{
 		Provider: "aws", Service: "ec2", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 100, Savings: -50,
 	})
@@ -2348,7 +2351,7 @@ func TestHandler_executePurchase_NegativeSavings(t *testing.T) {
 		Headers: map[string]string{
 			"Authorization": "Bearer admin-token",
 		},
-		Body: `{"recommendations": [{"id": "rec-1", "provider": "aws", "service": "ec2", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": 100.0, "savings": -50.0}]}`,
+		Body: `{"recommendations": [{"id": "rec-1", "provider": "aws", "service": "ec2", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": 100.0, "savings": 50.0}]}`,
 	}
 	result, err := handler.executePurchase(ctx, req)
 	assert.Error(t, err)
@@ -2405,7 +2408,11 @@ func TestHandler_executePurchase_ExceedsMaxAmount(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdminPurchaser()
-	// #1905: the $10M sanity guard now fires against the stored cost.
+	// #1905: the $10M sanity guard now fires against the stored cost. The
+	// request itself carries a VALID upfront_cost (100.0, well under the
+	// sanity limit) so this only fails because the stored row's cost
+	// ($15M) governs, not because the client's own number also exceeds
+	// the limit (CodeRabbit finding on #2073).
 	expectStoredRecs(mockStore, config.RecommendationRecord{
 		Provider: "aws", Service: "ec2", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 15_000_000, Savings: 50,
 	})
@@ -2416,7 +2423,7 @@ func TestHandler_executePurchase_ExceedsMaxAmount(t *testing.T) {
 		Headers: map[string]string{
 			"Authorization": "Bearer admin-token",
 		},
-		Body: `{"recommendations": [{"id": "rec-1", "provider": "aws", "service": "ec2", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": 15000000.0, "savings": 50.0}]}`,
+		Body: `{"recommendations": [{"id": "rec-1", "provider": "aws", "service": "ec2", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": 100.0, "savings": 50.0}]}`,
 	}
 	result, err := handler.executePurchase(ctx, req)
 	assert.Error(t, err)
