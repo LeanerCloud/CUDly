@@ -172,3 +172,35 @@ func TestAdminAndPurchaserCanExecutePurchases(t *testing.T) {
 	assert.True(t, ctx.HasPermission(ActionRetryAny, ResourcePurchases))
 	assert.True(t, ctx.HasPermission(ActionDelete, ResourceUsers))
 }
+
+func TestCoversCarvedOut(t *testing.T) {
+	cases := []struct {
+		perm Permission
+		want bool
+	}{
+		{Permission{Action: ActionExecute, Resource: ResourcePurchases}, true},
+		{Permission{Action: ActionApproveAny, Resource: ResourcePurchases}, true},
+		{Permission{Action: ActionRetryAny, Resource: ResourcePurchases}, true},
+		{Permission{Action: ActionExecute, Resource: ResourceRIExchange}, true},
+		{Permission{Action: ActionExecute, Resource: ResourceAll}, true},
+		{Permission{Action: ActionApproveAny, Resource: ResourceAll}, true},
+		{Permission{Action: ActionRetryAny, Resource: ResourceAll}, true},
+		// Not carved out: other verbs, even with the wildcard.
+		{Permission{Action: ActionAdmin, Resource: ResourceAll}, false},
+		{Permission{Action: ActionView, Resource: ResourceAll}, false},
+		{Permission{Action: ActionCancelAny, Resource: ResourceAll}, false},
+		{Permission{Action: ActionExecute, Resource: ResourcePlans}, false},
+		// Forms enforcement does not treat as wildcards, so neither does
+		// the carve-out: blank, prefix, and different case match nothing
+		// at check time (checkPermissionMatch compares exactly).
+		{Permission{Action: ActionExecute, Resource: ""}, false},
+		{Permission{Action: ActionExecute, Resource: "purchases*"}, false},
+		{Permission{Action: ActionExecute, Resource: "Purchases"}, false},
+		{Permission{Action: "Execute", Resource: ResourceAll}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.perm.Action+":"+tc.perm.Resource, func(t *testing.T) {
+			assert.Equal(t, tc.want, coversCarvedOut(tc.perm))
+		})
+	}
+}

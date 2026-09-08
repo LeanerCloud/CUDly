@@ -230,7 +230,7 @@ func TestGrantCeiling_ConstraintContainment(t *testing.T) {
 	ctx := context.Background()
 
 	const fixtureAction, fixtureResource = ActionView, ResourcePlans
-	require.False(t, adminCarvedOuts[[2]string{fixtureAction, fixtureResource}],
+	require.False(t, coversCarvedOut(Permission{Action: fixtureAction, Resource: fixtureResource}),
 		"fixture verb %s:%s must not be carved out, or the carve-out check "+
 			"refuses before this test's containment logic ever runs", fixtureAction, fixtureResource)
 
