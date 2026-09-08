@@ -556,4 +556,48 @@ describe('Issue #1904: fan-out modal skips incompatible buckets', () => {
 
     expect(api.executePurchase).not.toHaveBeenCalled();
   });
+  // Regression for the double-scale CodeRabbit found on #2071. loadedCellVariants
+  // pushes `rec` itself when the loaded list no longer holds its id, and rec is
+  // already scaled, so re-scaling halved count and cost a second time. Uses a
+  // count of 4 deliberately: at count 2 the second scale floors to zero units
+  // and pricedCellVariant returns null, so the row is left alone and the test
+  // would pass with or without the guard.
+  test('T11 the fallback row is not re-scaled when the loaded list is replaced during open', async () => {
+    const rec: LocalRecommendation = {
+      id: 'x-1-all', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',
+      region: 'us-east-1', resource_type: 'm5.xlarge', count: 4, term: 1,
+      payment: 'all-upfront', upfront_cost: 24000, monthly_cost: 0, savings: 1400,
+    };
+    (localStorage.getItem as jest.Mock).mockReturnValue(JSON.stringify({ capacity: 50 }));
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: [rec], regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue([rec]);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue([rec]);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['x-1-all']));
+    // A reload landing during openPurchaseModal's override fetch replaces the
+    // loaded list; the override matches the rec's own payment, so the seed
+    // path resolves to the fallback push, which is `rec` itself.
+    (api.listAccountServiceOverrides as jest.Mock).mockImplementation(async () => {
+      (state.getRecommendations as jest.Mock).mockReturnValue([]);
+      return [{ id: 'ovr-1', account_id: 'a1', provider: 'aws', service: 'ec2', payment: 'all-upfront' }];
+    });
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+
+    expect(getPurchaseModalRecommendations()[0]).toMatchObject({
+      id: 'x-1-all', count: 2, recommended_count: 4, upfront_cost: 12000,
+    });
+
+    (document.getElementById('execute-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+
+    expect(api.executePurchase).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({
+        id: 'x-1-all', count: 2, recommended_count: 4, upfront_cost: 12000,
+      })]),
+      50,
+      undefined,
+    );
+  });
 });

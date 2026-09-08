@@ -957,7 +957,13 @@ function loadedCellVariants(rec: LocalRecommendation): LocalRecommendation[] {
 // no such row was loaded or it scales to zero units at the modal's capacity.
 function pricedCellVariant(rec: LocalRecommendation, term: 1 | 3, payment: BulkPurchasePayment): LocalRecommendation | null {
   const v = loadedCellVariants(rec).find((c) => c.term === term && normalizeBulkPayment(c.payment) === payment);
-  return v ? scaleRecForCapacity(v, currentPurchaseCapacityPercent) : null;
+  if (!v) return null;
+  // `rec` reached the modal already scaled to currentPurchaseCapacityPercent:
+  // openPurchaseModal's only caller passes handleBulkPurchaseClick's scaled
+  // rows. Only the rows read from state.getRecommendations() are unscaled, so
+  // re-scaling the fallback push would halve count and cost a second time.
+  if (v === rec) return v;
+  return scaleRecForCapacity(v, currentPurchaseCapacityPercent);
 }
 
 // Distinct terms actually loaded for rec's cell, ascending. Used to build
