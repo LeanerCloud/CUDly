@@ -380,6 +380,90 @@ func TestProcessAutoExchange_UnparseablePaymentDue_FailsClosed(t *testing.T) {
 	}
 }
 
+// TestRunAutoExchange_MissingPaymentDue_RefusedBeforeAnyRecord is the
+// regression test for #1964 (audit A09-008): a quote that is valid but
+// carries no PaymentDue must be skipped before Execute is called or any
+// record is written, in both modes. Pre-fix, auto mode executed it and
+// manual mode issued an approval token for it, each recorded as costing "0".
+func TestRunAutoExchange_MissingPaymentDue_RefusedBeforeAnyRecord(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"auto", "manual"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			store := &mockExchangeStore{dailySpend: "0"}
+			client := &mockExchangeClient{
+				// PaymentDueRaw "", PaymentDueUSD nil, PaymentDueUSDStr "":
+				// the AWS response carried no PaymentDue at all.
+				quoteResult: &ExchangeQuoteSummary{
+					IsValidExchange: true,
+					CurrencyCode:    "USD",
+				},
+				executeResult: "exch-must-not-happen",
+			}
+			params := defaultParams(store, client)
+			params.Config.Mode = mode
+			params.Config.MaxPaymentPerExchangeUSD = 500.0
+
+			result, err := RunAutoExchange(context.Background(), params)
+			require.NoError(t, err)
+
+			assert.Zero(t, client.executeCalls, "Execute must not be called for a quote with no PaymentDue")
+			assert.Empty(t, store.savedRecords, "no record of any status may be written for an unpriced quote")
+			assert.Empty(t, result.Completed)
+			assert.Empty(t, result.Pending)
+			assert.Empty(t, result.Failed)
+			require.Len(t, result.Skipped, 1)
+			assert.Equal(t, "ri-001", result.Skipped[0].SourceRIID)
+			assert.Contains(t, result.Skipped[0].Reason, "no PaymentDue")
+		})
+	}
+}
+
+// TestProcessAutoExchange_FreshQuoteWithoutAmount_LedgerKeepsInitialQuote
+// (#1964): when the fresh Execute quote carries no amount, the completed
+// ledger row must keep the initial quoted amount, never "0", so the daily
+// spend total is not under-counted.
+func TestProcessAutoExchange_FreshQuoteWithoutAmount_LedgerKeepsInitialQuote(t *testing.T) {
+	t.Parallel()
+
+	preQuoteDue, _ := ParseDecimalRat("30.000000")
+	store := &mockExchangeStore{dailySpend: "0"}
+	client := &mockExchangeClient{
+		quoteResult: &ExchangeQuoteSummary{
+			IsValidExchange:  true,
+			PaymentDueRaw:    "30.000000",
+			PaymentDueUSD:    preQuoteDue,
+			PaymentDueUSDStr: "30.000000",
+			CurrencyCode:     "USD",
+		},
+		executeResult: "exch-no-fresh-amount",
+		// A client that skipped Execute's own re-quote check and returned
+		// a fresh quote without an amount.
+		executeQuoteResult: &ExchangeQuoteSummary{IsValidExchange: true, CurrencyCode: "USD"},
+	}
+	params := defaultParams(store, client)
+	params.Config.Mode = "auto"
+
+	rec := ReshapeRecommendation{
+		SourceRIID:         "ri-001",
+		SourceInstanceType: "m5.xlarge",
+		TargetInstanceType: "m5.large",
+		SourceCount:        1,
+		TargetCount:        2,
+		UtilizationPercent: 50.0,
+	}
+	perExchangeCap := new(big.Rat).SetFloat64(params.Config.MaxPaymentPerExchangeUSD)
+
+	outcome, halt := processAutoExchange(context.Background(), params, rec, "offering-123", "30.000000", perExchangeCap)
+
+	require.Empty(t, outcome.Error)
+	assert.False(t, halt)
+	require.Len(t, store.savedRecords, 1)
+	assert.Equal(t, "completed", store.savedRecords[0].Status)
+	assert.Equal(t, "30.000000", store.savedRecords[0].PaymentDue,
+		"ledger must keep the initial quoted amount when the fresh quote carries none, not \"0\"")
+}
+
 func TestRunAutoExchange_AutoMode_ExecutionFails(t *testing.T) {
 	t.Parallel()
 	store := &mockExchangeStore{dailySpend: "0"}

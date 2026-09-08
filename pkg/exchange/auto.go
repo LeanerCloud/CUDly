@@ -237,13 +237,7 @@ func processRecommendation(ctx context.Context, params RunAutoExchangeParams, re
 		return false
 	}
 
-	// A nil PaymentDueUSD documents a zero-cost exchange (no payment due),
-	// distinct from a parse failure: processAutoExchange fails closed on any
-	// string that does not parse as a decimal.
-	paymentDueStr := "0"
-	if quote.PaymentDueUSD != nil {
-		paymentDueStr = quote.PaymentDueUSD.FloatString(6)
-	}
+	paymentDueStr := quote.PaymentDueUSD.FloatString(6)
 
 	if params.Config.Mode == "manual" {
 		outcome := processManualExchange(ctx, params, rec, offeringID, paymentDueStr)
@@ -289,8 +283,9 @@ func resolveOffering(ctx context.Context, params RunAutoExchangeParams, rec Resh
 	return offeringID, nil
 }
 
-// getValidatedQuote fetches and validates an exchange quote.
-// Returns the quote on success, or a SkippedRecommendation on failure.
+// getValidatedQuote fetches and validates an exchange quote. The returned
+// quote is valid, carries a PaymentDueUSD, and is within the per-exchange cap.
+// Returns a SkippedRecommendation otherwise.
 func getValidatedQuote(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID string, perExchangeCap *big.Rat) (*ExchangeQuoteSummary, *SkippedRecommendation) {
 	quote, err := params.ExchangeClient.GetQuote(ctx, ExchangeQuoteRequest{
 		Region:           params.Region,
@@ -315,7 +310,15 @@ func getValidatedQuote(ctx context.Context, params RunAutoExchangeParams, rec Re
 		}
 	}
 
-	if quote.PaymentDueUSD != nil && quote.PaymentDueUSD.Cmp(perExchangeCap) > 0 {
+	if quote.PaymentDueUSD == nil {
+		return nil, &SkippedRecommendation{
+			SourceRIID:         rec.SourceRIID,
+			SourceInstanceType: rec.SourceInstanceType,
+			Reason:             "quote reported no PaymentDue; cannot enforce the per-exchange cap against an unknown amount",
+		}
+	}
+
+	if quote.PaymentDueUSD.Cmp(perExchangeCap) > 0 {
 		return nil, &SkippedRecommendation{
 			SourceRIID:         rec.SourceRIID,
 			SourceInstanceType: rec.SourceInstanceType,
@@ -431,19 +434,15 @@ func chooseEffectiveCap(dailyCap, dailySpent, perExchangeCap *big.Rat) *big.Rat 
 	return perExchangeCap
 }
 
-// acceptedAmountFromQuote returns the payment amount confirmed by a fresh
-// Execute quote, or fallback when freshQ is nil or carries an empty
-// PaymentDueUSDStr. Zero-cost exchanges (PaymentDueRaw empty, AWS returned
-// nil) are recorded as "0" so GetRIExchangeDailySpend's SUM is not distorted
-// by a NULL payment_due in the DB (H3 fix).
+// acceptedAmountFromQuote returns the payment amount confirmed by the fresh
+// Execute quote. Execute refuses a re-quote with no PaymentDue, so a fresh
+// quote without an amount can only come from a client that skipped that
+// check; the initial quoted amount is then the honest ledger value (H3 fix).
 func acceptedAmountFromQuote(freshQ *ExchangeQuoteSummary, fallback string) string {
-	if freshQ == nil {
-		return fallback
-	}
-	if freshQ.PaymentDueUSDStr != "" {
+	if freshQ != nil && freshQ.PaymentDueUSDStr != "" {
 		return freshQ.PaymentDueUSDStr
 	}
-	return "0"
+	return fallback
 }
 
 // saveLedgerRecord saves a completed exchange record with retry, returning a
@@ -511,11 +510,10 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 		return outcome, false
 	}
 
-	// paymentDueStr is always a decimal here: processRecommendation sets it to
-	// "0" when the quote has no PaymentDueUSD (the documented nil-means-zero
-	// case) and to FloatString(6) otherwise. A parse failure therefore means a
-	// caller passed garbage; fail closed instead of counting $0 toward the
-	// daily cap, mirroring the dailySpent branch above.
+	// paymentDueStr is always FloatString(6) of an amount getValidatedQuote
+	// confirmed the quote carries. A parse failure therefore means a caller
+	// passed garbage; fail closed instead of counting $0 toward the daily cap,
+	// mirroring the dailySpent branch above.
 	paymentDue, err := ParseDecimalRat(paymentDueStr)
 	if err != nil {
 		logging.Errorf("failed to parse payment due %q for %s: %v", paymentDueStr, rec.SourceRIID, err)
