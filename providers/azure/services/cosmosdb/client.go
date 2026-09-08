@@ -567,7 +567,7 @@ func (c *CosmosDBClient) getCosmosPricing(ctx context.Context, sku, region strin
 }
 
 // fetchAzurePricing fetches pricing data from Azure Retail Prices API,
-// following NextPageLink until exhausted or the shared safety cap fires.
+// following NextPageLink until exhausted; hitting the shared page cap is an error.
 // Delegates pagination to pricing.FetchAll.
 func (c *CosmosDBClient) fetchAzurePricing(ctx context.Context, filter string) (*AzureRetailPrice, error) {
 	baseURL := "https://prices.azure.com/api/retail/prices"

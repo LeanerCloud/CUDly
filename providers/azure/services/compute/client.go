@@ -728,8 +728,8 @@ func (c *ComputeClient) getVMPricing(ctx context.Context, vmSize, region string,
 }
 
 // fetchAzurePricing fetches pricing data from Azure Retail Prices API,
-// following NextPageLink until exhausted (or the shared safety cap is
-// hit). Delegates the pagination walk to pricing.FetchAll so every
+// following NextPageLink until exhausted (hitting the shared page cap
+// is an error). Delegates the pagination walk to pricing.FetchAll so every
 // service client shares the same per-page timeout, seen-URL guard, and
 // max-pages cap — see providers/azure/internal/pricing for those
 // invariants.

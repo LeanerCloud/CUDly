@@ -586,7 +586,7 @@ func (c *DatabaseClient) getSQLPricing(ctx context.Context, sku, region string, 
 }
 
 // fetchAzurePricing fetches pricing data from Azure Retail Prices API,
-// following NextPageLink until exhausted or the shared safety cap fires.
+// following NextPageLink until exhausted; hitting the shared page cap is an error.
 // Delegates pagination to pricing.FetchAll — see
 // providers/azure/internal/pricing for the per-page timeout, max-pages
 // cap, and seen-URL guard invariants.
