@@ -5,6 +5,7 @@ package exchange
 //   - M4: over-cap re-quote aborts before accept
 //   - M3: empty region returns an error (no us-east-1 default)
 //   - L2: Count <= 0 returns an error (no silent rewrite to 1)
+//   - #1964 / A09-004: a quote with no PaymentDue refuses before accept; an explicit zero proceeds
 
 import (
 	"context"
@@ -125,6 +126,122 @@ func TestExecute_ReQuoteWithinCapProceedsToAccept(t *testing.T) {
 	}
 	if f.acceptInput == nil {
 		t.Fatal("Accept was not called despite both quotes being within cap")
+	}
+}
+
+// seqQuoteOutNoPayment models a valid quote whose PaymentDue field is absent.
+func seqQuoteOutNoPayment() *ec2.GetReservedInstancesExchangeQuoteOutput {
+	return &ec2.GetReservedInstancesExchangeQuoteOutput{IsValidExchange: sdkaws.Bool(true)}
+}
+
+// TestExecute_MissingPaymentDueOnInitialQuote_RefusesBeforeAccept (#1964,
+// A09-004): a valid initial quote with no PaymentDue must be refused; Accept
+// must not be called and the re-quote must not even be attempted.
+func TestExecute_MissingPaymentDueOnInitialQuote_RefusesBeforeAccept(t *testing.T) {
+	t.Parallel()
+
+	f := &sequentialFakeEC2{
+		quoteOutputs: []*ec2.GetReservedInstancesExchangeQuoteOutput{seqQuoteOutNoPayment()},
+		quoteErrors:  []error{nil},
+		acceptOutput: &ec2.AcceptReservedInstancesExchangeQuoteOutput{ExchangeId: sdkaws.String("should-not-be-called")},
+	}
+	c := NewExchangeClientFromAPI(f)
+
+	_, _, err := c.Execute(context.Background(), ExchangeExecuteRequest{
+		ReservedIDs:      []string{"ri-1"},
+		TargetOfferingID: "off-A",
+		TargetCount:      1,
+		MaxPaymentDueUSD: new(big.Rat).SetInt64(50),
+	})
+
+	if err == nil {
+		t.Fatal("expected error when the initial quote carries no PaymentDue, got nil")
+	}
+	if !strings.Contains(err.Error(), "no PaymentDue") {
+		t.Errorf("error should name the missing PaymentDue; got: %v", err)
+	}
+	if f.acceptInput != nil {
+		t.Fatalf("Accept was called despite the quote carrying no PaymentDue; accept input: %+v", f.acceptInput)
+	}
+	if f.quoteCall != 1 {
+		t.Errorf("expected exactly one quote call before refusal, got %d", f.quoteCall)
+	}
+}
+
+// TestExecute_MissingPaymentDueOnReQuote_RefusesBeforeAccept (#1964,
+// A09-004): the initial quote is priced and within cap, but the pre-accept
+// re-quote carries no PaymentDue. The exchange must abort before Accept.
+func TestExecute_MissingPaymentDueOnReQuote_RefusesBeforeAccept(t *testing.T) {
+	t.Parallel()
+
+	f := &sequentialFakeEC2{
+		quoteOutputs: []*ec2.GetReservedInstancesExchangeQuoteOutput{
+			seqQuoteOut("40.00"),
+			seqQuoteOutNoPayment(),
+		},
+		quoteErrors:  []error{nil, nil},
+		acceptOutput: &ec2.AcceptReservedInstancesExchangeQuoteOutput{ExchangeId: sdkaws.String("should-not-be-called")},
+	}
+	c := NewExchangeClientFromAPI(f)
+
+	_, _, err := c.Execute(context.Background(), ExchangeExecuteRequest{
+		ReservedIDs:      []string{"ri-1"},
+		TargetOfferingID: "off-A",
+		TargetCount:      1,
+		MaxPaymentDueUSD: new(big.Rat).SetInt64(50),
+	})
+
+	if err == nil {
+		t.Fatal("expected error when the re-quote carries no PaymentDue, got nil")
+	}
+	if !strings.Contains(err.Error(), "no PaymentDue") {
+		t.Errorf("error should name the missing PaymentDue; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "accept time") {
+		t.Errorf("error should say the refusal happened at accept time; got: %v", err)
+	}
+	if f.acceptInput != nil {
+		t.Fatalf("Accept was called despite the re-quote carrying no PaymentDue; accept input: %+v", f.acceptInput)
+	}
+	if f.quoteCall != 2 {
+		t.Errorf("expected two quote calls (initial + re-quote) before refusal, got %d", f.quoteCall)
+	}
+}
+
+// TestExecute_ZeroPaymentDueProceedsToAccept is the positive control for
+// #1964: an explicit zero true-up cost is a real amount within any cap and
+// must not be confused with an absent PaymentDue.
+func TestExecute_ZeroPaymentDueProceedsToAccept(t *testing.T) {
+	t.Parallel()
+
+	f := &sequentialFakeEC2{
+		quoteOutputs: []*ec2.GetReservedInstancesExchangeQuoteOutput{
+			seqQuoteOut("0.000000"),
+			seqQuoteOut("0.000000"),
+		},
+		quoteErrors:  []error{nil, nil},
+		acceptOutput: &ec2.AcceptReservedInstancesExchangeQuoteOutput{ExchangeId: sdkaws.String("exch-zero")},
+	}
+	c := NewExchangeClientFromAPI(f)
+
+	exchangeID, freshQ, err := c.Execute(context.Background(), ExchangeExecuteRequest{
+		ReservedIDs:      []string{"ri-1"},
+		TargetOfferingID: "off-A",
+		TargetCount:      1,
+		MaxPaymentDueUSD: new(big.Rat).SetInt64(50),
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error for a zero-cost exchange: %v", err)
+	}
+	if exchangeID != "exch-zero" {
+		t.Fatalf("expected exchange ID 'exch-zero', got %q", exchangeID)
+	}
+	if f.acceptInput == nil {
+		t.Fatal("Accept was not called for a zero-cost exchange")
+	}
+	if freshQ == nil || freshQ.PaymentDueUSDStr != "0.000000" {
+		t.Fatalf("fresh quote must carry the explicit zero amount, got %+v", freshQ)
 	}
 }
 

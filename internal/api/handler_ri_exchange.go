@@ -2387,17 +2387,18 @@ func handlerChooseEffectiveCap(dailyCap, dailySpent, perExchangeCap *big.Rat) *b
 
 // handlerAcceptedAmount extracts the confirmed payment amount from a fresh
 // Execute quote, falling back to fallback when freshQ is nil or empty (H3 fix).
+//
+// The empty case no longer means "zero-cost exchange": since #1964 an absent
+// PaymentDue is refused by checkInitialQuote and checkReQuote before Accept,
+// and a genuine zero arrives as an explicit "0.000000". Execute therefore
+// cannot return successfully with an empty amount, so this mirrors
+// exchange.acceptedAmountFromQuote and returns the caller's fallback rather
+// than fabricating "0".
 func handlerAcceptedAmount(freshQ *exchange.ExchangeQuoteSummary, fallback string) string {
-	if freshQ == nil {
-		return fallback
-	}
-	if freshQ.PaymentDueUSDStr != "" {
+	if freshQ != nil && freshQ.PaymentDueUSDStr != "" {
 		return freshQ.PaymentDueUSDStr
 	}
-	// Zero-cost exchange: PaymentDueRaw was empty (AWS returned nil) so
-	// PaymentDueUSDStr is also empty. Use "0" to avoid a NULL payment_due in
-	// the DB that would silently distort GetRIExchangeDailySpend's SUM.
-	return "0"
+	return fallback
 }
 
 // checkCapsAndComputeHeadroom validates the spending-cap configuration, runs the

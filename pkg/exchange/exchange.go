@@ -299,35 +299,46 @@ func ExecuteExchange(ctx context.Context, req ExchangeExecuteRequest) (exchangeI
 	return executeWithAPI(ctx, ec2.NewFromConfig(cfg), req)
 }
 
-// resolvePaymentDue returns the quote's PaymentDueUSD, treating nil as zero.
-// AWS may omit PaymentDue for zero-cost exchanges (e.g., same-RI-type conversions).
-func resolvePaymentDue(q *ExchangeQuoteSummary) *big.Rat {
-	if q.PaymentDueUSD != nil {
-		return q.PaymentDueUSD
+// requirePaymentDue returns the quote's PaymentDueUSD, refusing a quote that
+// carries none. AWS reports the true-up cost as a decimal that is zero or
+// more, so a zero-cost exchange parses to a non-nil zero; a nil means the
+// response had no amount at all, and a spend cap cannot be enforced against
+// an unknown amount.
+func requirePaymentDue(q *ExchangeQuoteSummary) (*big.Rat, error) {
+	if q.PaymentDueUSD == nil {
+		return nil, fmt.Errorf("quote reported no PaymentDue; refusing to enforce the spend cap against an unknown amount")
 	}
-	return new(big.Rat)
+	return q.PaymentDueUSD, nil
 }
 
-// checkInitialQuote returns an error if the quote is invalid or exceeds the spend cap.
+// checkInitialQuote returns an error if the quote is invalid, carries no
+// payment amount, or exceeds the spend cap.
 func checkInitialQuote(q *ExchangeQuoteSummary, maxPayment *big.Rat) error {
 	if !q.IsValidExchange {
 		return fmt.Errorf("exchange is not valid: %s", q.ValidationFailureReason)
 	}
-	paymentDue := resolvePaymentDue(q)
+	paymentDue, err := requirePaymentDue(q)
+	if err != nil {
+		return err
+	}
 	if paymentDue.Cmp(maxPayment) == 1 {
 		return fmt.Errorf("paymentDue %s exceeds max %s", paymentDue.FloatString(2), maxPayment.FloatString(2))
 	}
 	return nil
 }
 
-// checkReQuote returns an error if the pre-accept re-quote is invalid or exceeds the cap.
-// It is called immediately before AcceptReservedInstancesExchangeQuote to narrow the
-// race window between pricing changes.
+// checkReQuote returns an error if the pre-accept re-quote is invalid, carries
+// no payment amount, or exceeds the cap. It is called immediately before
+// AcceptReservedInstancesExchangeQuote to narrow the race window between
+// pricing changes.
 func checkReQuote(q *ExchangeQuoteSummary, maxPayment *big.Rat) error {
 	if !q.IsValidExchange {
 		return fmt.Errorf("exchange no longer valid at accept time: %s", q.ValidationFailureReason)
 	}
-	paymentDue := resolvePaymentDue(q)
+	paymentDue, err := requirePaymentDue(q)
+	if err != nil {
+		return fmt.Errorf("aborting exchange at accept time: %w", err)
+	}
 	if paymentDue.Cmp(maxPayment) == 1 {
 		return fmt.Errorf(
 			"aborting exchange: re-quoted payment %s USD exceeds cap %s USD (pricing changed between initial quote and accept)",
