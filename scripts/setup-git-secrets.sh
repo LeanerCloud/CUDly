@@ -53,7 +53,6 @@ git secrets --add '[^A-Za-z0-9/+=]{40}[^A-Za-z0-9/+=]'                 # AWS Sec
 git secrets --add 'aws(.{0,20})?['\''"][0-9a-zA-Z/+]{40}['\''"]'       # AWS Credentials
 
 # GCP patterns
-git secrets --add 'type.*service_account'                               # GCP Service Account JSON
 git secrets --add 'AIza[0-9A-Za-z_-]{35}'                              # GCP API Key
 
 # Azure patterns
@@ -63,46 +62,17 @@ git secrets --add 'DefaultEndpointsProtocol=https'                      # Azure 
 git secrets --add 'password\s*[=:]\s*['\''"][^'\''"]{8,}'             # Password with quoted value
 git secrets --add 'api[_-]?key\s*[=:]\s*['\''"][^'\''"]{8,}'         # API key with quoted value
 git secrets --add 'secret[_-]?key\s*[=:]\s*['\''"][^'\''"]{8,}'      # Secret key with quoted value
-git secrets --add '-----BEGIN (RSA|DSA|EC|OPENSSH) PRIVATE KEY-----'  # PEM private keys
+git secrets --add 'BEGIN[[:space:]]((RSA|DSA|EC|OPENSSH|ENCRYPTED)[[:space:]])?PRIVATE[[:space:]]KEY-----'  # PEM private keys
 
 # Database connection strings
 git secrets --add 'postgres://[^:]+:[^@]+@'                           # PostgreSQL
 git secrets --add 'mysql://[^:]+:[^@]+@'                              # MySQL
 git secrets --add 'mongodb(\+srv)?://[^:]+:[^@]+@'                    # MongoDB
 
-# Add allowed patterns (things that look like secrets but aren't)
-echo ""
-echo "Adding allowed patterns (false positives)..."
-
-# Terraform variables and outputs
-git secrets --add --allowed 'var\.'
-git secrets --add --allowed 'local\.'
-git secrets --add --allowed 'output\.'
-git secrets --add --allowed 'data\.'
-
-# Test files
-git secrets --add --allowed '_test\.go'
-git secrets --add --allowed 'testdata/'
-git secrets --add --allowed 'test_password'
-git secrets --add --allowed 'test_secret'
-
-# Documentation and examples
-git secrets --add --allowed 'example\.com'
-git secrets --add --allowed 'YOUR_'
-git secrets --add --allowed '<your-'
-git secrets --add --allowed 'placeholder'
-
-# Go code patterns (function signatures, struct fields, variable names)
-git secrets --add --allowed 'func.*password'
-git secrets --add --allowed 'func.*secret'
-git secrets --add --allowed 'func.*token'
-git secrets --add --allowed 'Password\s+string'
-git secrets --add --allowed 'Secret\s+string'
-git secrets --add --allowed 'Token\s+string'
-
-# Terraform resource references
-git secrets --add --allowed 'resource\s'
-git secrets --add --allowed 'module\.'
+# Allowed patterns live in .gitallowed (versioned, applied by every scan, including CI).
+# They are matched against the whole "path:line:content" scanner output line, so an entry
+# must describe the benign literal or anchor on the path; a bare keyword whitelists
+# every line that contains it (#1972).
 
 echo -e "${GREEN}✓ Secret patterns registered${NC}"
 
