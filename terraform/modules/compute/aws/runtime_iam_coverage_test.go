@@ -3,7 +3,14 @@
 // check-aws-iam-parity.sh cannot see this class because it only compares the
 // three runtime flavors with each other, so a gap present in all three passes.
 // This derives the called-action set straight from the SDK request structs
-// under providers/aws and internal and asserts each flavor grants every one.
+// under the scanned roots and asserts each flavor grants every one.
+//
+// Two limits are deliberate. The guard is one-way: it catches an action the
+// code calls that a flavor does not grant, never a grant no code uses. Dead
+// grants are #1322's subject. And it covers only the reservation-related
+// service prefixes below, matching check-aws-iam-parity.sh's scope; platform
+// namespaces (sns, ses, secretsmanager, lambda, kms, logs) are out of reach
+// and have known gaps of their own, tracked on #1204.
 package aws_test
 
 import (
@@ -52,13 +59,24 @@ var requiredDerivedActions = []string{
 	"es:AddTags",
 }
 
-// scanRoots are walked, relative to the repo root, for SDK call sites. Not
-// cmd/: the CLI runs under operator credentials, a different identity than
-// the runtime role this test guards (organizations:DescribeAccount is
-// CLI-only for exactly this reason, per #1322).
+// scanRoots are walked, relative to the repo root, for SDK call sites.
+//
+// pkg/ is included because internal/ imports it at runtime: pkg/exchange
+// builds the RI exchange quote and accept inputs, reached from
+// internal/api/handler_ri_exchange.go and internal/server/ladder_write.go.
+// Being a separate Go module does not matter here; the walker reads files.
+//
+// cmd/ is excluded because the CLI runs under operator credentials, a
+// different identity than the runtime role this test guards
+// (organizations:DescribeAccount is CLI-only for exactly this reason, per
+// #1322). Note cmd/server IS a runtime entry point: the exclusion is safe
+// only while cmd/server and cmd/cudly-mcp import no SDK service package
+// directly, which holds today. If either starts issuing its own SDK calls,
+// add it here.
 var scanRoots = []string{
 	filepath.Join("providers", "aws"),
 	"internal",
+	"pkg",
 }
 
 // runtimeIAMFiles are the IaC files that grant the runtime role's IAM
