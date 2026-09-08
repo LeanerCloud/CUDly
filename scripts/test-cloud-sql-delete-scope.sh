@@ -410,9 +410,13 @@ assert_nothing_swallowed "$DELETE_SCRIPT"
 # `terraform` and `gcloud` are stubbed on PATH, and every invocation of either
 # is logged to the SAME file, so the ordering assertion (state rm after
 # delete) can be made from one call log rather than two that would have to be
-# interleaved by wall-clock time. The gcloud stub exits 99 if any argument
-# starts with `--filter`, so a filter reintroduced into the listing call fails
-# as BEHAVIOUR, not only as text.
+# interleaved by wall-clock time. The gcloud stub's `list` branch is an
+# ALLOWLIST of the exact argument vector the script is supposed to send, not a
+# denylist of `--filter`: a denylist of one forbidden flag still lets
+# `--limit=1`, `--page-size`, `--sort-by`, `--uri` or `--flags-file` through,
+# and real gcloud 456 honours every one of those the same way `head -1` used
+# to, so a filter OR any of those reintroduced into the listing call fails as
+# BEHAVIOUR, not only as text.
 STUB_DIR="$(mktemp -d)"
 STUB_STATE="$(mktemp -d)"
 CALLS="$(mktemp)"
@@ -439,14 +443,17 @@ cat >"${STUB_DIR}/gcloud" <<'EOF'
 echo "gcloud $*" >>"$CALLS"
 case "$3" in
   list)
-    for arg in "$@"; do
-      case "$arg" in
-        --filter*)
-          echo "stub: --filter is not the guard" >&2
-          exit 99
-          ;;
-      esac
-    done
+    # Allowlist, not a denylist: a denylist of `--filter` alone still lets
+    # `--limit=1`, `--page-size`, `--sort-by`, `--uri` or `--flags-file`
+    # through, and real gcloud 456 honours every one of those, so any of them
+    # walks straight past the selector the same way `head -1` used to.
+    # Require the exact argument vector this script is supposed to send and
+    # nothing else.
+    if [[ "$#" -ne 5 || "$1" != "sql" || "$2" != "instances" || "$3" != "list" || \
+          "$4" != --project=* || "$5" != "--format=value(name)" ]]; then
+      echo "stub: unexpected 'gcloud sql instances list' invocation: $*" >&2
+      exit 99
+    fi
     [[ "${LIST_FAILS:-0}" == "1" ]] && { echo "list failed" >&2; exit 255; }
     printf '%s\n' "$LISTING"
     ;;
@@ -499,6 +506,19 @@ export TF_OUTPUT_JSON='{}'
 run_script "$STUB_STATE" "$PROJECT_OK"
 assert_behaviour "behaviour: a state with no outputs exits 0 without calling gcloud or state rm" \
   "$([[ "$STUB_EXIT" -eq 0 && "$(count_calls '^gcloud')" -eq 0 && "$(count_calls 'state rm')" -eq 0 ]] && echo 0 || echo 1)" \
+  "exit ${STUB_EXIT}, calls: $(cat "$CALLS")"
+
+# `jq -r 'length' <<<"$OUTPUTS_JSON"` fails on non-JSON, and inlined into
+# `if [[ "$(jq ...)" -eq 0 ]]` a failure there substitutes an empty string,
+# which `-eq 0` accepts as true -- a broken `terraform output` (a warning
+# printed to stdout ahead of the JSON, say) would then read as "no outputs,
+# already destroyed" and exit 0 without ever reaching gcloud. Asserted as
+# behaviour: a `terraform output -json` that prints garbage must fail the
+# step loudly, not silently skip the deletion.
+export TF_OUTPUT_JSON='not valid json'
+run_script "$STUB_STATE" "$PROJECT_OK"
+assert_behaviour "behaviour: terraform output printing non-JSON fails loudly without calling gcloud" \
+  "$([[ "$STUB_EXIT" -ne 0 && "$(count_calls '^gcloud')" -eq 0 ]] && echo 0 || echo 1)" \
   "exit ${STUB_EXIT}, calls: $(cat "$CALLS")"
 
 # A state that predates the output. Distinct from the empty case below,
