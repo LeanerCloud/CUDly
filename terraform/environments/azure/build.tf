@@ -20,8 +20,9 @@ module "build" {
   source_path = "${path.root}/../../.." # Root of the project (where Dockerfile is)
   # platform not set — auto-detected from builder host (Container Apps and AKS support arm64 and amd64)
 
-  # Registry login for ACR using admin credentials
-  registry_login_command = "echo '${nonsensitive(azurerm_container_registry.main.admin_password)}' | docker login ${azurerm_container_registry.main.login_server} -u ${azurerm_container_registry.main.admin_username} --password-stdin"
+  # Registry login with the caller's Entra identity (deploy SP in CI, az login
+  # locally); the principal needs AcrPush on the registry.
+  registry_login_command = "az acr login --name ${azurerm_container_registry.main.name}"
 
   # Build options
   skip_docker_build  = false

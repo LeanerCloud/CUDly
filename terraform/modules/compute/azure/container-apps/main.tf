@@ -85,14 +85,10 @@ resource "azurerm_container_app" "main" {
     identity_ids = [azurerm_user_assigned_identity.container_app.id]
   }
 
-  # Registry authentication
-  dynamic "registry" {
-    for_each = var.registry_server != "" ? [1] : []
-    content {
-      server               = var.registry_server
-      username             = var.registry_username
-      password_secret_name = "registry-password"
-    }
+  # Registry authentication: pull with the user-assigned identity (AcrPull below)
+  registry {
+    server   = var.registry_server
+    identity = azurerm_user_assigned_identity.container_app.id
   }
 
   # Container configuration
@@ -220,19 +216,15 @@ resource "azurerm_container_app" "main" {
     }
   }
 
-  # Registry password secret (for ACR admin auth)
-  dynamic "secret" {
-    for_each = var.registry_server != "" ? [1] : []
-    content {
-      name  = "registry-password"
-      value = var.registry_password
-    }
-  }
-
   tags = merge(var.tags, {
     managed_by   = "terraform"
     architecture = "x86_64"
   })
+
+  # Ordering only, not a propagation wait: the first revision's image pull
+  # needs AcrPull to exist. If RBAC has not propagated yet the revision fails
+  # to provision and the apply errors; re-running the apply recovers.
+  depends_on = [azurerm_role_assignment.acr_pull]
 }
 
 # ==============================================
@@ -252,6 +244,13 @@ locals {
   # plan time. scope is ForceNew on azurerm_role_assignment, so it must match the
   # casing Azure returns in resource IDs; the caller normalises for that.
   subscription_resource_id = "/subscriptions/${var.subscription_id}"
+}
+
+# AcrPull: lets the container app's identity pull the image from the registry.
+resource "azurerm_role_assignment" "acr_pull" {
+  scope                = var.container_registry_id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_user_assigned_identity.container_app.principal_id
 }
 
 # Cost Management Reader: grants access to Azure Consumption API (reservation

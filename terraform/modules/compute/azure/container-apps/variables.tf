@@ -192,20 +192,11 @@ variable "custom_domains" {
 variable "registry_server" {
   description = "Container registry server URL (e.g. myacr.azurecr.io)"
   type        = string
-  default     = ""
 }
 
-variable "registry_username" {
-  description = "Container registry username (for admin auth)"
+variable "container_registry_id" {
+  description = "Container registry ARM resource ID, the scope of the AcrPull grant to the app's managed identity"
   type        = string
-  default     = ""
-}
-
-variable "registry_password" {
-  description = "Container registry password (for admin auth)"
-  type        = string
-  default     = ""
-  sensitive   = true
 }
 
 variable "tags" {
