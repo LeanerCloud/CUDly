@@ -4431,11 +4431,9 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
 
   const status = document.createElement('p');
   const renderStatus = (): void => {
-    // For mixed-SP buckets check compatibility per rec — every rec must
-    // be supported. For non-SP buckets every rec shares b.service so a
-    // single check is equivalent. The shared helper keeps this in sync
-    // with the same check at handleBulkPurchaseClick.
-    const compat = isBucketPaymentCompatible(b.recs, b.payment);
+    // Same predicate the submit filter and the header totals use, so the
+    // "will be skipped" label cannot disagree with what actually submits.
+    const compat = isSubmittableBucket(b);
     status.className = compat ? 'fanout-bucket-ok' : 'fanout-bucket-error';
     status.textContent = compat
       ? `${b.capacityPercent}% capacity · ${b.term}yr · ${b.payment}`
