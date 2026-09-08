@@ -329,7 +329,7 @@ func (s *Service) HasPermission(ctx context.Context, userID, action, resource st
 func permissionsAllow(permissions []Permission, action, resource string, constraints *PermissionConstraints) bool {
 	for _, perm := range permissions {
 		if checkAdminPermission(perm) {
-			if adminCarvedOuts[[2]string{action, resource}] {
+			if coversCarvedOut(Permission{Action: action, Resource: resource}) {
 				continue
 			}
 			return true

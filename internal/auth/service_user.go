@@ -548,7 +548,7 @@ func (s *Service) guardSelfCarvedOutGrant(ctx context.Context, held []Permission
 // applies: an actor holding only admin:* does not "already hold" these.
 func (s *Service) firstUnheldCarvedOut(group *Group, held []Permission) *Permission {
 	for i, perm := range group.Permissions {
-		if !adminCarvedOuts[[2]string{perm.Action, perm.Resource}] {
+		if !coversCarvedOut(perm) {
 			continue
 		}
 		if permissionsAllow(held, perm.Action, perm.Resource, nil) {

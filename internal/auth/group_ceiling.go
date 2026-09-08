@@ -82,7 +82,7 @@ func (s *Service) checkGrantCeiling(ctx context.Context, actorUserID string, req
 		return err
 	}
 	for _, req := range requested {
-		if adminCarvedOuts[[2]string{req.Action, req.Resource}] {
+		if coversCarvedOut(req) {
 			if permissionCoveredBy(existing, req) {
 				continue
 			}
@@ -350,7 +350,7 @@ func grantCeilingAllows(actorPerms []Permission, req Permission) bool {
 			// constraint set. Carved-out pairs never reach here (the caller
 			// rejects them first), but mirror permissionsAllow anyway so the
 			// two stay in lockstep if the carve-out set grows (#1644).
-			if adminCarvedOuts[[2]string{req.Action, req.Resource}] {
+			if coversCarvedOut(req) {
 				continue
 			}
 			return true

@@ -133,6 +133,22 @@ var adminCarvedOuts = map[[2]string]bool{
 	{ActionExecute, ResourceRIExchange}: true,
 }
 
+// coversCarvedOut reports whether perm, as stated, would satisfy any
+// carved-out pair under enforcement's own matching rules
+// (checkPermissionMatch). A stored resource of "*" matches every resource
+// there, so {execute, *} covers execute:purchases and execute:ri-exchange and
+// is carved out exactly as those pairs are (issue #1901). Every carve-out
+// test goes through here so the grant-time guards and the enforcement
+// matchers cannot disagree about what the set covers.
+func coversCarvedOut(perm Permission) bool {
+	for pair := range adminCarvedOuts {
+		if checkPermissionMatch(perm, pair[0], pair[1]) {
+			return true
+		}
+	}
+	return false
+}
+
 // HasPermission checks if the auth context has a specific permission.
 // Authorization is derived purely from group-granted permissions: a user
 // who is a member of the Administrators group holds {ActionAdmin, ResourceAll}
@@ -148,7 +164,7 @@ func (ctx *AuthContext) HasPermission(action, resource string) bool {
 		// Admin permission grants all access EXCEPT the carved-out
 		// money-spending verbs (separation of duties, issue #923).
 		if perm.Action == ActionAdmin && perm.Resource == ResourceAll {
-			if adminCarvedOuts[[2]string{action, resource}] {
+			if coversCarvedOut(Permission{Action: action, Resource: resource}) {
 				// Fall through to explicit-permission check below.
 				continue
 			}
