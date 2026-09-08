@@ -1,8 +1,9 @@
 #!/bin/bash
 # Self-test for the git-secrets allowlist (#1972). Exercises the real
-# scripts/setup-git-secrets.sh and .gitallowed in a throwaway repo, through
-# the pre-commit hook scan path, in both directions: fixtures that must be
-# caught, and fixtures that must scan clean.
+# scripts/setup-git-secrets.sh and .gitallowed in a throwaway repo, both
+# directly via `git secrets --scan --cached` and through the installed
+# pre-commit hook, in both directions: fixtures that must be caught, and
+# fixtures that must scan clean.
 #
 # Fixture safety: every positive fixture below is a secret-shaped string
 # that this script itself, and the repo's detect-private-key / git-secrets
@@ -42,11 +43,34 @@ fi
 # Same HOME-isolation reason: drop the provider before any further scan.
 git config --unset-all secrets.providers
 
+# The pre-commit hook ignores the args git would pass it and recomputes its
+# own file list from the index (diff against HEAD, or the empty tree if
+# there is no HEAD yet, which is always true in this never-committed
+# throwaway repo). So it scans every currently staged path, not just
+# $relpath -- calling it with no args, as git itself does, is correct.
+HOOK_DIR="$(git rev-parse --git-dir)/hooks"
+
 pass=0
 fail=0
 
-# Writes $content to $relpath, stages it, scans it through the hook path,
-# compares the exit code to $expected, then unstages and removes it.
+# Records one pass/fail against $expected, printing a FAIL line labeled
+# $label on mismatch. Shared by both scan paths in run_case/run_staged_case
+# so a direct-scan/hook disagreement surfaces as its own labeled failure
+# instead of being silently reconciled.
+check_result() {
+    local label=$1 expected=$2 actual=$3
+    if [ "$actual" -eq "$expected" ]; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1))
+        echo "FAIL: $label (expected exit $expected, got $actual)" >&2
+    fi
+}
+
+# Writes $content to $relpath, stages it, scans it two ways -- directly via
+# `git secrets --scan --cached` (exact file argument) and via the installed
+# pre-commit hook (the real path a developer's commit takes) -- compares
+# each exit code to $expected, then unstages and removes it.
 run_case() {
     local label=$1 expected=$2 relpath=$3 content=$4
     mkdir -p "$(dirname "$relpath")"
@@ -54,14 +78,12 @@ run_case() {
     git add "$relpath"
     local actual=0
     git secrets --scan --cached "$relpath" >/dev/null 2>&1 || actual=$?
+    check_result "$label (direct scan)" "$expected" "$actual"
+    local hook_actual=0
+    "$HOOK_DIR/pre-commit" >/dev/null 2>&1 || hook_actual=$?
+    check_result "$label (installed hook)" "$expected" "$hook_actual"
     git rm -q --cached "$relpath"
     rm -f "$relpath"
-    if [ "$actual" -eq "$expected" ]; then
-        pass=$((pass + 1))
-    else
-        fail=$((fail + 1))
-        echo "FAIL: $label (expected exit $expected, got $actual)" >&2
-    fi
 }
 
 # Same as run_case, for a file already on disk (the copied setup script and
@@ -71,12 +93,10 @@ run_staged_case() {
     git add "$relpath"
     local actual=0
     git secrets --scan --cached "$relpath" >/dev/null 2>&1 || actual=$?
-    if [ "$actual" -eq "$expected" ]; then
-        pass=$((pass + 1))
-    else
-        fail=$((fail + 1))
-        echo "FAIL: $label (expected exit $expected, got $actual)" >&2
-    fi
+    check_result "$label (direct scan)" "$expected" "$actual"
+    local hook_actual=0
+    "$HOOK_DIR/pre-commit" >/dev/null 2>&1 || hook_actual=$?
+    check_result "$label (installed hook)" "$expected" "$hook_actual"
 }
 
 # Fixtures, assembled from adjacent literals so this file scans clean.
@@ -99,6 +119,19 @@ run_case "untruncated PKCS8 body" 1 e.json \
     '"private_key": "'"$PEM"'\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC\n"'
 run_case "corrected GCP API key range" 1 f.txt \
     "$AIZA"
+
+# Negative control for the setup-script allowlist entries below: a secret
+# appended to a DIFFERENT git-secrets registration line in that file (the
+# GCP one, not one of the three that legitimately self-match) must still be
+# caught. A prefix-only entry anchored on just "git secrets --add '" would
+# hide this too -- the exact #1972 hole, reintroduced at the scale of one
+# file. Mutates the tracked copy of the setup script in place at its real
+# path, since the allowlist entries are anchored on that path; restores the
+# pristine copy afterward so the later self-scan case below sees it intact.
+run_case "secret appended to an unrelated registration line stays caught" 1 \
+    scripts/setup-git-secrets.sh \
+    "$(sed "s/# GCP API Key\$/# GCP API Key ${KEY}/" "$REPO_ROOT/scripts/setup-git-secrets.sh")"
+cp "$REPO_ROOT/scripts/setup-git-secrets.sh" scripts/setup-git-secrets.sh
 
 # Must scan clean (exit 0): what the tree contains, and what the allowlist
 # must keep clean.
