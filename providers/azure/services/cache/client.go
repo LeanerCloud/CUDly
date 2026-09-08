@@ -567,7 +567,7 @@ func (c *CacheClient) getRedisPricing(ctx context.Context, sku, region string, t
 }
 
 // fetchAzurePricing fetches pricing data from Azure Retail Prices API,
-// following NextPageLink until exhausted or the shared safety cap fires.
+// following NextPageLink until exhausted; hitting the shared page cap is an error.
 // Delegates pagination to pricing.FetchAll.
 func (c *CacheClient) fetchAzurePricing(ctx context.Context, serviceName, sku, region string) (*AzureRetailPrice, error) {
 	filter := fmt.Sprintf("serviceName eq '%s' and armRegionName eq '%s' and contains(armSkuName, '%s')",

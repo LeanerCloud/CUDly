@@ -42,10 +42,15 @@ type Page[T any] struct {
 // service clients use this default.
 const DefaultPageTimeout = 10 * time.Second
 
-// DefaultMaxPages caps the NextPageLink loop. The Azure Retail Prices API
-// paginates at 100 items per page, so 50 pages is 5000 items — more than
-// any realistic SKU/region/term query. The cap is purely a defence against
-// a server bug returning a NextPageLink that never empties.
+// DefaultMaxPages caps the NextPageLink loop. The Retail Prices API
+// (api-version 2023-01-01-preview) pages at about 1,000 items, so 50
+// pages is roughly 50,000 items. The largest filter any client issues
+// (a region-wide service catalogue, cosmosdb/search) measured 1 page on
+// 2026-09-08; the whole Virtual Machines catalogue for one region, which
+// no client requests, measured 16. The cap is a defence against a
+// server bug returning a NextPageLink that never empties. Reaching it
+// with a NextPageLink still pending is an error, never a truncated
+// result (#1963).
 const DefaultMaxPages = 50
 
 // FetchAll walks the Retail Prices API starting at initialURL, appending
@@ -54,7 +59,8 @@ const DefaultMaxPages = 50
 //   - a per-page timeout (pageTimeout) that's independent of the caller's
 //     ctx, so one slow page can't consume the caller's whole budget;
 //   - a max-pages cap (maxPages) against a server bug returning an
-//     infinite NextPageLink chain;
+//     infinite NextPageLink chain; hitting it with pages remaining is
+//     an error, not a truncated result;
 //   - a seen-URL guard against a self-referential NextPageLink.
 //
 // ctx's cancellation still propagates via context.WithTimeout(ctx, ...),
@@ -84,6 +90,9 @@ func FetchAll[T any](ctx context.Context, httpClient HTTPClient, initialURL stri
 		nextURL = page.NextPageLink
 	}
 
+	if nextURL != "" {
+		return nil, fmt.Errorf("pricing API result exceeds the %d-page cap (%d items read, NextPageLink still set)", maxPages, len(all))
+	}
 	return all, nil
 }
 

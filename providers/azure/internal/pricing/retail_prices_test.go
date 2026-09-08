@@ -60,6 +60,22 @@ func okJSONResponse(body string) *http.Response {
 	}
 }
 
+// scriptPageChain scripts n pages at https://prices.example/page<letter>,
+// each holding one item named after its letter and linking to the next;
+// the last page has an empty NextPageLink.
+func scriptPageChain(client *fakeHTTPClient, n int) {
+	for i := 0; i < n; i++ {
+		url := "https://prices.example/page" + string(rune('a'+i))
+		next := ""
+		if i < n-1 {
+			next = "https://prices.example/page" + string(rune('a'+i+1))
+		}
+		client.responses[url] = okJSONResponse(
+			`{"Items":[{"name":"` + string(rune('a'+i)) + `"}],"NextPageLink":"` + next + `"}`,
+		)
+	}
+}
+
 // TestFetchAll_MergesPages pins the multi-page walk: page 1 has a non-
 // empty NextPageLink, page 2 has an empty NextPageLink, all items are
 // merged into the returned slice in order.
@@ -94,29 +110,35 @@ func TestFetchAll_RejectsSelfReferentialNextPageLink(t *testing.T) {
 	assert.Contains(t, err.Error(), "self-referential")
 }
 
-// TestFetchAll_HonoursMaxPagesCap covers the defensive cap: if the server
-// returns a genuinely unbounded chain of fresh NextPageLinks, the walker
-// must stop after maxPages instead of running forever.
-func TestFetchAll_HonoursMaxPagesCap(t *testing.T) {
+// TestFetchAll_ErrorsWhenCapReachedWithPagesRemaining is the regression
+// test for #1963: a chain longer than maxPages must produce an error, not
+// the first maxPages pages with a nil error. The walker must still stop
+// fetching at the cap.
+func TestFetchAll_ErrorsWhenCapReachedWithPagesRemaining(t *testing.T) {
 	client := newFakeHTTPClient()
-	for i := 0; i < 10; i++ {
-		url := "https://prices.example/page" + string(rune('a'+i))
-		next := ""
-		if i < 9 {
-			next = "https://prices.example/page" + string(rune('a'+i+1))
-		}
-		client.responses[url] = okJSONResponse(
-			`{"Items":[{"name":"` + string(rune('a'+i)) + `"}],"NextPageLink":"` + next + `"}`,
-		)
-	}
+	scriptPageChain(client, 10)
 
-	// Cap at 3 — walker should read pages a, b, c only.
+	items, err := FetchAll[fakeItem](context.Background(), client, "https://prices.example/pagea", DefaultPageTimeout, 3)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "3-page cap")
+	assert.Contains(t, err.Error(), "3 items read")
+	assert.Nil(t, items, "a truncated result must not be returned alongside the error")
+	assert.Len(t, client.calls, 3, "walker must not fetch beyond maxPages")
+}
+
+// TestFetchAll_ExactlyMaxPagesSucceeds pins the boundary: a chain of
+// exactly maxPages pages whose last page has an empty NextPageLink is
+// complete and must not be reported as truncated.
+func TestFetchAll_ExactlyMaxPagesSucceeds(t *testing.T) {
+	client := newFakeHTTPClient()
+	scriptPageChain(client, 3)
+
 	items, err := FetchAll[fakeItem](context.Background(), client, "https://prices.example/pagea", DefaultPageTimeout, 3)
 	require.NoError(t, err)
 	require.Len(t, items, 3)
 	assert.Equal(t, "a", items[0].Name)
 	assert.Equal(t, "c", items[2].Name)
-	assert.Len(t, client.calls, 3, "walker must not fetch beyond maxPages")
+	assert.Len(t, client.calls, 3)
 }
 
 // TestFetchAll_PerPageTimeout proves the per-page timeout is applied
