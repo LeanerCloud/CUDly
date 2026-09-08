@@ -2297,11 +2297,11 @@ func normalizeCapacityPercent(execReq *ExecutePurchaseRequest) error {
 }
 
 // validateExecutePurchaseRecommendations runs the per-rec #643 boundary
-// validation over every rec in a web execute request, returning the first
-// failure. On success it also returns the payment-option coercions that
-// occurred (nil-free, in rec order) so the response can surface them to the
-// caller (#1503 follow-up). Extracted so validateExecutePurchaseRequest stays
-// under the gocyclo threshold.
+// validation over every rec in a web execute request, then the one-account-
+// per-batch rule (#1902), returning the first failure. On success it also
+// returns the payment-option coercions that occurred (nil-free, in rec order)
+// so the response can surface them to the caller (#1503 follow-up). Extracted
+// so validateExecutePurchaseRequest stays under the gocyclo threshold.
 func validateExecutePurchaseRecommendations(recs []config.RecommendationRecord) ([]PaymentAdjustment, error) {
 	var adjustments []PaymentAdjustment
 	for i := range recs {
@@ -2312,6 +2312,13 @@ func validateExecutePurchaseRecommendations(recs []config.RecommendationRecord) 
 		if adjustment != nil {
 			adjustments = append(adjustments, *adjustment)
 		}
+	}
+	// One plan-less execution targets exactly one cloud account (#1902).
+	// Same rule the executor enforces in resolveSingleAccountProvider, applied
+	// here so the batch is refused before an execution row exists, an
+	// approval email goes out, or a History row lands as failed.
+	if _, err := purchase.SingleCloudAccountIDFromRecs(recs); err != nil {
+		return nil, NewClientError(400, err.Error())
 	}
 	return adjustments, nil
 }
