@@ -1634,8 +1634,10 @@ func TestPolicyDocumentsUseLiteralActionAndResourceLists(t *testing.T) {
 // and, because customer managed keys carry a default key policy that
 // delegates to IAM, reaches every CMK in the shared account (#1969). A grant
 // gated on aws:ResourceTag/Project, the KMSMutateTaggedOnly convention in
-// policy_compute.tf, or on kms:GrantIsForAWSResource for CreateGrant, still
-// passes this guard if a CUDly symmetric key ever needs one.
+// policy_compute.tf, still passes this guard if a CUDly symmetric key ever
+// needs one; kms:CreateGrant additionally needs kms:GrantIsForAWSResource,
+// since the tag alone scopes which key the grant targets, not who it
+// authorizes.
 var kmsDataPlaneActions = []string{
 	"kms:CreateGrant",
 	"kms:Decrypt",
@@ -1648,30 +1650,40 @@ var kmsDataPlaneActions = []string{
 	"kms:ReEncryptTo",
 }
 
-// actionKeyPresentPattern matches an `Action = ...` or `actions = ...`
-// assignment regardless of whether the value is a literal list/string this
-// test can read. It exists so TestKMSDataPlaneActionsAreNotUnconditionallyGranted
-// can tell "this statement grants nothing" (no Action key at all) apart from
-// "this statement grants something this test cannot read"
-// (`Action = local.something`): actionAssignmentPattern only matches the
-// latter's value shape, so a bare reference produces the exact same zero
-// match count as a statement with no Action key, and only the reference case
-// is a hole worth failing on (#1969).
-var actionKeyPresentPattern = regexp.MustCompile(`(?m)^[ \t]*(?:Action|actions)\s*=`)
+// kmsResourceScopingConditionKey and kmsResourceScopingTagValue are the
+// condition key and value KMSMutateTaggedOnly (policy_compute.tf) and
+// KMSReadTaggedOnly (policy_compute_b.tf) key their exemption on. Both are
+// pinned, not merely the key's presence: a Condition that references the key
+// with an unrelated value, or that inverts it (StringNotEquals), restricts
+// nothing this guard cares about either.
+const (
+	kmsResourceScopingConditionKey = "aws:ResourceTag/Project"
+	kmsResourceScopingTagValue     = "CUDly"
+)
 
-// kmsResourceScopingConditionKey is the condition key KMSMutateTaggedOnly
-// (policy_compute.tf) and KMSReadTaggedOnly (policy_compute_b.tf) key their
-// exemption on. A Condition that does not reference it (an unrelated key, or
-// none at all) restricts nothing this guard cares about, so its presence,
-// not merely a Condition's presence, is what earns the exemption below.
-const kmsResourceScopingConditionKey = "aws:ResourceTag/Project"
-
-// kmsGrantIsForResourceConditionKey is required IN ADDITION to
-// kmsResourceScopingConditionKey for kms:CreateGrant specifically: the tag
-// condition scopes which key the grant is created on, not who the grant
-// authorizes, so a CreateGrant gated on the tag alone still lets the deploy
-// role hand the ability to use a CUDly-tagged key to any grantee it names.
+// kmsGrantIsForResourceConditionKey closes the gap kmsResourceScopingConditionKey
+// leaves open for kms:CreateGrant specifically: the tag condition scopes
+// which key the grant is created ON, not who it authorizes, so CreateGrant
+// additionally needs this Bool condition pinned true, which permits the call
+// only when an AWS service integrated with KMS makes it on the deploy role's
+// behalf, never a direct caller naming an arbitrary grantee.
 const kmsGrantIsForResourceConditionKey = "kms:GrantIsForAWSResource"
+
+// kmsResourceScopingOperatorPattern matches kmsResourceScopingConditionKey in
+// KEY position (quoted, followed by "="), pinned to kmsResourceScopingTagValue
+// case-insensitively (matching the StringEqualsIgnoreCase these statements
+// use, per the tag-casing note in policy_compute.tf). Key position, not a
+// bare Contains, is what stops the key appearing only as a value, or inside a
+// trailing comment (readPolicySource strips only whole-line comments), from
+// earning the exemption; pinning the value is what stops a wrong tag value or
+// an inverted operator from earning it once combined with the operator name
+// check below.
+var kmsResourceScopingOperatorPattern = regexp.MustCompile(`(?i)"` + regexp.QuoteMeta(kmsResourceScopingConditionKey) + `"\s*=\s*"` + regexp.QuoteMeta(kmsResourceScopingTagValue) + `"`)
+
+// kmsGrantIsForResourceTruePattern matches kmsGrantIsForResourceConditionKey
+// in key position pinned to "true": "false" or any other value grants
+// nothing extra and must not earn the exemption.
+var kmsGrantIsForResourceTruePattern = regexp.MustCompile(`"` + regexp.QuoteMeta(kmsGrantIsForResourceConditionKey) + `"\s*=\s*"true"`)
 
 // TestKMSDataPlaneActionsAreNotUnconditionallyGranted is the KMS counterpart of
 // TestBoundaryGatedActionsAreNotUnconditionallyGranted: every deploy-role
@@ -1679,6 +1691,15 @@ const kmsGrantIsForResourceConditionKey = "kms:GrantIsForAWSResource"
 // under a Condition actually scoped to a CUDly-owned key. policy_boundary.tf
 // is skipped on purpose: its WorkloadServiceCeiling allows kms:* by design
 // and, being a permissions boundary, grants nothing on its own.
+//
+// Effect and Action are read the same fail-closed way boundaryAllowedActions
+// reads policy_boundary.tf: a statement not positively identified as a Deny
+// is treated as a grant, NotAction is refused outright because it cannot be
+// expressed as a bounded Action set, and a statement whose Action this test
+// cannot parse into literals is refused rather than silently skipped. A
+// one-line statement and a quoted "Action" key both hide the assignment from
+// actionAssignmentPattern's ^-anchored match the same way a local/var
+// reference does, so all three are the same failure here.
 func TestKMSDataPlaneActionsAreNotUnconditionallyGranted(t *testing.T) {
 	scanned := 0
 	for _, f := range append(guardedPolicyFiles(t), iamFile) {
@@ -1692,14 +1713,15 @@ func TestKMSDataPlaneActionsAreNotUnconditionallyGranted(t *testing.T) {
 			}
 			for _, stmt := range stmts {
 				scanned++
-				if !effectIsAllowPattern.MatchString(stmt) {
+				if statementEffect(stmt) == "Deny" {
 					continue
 				}
-
+				if strings.Contains(stmt, "NotAction") {
+					t.Errorf("%s: statement %q uses NotAction, which grants every action except the ones it names. A KMS data-plane action granted by omission this way is invisible to a guard that can only check a bounded Action set (#1969)", f, statementSid(stmt))
+					continue
+				}
 				if !actionAssignmentPattern.MatchString(stmt) {
-					if actionKeyPresentPattern.MatchString(stmt) {
-						t.Errorf("%s: statement %q has an Action expression this test cannot read (not a literal list or quoted string, e.g. a local or var reference). IAM still grants whatever it resolves to, so a KMS data-plane action behind it is invisible to this guard (#1969). Gate the statement with a Condition scoped to %s, or write Action as literals", f, statementSid(stmt), kmsResourceScopingConditionKey)
-					}
+					t.Errorf("%s: statement %q has no Action list this test can parse (not one attribute per line with a literal list or quoted string, e.g. a one-line statement, a quoted \"Action\" key, or a local/var reference). IAM still grants whatever it resolves to, so a KMS data-plane action behind it is invisible to this guard (#1969)", f, statementSid(stmt))
 					continue
 				}
 
@@ -1709,15 +1731,29 @@ func TestKMSDataPlaneActionsAreNotUnconditionallyGranted(t *testing.T) {
 				}
 
 				condBody := statementConditionBody(stmt)
-				scopedToProject := strings.Contains(condBody, kmsResourceScopingConditionKey)
+				ops := statementConditionOperators(stmt)
+				if opens := len(anyBlockOpenPattern.FindAllString(condBody, -1)); opens != len(ops) {
+					t.Errorf("%s: statement %q has a Condition block opening %d nested objects but this test parsed only %d of them as operators; an operator it cannot see is still ANDed in by IAM, so this guard cannot verify what actually scopes the grant", f, statementSid(stmt), opens, len(ops))
+				}
+
+				scopedToProject, grantIsForResource := false, false
+				for _, op := range ops {
+					switch op.name {
+					case "StringEquals", "StringEqualsIgnoreCase":
+						scopedToProject = scopedToProject || kmsResourceScopingOperatorPattern.MatchString(op.body)
+					case "Bool":
+						grantIsForResource = grantIsForResource || kmsGrantIsForResourceTruePattern.MatchString(op.body)
+					}
+				}
+
 				for _, action := range kmsDataPlaneActions {
 					if !actionPermitted(granted, action) {
 						continue
 					}
-					if scopedToProject && (action != "kms:CreateGrant" || strings.Contains(condBody, kmsGrantIsForResourceConditionKey)) {
+					if scopedToProject && (action != "kms:CreateGrant" || grantIsForResource) {
 						continue
 					}
-					t.Errorf("%s: statement %q grants %s without a Condition properly scoped to a CUDly-owned key (needs %s, and for kms:CreateGrant also %s). Customer managed keys delegate to IAM by default, so an unscoped or wrongly-scoped grant reaches every CMK in the account, not just CUDly's (#1969). Nothing on the deploy path needs it; if a CUDly symmetric key ever does, gate it like KMSMutateTaggedOnly in policy_compute.tf", f, statementSid(stmt), action, kmsResourceScopingConditionKey, kmsGrantIsForResourceConditionKey)
+					t.Errorf("%s: statement %q grants %s without a Condition properly scoped to a CUDly-owned key (needs %s = %q via StringEquals/StringEqualsIgnoreCase, and for kms:CreateGrant also %s = \"true\" via Bool). Customer managed keys delegate to IAM by default, so an unscoped or wrongly-scoped grant reaches every CMK in the account, not just CUDly's (#1969). Nothing on the deploy path needs it; if a CUDly symmetric key ever does, gate it like KMSMutateTaggedOnly in policy_compute.tf", f, statementSid(stmt), action, kmsResourceScopingConditionKey, kmsResourceScopingTagValue, kmsGrantIsForResourceConditionKey)
 				}
 			}
 		})
