@@ -4388,8 +4388,11 @@ function renderFanOutSummary(summary: HTMLElement, buckets: FanOutBucket[]): voi
 
   const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
   if (executeBtn) {
-    executeBtn.disabled = submittable.length === 0;
-    executeBtn.title = submittable.length === 0 ? 'No compatible buckets to submit' : '';
+    const submitting = executeBtn.dataset['submitting'] === 'true';
+    executeBtn.disabled = submitting || submittable.length === 0;
+    executeBtn.title = submitting
+      ? 'Purchase submission in progress'
+      : submittable.length === 0 ? 'No compatible buckets to submit' : '';
   }
 }
 
@@ -5021,7 +5024,7 @@ function renderDirectExecuteWarning(): void {
   icon.textContent = 'Warning: ';
   directWarning.appendChild(icon);
   const text = document.createTextNode(
-    `This will charge $${totalUpfront.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} upfront immediately. ` +
+    `This will charge ${formatCurrency(totalUpfront, '$', 2)} upfront immediately. ` +
     'This bypasses the approval step. AWS allows cancellation within 24 hours via the Account & Billing console.',
   );
   directWarning.appendChild(text);
@@ -5390,8 +5393,11 @@ function updatePurchaseModalTotals(selectAllCb: HTMLInputElement): void {
   const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
   if (executeBtn) {
     const noneSelected = checkedPurchaseIndices.size === 0;
-    executeBtn.disabled = noneSelected;
-    executeBtn.title = noneSelected ? 'Select at least one purchase' : '';
+    const submitting = executeBtn.dataset['submitting'] === 'true';
+    executeBtn.disabled = submitting || noneSelected;
+    executeBtn.title = submitting
+      ? 'Purchase submission in progress'
+      : noneSelected ? 'Select at least one purchase' : '';
   }
 
   // Sync select-all checkbox indeterminate/checked/unchecked state.

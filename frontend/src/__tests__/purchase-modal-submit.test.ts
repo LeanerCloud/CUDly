@@ -144,10 +144,11 @@ jest.mock('../toast', () => ({
 
 // ── imports ───────────────────────────────────────────────────────────────────
 
-import { setupEventListeners } from '../app';
+import { handleExecutePurchase, setupEventListeners } from '../app';
 import * as api from '../api';
 import * as state from '../state';
 import { showToast } from '../toast';
+import { confirmDialog } from '../confirmDialog';
 import {
   openPurchaseModal,
   getPurchaseModalRecommendations,
@@ -194,6 +195,17 @@ function buildRows(): LocalRecommendation[] {
 /** Drains the microtask queue enough for the async handlers under test to settle. */
 async function flush(): Promise<void> {
   for (let i = 0; i < 6; i++) await Promise.resolve();
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 // ── DOM / mock scaffolding ────────────────────────────────────────────────────
@@ -438,6 +450,61 @@ describe('Issue #1903: purchase modal re-prices on Term/Payment change', () => {
 
     expect(document.querySelector('.direct-execute-warning')?.textContent).toContain('12,000.00');
   });
+
+  test('busy single purchase stays disabled while its request is pending', async () => {
+    const request = deferred<Awaited<ReturnType<typeof api.executePurchase>>>();
+    (api.executePurchase as jest.Mock).mockReturnValue(request.promise);
+    const rows = buildRows();
+    await openPurchaseModal([rows[0]!]);
+
+    const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement;
+    executeBtn.click();
+    await flush();
+    expect(api.executePurchase).toHaveBeenCalledTimes(1);
+
+    const termSelect = document.querySelector<HTMLSelectElement>('.purchase-row-term')!;
+    termSelect.value = '1';
+    termSelect.dispatchEvent(new Event('change'));
+    const include = document.querySelector<HTMLInputElement>('.purchase-modal-row-include')!;
+    include.checked = false;
+    include.dispatchEvent(new Event('change'));
+    include.checked = true;
+    include.dispatchEvent(new Event('change'));
+
+    expect(executeBtn.disabled).toBe(true);
+    executeBtn.click();
+    await flush();
+    expect(api.executePurchase).toHaveBeenCalledTimes(1);
+
+    request.resolve({
+      execution_id: 'exec-single',
+      status: 'pending',
+      email_sent: true,
+      approval_recipient: 'approver@example.com',
+    });
+    await flush();
+    expect(executeBtn.dataset['submitting']).toBeUndefined();
+  });
+
+  test('confirmation cancel restores normal single-purchase submission', async () => {
+    (confirmDialog as jest.Mock)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const rows = buildRows();
+    await openPurchaseModal([rows[0]!]);
+
+    const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement;
+    executeBtn.click();
+    await flush();
+
+    expect(api.executePurchase).not.toHaveBeenCalled();
+    expect(executeBtn.dataset['submitting']).toBeUndefined();
+    expect(executeBtn.disabled).toBe(false);
+
+    executeBtn.click();
+    await flush();
+    expect(api.executePurchase).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ── #1904: fan-out modal skips incompatible buckets ──────────────────────────
@@ -599,5 +666,79 @@ describe('Issue #1904: fan-out modal skips incompatible buckets', () => {
       50,
       undefined,
     );
+  });
+
+  test('busy fan-out stays disabled while its requests are pending', async () => {
+    const requests = [
+      deferred<Awaited<ReturnType<typeof api.executePurchase>>>(),
+      deferred<Awaited<ReturnType<typeof api.executePurchase>>>(),
+    ];
+    (api.executePurchase as jest.Mock)
+      .mockReturnValueOnce(requests[0]!.promise)
+      .mockReturnValueOnce(requests[1]!.promise);
+    const rows = buildFanOutRows();
+    (api.getConfig as jest.Mock).mockResolvedValue({ global: { default_payment: 'partial-upfront' } });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {}, recommendations: rows, regions: [],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['ec2-1', 'rds-3']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+    const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement;
+    executeBtn.click();
+    await flush();
+    expect(api.executePurchase).toHaveBeenCalledTimes(2);
+
+    const paymentSelect = document.querySelector<HTMLSelectElement>('.fanout-bucket-payment')!;
+    paymentSelect.value = 'partial-upfront';
+    paymentSelect.dispatchEvent(new Event('change'));
+
+    expect(executeBtn.disabled).toBe(true);
+    executeBtn.click();
+    await flush();
+    expect(api.executePurchase).toHaveBeenCalledTimes(2);
+
+    for (const [i, request] of requests.entries()) {
+      request.resolve({
+        execution_id: `exec-fanout-${i}`,
+        status: 'pending',
+        email_sent: true,
+        approval_recipient: 'approver@example.com',
+      });
+    }
+    await flush();
+    expect(executeBtn.dataset['submitting']).toBeUndefined();
+  });
+
+  test('fan-out clears submitting state when result processing throws', async () => {
+    const rows = buildFanOutRows();
+    (api.getConfig as jest.Mock).mockResolvedValue({ global: { default_payment: 'partial-upfront' } });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {}, recommendations: rows, regions: [],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['ec2-1', 'rds-3']));
+    (api.executePurchase as jest.Mock)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        execution_id: 'exec-valid',
+        status: 'pending',
+        email_sent: true,
+      });
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+    const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement;
+    await expect(handleExecutePurchase()).rejects.toThrow(TypeError);
+
+    expect(api.executePurchase).toHaveBeenCalledTimes(2);
+    expect(executeBtn.dataset['submitting']).toBeUndefined();
+    expect(executeBtn.disabled).toBe(false);
   });
 });
