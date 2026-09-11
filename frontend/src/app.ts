@@ -309,12 +309,38 @@ function setupButtonHandlers(): void {
 
 }
 
+function setExecutePurchaseSubmitting(
+  executeBtn: HTMLButtonElement | null,
+  submitting: boolean,
+  label: string,
+): void {
+  if (!executeBtn) return;
+
+  executeBtn.textContent = label;
+  if (submitting) {
+    executeBtn.dataset['submitting'] = 'true';
+    executeBtn.disabled = true;
+    executeBtn.title = 'Purchase submission in progress';
+    return;
+  }
+
+  delete executeBtn.dataset['submitting'];
+  const fanOutBuckets = getFanOutBuckets();
+  const unavailable = fanOutBuckets !== null
+    ? fanOutBuckets.length === 0
+    : getPurchaseModalRecommendations().length === 0;
+  executeBtn.disabled = unavailable;
+  executeBtn.title = unavailable
+    ? fanOutBuckets !== null ? 'No compatible buckets to submit' : 'Select at least one purchase'
+    : '';
+}
+
 /**
  * Handle execute purchase button click. Routes to the single-bucket
  * path when getPurchaseModalRecommendations has content, or to the
  * multi-bucket fan-out path when the fan-out modal set buckets.
  */
-async function handleExecutePurchase(): Promise<void> {
+export async function handleExecutePurchase(): Promise<void> {
   const fanOutBuckets = getFanOutBuckets();
   if (fanOutBuckets && fanOutBuckets.length > 0) {
     await handleFanOutExecute(fanOutBuckets);
@@ -338,10 +364,7 @@ async function handleExecutePurchase(): Promise<void> {
   // mint a duplicate pending execution (#644). The button is re-enabled on
   // cancel below and in the finally block once the request settles.
   const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
-  if (executeBtn) {
-    executeBtn.disabled = true;
-    executeBtn.textContent = 'Sending...';
-  }
+  setExecutePurchaseSubmitting(executeBtn, true, 'Sending...');
 
   const defaultBtnLabel = isDirect ? 'Execute Purchase Now' : 'Send for Approval';
 
@@ -364,10 +387,7 @@ async function handleExecutePurchase(): Promise<void> {
       });
 
   if (!ok) {
-    if (executeBtn) {
-      executeBtn.disabled = false;
-      executeBtn.textContent = defaultBtnLabel;
-    }
+    setExecutePurchaseSubmitting(executeBtn, false, defaultBtnLabel);
     return;
   }
 
@@ -460,10 +480,7 @@ async function handleExecutePurchase(): Promise<void> {
     const verb = isDirect ? 'execute' : 'send for approval';
     showToast({ message: `Failed to ${verb} purchase: ${err.message}`, kind: 'error' });
   } finally {
-    if (executeBtn) {
-      executeBtn.disabled = false;
-      executeBtn.textContent = defaultBtnLabel;
-    }
+    setExecutePurchaseSubmitting(executeBtn, false, defaultBtnLabel);
   }
 }
 
@@ -495,10 +512,7 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
   // double-click can't fan out a second wave of duplicate executions (#644).
   // Re-enabled on cancel below and after the calls settle at the end.
   const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
-  if (executeBtn) {
-    executeBtn.disabled = true;
-    executeBtn.textContent = `Sending 0/${buckets.length}…`;
-  }
+  setExecutePurchaseSubmitting(executeBtn, true, `Sending 0/${buckets.length}…`);
 
   // Same approval-required default as the single-purchase path: each
   // bucket POSTs a request that triggers an approval email; the actual
@@ -510,13 +524,18 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
     destructive: false,
   });
   if (!ok) {
-    if (executeBtn) {
-      executeBtn.disabled = false;
-      executeBtn.textContent = 'Send for Approval';
-    }
+    setExecutePurchaseSubmitting(executeBtn, false, 'Send for Approval');
     return;
   }
 
+  try {
+    await submitFanOutBuckets(buckets);
+  } finally {
+    setExecutePurchaseSubmitting(executeBtn, false, 'Send for Approval');
+  }
+}
+
+async function submitFanOutBuckets(buckets: FanOutBucket[]): Promise<void> {
   // Fire all POSTs in parallel via allSettled so one failure doesn't
   // cascade. Each bucket's recs are already scaled by its capacity %;
   // the POST body records capacity_percent for audit. Spread the full
@@ -646,11 +665,6 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
   }
 
   await loadDashboard();
-
-  if (executeBtn) {
-    executeBtn.disabled = false;
-    executeBtn.textContent = 'Send for Approval';
-  }
 }
 
 /**

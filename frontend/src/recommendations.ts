@@ -39,6 +39,11 @@ export type { ParsedNumericFilter } from './lib/column-filters';
 
 // Module state for current purchase modal recommendations
 let currentPurchaseRecommendations: LocalRecommendation[] = [];
+// Capacity % the modal's recommendations were scaled at (issue #1903). Used
+// by pricedCellVariant to re-scale a sibling variant swapped in on a
+// Term/Payment change so the row keeps the same capacity as the rest of the
+// modal. Reset to 100 on modal close.
+let currentPurchaseCapacityPercent = 100;
 // Tracks which row indices in currentPurchaseRecommendations the user
 // has kept included (checked). Initialised to all indices on modal open;
 // toggled by per-row checkboxes and the select-all header checkbox.
@@ -229,6 +234,7 @@ export function clearPurchaseModalRecommendations(): void {
   currentPurchaseRecommendations = [];
   checkedPurchaseIndices = new Set();
   checkedPurchaseModalInitialised = false;
+  currentPurchaseCapacityPercent = 100;
 }
 
 /**
@@ -932,6 +938,58 @@ export function groupRecsByCell(recs: readonly LocalRecommendation[]): Map<strin
     }
   }
   return groups;
+}
+
+// Every loaded (term, payment) row of rec's cell, plus rec itself when the
+// loaded set lacks it (modal opened on a stale or test-supplied list).
+// Reads state.getRecommendations() (not getVisibleRecommendations) so a
+// column filter that hides a sibling term/payment row can never make the
+// purchase modal think a priced variant doesn't exist (issue #1903).
+function loadedCellVariants(rec: LocalRecommendation): LocalRecommendation[] {
+  const key = cellKey(rec);
+  const variants = (state.getRecommendations() as unknown as LocalRecommendation[])
+    .filter((v) => cellKey(v) === key);
+  if (!variants.some((v) => v.id === rec.id)) variants.push(rec);
+  return sortVariantsInCell(variants);
+}
+
+// The scaled variant the modal would submit for (term, payment), or null when
+// no such row was loaded or it scales to zero units at the modal's capacity.
+function pricedCellVariant(rec: LocalRecommendation, term: 1 | 3, payment: BulkPurchasePayment): LocalRecommendation | null {
+  const v = loadedCellVariants(rec).find((c) => c.term === term && normalizeBulkPayment(c.payment) === payment);
+  if (!v) return null;
+  // `rec` reached the modal already scaled to currentPurchaseCapacityPercent:
+  // openPurchaseModal's only caller passes handleBulkPurchaseClick's scaled
+  // rows. Only the rows read from state.getRecommendations() are unscaled, so
+  // re-scaling the fallback push would halve count and cost a second time.
+  if (v === rec) return v;
+  return scaleRecForCapacity(v, currentPurchaseCapacityPercent);
+}
+
+// Distinct terms actually loaded for rec's cell, ascending. Used to build
+// the purchase modal's Term <select> so it never offers a term the API
+// didn't price (issue #1903).
+function cellTermOptions(rec: LocalRecommendation): Array<1 | 3> {
+  const terms = new Set<1 | 3>();
+  for (const v of loadedCellVariants(rec)) {
+    if (v.term === 1 || v.term === 3) terms.add(v.term);
+  }
+  return Array.from(terms).sort((a, b) => a - b);
+}
+
+// Payment options for rec's cell at `term`, restricted to combinations that
+// were actually loaded (and thus priced) — the intersection of the compat
+// table's order with the loaded set (issue #1903).
+function cellPaymentOptions(rec: LocalRecommendation, term: 1 | 3): BulkPurchasePayment[] {
+  const loaded = new Set(
+    loadedCellVariants(rec)
+      .filter((v) => v.term === term)
+      .map((v) => normalizeBulkPayment(v.payment))
+      .filter((p): p is BulkPurchasePayment => p !== null),
+  );
+  return paymentOptionsFor(rec.provider as CompatProvider, rec.service, term).filter((p) =>
+    loaded.has(p as BulkPurchasePayment),
+  ) as BulkPurchasePayment[];
 }
 
 // issue #135: SP plan-type row grouping helpers.
@@ -3906,6 +3964,28 @@ async function openCreatePlanFromBottomBox(snapshot: LocalRecommendation[]): Pro
   openCreatePlanModal(snapshot as unknown as readonly api.Recommendation[]);
 }
 
+// Scale one rec's count-dependent fields (count, upfront_cost, monthly_cost,
+// savings) to a capacity %, flooring the unit count. Returns null when the
+// scaled count floors to 0 — the row contributes nothing at this capacity.
+// Extracted from handleBulkPurchaseClick's scaling loop (issue #1903) so
+// pricedCellVariant can apply the same scaling to a sibling variant swapped
+// in on a Term/Payment change.
+function scaleRecForCapacity(r: LocalRecommendation, capacityPercent: number): LocalRecommendation | null {
+  const newCount = Math.floor((r.count * capacityPercent) / 100);
+  if (newCount <= 0) return null;
+  const ratio = r.count > 0 ? newCount / r.count : 1;
+  return {
+    ...r,
+    count: newCount,
+    // Carry the pre-scaling count so the backend can verify the
+    // capacity_percent it records against the scaled count (#647).
+    recommended_count: r.count,
+    upfront_cost: r.upfront_cost * ratio,
+    monthly_cost: r.monthly_cost != null ? r.monthly_cost * ratio : null,
+    savings: r.savings * ratio,
+  };
+}
+
 function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
   const tb = loadBulkPurchaseState();
   if (recommendations.length === 0) {
@@ -3916,19 +3996,8 @@ function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
   // Scale by capacity %; drop rows whose scaled count floors to 0.
   const scaled: LocalRecommendation[] = [];
   for (const r of recommendations) {
-    const newCount = Math.floor((r.count * tb.capacity) / 100);
-    if (newCount <= 0) continue;
-    const ratio = r.count > 0 ? newCount / r.count : 1;
-    scaled.push({
-      ...r,
-      count: newCount,
-      // Carry the pre-scaling count so the backend can verify the
-      // capacity_percent it records against the scaled count (#647).
-      recommended_count: r.count,
-      upfront_cost: r.upfront_cost * ratio,
-      monthly_cost: r.monthly_cost != null ? r.monthly_cost * ratio : null,
-      savings: r.savings * ratio,
-    });
+    const s = scaleRecForCapacity(r, tb.capacity);
+    if (s) scaled.push(s);
   }
   if (scaled.length === 0) {
     showToast({
@@ -3992,7 +4061,7 @@ function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
   // (wired in app.ts) picks up the recs via getPurchaseModalRecommendations.
   // openPurchaseModal is async (issue #111 (iii): per-rec override
   // prefetch); fire-and-forget — the modal is the user's surface.
-  void openPurchaseModal(scaled);
+  void openPurchaseModal(scaled, tb.capacity);
 }
 
 // FanOutBucket groups one batch of recs under a single (provider,
@@ -4048,9 +4117,16 @@ export interface FanOutBucket {
 // the modal closes.
 let currentFanOutBuckets: FanOutBucket[] | null = null;
 
+// The renderer promises "This bucket will be skipped" from exactly this
+// check (renderFanOutBucketSection); submit and totals must agree with it
+// (issue #1904) so a bucket the UI marks skipped is never posted.
+function isSubmittableBucket(b: FanOutBucket): boolean {
+  return isBucketPaymentCompatible(b.recs, b.payment);
+}
+
 export function getFanOutBuckets(): FanOutBucket[] | null {
   if (!currentFanOutBuckets) return null;
-  return currentFanOutBuckets.map((b) => ({
+  return currentFanOutBuckets.filter(isSubmittableBucket).map((b) => ({
     ...b,
     // Deep-copy the per-rec map so callers can't mutate module state.
     perRecPayments: b.perRecPayments ? new Map(b.perRecPayments) : undefined,
@@ -4258,17 +4334,43 @@ async function openFanOutModal(
   while (container.firstChild) container.removeChild(container.firstChild);
 
   const summary = document.createElement('div');
+  summary.id = 'fanout-summary';
   summary.className = 'form-section fanout-summary';
+  renderFanOutSummary(summary, buckets);
+  container.appendChild(summary);
+
+  for (const b of buckets) {
+    container.appendChild(renderFanOutBucketSection(b));
+  }
+
+  openModal(modal);
+}
+
+// renderFanOutSummary rebuilds the fan-out modal's header — title, email
+// count, skipped-bucket note, and totals — from the submittable subset
+// (issue #1904), so what the user sees here matches exactly what
+// getFanOutBuckets() returns to app.ts on submit. Also disables the
+// Execute button when nothing is submittable.
+function renderFanOutSummary(summary: HTMLElement, buckets: FanOutBucket[]): void {
+  while (summary.firstChild) summary.removeChild(summary.firstChild);
+
+  const submittable = buckets.filter(isSubmittableBucket);
+  const skipped = buckets.length - submittable.length;
+
   const summaryTitle = document.createElement('h3');
   summaryTitle.textContent = `Bulk purchase — ${buckets.length} bucket${buckets.length === 1 ? '' : 's'}`;
   summary.appendChild(summaryTitle);
 
   const emailNote = document.createElement('p');
   emailNote.className = 'fanout-email-note';
-  emailNote.textContent = `Will send ${buckets.length} approval email${buckets.length === 1 ? '' : 's'} — one per bucket.`;
+  let emailText = `Will send ${submittable.length} approval email${submittable.length === 1 ? '' : 's'} — one per bucket.`;
+  if (skipped > 0) {
+    emailText += ` ${skipped} incompatible bucket${skipped === 1 ? '' : 's'} will be skipped.`;
+  }
+  emailNote.textContent = emailText;
   summary.appendChild(emailNote);
 
-  const totals = computeFanOutTotals(buckets);
+  const totals = computeFanOutTotals(submittable);
   const totalLine = (label: string, value: string, cls = ''): HTMLParagraphElement => {
     const p = document.createElement('p');
     const strong = document.createElement('strong');
@@ -4283,13 +4385,26 @@ async function openFanOutModal(
   summary.appendChild(totalLine('Total commitments', String(totals.totalCount)));
   summary.appendChild(totalLine('Total upfront', formatCurrency(totals.totalUpfront)));
   summary.appendChild(totalLine(`Total savings ${periodSuffix(fanOutPeriod)}`, formatCostForPeriod(totals.totalSavings, fanOutPeriod), 'savings'));
-  container.appendChild(summary);
 
-  for (const b of buckets) {
-    container.appendChild(renderFanOutBucketSection(b));
+  const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
+  if (executeBtn) {
+    const submitting = executeBtn.dataset['submitting'] === 'true';
+    executeBtn.disabled = submitting || submittable.length === 0;
+    executeBtn.title = submitting
+      ? 'Purchase submission in progress'
+      : submittable.length === 0 ? 'No compatible buckets to submit' : '';
   }
+}
 
-  openModal(modal);
+// refreshFanOutSummary re-renders #fanout-summary from currentFanOutBuckets.
+// Called after a bucket's Payment change so a user who repairs a skipped
+// bucket sees the email count, skipped note, and totals follow immediately
+// (issue #1904) rather than only on the next modal open.
+function refreshFanOutSummary(): void {
+  if (!currentFanOutBuckets) return;
+  const summary = document.getElementById('fanout-summary');
+  if (!summary) return;
+  renderFanOutSummary(summary, currentFanOutBuckets);
 }
 
 function computeFanOutTotals(buckets: FanOutBucket[]): { totalCount: number; totalUpfront: number; totalSavings: number } {
@@ -4325,11 +4440,9 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
 
   const status = document.createElement('p');
   const renderStatus = (): void => {
-    // For mixed-SP buckets check compatibility per rec — every rec must
-    // be supported. For non-SP buckets every rec shares b.service so a
-    // single check is equivalent. The shared helper keeps this in sync
-    // with the same check at handleBulkPurchaseClick.
-    const compat = isBucketPaymentCompatible(b.recs, b.payment);
+    // Same predicate the submit filter and the header totals use, so the
+    // "will be skipped" label cannot disagree with what actually submits.
+    const compat = isSubmittableBucket(b);
     status.className = compat ? 'fanout-bucket-ok' : 'fanout-bucket-error';
     status.textContent = compat
       ? `${b.capacityPercent}% capacity · ${b.term}yr · ${b.payment}`
@@ -4374,6 +4487,10 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
     }
     b.payment = next;
     renderStatus();
+    // Issue #1904: a payment fix here can move this bucket in or out of the
+    // submittable set, so the header's email count, skipped note, totals,
+    // and Execute-enabled state must follow immediately.
+    refreshFanOutSummary();
     // Re-sync any visible per-rec selects whose ids are NOT explicit
     // overrides: those rows follow the bucket default, so their displayed
     // value must track the new bucket payment. Rows with an explicit
@@ -4849,7 +4966,7 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
 function resolvePerRecPaymentSeed(
   rec: LocalRecommendation,
   overridesByAccount: Map<string, AccountServiceOverride[]>,
-): { payment: CompatPayment; source: 'override' | 'rec' | 'fallback' } {
+): { payment: CompatPayment; source: 'override' | 'rec' | 'fallback'; variant?: LocalRecommendation } {
   const provider = rec.provider as CompatProvider;
   const term = rec.term as 1 | 3;
 
@@ -4859,12 +4976,13 @@ function resolvePerRecPaymentSeed(
       const match = overrides.find(
         (o) => o.provider === provider && o.service === rec.service,
       );
-      if (
-        match
-        && match.payment
-        && isPaymentSupported(provider, rec.service, term, match.payment as CompatPayment)
-      ) {
-        return { payment: match.payment as CompatPayment, source: 'override' };
+      // Issue #1903: an override is only honoured when a priced variant for
+      // it was actually loaded — otherwise the override would relabel this
+      // row's payment without the matching price.
+      const overridePayment = normalizeBulkPayment(match?.payment);
+      if (overridePayment && isPaymentSupported(provider, rec.service, term, overridePayment)) {
+        const variant = pricedCellVariant(rec, term, overridePayment);
+        if (variant) return { payment: overridePayment, source: 'override', variant };
       }
     }
   }
@@ -4883,6 +5001,33 @@ function resolvePerRecPaymentSeed(
     ? cachedGlobalDefaultPayment
     : (options[0] ?? 'all-upfront') as CompatPayment;
   return { payment: preferred, source: 'fallback' };
+}
+
+// renderDirectExecuteWarning rebuilds the "this will charge $X upfront
+// immediately" callout from the currently checked rows. It is a money total
+// in the same modal as the per-row cost cells (issue #1903), so it must
+// follow both a checkbox toggle (updatePurchaseModalTotals, pre-existing
+// gap) and a Term/Payment re-price, not only the radio's own change event.
+// No-ops when the callout isn't in the DOM (no direct-execute permission).
+function renderDirectExecuteWarning(): void {
+  const directWarning = document.querySelector<HTMLElement>('#purchase-details .direct-execute-warning');
+  if (!directWarning) return;
+  directWarning.hidden = currentExecuteMode !== 'direct';
+  if (currentExecuteMode !== 'direct') return;
+  let totalUpfront = 0;
+  for (const idx of checkedPurchaseIndices) {
+    const r = currentPurchaseRecommendations[idx];
+    if (r) totalUpfront += r.upfront_cost;
+  }
+  while (directWarning.firstChild) directWarning.removeChild(directWarning.firstChild);
+  const icon = document.createElement('strong');
+  icon.textContent = 'Warning: ';
+  directWarning.appendChild(icon);
+  const text = document.createTextNode(
+    `This will charge ${formatCurrency(totalUpfront, '$', 2)} upfront immediately. ` +
+    'This bypasses the approval step. AWS allows cancellation within 24 hours via the Account & Billing console.',
+  );
+  directWarning.appendChild(text);
 }
 
 /**
@@ -4917,7 +5062,8 @@ function resolvePerRecPaymentSeed(
  * `openFanOutModal`. Errors swallowed: the rec-payment fallback always
  * works, so a transient API blip shouldn't block the modal.
  */
-export async function openPurchaseModal(recommendations: LocalRecommendation[]): Promise<void> {
+export async function openPurchaseModal(recommendations: LocalRecommendation[], capacityPercent = 100): Promise<void> {
+  currentPurchaseCapacityPercent = capacityPercent;
   currentPurchaseRecommendations = [...recommendations];
   // Initialise all indices as checked (issue #320: all selected by default).
   checkedPurchaseIndices = new Set(currentPurchaseRecommendations.map((_, i) => i));
@@ -4943,7 +5089,10 @@ export async function openPurchaseModal(recommendations: LocalRecommendation[]):
   // the time the modal opens.
   const seeds = currentPurchaseRecommendations.map((r) => resolvePerRecPaymentSeed(r, overridesByAccount));
   for (let i = 0; i < currentPurchaseRecommendations.length; i++) {
-    currentPurchaseRecommendations[i]!.payment = seeds[i]!.payment;
+    const seed = seeds[i]!;
+    currentPurchaseRecommendations[i] = seed.variant
+      ? { ...seed.variant, payment: seed.payment }
+      : { ...currentPurchaseRecommendations[i]!, payment: seed.payment };
   }
 
   while (container.firstChild) container.removeChild(container.firstChild);
@@ -5012,24 +5161,7 @@ export async function openPurchaseModal(recommendations: LocalRecommendation[]):
     // Wire radio changes to update state + show/hide warning.
     const updateExecuteMode = (): void => {
       currentExecuteMode = directRadio.checked ? 'direct' : '';
-      directWarning.hidden = currentExecuteMode !== 'direct';
-      if (currentExecuteMode === 'direct') {
-        // Compute total upfront from currently checked rows for the warning.
-        let totalUpfront = 0;
-        for (const idx of checkedPurchaseIndices) {
-          const r = currentPurchaseRecommendations[idx];
-          if (r) totalUpfront += r.upfront_cost;
-        }
-        while (directWarning.firstChild) directWarning.removeChild(directWarning.firstChild);
-        const icon = document.createElement('strong');
-        icon.textContent = 'Warning: ';
-        directWarning.appendChild(icon);
-        const text = document.createTextNode(
-          `This will charge $${totalUpfront.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} upfront immediately. ` +
-          'This bypasses the approval step. AWS allows cancellation within 24 hours via the Account & Billing console.',
-        );
-        directWarning.appendChild(text);
-      }
+      renderDirectExecuteWarning();
       // Update the submit button label to reflect the selected mode.
       const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
       if (executeBtn) {
@@ -5261,8 +5393,11 @@ function updatePurchaseModalTotals(selectAllCb: HTMLInputElement): void {
   const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
   if (executeBtn) {
     const noneSelected = checkedPurchaseIndices.size === 0;
-    executeBtn.disabled = noneSelected;
-    executeBtn.title = noneSelected ? 'Select at least one purchase' : '';
+    const submitting = executeBtn.dataset['submitting'] === 'true';
+    executeBtn.disabled = submitting || noneSelected;
+    executeBtn.title = submitting
+      ? 'Purchase submission in progress'
+      : noneSelected ? 'Select at least one purchase' : '';
   }
 
   // Sync select-all checkbox indeterminate/checked/unchecked state.
@@ -5278,6 +5413,11 @@ function updatePurchaseModalTotals(selectAllCb: HTMLInputElement): void {
     selectAllCb.checked = false;
     selectAllCb.indeterminate = true;
   }
+
+  // Issue #1903: the direct-execute warning's dollar total is derived from
+  // checkedPurchaseIndices too, so it must refresh on every checkbox toggle,
+  // not only when the radio itself changes.
+  renderDirectExecuteWarning();
 }
 
 // renderPurchaseModalRow builds one editable <tr> for the per-row
@@ -5364,13 +5504,12 @@ function renderPurchaseModalRow(idx: number, paymentSource: 'override' | 'rec' |
   effPctTd.appendChild(document.createTextNode(pct !== null ? pct.toFixed(1) + '%' : '—'));
   tr.appendChild(effPctTd);
 
-  // Term select (col 9). AWS/Azure/GCP commitments universally support 1y and 3y;
-  // on change we rederive Payment options for the new term and pick a
-  // still-valid value if the current one becomes unsupported.
+  // Term select (col 9). Options are the terms actually loaded for this
+  // cell (issue #1903) — an unpriced term is never offered.
   const termCell = document.createElement('td');
   const termSelect = document.createElement('select');
   termSelect.className = 'purchase-row-term';
-  for (const t of [1, 3]) {
+  for (const t of cellTermOptions(rec)) {
     const opt = document.createElement('option');
     opt.value = String(t);
     opt.textContent = formatTerm(t);
@@ -5380,13 +5519,13 @@ function renderPurchaseModalRow(idx: number, paymentSource: 'override' | 'rec' |
   termCell.appendChild(termSelect);
   tr.appendChild(termCell);
 
-  // Payment select (col 10). Options come from paymentOptionsFor (already
-  // filtered to supported values for this provider/service/term cell),
-  // so the user can never pick an unsupported combo through the UI.
+  // Payment select (col 10). Options are restricted to the (term, payment)
+  // combinations actually loaded for this cell (issue #1903), so the user
+  // can never pick a combo the API never priced.
   const paymentCell = document.createElement('td');
   const paymentSelect = document.createElement('select');
   paymentSelect.className = 'purchase-row-payment';
-  rebuildPaymentOptions(paymentSelect, rec.provider as CompatProvider, rec.service, rec.term as 1 | 3, (rec.payment ?? '') as CompatPayment);
+  rebuildPaymentOptions(paymentSelect, cellPaymentOptions(rec, rec.term as 1 | 3), (rec.payment ?? '') as BulkPurchasePayment | '');
   paymentCell.appendChild(paymentSelect);
   if (paymentSource === 'override') {
     const sourceNote = document.createElement('span');
@@ -5409,46 +5548,64 @@ function renderPurchaseModalRow(idx: number, paymentSource: 'override' | 'rec' |
     if (selectAllCb) updatePurchaseModalTotals(selectAllCb);
   });
 
+  // Issue #1903: swap in the loaded sibling variant for the selected
+  // (term, payment) and re-render the whole row so the cost cells, the
+  // Include checkbox, and both selects stay derived from one source. Term
+  // and Payment changes both funnel through this so neither can leave the
+  // row's price stale.
+  const applyVariantChange = (focusSelector: string): void => {
+    const term = parseInt(termSelect.value, 10) === 3 ? 3 : 1;
+    const payment = paymentSelect.value as BulkPurchasePayment;
+    const live = currentPurchaseRecommendations[idx];
+    if (!live) return;
+    const variant = pricedCellVariant(live, term, payment);
+    if (!variant) {
+      // Reachable: a sibling variant with a smaller count can floor to 0 at
+      // the modal's capacity. Keep the priced rec and put the selects back.
+      showToast({
+        message: `No priced ${formatTerm(term)} / ${payment} option for this row at ${currentPurchaseCapacityPercent}% capacity.`,
+        kind: 'warning',
+      });
+      termSelect.value = String(live.term);
+      rebuildPaymentOptions(paymentSelect, cellPaymentOptions(live, live.term as 1 | 3), (live.payment ?? '') as BulkPurchasePayment | '');
+      return;
+    }
+    currentPurchaseRecommendations[idx] = { ...variant, payment };
+    const fresh = renderPurchaseModalRow(idx, paymentSource);
+    tr.replaceWith(fresh);
+    fresh.querySelector<HTMLSelectElement>(focusSelector)?.focus();
+    const selectAllCb = document.getElementById('purchase-modal-select-all') as HTMLInputElement | null;
+    if (selectAllCb) updatePurchaseModalTotals(selectAllCb);
+  };
+
   termSelect.addEventListener('change', () => {
     const live = currentPurchaseRecommendations[idx];
     if (!live) return;
     const newTerm = parseInt(termSelect.value, 10) === 3 ? 3 : 1;
-    live.term = newTerm;
-    // Rebuild this row's payment options for the new term; if current
-    // payment is no longer supported, pick the first valid option and
-    // mirror back to live state.
-    rebuildPaymentOptions(
-      paymentSelect,
-      live.provider as CompatProvider,
-      live.service,
-      newTerm,
-      (live.payment ?? '') as CompatPayment,
-    );
-    live.payment = paymentSelect.value;
+    // Rebuild this row's payment options for the new term before applying —
+    // applyVariantChange reads paymentSelect.value, so it must already
+    // reflect the new term's loaded options.
+    rebuildPaymentOptions(paymentSelect, cellPaymentOptions(live, newTerm), (live.payment ?? '') as BulkPurchasePayment | '');
+    applyVariantChange('.purchase-row-term');
   });
 
-  paymentSelect.addEventListener('change', () => {
-    const live = currentPurchaseRecommendations[idx];
-    if (!live) return;
-    live.payment = paymentSelect.value;
-  });
+  paymentSelect.addEventListener('change', () => applyVariantChange('.purchase-row-payment'));
 
   return tr;
 }
 
-// rebuildPaymentOptions clears and re-populates a <select> with the
-// supported Payment options for a (provider, service, term) cell.
-// If `desired` is in the new option set, it stays selected; otherwise
-// the first option wins and the select's `.value` reflects that.
+// rebuildPaymentOptions clears and re-populates a <select> with the given
+// Payment options. If `desired` is in the new option set, it stays
+// selected; otherwise the first option wins and the select's `.value`
+// reflects that. Issue #1903: options are passed in by the caller
+// (cellPaymentOptions — loaded variants only) rather than derived here from
+// the full compat table, so an unpriced combination can never be offered.
 function rebuildPaymentOptions(
   select: HTMLSelectElement,
-  provider: CompatProvider,
-  service: string,
-  term: 1 | 3,
-  desired: CompatPayment | '',
+  options: readonly BulkPurchasePayment[],
+  desired: BulkPurchasePayment | '',
 ): void {
   while (select.firstChild) select.removeChild(select.firstChild);
-  const options = paymentOptionsFor(provider, service, term);
   let matched = false;
   for (const opt of options) {
     const o = document.createElement('option');

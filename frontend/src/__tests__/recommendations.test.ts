@@ -3669,6 +3669,12 @@ describe('Issue #111 (iii): per-row Payment seed in openPurchaseModal', () => {
     document.body.appendChild(purchaseModal);
     jest.clearAllMocks();
     (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+    // Issue #1903: pricedCellVariant/cellTermOptions/cellPaymentOptions read
+    // state.getRecommendations() for the loaded sibling (term, payment) rows.
+    // Reset to empty here so per-test mockReturnValue overrides below don't
+    // leak into sibling describe blocks (clearAllMocks does not reset return
+    // values — see the note above at the #288 execute-mode-toggle suite).
+    (state.getRecommendations as jest.Mock).mockReturnValue([]);
   });
 
   test('(a) single rec with matching override → row Payment seeded from override; source-note rendered', async () => {
@@ -3684,12 +3690,20 @@ describe('Issue #111 (iii): per-row Payment seed in openPurchaseModal', () => {
       service: 'ec2', resource_type: 't3.medium', region: 'us-east-1',
       count: 5, term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 500,
     };
+    // Issue #1903: the override is only honoured when a priced variant for
+    // it was actually loaded.
+    (state.getRecommendations as jest.Mock).mockReturnValue([
+      rec,
+      { ...rec, id: 'rec-1-partial', payment: 'partial-upfront', upfront_cost: 250, monthly_cost: 20 },
+    ]);
 
     await openPurchaseModal([rec]);
 
     const live = getPurchaseModalRecommendations();
     expect(live).toHaveLength(1);
     expect(live[0]!.payment).toBe('partial-upfront');
+    expect(live[0]!.upfront_cost).toBe(250);
+    expect(live[0]!.id).toBe('rec-1-partial');
 
     const select = document.querySelector<HTMLSelectElement>('.purchase-row-payment');
     expect(select).not.toBeNull();
@@ -3760,6 +3774,13 @@ describe('Issue #111 (iii): per-row Payment seed in openPurchaseModal', () => {
       service: 'ec2', resource_type: 't3.medium', region: 'us-east-1',
       count: 5, term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 500,
     };
+    // Issue #1903: the 3yr row Term now offers must be loaded (and thus
+    // priced) — mock the two 3yr variants this cell would have fanned out.
+    (state.getRecommendations as jest.Mock).mockReturnValue([
+      rec,
+      { ...rec, id: 'rec-4-3-all', term: 3, upfront_cost: 1400 },
+      { ...rec, id: 'rec-4-3-partial', term: 3, payment: 'partial-upfront', upfront_cost: 700, monthly_cost: 30 },
+    ]);
 
     await openPurchaseModal([rec]);
 
@@ -3784,6 +3805,10 @@ describe('Issue #111 (iii): per-row Payment seed in openPurchaseModal', () => {
     expect(paymentSelect!.value).toBe(live[0]!.payment);
     const options = Array.from(paymentSelect!.options).map((o) => o.value);
     expect(options.length).toBeGreaterThan(0);
+    // Issue #1903: options are restricted to the priced (loaded) set, and
+    // the swapped-in row carries the priced variant's own price/id.
+    expect(options).toEqual(['all-upfront', 'partial-upfront']);
+    expect(live[0]!.upfront_cost).toBe(1400);
   });
 
   test('(e) user changes Payment dropdown → live state reflects new value (and would round-trip via handleExecutePurchase)', async () => {
@@ -3792,6 +3817,11 @@ describe('Issue #111 (iii): per-row Payment seed in openPurchaseModal', () => {
       service: 'ec2', resource_type: 't3.medium', region: 'us-east-1',
       count: 5, term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 500,
     };
+    // Issue #1903: the no-upfront option must be a loaded (priced) variant.
+    (state.getRecommendations as jest.Mock).mockReturnValue([
+      rec,
+      { ...rec, id: 'rec-5-no', payment: 'no-upfront', upfront_cost: 0, monthly_cost: 60 },
+    ]);
 
     await openPurchaseModal([rec]);
 
@@ -3804,6 +3834,8 @@ describe('Issue #111 (iii): per-row Payment seed in openPurchaseModal', () => {
 
     const live = getPurchaseModalRecommendations();
     expect(live[0]!.payment).toBe('no-upfront');
+    expect(live[0]!.upfront_cost).toBe(0);
+    expect(live[0]!.monthly_cost).toBe(60);
 
     // The mapping in app.ts::handleExecutePurchase reads this value
     // verbatim (`payment: r.payment ?? 'all-upfront'`), so a downstream
@@ -3820,6 +3852,12 @@ describe('Issue #111 (iii): per-row Payment seed in openPurchaseModal', () => {
       service: 'ec2', resource_type: 't3.medium', region: 'us-east-1',
       count: 2, term: 1, payment: 'all-upfront', savings: 50, upfront_cost: 200,
     };
+    // Issue #1903: a 3yr option is only offered when a 3yr variant was
+    // actually loaded for this cell.
+    (state.getRecommendations as jest.Mock).mockReturnValue([
+      rec,
+      { ...rec, id: 'rec-6-3yr', term: 3 },
+    ]);
 
     await openPurchaseModal([rec]);
 
