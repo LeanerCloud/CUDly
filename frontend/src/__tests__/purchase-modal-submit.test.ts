@@ -3,15 +3,13 @@
  * re-price the row (not just relabel it), and the fan-out modal must never
  * submit a bucket it told the user would be skipped.
  *
- * These tests drive the REAL app.ts + recommendations.ts modules end to end
- * and assert on the actual request body handed to api.executePurchase — the
- * body the backend prices, records, and emails from (see
- * internal/api/handler_purchases.go: validateAndTotalRecommendations /
- * recTotalCommitment trust the submitted amounts verbatim). Asserting on an
- * intermediate helper instead of this body would not prove the fix.
+ * These tests drive app.ts and recommendations.ts and assert that the
+ * displayed variant matches the body passed to api.executePurchase.
+ * The backend independently resolves identity and pricing from stored
+ * recommendations (internal/api/purchase_pricing.go).
  */
 
-// ── mocks (must precede imports) ─────────────────────────────────────────────
+// Mocks must precede imports.
 
 jest.mock('../api', () => ({
   initAuth: jest.fn(),
@@ -142,7 +140,7 @@ jest.mock('../toast', () => ({
   showToast: jest.fn(),
 }));
 
-// ── imports ───────────────────────────────────────────────────────────────────
+// Imports
 
 import { handleExecutePurchase, setupEventListeners } from '../app';
 import * as api from '../api';
@@ -161,7 +159,7 @@ import { formatCurrency } from '../utils';
 import { ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID } from '../permissions';
 import type { LocalRecommendation } from '../types';
 
-// ── fixtures ──────────────────────────────────────────────────────────────────
+// Fixtures
 
 // One AWS EC2 cell fanned out into its four (term, payment) variants — the
 // same shape providers/aws/recommendations/client.go produces for a single
@@ -208,7 +206,7 @@ function deferred<T>(): {
   return { promise, resolve };
 }
 
-// ── DOM / mock scaffolding ────────────────────────────────────────────────────
+// DOM / mock scaffolding
 
 beforeEach(() => {
   document.body.replaceChildren();
@@ -264,7 +262,7 @@ beforeEach(() => {
   (state.getRecommendations as jest.Mock).mockReturnValue(buildRows());
 });
 
-// ── #1903: purchase modal re-prices on Term/Payment change ───────────────────
+// #1903: purchase modal re-prices on Term/Payment change
 
 describe('Issue #1903: purchase modal re-prices on Term/Payment change', () => {
   test('T1 term change re-prices the submitted body', async () => {
@@ -507,7 +505,7 @@ describe('Issue #1903: purchase modal re-prices on Term/Payment change', () => {
   });
 });
 
-// ── #1904: fan-out modal skips incompatible buckets ──────────────────────────
+// #1904: fan-out modal skips incompatible buckets
 
 describe('Issue #1904: fan-out modal skips incompatible buckets', () => {
   function buildFanOutRows(): LocalRecommendation[] {
