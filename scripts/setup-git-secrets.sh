@@ -30,6 +30,26 @@ echo -e "${GREEN}✓ git-secrets is installed${NC}"
 echo ""
 
 # Install git hooks
+#
+# git-secrets 1.3.0's install_hook() writes and chmods the hook file, then
+# reports success via a `say` call. `say` was never its own function:
+# git-secrets sources git's git-sh-setup and relied on `say` being defined
+# there (introduced in git-sh-setup.sh in 2009). Git removed it in commit
+# 5b893f7d81 ("git-sh-setup.sh: remove 'say' function, change last users"),
+# first shipped in Git 2.38 (2022), because it was undocumented and unused
+# within git's own tree, breaking git-secrets as an unintended side effect
+# of a git upgrade rather than a git-secrets regression. On macOS the bare
+# `say` call resolves to /usr/bin/say (the text-to-speech binary) instead
+# and exits 0 by accident; on Linux (or on a new-enough git anywhere) there
+# is no such fallback, so it's "command not found" and `git secrets
+# --install -f` returns non-zero even though every hook file was already
+# written correctly. Define `say` as a no-op here and export it so the
+# exported function is visible in the git-secrets child process on both
+# platforms, making the real hook-writing exit status the one that reaches
+# the check below.
+say() { :; }
+export -f say
+
 echo "Installing git-secrets hooks..."
 if git secrets --install -f; then
     echo -e "${GREEN}✓ Git hooks installed${NC}"
@@ -53,8 +73,7 @@ git secrets --add '[^A-Za-z0-9/+=]{40}[^A-Za-z0-9/+=]'                 # AWS Sec
 git secrets --add 'aws(.{0,20})?['\''"][0-9a-zA-Z/+]{40}['\''"]'       # AWS Credentials
 
 # GCP patterns
-git secrets --add 'type.*service_account'                               # GCP Service Account JSON
-git secrets --add 'AIza[0-9A-Za-z-_]{35}'                              # GCP API Key
+git secrets --add 'AIza[0-9A-Za-z_-]{35}'                              # GCP API Key
 
 # Azure patterns
 git secrets --add 'DefaultEndpointsProtocol=https'                      # Azure Connection String
@@ -63,46 +82,17 @@ git secrets --add 'DefaultEndpointsProtocol=https'                      # Azure 
 git secrets --add 'password\s*[=:]\s*['\''"][^'\''"]{8,}'             # Password with quoted value
 git secrets --add 'api[_-]?key\s*[=:]\s*['\''"][^'\''"]{8,}'         # API key with quoted value
 git secrets --add 'secret[_-]?key\s*[=:]\s*['\''"][^'\''"]{8,}'      # Secret key with quoted value
-git secrets --add '-----BEGIN (RSA|DSA|EC|OPENSSH) PRIVATE KEY-----'  # PEM private keys
+git secrets --add 'BEGIN[[:space:]]((RSA|DSA|EC|OPENSSH|ENCRYPTED)[[:space:]])?PRIVATE[[:space:]]KEY-----'  # PEM private keys
 
 # Database connection strings
 git secrets --add 'postgres://[^:]+:[^@]+@'                           # PostgreSQL
 git secrets --add 'mysql://[^:]+:[^@]+@'                              # MySQL
 git secrets --add 'mongodb(\+srv)?://[^:]+:[^@]+@'                    # MongoDB
 
-# Add allowed patterns (things that look like secrets but aren't)
-echo ""
-echo "Adding allowed patterns (false positives)..."
-
-# Terraform variables and outputs
-git secrets --add --allowed 'var\.'
-git secrets --add --allowed 'local\.'
-git secrets --add --allowed 'output\.'
-git secrets --add --allowed 'data\.'
-
-# Test files
-git secrets --add --allowed '_test\.go'
-git secrets --add --allowed 'testdata/'
-git secrets --add --allowed 'test_password'
-git secrets --add --allowed 'test_secret'
-
-# Documentation and examples
-git secrets --add --allowed 'example\.com'
-git secrets --add --allowed 'YOUR_'
-git secrets --add --allowed '<your-'
-git secrets --add --allowed 'placeholder'
-
-# Go code patterns (function signatures, struct fields, variable names)
-git secrets --add --allowed 'func.*password'
-git secrets --add --allowed 'func.*secret'
-git secrets --add --allowed 'func.*token'
-git secrets --add --allowed 'Password\s+string'
-git secrets --add --allowed 'Secret\s+string'
-git secrets --add --allowed 'Token\s+string'
-
-# Terraform resource references
-git secrets --add --allowed 'resource\s'
-git secrets --add --allowed 'module\.'
+# Allowed patterns live in .gitallowed (versioned, applied by every scan, including CI).
+# They are matched against the whole "path:line:content" scanner output line, so an entry
+# must describe the benign literal or anchor on the path; a bare keyword whitelists
+# every line that contains it (#1972).
 
 echo -e "${GREEN}✓ Secret patterns registered${NC}"
 
