@@ -1,0 +1,50 @@
+# GoReleaser config for cmd/cudly-mcp (see mcp/README.md and
+# docs/plans/mcp/05-store.md Phase B4). This repo hosts several independent
+# tools under one module; this config -- and the v* tag trigger in
+# .github/workflows/release.yml -- is scoped to cudly-mcp only. There is
+# nothing else in this repo's release surface yet.
+version: 2
+
+project_name: cudly-mcp
+
+builds:
+  - id: cudly-mcp
+    main: ./cmd/cudly-mcp
+    binary: cudly-mcp
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.Version={{ .Version }}
+
+# formats: ["binary"] skips compression and uploads the raw per-platform
+# executables directly to the GitHub Release -- release.yml's MCPB pack step
+# reads them straight out of dist/ (no download/extract round trip needed).
+archives:
+  - id: cudly-mcp
+    ids: [cudly-mcp]
+    formats: [binary]
+    name_template: "cudly-mcp_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "cudly-mcp_checksums.txt"
+  algorithm: sha256
+
+# Per-tag release notes: the default changelog would pull in every commit
+# since the last tag across this repo's unrelated tools, most of which have
+# nothing to do with cudly-mcp. Disabled rather than misleading.
+changelog:
+  disable: true
+
+release:
+  github:
+    owner: LeanerCloud
+    name: CUDly
+  # release.yml also uploads the MCPB bundle(s) as extra release assets
+  # after this step runs; GoReleaser only produces the raw binaries here.
+  mode: append
