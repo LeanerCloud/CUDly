@@ -97,10 +97,9 @@ module "compute_container_apps" {
     },
     var.additional_env_vars
   )
-  # ACR registry credentials for image pull
-  registry_server   = azurerm_container_registry.main.login_server
-  registry_username = azurerm_container_registry.main.admin_username
-  registry_password = azurerm_container_registry.main.admin_password
+  # Image pulls authenticate with the app's managed identity (AcrPull inside the module)
+  registry_server       = azurerm_container_registry.main.login_server
+  container_registry_id = azurerm_container_registry.main.id
 
   # Scheduled tasks (Logic Apps)
   #
