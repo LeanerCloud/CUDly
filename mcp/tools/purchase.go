@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -94,8 +95,9 @@ type PurchaseRequest struct {
 	// Azure subscription, or GCP project the call is billed to. It is folded
 	// into the idempotency key so two purchases that are identical in every
 	// product dimension but target different accounts derive DIFFERENT
-	// tokens. Populated by each tool via CredentialScope(). See
-	// idempotencyKeyFor for why omitting it is a double-spend/skipped-spend
+	// tokens. Real purchases include the same ambient fallback as provider
+	// resolution; previews record only an explicit caller-supplied scope.
+	// See idempotencyKeyFor for why omitting it is a double-spend/skipped-spend
 	// hazard on Azure specifically.
 	CredentialScope string
 }
@@ -129,6 +131,16 @@ func CredentialScope(explicit string, envVars ...string) string {
 		}
 	}
 	return ""
+}
+
+// requestCredentialScope resolves the audit/idempotency scope for the selected
+// mode: previews must not record an ambient account they never resolved, while
+// real purchases must keep the provider-env fallback used by authorization.
+func requestCredentialScope(explicit string, dryRun bool, envVars ...string) string {
+	if dryRun {
+		return CredentialScope(explicit)
+	}
+	return CredentialScope(explicit, envVars...)
 }
 
 // credentialScopeSource describes where a provider's credential scope can come
@@ -397,6 +409,10 @@ func rfc3339OrNil(t time.Time) *string {
 	return &s
 }
 
+func purchaseSucceeded(result common.PurchaseResult) bool {
+	return result.Success && result.Error == nil
+}
+
 // idempotencyKeyFor derives a stable per-request key from every field that
 // identifies what is being bought: provider, region, service, resource type,
 // count, term, payment option, plus every service-specific dimension held in
@@ -514,21 +530,18 @@ func savingsPlanDetailsKey(d *common.SavingsPlanDetails) string {
 		d.PlanType, d.HourlyCommitment, d.Coverage, d.InstanceFamily, d.Region, d.OfferingID)
 }
 
-// logPurchaseAttempt and logPurchaseOutcome write the MCP server's audit
-// trail for real, money-spending purchases. Without them an MCP purchase
-// left no record anywhere: the CLI path emits a common.AuditRecord per
-// purchase (cmd/multi_service.go) and the web path persists a
-// purchase_executions row that also carries the approval history, but this
-// server has neither, so an operator asking "what did the assistant buy?"
-// had nothing to read. These lines are that record.
+// logPurchaseAttempt and logPurchaseOutcome write the MCP server's stderr
+// diagnostic trail for real, money-spending purchases. These lines are the
+// live human-readable counterpart to the server's durable JSONL audit log.
 //
 // They go to the standard logger, which writes to STDERR. That is load
 // bearing: the MCP stdio transport owns stdout for JSON-RPC framing, so
 // anything written there would corrupt the protocol stream.
 //
-// Preview calls are deliberately not logged: they contact no provider and
-// spend nothing, and logging every dry run would bury the real purchases in
-// the noise they need to stand out from.
+// Preview calls deliberately omit purchase attempt/outcome diagnostics on
+// stderr: they contact no provider and spend nothing, and logging every dry
+// run would bury real purchases. recordPurchaseAudit still runs for each
+// preview; audit path or write failures may emit an "mcp audit log" warning.
 //
 // The idempotency token is masked (common.MaskToken) rather than written in
 // full, matching how every provider client logs it: it is a stable
@@ -540,6 +553,8 @@ func logPurchaseAttempt(req PurchaseRequest, rec common.Recommendation, token st
 		rec.Term, rec.PaymentOption, common.MaskToken(token))
 }
 
+const providerFailureWithoutDetail = "provider reported failure with no error detail"
+
 // logPurchaseOutcome logs FAILED whenever success is false, even if err is
 // nil: a provider can report PurchaseResult{Success: false, Error: nil} (no
 // Go error, no result.Error, just a plain "did not buy anything"), and that
@@ -547,7 +562,7 @@ func logPurchaseAttempt(req PurchaseRequest, rec common.Recommendation, token st
 func logPurchaseOutcome(rec common.Recommendation, token, commitmentID string, success bool, err error) {
 	if !success {
 		if err == nil {
-			err = fmt.Errorf("provider reported failure with no error detail")
+			err = errors.New(providerFailureWithoutDetail)
 		}
 		log.Printf("mcp purchase FAILED: provider=%s resource=%s token=%s: %v",
 			rec.Provider, rec.ResourceType, common.MaskToken(token), err)
@@ -603,6 +618,7 @@ func ExecutePurchase(ctx context.Context, req PurchaseRequest) (*PurchaseRespons
 
 	rec := req.Recommendation
 	if mode == modePreview {
+		recordPurchaseAudit(rec, req.CredentialScope, common.PurchaseResult{DryRun: true}, auditStatusSkipped, true)
 		return &PurchaseResponse{
 			Success:           true,
 			DryRun:            true,
@@ -638,14 +654,20 @@ func ExecutePurchase(ctx context.Context, req PurchaseRequest) (*PurchaseRespons
 	result, err := client.PurchaseCommitment(ctx, rec, opts)
 	if err != nil {
 		logPurchaseOutcome(rec, token, "", false, err)
+		recordPurchaseAudit(rec, req.CredentialScope, common.PurchaseResult{Error: err}, auditStatusError, false)
 		// Full provider error text surfaces to the caller (feedback:
 		// providers must never swallow the underlying SDK/HTTP error).
 		return nil, fmt.Errorf("purchase commitment failed: %w", err)
 	}
-	logPurchaseOutcome(rec, token, result.CommitmentID, result.Success, result.Error)
+	auditResult := result
+	if !purchaseSucceeded(auditResult) && auditResult.Error == nil {
+		auditResult.Error = errors.New(providerFailureWithoutDetail)
+	}
+	logPurchaseOutcome(rec, token, auditResult.CommitmentID, purchaseSucceeded(auditResult), auditResult.Error)
+	recordPurchaseAudit(rec, req.CredentialScope, auditResult, auditStatusFor(auditResult), false)
 
 	resp := &PurchaseResponse{
-		Success:           result.Success,
+		Success:           purchaseSucceeded(result),
 		DryRun:            result.DryRun,
 		CommitmentID:      result.CommitmentID,
 		Cost:              nonZeroCostPtr(result.Cost),
@@ -663,7 +685,7 @@ func ExecutePurchase(ctx context.Context, req PurchaseRequest) (*PurchaseRespons
 	// Success=false (or carries an Error) bought nothing, so pitching a
 	// 7-day window against a purchase that did not happen would be wrong on
 	// the facts, not merely premature.
-	if result.Success && result.Error == nil {
+	if purchaseSucceeded(result) {
 		resp.Archera = archeraOffer()
 	}
 	return resp, nil

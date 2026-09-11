@@ -42,3 +42,52 @@ func TestCheckAuditLogWritable_DoesNotChmodExistingAuditLog(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
+
+func TestCheckAuditLogWritable_RejectsWriteOnlyAuditLog(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses file read permission checks")
+	}
+
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("line1\n"), 0o200))
+
+	err := CheckAuditLogWritable(path)
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "not readable and writable")
+}
+
+func TestCheckAuditLogWritable_RejectsUnreadableImmediateParent(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory read permission checks")
+	}
+
+	parent := filepath.Join(t.TempDir(), "audit-parent")
+	require.NoError(t, os.Mkdir(parent, 0o700))
+	path := filepath.Join(parent, "audit.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("existing\n"), 0o600))
+	require.NoError(t, os.Chmod(parent, 0o300))
+	t.Cleanup(func() { require.NoError(t, os.Chmod(parent, 0o700)) })
+
+	err := CheckAuditLogWritable(path)
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, parent)
+	assert.ErrorContains(t, err, "durability")
+}
+
+func TestCheckAuditLogWritable_AllowsUnreadableHigherAncestor(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory read permission checks")
+	}
+
+	higher := filepath.Join(t.TempDir(), "higher")
+	parent := filepath.Join(higher, "audit-parent")
+	require.NoError(t, os.MkdirAll(parent, 0o700))
+	path := filepath.Join(parent, "audit.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("existing\n"), 0o600))
+	require.NoError(t, os.Chmod(higher, 0o300))
+	t.Cleanup(func() { require.NoError(t, os.Chmod(higher, 0o700)) })
+
+	require.NoError(t, CheckAuditLogWritable(path))
+}

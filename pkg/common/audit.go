@@ -2,7 +2,10 @@ package common
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"log"
 	"os"
 	"time"
@@ -24,27 +27,255 @@ func WriteAuditRecord(record AuditRecord, path string) error {
 	// ops tooling and reconciled against purchase_history; restricting to
 	// 0600 would break that workflow without adding meaningful protection
 	// since the file lives under the run-owned working dir.
-	// #nosec G302,G304 -- 0644 perms required for downstream readers; path is operator-configured audit log location.
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return fmt.Errorf("open audit log %s: %w", path, err)
-	}
-	defer f.Close()
+	return appendJSONL(path, data, 0644)
+}
 
-	if _, err := f.Write(append(data, '\n')); err != nil {
-		return fmt.Errorf("write audit record: %w", err)
+// CheckAuditLogWritable verifies the audit file is readable and writable and
+// its immediate namespace parents can be opened and synced for durability.
+func CheckAuditLogWritable(path string) error {
+	f, err := openAuditLogForAppend(path, 0644)
+	if err != nil {
+		return fmt.Errorf("audit log %q not readable and writable or parent not durable: %w", path, err)
+	}
+	if err := probeAuditLogWritable(path, f); err != nil {
+		return fmt.Errorf("audit log %q not readable and writable or parent not durable: %w", path, err)
 	}
 	return nil
 }
 
-// CheckAuditLogWritable opens the audit log file in append mode to verify it is writable.
-// Returns an error if the path cannot be opened for writing.
-func CheckAuditLogWritable(path string) error {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644) // #nosec G302,G304 -- 0644 intentionally matches WriteAuditRecord; path is operator-configured.
-	if err != nil {
-		return fmt.Errorf("audit log %q not writable: %w", path, err)
+func openAuditLogForAppend(path string, perm fs.FileMode) (auditLogFile, error) {
+	return openAuditLogForAppendWithBinder(path, perm, bindAuditLogParents)
+}
+
+type auditParentBinder func(string, *os.File) ([]auditParentDir, error)
+
+func openAuditLogForAppendWithBinder(
+	path string,
+	perm fs.FileMode,
+	bindParents auditParentBinder,
+) (auditLogFile, error) {
+	if err := validateAuditLogTarget(path); err != nil {
+		return nil, err
 	}
-	return f.Close()
+
+	// #nosec G302,G304,G703 -- audit path is operator-configured; WriteAuditRecord intentionally uses 0644 for downstream readers.
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, perm)
+	if err != nil {
+		return nil, fmt.Errorf("open audit log %s: %w", path, err)
+	}
+
+	info, err := f.Stat()
+	if err != nil {
+		closeErr := f.Close()
+		return nil, errors.Join(fmt.Errorf("stat opened audit log %s: %w", path, err), closeErr)
+	}
+	if !info.Mode().IsRegular() {
+		closeErr := f.Close()
+		return nil, errors.Join(nonRegularAuditLogTargetError(path, info.Mode()), closeErr)
+	}
+
+	parents, err := bindParents(path, f)
+	if err != nil {
+		return nil, closeAuditLog(path, f, err)
+	}
+	return &auditOSFile{File: f, parents: parents}, nil
+}
+
+type auditLogFile interface {
+	Lock() error
+	syncParents() error
+	needsRecordSeparator() (bool, error)
+	Write([]byte) (int, error)
+	Sync() error
+	Unlock() error
+	Close() error
+}
+
+type auditOSFile struct {
+	*os.File
+	parents []auditParentDir
+}
+
+type auditParentHandle interface {
+	Sync() error
+	Close() error
+}
+
+type auditParentDir struct {
+	path   string
+	handle auditParentHandle
+}
+
+func (f *auditOSFile) syncParents() error {
+	var syncErr error
+	for _, parent := range f.parents {
+		if err := parent.handle.Sync(); err != nil {
+			syncErr = errors.Join(syncErr, fmt.Errorf("sync audit log parent directory %s for durability: %w", parent.path, err))
+		}
+	}
+	return syncErr
+}
+
+func (f *auditOSFile) Close() error {
+	var closeErr error
+	for _, parent := range f.parents {
+		if err := parent.handle.Close(); err != nil {
+			closeErr = errors.Join(closeErr, fmt.Errorf("close audit log parent directory %s: %w", parent.path, err))
+		}
+	}
+	if err := f.File.Close(); err != nil {
+		closeErr = errors.Join(closeErr, err)
+	}
+	return closeErr
+}
+
+func (f *auditOSFile) needsRecordSeparator() (bool, error) {
+	info, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	if info.Size() == 0 {
+		return false, nil
+	}
+
+	var tail [1]byte
+	n, err := f.ReadAt(tail[:], info.Size()-1)
+	if err != nil {
+		return false, err
+	}
+	if n != len(tail) {
+		return false, io.ErrUnexpectedEOF
+	}
+	return tail[0] != '\n', nil
+}
+
+func appendJSONL(path string, payload []byte, perm fs.FileMode) error {
+	f, err := openAuditLogForAppend(path, perm)
+	if err != nil {
+		return err
+	}
+	return appendJSONLFile(path, f, payload)
+}
+
+func appendJSONLFile(path string, f auditLogFile, payload []byte) error {
+	return withAuditLogTransaction(path, f, func() error {
+		return appendJSONLLocked(path, f, payload)
+	})
+}
+
+func probeAuditLogWritable(path string, f auditLogFile) error {
+	return withAuditLogTransaction(path, f, nil)
+}
+
+func appendJSONLLocked(path string, f auditLogFile, payload []byte) error {
+	if err := repairAbandonedAuditRecord(path, f); err != nil {
+		return err
+	}
+
+	line := make([]byte, 0, len(payload)+1)
+	line = append(line, payload...)
+	line = append(line, '\n')
+
+	n, err := f.Write(line)
+	var opErr error
+	switch {
+	case err != nil:
+		opErr = fmt.Errorf("write audit record to %s: %w", path, err)
+	case n != len(line):
+		opErr = fmt.Errorf("write audit record to %s: %w", path, io.ErrShortWrite)
+	default:
+		if err := f.Sync(); err != nil {
+			opErr = fmt.Errorf("sync audit record to %s: %w", path, err)
+		}
+	}
+
+	if opErr != nil && n > 0 && n < len(line) {
+		if err := terminatePartialAuditRecord(path, f); err != nil {
+			opErr = errors.Join(opErr, err)
+		}
+	}
+
+	return opErr
+}
+
+func repairAbandonedAuditRecord(path string, f auditLogFile) error {
+	needsSeparator, err := f.needsRecordSeparator()
+	if err != nil {
+		return fmt.Errorf("inspect audit log tail %s: %w", path, err)
+	}
+	if !needsSeparator {
+		return nil
+	}
+	return terminatePartialAuditRecord(path, f)
+}
+
+func withAuditLogTransaction(path string, f auditLogFile, work func() error) error {
+	if err := f.Lock(); err != nil {
+		return closeAuditLog(path, f, fmt.Errorf("lock audit log %s: %w", path, err))
+	}
+
+	opErr := f.syncParents()
+	if opErr == nil && work != nil {
+		opErr = work()
+	}
+	if err := f.Unlock(); err != nil {
+		opErr = errors.Join(opErr, fmt.Errorf("unlock audit log %s: %w", path, err))
+	}
+	return closeAuditLog(path, f, opErr)
+}
+
+func closeAuditLog(path string, f io.Closer, opErr error) error {
+	if err := f.Close(); err != nil {
+		return errors.Join(opErr, fmt.Errorf("close audit log %s: %w", path, err))
+	}
+	return opErr
+}
+
+func terminatePartialAuditRecord(path string, f auditLogFile) error {
+	n, err := f.Write([]byte{'\n'})
+	var opErr error
+	switch {
+	case err != nil:
+		opErr = fmt.Errorf("write audit record separator to %s: %w", path, err)
+	case n != 1:
+		opErr = fmt.Errorf("write audit record separator to %s: %w", path, io.ErrShortWrite)
+	}
+	if n == 1 {
+		if err := f.Sync(); err != nil {
+			opErr = errors.Join(opErr, fmt.Errorf("sync audit record separator to %s: %w", path, err))
+		}
+	}
+	return opErr
+}
+
+func validateAuditLogTarget(path string) error {
+	info, err := os.Lstat(path) // #nosec G703 -- audit path is operator configured
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("stat audit log target %q: %w", path, err)
+	}
+
+	if info.Mode()&os.ModeSymlink != 0 {
+		targetInfo, err := os.Stat(path) // #nosec G703 -- audit path is operator configured
+		if err != nil {
+			return fmt.Errorf("resolve audit log symlink %q: %w", path, err)
+		}
+		if !targetInfo.Mode().IsRegular() {
+			return nonRegularAuditLogTargetError(path, targetInfo.Mode())
+		}
+		return nil
+	}
+
+	if !info.Mode().IsRegular() {
+		return nonRegularAuditLogTargetError(path, info.Mode())
+	}
+	return nil
+}
+
+func nonRegularAuditLogTargetError(path string, mode fs.FileMode) error {
+	return fmt.Errorf("non-regular audit log target %q has mode %s", path, mode.Type())
 }
 
 // NewAuditRecord constructs an AuditRecord from a Recommendation and a PurchaseResult.

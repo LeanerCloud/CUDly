@@ -105,6 +105,19 @@ func TestRawRecommendation_Omitempty(t *testing.T) {
 	data, err := json.Marshal(record)
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "raw_recommendation")
+	assert.NotContains(t, string(data), "credential_scope")
+}
+
+func TestAuditRecord_CredentialScopeJSON(t *testing.T) {
+	t.Parallel()
+	record := AuditRecord{RunID: "run-x", CredentialScope: "profile-a"}
+	data, err := json.Marshal(record)
+	require.NoError(t, err)
+
+	var parsed AuditRecord
+	require.NoError(t, json.Unmarshal(data, &parsed))
+	assert.Equal(t, "profile-a", parsed.CredentialScope)
+	assert.Contains(t, string(data), `"credential_scope":"profile-a"`)
 }
 
 func TestNewAuditRecord_Fields(t *testing.T) {
@@ -130,6 +143,7 @@ func TestNewAuditRecord_Fields(t *testing.T) {
 	assert.Equal(t, ProviderAWS, ar.Provider)
 	assert.Equal(t, "111", ar.AccountID)
 	assert.Equal(t, "staging", ar.AccountName)
+	assert.Empty(t, ar.CredentialScope)
 	assert.Equal(t, "eu-west-1", ar.Region)
 	assert.Equal(t, 12, ar.Term)
 	assert.Equal(t, 3, ar.Count)
@@ -146,7 +160,33 @@ func TestCheckAuditLogWritable_WritablePath(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audit.jsonl")
 
-	assert.NoError(t, CheckAuditLogWritable(path))
+	require.NoError(t, CheckAuditLogWritable(path))
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.True(t, info.Mode().IsRegular())
+}
+
+func TestCheckAuditLogWritable_AllowsSymlinkToRegularFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "audit.jsonl")
+	require.NoError(t, os.WriteFile(target, []byte("existing\n"), 0o600))
+	link := filepath.Join(dir, "audit-link.jsonl")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+
+	require.NoError(t, CheckAuditLogWritable(link))
+}
+
+func TestCheckAuditLogWritable_RejectsNonRegularTargets(t *testing.T) {
+	t.Parallel()
+
+	err := CheckAuditLogWritable(t.TempDir())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-regular audit log target")
 }
 
 // The unwritable path is a child of a regular file rather than a 0555
