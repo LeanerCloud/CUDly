@@ -940,7 +940,38 @@ export function groupRecsByCell(recs: readonly LocalRecommendation[]): Map<strin
   return groups;
 }
 
-// Every loaded (term, payment) row of rec's cell, plus rec itself when the
+// Stable offering selectors from pkg/common/types.go; SP prices and offering
+// IDs can legitimately differ across term/payment variants.
+function samePurchaseVariantIdentity(a: LocalRecommendation, b: LocalRecommendation): boolean {
+  if (a.provider !== 'aws') return true;
+  let fields: readonly string[];
+  switch (a.service) {
+    case 'ec2':
+    case 'compute':
+      fields = ['platform', 'tenancy', 'scope'];
+      break;
+    case 'rds':
+    case 'relational-db':
+      fields = ['engine', 'az_config'];
+      break;
+    case 'elasticache':
+    case 'cache':
+      fields = ['engine'];
+      break;
+    default:
+      fields = isSavingsPlanService(a.service) ? ['plan_type', 'instance_family', 'region'] : [];
+  }
+  if (fields.length === 0) return true;
+  const left = a.details ?? {};
+  const right = b.details ?? {};
+  if (typeof left !== 'object' || Array.isArray(left) || typeof right !== 'object' || Array.isArray(right)) return false;
+  return fields.every((field) => {
+    const value = (left as Record<string, unknown>)[field];
+    return (value === undefined || typeof value === 'string') && value === (right as Record<string, unknown>)[field];
+  });
+}
+
+// Every loaded (term, payment) row of rec's purchase identity, plus rec itself when the
 // loaded set lacks it (modal opened on a stale or test-supplied list).
 // Reads state.getRecommendations() (not getVisibleRecommendations) so a
 // column filter that hides a sibling term/payment row can never make the
@@ -948,7 +979,7 @@ export function groupRecsByCell(recs: readonly LocalRecommendation[]): Map<strin
 function loadedCellVariants(rec: LocalRecommendation): LocalRecommendation[] {
   const key = cellKey(rec);
   const variants = (state.getRecommendations() as unknown as LocalRecommendation[])
-    .filter((v) => cellKey(v) === key);
+    .filter((v) => cellKey(v) === key && samePurchaseVariantIdentity(rec, v));
   if (!variants.some((v) => v.id === rec.id)) variants.push(rec);
   return sortVariantsInCell(variants);
 }
@@ -1520,9 +1551,9 @@ export function onDemandMonthly(r: LocalRecommendation): number | null {
   return null;
 }
 
-// ---------------------------------------------------------------------------
+//
 // Cost-period scaling (issue #319)
-// ---------------------------------------------------------------------------
+//
 
 /** Conversion factors relative to a monthly base. */
 const PERIOD_FACTOR: Record<CostPeriod, number> = {
@@ -1647,7 +1678,7 @@ export function pickBestVariantPerCell(recs: readonly LocalRecommendation[]): Lo
   return result;
 }
 
-// ---------------------------------------------------------------------------
+//
 // COLUMN_DEFS — single source of truth for the recommendations table columns.
 //
 // Order here matches the rendered column order (left to right), excluding the
@@ -1663,7 +1694,7 @@ export function pickBestVariantPerCell(recs: readonly LocalRecommendation[]): Lo
 // cost columns (`savings`, `monthly_cost`, `on_demand_monthly`) are handled
 // separately by `getColumnLabel` per-period, so their entry here is only
 // used as the data-attribute / fallback label, not the rendered <th>.
-// ---------------------------------------------------------------------------
+//
 export interface ColumnDef {
   key: state.RecommendationsColumnId;
   label: string;
@@ -1931,7 +1962,7 @@ function roundForDisplay(n: number, precision: number): number {
   return Number(n.toFixed(precision));
 }
 
-// ---------------------------------------------------------------------------
+//
 // Column-filter popover (portal pattern)
 //
 // The popover element lives appended to document.body so it survives
@@ -1943,7 +1974,7 @@ function roundForDisplay(n: number, precision: number): number {
 // The popover STRUCTURE is built once on open; STATE (.checked / .value) is
 // re-synced on every anchor re-bind from the latest column-filter state, EXCEPT
 // when the input is document.activeElement (mid-typing protection).
-// ---------------------------------------------------------------------------
+//
 
 // Derived from COLUMN_DEFS — numeric columns get a text-input filter; categoricals
 // get a checkbox-list filter.  Kept as a Set for O(1) membership tests.
@@ -2563,13 +2594,13 @@ function ensureRecommendationsTabObserver(): void {
   recommendationsTabObserver.observe(tab, { attributes: true, attributeFilter: ['class'] });
 }
 
-// ---------------------------------------------------------------------------
+//
 // Column-visibility popover (issue #318)
 //
 // Separate state from the column-filter popover (openPopover / outsideClickHandler
 // etc.) to avoid conflating the two interactions.  Shares the positionPopover()
 // helper for positioning.
-// ---------------------------------------------------------------------------
+//
 
 interface VisibilityPopoverState {
   el: HTMLDivElement;
@@ -2715,7 +2746,7 @@ function mountColumnsButton(bar: HTMLElement): void {
   }
 }
 
-// ---------------------------------------------------------------------------
+//
 
 // Render (or update) the filter-status bar: a "Clear filters (N)" button
 // when at least one column filter is active, plus an aria-live region
@@ -3500,9 +3531,9 @@ function saveBulkPurchaseState(s: BulkPurchaseToolbarState): void {
   }
 }
 
-// ---------------------------------------------------------------------------
+//
 // Column visibility — localStorage persistence (issue #318)
-// ---------------------------------------------------------------------------
+//
 
 // TOGGLEABLE_COLUMNS — the subset of COLUMN_DEFS whose visibility can be toggled.
 // Provider, Account, Service, and Resource Type are "cell identity anchors" on
@@ -3555,9 +3586,9 @@ export function saveColumnVisibility(hidden: ReadonlySet<state.RecommendationsCo
   }
 }
 
-// ---------------------------------------------------------------------------
+//
 // Column filters — localStorage persistence (issue #163)
-// ---------------------------------------------------------------------------
+//
 
 const COLUMN_FILTERS_LS_KEY = 'cudly.recs.columnFilters.v1';
 const COLUMN_FILTERS_SCHEMA_VERSION = 1;
@@ -3648,7 +3679,7 @@ function visibleColumns(): readonly ColumnDef[] {
   return COLUMN_DEFS.filter((c) => !hidden.has(c.key));
 }
 
-// ---------------------------------------------------------------------------
+//
 // Mount-once-then-update lifecycle for the sticky bottom action box.
 // mountBottomActionBox builds the DOM (input/select/button identities) and
 // wires listeners exactly once. updateBottomActionBox refreshes only the

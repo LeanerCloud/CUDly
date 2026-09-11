@@ -265,6 +265,103 @@ beforeEach(() => {
 // #1903: purchase modal re-prices on Term/Payment change
 
 describe('Issue #1903: purchase modal re-prices on Term/Payment change', () => {
+  test.each<[string, string, string, Record<string, unknown>, unknown]>([
+    ['ec2', 'platform', 'm5.large', { instance_type: 'm5.large', platform: 'Linux/UNIX', tenancy: 'default', scope: 'Region' }, 'Windows'],
+    ['ec2', 'tenancy', 'm5.large', { instance_type: 'm5.large', platform: 'Linux/UNIX', tenancy: 'default', scope: 'Region' }, 'dedicated'],
+    ['ec2', 'scope', 'm5.large', { instance_type: 'm5.large', platform: 'Linux/UNIX', tenancy: 'default', scope: 'Region' }, 'Availability Zone'],
+    ['compute', 'platform', 'm5.large', { instance_type: 'm5.large', platform: 'Linux/UNIX', tenancy: 'default', scope: 'Region' }, 'Windows'],
+    ['rds', 'az_config', 'db.r5.large', { engine: 'postgres', az_config: 'single-az' }, 'multi-az'],
+    ['relational-db', 'az_config', 'db.r5.large', { engine: 'postgres', az_config: 'single-az' }, 'multi-az'],
+    ['rds', 'engine', 'db.r5.large', { engine: 'postgres', az_config: 'single-az' }, 'mysql'],
+    ['elasticache', 'engine', 'cache.r6g.large', { engine: 'redis', node_type: 'cache.r6g.large' }, 'memcached'],
+    ['cache', 'engine', 'cache.r6g.large', { engine: 'redis', node_type: 'cache.r6g.large' }, 'memcached'],
+    ['savingsplans', 'plan_type', '', { plan_type: 'Compute', hourly_commitment: 1 }, 'SageMaker'],
+    ['savings-plans-ec2instance', 'instance_family', '', { plan_type: 'EC2Instance', instance_family: 'm5', region: 'us-east-1', hourly_commitment: 1 }, 'm6i'],
+    ['savings-plans-ec2instance', 'region', '', { plan_type: 'EC2Instance', instance_family: 'm5', region: 'us-east-1', hourly_commitment: 1 }, 'us-west-2'],
+  ])('purchase identity excludes %s variants with different %s', async (service, field, resourceType, details, otherValue) => {
+    const savingsPlan = service === 'savingsplans' || service.startsWith('savings-plans');
+    const original = { ...buildRows()[0]!, service, resource_type: resourceType, count: savingsPlan ? 1 : 2, region: savingsPlan ? '' : 'us-east-1', details };
+    const other = { ...original, id: 'other-identity', term: 1, upfront_cost: 12000, details: { ...details, [field]: otherValue } };
+    (state.getRecommendations as jest.Mock).mockReturnValue([other, original]);
+
+    await openPurchaseModal([original]);
+
+    const termSelect = document.querySelector<HTMLSelectElement>('.purchase-row-term')!;
+    expect(Array.from(termSelect.options, (option) => option.value)).toEqual(['3']);
+    expect(getPurchaseModalRecommendations()).toEqual([original]);
+    (document.getElementById('execute-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+    expect(api.executePurchase).toHaveBeenCalledTimes(1);
+    expect((api.executePurchase as jest.Mock).mock.calls[0]![0]).toEqual([
+      expect.objectContaining({ id: original.id, term: 3, details, upfront_cost: original.upfront_cost }),
+    ]);
+  });
+
+  test.each([false, true])('purchase identity selects the matching priced EC2 variant (reverse order: %s)', async (reverse) => {
+    const details = { instance_type: 'm5.large', platform: 'Linux/UNIX', tenancy: 'default', scope: 'Region' };
+    const original = { ...buildRows()[0]!, details };
+    const dedicated = { ...original, id: 'dedicated-1-all', term: 1, upfront_cost: 12000, details: { ...details, tenancy: 'dedicated' } };
+    const matching = { ...original, id: 'default-1-no', term: 1, payment: 'no-upfront', upfront_cost: 0, monthly_cost: 800, savings: 500 };
+    const loaded = [original, dedicated, matching];
+    (state.getRecommendations as jest.Mock).mockReturnValue(reverse ? loaded.reverse() : loaded);
+
+    await openPurchaseModal([original]);
+    const termSelect = document.querySelector<HTMLSelectElement>('.purchase-row-term')!;
+    termSelect.value = '1';
+    termSelect.dispatchEvent(new Event('change'));
+
+    const row = document.querySelector<HTMLTableRowElement>('.purchase-modal-table tbody tr')!;
+    expect(row.cells[5]!.textContent).toBe(formatCurrency(0));
+    expect(row.cells[6]!.textContent).toBe(formatCurrency(800));
+    expect(document.querySelector<HTMLSelectElement>('.purchase-row-payment')!.value).toBe('no-upfront');
+    expect(getPurchaseModalRecommendations()[0]).toMatchObject(matching);
+    (document.getElementById('execute-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+    expect(api.executePurchase).toHaveBeenCalledTimes(1);
+    expect((api.executePurchase as jest.Mock).mock.calls[0]![0]).toEqual([
+      expect.objectContaining(matching),
+    ]);
+  });
+
+  test.each([undefined, null, [], 'invalid', { platform: 1 }, {}])('purchase identity does not match populated EC2 details to %j', async (otherDetails) => {
+    const original = { ...buildRows()[0]!, details: { platform: 'Linux/UNIX', tenancy: 'default', scope: 'Region' } };
+    const other = { ...original, id: 'missing-identity', term: 1, details: otherDetails };
+    (state.getRecommendations as jest.Mock).mockReturnValue([other, original]);
+
+    await openPurchaseModal([original]);
+
+    expect(Array.from(document.querySelector<HTMLSelectElement>('.purchase-row-term')!.options, (option) => option.value))
+      .toEqual(['3']);
+    expect(getPurchaseModalRecommendations()[0]).toEqual(original);
+  });
+
+  test('purchase identity allows Savings Plans prices and offering IDs to change', async () => {
+    const original = {
+      ...buildRows()[0]!, service: 'savings-plans-ec2instance', resource_type: '', region: '', count: 1,
+      details: { plan_type: 'EC2Instance', instance_family: 'm5', region: 'us-east-1', hourly_commitment: 1, offering_id: 'offering-3-all', coverage: '50.0%' },
+    };
+    const matching = {
+      ...original, id: 'sp-1-no', term: 1, payment: 'no-upfront', upfront_cost: 0, monthly_cost: 1460, savings: 400,
+      details: { ...original.details, hourly_commitment: 2, offering_id: 'offering-1-no', coverage: '40.0%' },
+    };
+    (state.getRecommendations as jest.Mock).mockReturnValue([original, matching]);
+
+    await openPurchaseModal([original]);
+    const termSelect = document.querySelector<HTMLSelectElement>('.purchase-row-term')!;
+    termSelect.value = '1';
+    termSelect.dispatchEvent(new Event('change'));
+
+    expect(getPurchaseModalRecommendations()[0]).toMatchObject(matching);
+    expect(document.querySelector<HTMLTableRowElement>('.purchase-modal-table tbody tr')!.cells[6]!.textContent)
+      .toBe(formatCurrency(1460));
+    (document.getElementById('execute-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+    expect(api.executePurchase).toHaveBeenCalledTimes(1);
+    expect((api.executePurchase as jest.Mock).mock.calls[0]![0]).toEqual([
+      expect.objectContaining(matching),
+    ]);
+  });
+
   test('T1 term change re-prices the submitted body', async () => {
     const rows = buildRows();
     const v3all = rows.find((r) => r.id === 'v-3-all')!;
