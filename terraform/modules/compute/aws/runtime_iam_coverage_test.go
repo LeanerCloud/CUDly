@@ -1,16 +1,8 @@
-// Guards the class of defect behind #1967 and #1968: an AWS action the
-// application calls under the runtime role that no runtime IaC flavor grants.
-// check-aws-iam-parity.sh cannot see this class because it only compares the
-// three runtime flavors with each other, so a gap present in all three passes.
-// This derives the called-action set straight from the SDK request structs
-// under the scanned roots and asserts each flavor grants every one.
-//
-// Two limits are deliberate. The guard is one-way: it catches an action the
-// code calls that a flavor does not grant, never a grant no code uses. Dead
-// grants are #1322's subject. And it covers only the reservation-related
-// service prefixes below, matching check-aws-iam-parity.sh's scope; platform
-// namespaces (sns, ses, secretsmanager, lambda, kms, logs) are out of reach
-// and have known gaps of their own, tracked on #1204.
+// Detects CE/EC2 action names missing from runtime IaC, including gaps shared
+// by all three flavors that check-aws-iam-parity.sh cannot detect (#1967/#1968).
+// This is source/action-presence coverage, not IAM evaluation: Effect, resource
+// scope, role attachment, and inline comments require separate review. Unused
+// grants (#1322) and other service namespaces are outside this guard's scope.
 package aws_test
 
 import (
@@ -25,22 +17,13 @@ import (
 	"testing"
 )
 
-// sdkServiceToIAMPrefix maps an aws-sdk-go-v2 service package name to the IAM
-// action prefix it authorizes against. Two services rename: Cost Explorer's
-// package is costexplorer but its actions are ce:*, and OpenSearch's package
-// is opensearch but its actions (for historical reasons) are es:*. sts is
-// deliberately absent: GetCallerIdentity requires no IAM permission at all,
-// so a call to it must never enter the derived set.
+// sdkServiceToIAMPrefix maps the CE/EC2 aws-sdk-go-v2 service package names to
+// the IAM action prefixes they authorize against. Cost Explorer's package is
+// costexplorer but its actions are ce:*. sts is deliberately absent:
+// GetCallerIdentity requires no IAM permission and must never enter the set.
 var sdkServiceToIAMPrefix = map[string]string{
-	"costexplorer":  "ce",
-	"ec2":           "ec2",
-	"rds":           "rds",
-	"elasticache":   "elasticache",
-	"opensearch":    "es",
-	"redshift":      "redshift",
-	"memorydb":      "memorydb",
-	"savingsplans":  "savingsplans",
-	"organizations": "organizations",
+	"costexplorer": "ce",
+	"ec2":          "ec2",
 }
 
 // requiredDerivedActions is the floor from #1967/#1968: actions the code is
@@ -54,9 +37,6 @@ var requiredDerivedActions = []string{
 	"ec2:CancelReservedInstancesListing",
 	"ec2:DescribeInstanceTypes",
 	"ec2:CreateTags",
-	"redshift:DescribeTags",
-	"redshift:CreateTags",
-	"es:AddTags",
 }
 
 // scanRoots are walked, relative to the repo root, for SDK call sites.
@@ -250,19 +230,17 @@ func sdkImportAliases(file *ast.File) map[string]string {
 	return aliases
 }
 
-// grantedActionPattern is check-aws-iam-parity.sh's extraction regex,
-// rewritten with a capture group so the match includes only the action
-// itself, not the boundary byte before it.
-var grantedActionPattern = regexp.MustCompile(`(?:^|[^A-Za-z])((?:ce|ec2|rds|elasticache|es|redshift|memorydb|savingsplans|organizations):[A-Z][A-Za-z]+)`)
+// grantedActionPattern is the CE/EC2 subset of check-aws-iam-parity.sh's
+// extraction regex, rewritten with a capture group so the match includes only
+// the action itself, not the boundary byte before it.
+var grantedActionPattern = regexp.MustCompile(`(?:^|[^A-Za-z])((?:ce|ec2):[A-Z][A-Za-z]+)`)
 
 // hashCommentLinePattern matches a whole line whose first non-blank byte is
 // #, the comment style both Terraform and CloudFormation YAML use here.
 var hashCommentLinePattern = regexp.MustCompile(`(?m)^[ \t]*#.*$`)
 
-// grantedActions reads path (relative to this package's directory, matching
-// how go test sets its working directory) and returns the set of IAM actions
-// it grants. Comment lines are stripped first, so a comment naming an action
-// cannot satisfy the guard.
+// grantedActions extracts action names from path after stripping whole-line
+// # comments. It does not parse policy semantics or other comment forms.
 func grantedActions(t *testing.T, path string) map[string]bool {
 	t.Helper()
 
