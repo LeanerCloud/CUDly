@@ -986,7 +986,12 @@ function loadedCellVariants(rec: LocalRecommendation): LocalRecommendation[] {
 
 // The scaled variant the modal would submit for (term, payment), or null when
 // no such row was loaded or it scales to zero units at the modal's capacity.
-function pricedCellVariant(rec: LocalRecommendation, term: 1 | 3, payment: BulkPurchasePayment): LocalRecommendation | null {
+function pricedCellVariant(
+  rec: LocalRecommendation,
+  term: 1 | 3,
+  payment: BulkPurchasePayment,
+  capacityPercent: number,
+): LocalRecommendation | null {
   const v = loadedCellVariants(rec).find((c) => c.term === term && normalizeBulkPayment(c.payment) === payment);
   if (!v) return null;
   // `rec` reached the modal already scaled to currentPurchaseCapacityPercent:
@@ -994,7 +999,7 @@ function pricedCellVariant(rec: LocalRecommendation, term: 1 | 3, payment: BulkP
   // rows. Only the rows read from state.getRecommendations() are unscaled, so
   // re-scaling the fallback push would halve count and cost a second time.
   if (v === rec) return v;
-  return scaleRecForCapacity(v, currentPurchaseCapacityPercent);
+  return scaleRecForCapacity(v, capacityPercent);
 }
 
 // Distinct terms actually loaded for rec's cell, ascending. Used to build
@@ -1010,9 +1015,13 @@ function cellTermOptions(rec: LocalRecommendation): Array<1 | 3> {
 
 // Payment options for rec's cell at `term`, restricted to combinations that
 // were loaded and remain priced at the modal capacity (issue #1903).
-function cellPaymentOptions(rec: LocalRecommendation, term: 1 | 3): BulkPurchasePayment[] {
+function cellPaymentOptions(
+  rec: LocalRecommendation,
+  term: 1 | 3,
+  capacityPercent: number,
+): BulkPurchasePayment[] {
   return paymentOptionsFor(rec.provider as CompatProvider, rec.service, term).filter((p) =>
-    pricedCellVariant(rec, term, p as BulkPurchasePayment) !== null,
+    pricedCellVariant(rec, term, p as BulkPurchasePayment, capacityPercent) !== null,
   ) as BulkPurchasePayment[];
 }
 
@@ -4145,7 +4154,13 @@ let currentFanOutBuckets: FanOutBucket[] | null = null;
 // check (renderFanOutBucketSection); submit and totals must agree with it
 // (issue #1904) so a bucket the UI marks skipped is never posted.
 function isSubmittableBucket(b: FanOutBucket): boolean {
-  return isBucketPaymentCompatible(b.recs, b.payment);
+  if (b.recs.length === 0) return false;
+  return b.recs.every((rec) => {
+    const effectivePayment = b.perRecPayments?.get(rec.id) ?? b.payment;
+    const actualPayment = normalizeBulkPayment(rec.payment);
+    return actualPayment === effectivePayment
+      && isPaymentSupported(rec.provider as CompatProvider, rec.service, rec.term as 1 | 3, effectivePayment);
+  });
 }
 
 export function getFanOutBuckets(): FanOutBucket[] | null {
@@ -4295,40 +4310,48 @@ async function openFanOutModal(
       // rec slugs on recs[].service are what the backend sees.
       const bucketService = isSavingsPlanService(r.service) ? SAVINGS_PLANS_BUCKET_KEY : r.service;
 
-      // Issue #197: for multi-account buckets, build a per-rec payment
-      // map seeded from each rec's account override (when available and
-      // supported), falling back to the bucket-level payment. This lets
-      // each account's payment policy apply inside a mixed-account bucket.
+      let resolvedRecs = recs;
       const distinctAccountIDs = new Set(recs.map((rec) => rec.cloud_account_id).filter(Boolean));
+      let resolvedPayment = seed.payment;
+      let resolvedPaymentSource: 'override' | 'toolbar' = seed.source;
       let perRecPayments: Map<string, BulkPurchasePayment> | undefined;
       if (distinctAccountIDs.size > 1) {
         perRecPayments = new Map<string, BulkPurchasePayment>();
         const bucketPayment = seed.payment;
-        for (const rec of recs) {
-          let recPayment: BulkPurchasePayment = bucketPayment;
-          if (rec.cloud_account_id) {
-            const overrides = overridesByAccount.get(rec.cloud_account_id);
-            if (overrides) {
-              const recTerm = rec.term as 1 | 3;
-              const match = overrides.find(
-                (o) => o.provider === (rec.provider as CompatProvider) && o.service === rec.service,
-              );
-              const overridePayment = normalizeBulkPayment(match?.payment);
-              if (
-                overridePayment
-                && isPaymentSupported(rec.provider as CompatProvider, rec.service, recTerm, overridePayment)
-              ) {
-                recPayment = overridePayment;
-              }
+        const resolved = recs.map((rec) => resolvePerRecPaymentSeed(rec, overridesByAccount, toolbar.capacity));
+        if (resolved.every((value) => value !== null)) {
+          resolvedRecs = resolved.map((value) => value!.variant);
+          for (const value of resolved) {
+            const resolvedSeed = value!;
+            const resolvedPaymentForMap = normalizeBulkPayment(resolvedSeed.payment);
+            if (resolvedPaymentForMap && (resolvedSeed.source === 'override' || resolvedPaymentForMap !== bucketPayment)) {
+              perRecPayments.set(resolvedSeed.variant.id, resolvedPaymentForMap);
             }
           }
-          // Only record an explicit override; recs that match the bucket
-          // default are intentionally left out of the map so they keep
-          // following the bucket-level dropdown via the `?? b.payment`
-          // fallback on the execute path. Eagerly populating every rec would
-          // make the bucket-level control a no-op for unedited rows.
-          if (recPayment !== bucketPayment) {
-            perRecPayments.set(rec.id, recPayment);
+        } else {
+          resolvedRecs = recs;
+        }
+      } else {
+        const candidates: BulkPurchasePayment[] = [
+          seed.payment,
+          ...recs
+            .map((rec) => normalizeBulkPayment(rec.payment))
+            .filter((payment): payment is BulkPurchasePayment => payment !== null),
+          toolbar.payment,
+          ...paymentOptionsFor(r.provider as CompatProvider, r.service, r.term as 1 | 3)
+            .map((payment) => normalizeBulkPayment(payment))
+            .filter((payment): payment is BulkPurchasePayment => payment !== null),
+        ].filter((payment, index, all) =>
+          all.indexOf(payment) === index
+          && isPaymentSupported(r.provider as CompatProvider, r.service, r.term as 1 | 3, payment),
+        );
+        for (const candidate of candidates) {
+          const resolved = recs.map((rec) => pricedCellVariant(rec, r.term as 1 | 3, candidate, toolbar.capacity));
+          if (resolved.every((value) => value !== null)) {
+            resolvedRecs = resolved.map((value) => value!);
+            resolvedPayment = candidate;
+            resolvedPaymentSource = candidate === seed.payment ? seed.source : 'toolbar';
+            break;
           }
         }
       }
@@ -4340,10 +4363,10 @@ async function openFanOutModal(
         // the term from the bucket itself rather than from the dropped
         // toolbar override.
         term: r.term as 1 | 3,
-        payment: seed.payment,
-        paymentSource: seed.source,
+        payment: resolvedPayment,
+        paymentSource: resolvedPaymentSource,
         capacityPercent: toolbar.capacity,
-        recs,
+        recs: resolvedRecs,
         perRecPayments,
       };
     });
@@ -4491,47 +4514,60 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
   paymentLabel.appendChild(document.createTextNode('Payment: '));
   const paymentSelect = document.createElement('select');
   paymentSelect.className = 'fanout-bucket-payment';
-  for (const opt of paymentOptionsFor(b.provider, b.service, b.term)) {
+  const purchasePending = document.getElementById('execute-purchase-btn')?.dataset['submitting'] === 'true';
+  const inheritingRows = b.recs.filter((rec) => !b.perRecPayments?.has(rec.id));
+  const bucketOptions = (inheritingRows[0] ? cellPaymentOptions(inheritingRows[0], b.term, b.capacityPercent) : [])
+    .filter((payment) => inheritingRows.every((rec) =>
+      cellPaymentOptions(rec, b.term, b.capacityPercent).includes(payment),
+    ));
+  const hasCurrentOption = bucketOptions.includes(b.payment);
+  let unavailableOption: HTMLOptionElement | undefined;
+  if (!hasCurrentOption) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'Unavailable: no priced payment';
+    option.selected = true;
+    option.disabled = true;
+    paymentSelect.appendChild(option);
+    unavailableOption = option;
+  }
+  for (const opt of bucketOptions) {
     const option = document.createElement('option');
     option.value = opt;
     option.textContent = opt;
-    if (opt === b.payment) option.selected = true;
+    option.selected = opt === b.payment;
     paymentSelect.appendChild(option);
   }
+  if (unavailableOption) {
+    unavailableOption.selected = true;
+    paymentSelect.value = '';
+  }
+  paymentSelect.disabled = purchasePending || bucketOptions.length === 0 || Boolean(b.perRecPayments && inheritingRows.length === 0);
   paymentSelect.addEventListener('change', () => {
     const next = paymentSelect.value as FanOutBucket['payment'];
-    // Find this bucket in module state by reference equality on the
-    // recs array (the recs array is preserved across the b ↔
-    // currentFanOutBuckets[i] mapping; identity comparison is safe).
-    if (currentFanOutBuckets) {
-      const idx = currentFanOutBuckets.findIndex((cb) => cb.recs === b.recs);
-      if (idx >= 0) {
-        currentFanOutBuckets[idx]!.payment = next;
-      }
-    }
-    b.payment = next;
-    renderStatus();
-    // Issue #1904: a payment fix here can move this bucket in or out of the
-    // submittable set, so the header's email count, skipped note, totals,
-    // and Execute-enabled state must follow immediately.
-    refreshFanOutSummary();
-    // Re-sync any visible per-rec selects whose ids are NOT explicit
-    // overrides: those rows follow the bucket default, so their displayed
-    // value must track the new bucket payment. Rows with an explicit
-    // override (present in perRecPayments) keep their own value.
-    if (b.perRecPayments) {
-      const perRecSelects = section.querySelectorAll<HTMLSelectElement>('.fanout-per-rec-payment');
-      perRecSelects.forEach((sel) => {
-        const recId = sel.dataset['recId'];
-        if (!recId || b.perRecPayments!.has(recId)) return;
-        // Only re-sync when this rec actually supports the new payment.
-        // Per-rec options derive from rec.service, which can differ from
-        // b.service in mixed-SP buckets; skip rows where `next` isn't an
-        // option so the displayed value never diverges from what posts.
-        const supported = Array.from(sel.options).some((o) => o.value === next);
-        if (supported) sel.value = next;
+    const replacements: Array<LocalRecommendation | null> = b.recs.map((rec) => {
+      if (b.perRecPayments?.has(rec.id)) return rec;
+      const replacement = pricedCellVariant(rec, b.term, next, b.capacityPercent);
+      return replacement ? { ...replacement, payment: next } : null;
+    });
+    if (replacements.some((replacement) => replacement === null)) {
+      showToast({
+        message: `No priced ${next} option is available for every inherited row at ${b.capacityPercent}% capacity.`,
+        kind: 'warning',
       });
+      paymentSelect.value = hasCurrentOption ? b.payment : '';
+      return;
     }
+    b.recs = replacements.map((replacement) => replacement!);
+    b.payment = next;
+    refreshFanOutSummary();
+    const expanded = Array.from(section.querySelectorAll('details')).map((details) => details.open);
+    const refreshed = renderFanOutBucketSection(b);
+    refreshed.querySelectorAll('details').forEach((details, index) => {
+      details.open = expanded[index] ?? false;
+    });
+    section.replaceWith(refreshed);
+    refreshed.querySelector<HTMLSelectElement>('.fanout-bucket-payment')?.focus();
   });
   paymentLabel.appendChild(paymentSelect);
   paymentRow.appendChild(paymentLabel);
@@ -4548,6 +4584,7 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
   // independently. The bucket-level dropdown above still acts as a fallback
   // default but is labelled to make the per-rec row the primary surface.
   if (b.perRecPayments) {
+    const paymentMap = b.perRecPayments;
     const perRecNote = document.createElement('p');
     perRecNote.className = 'fanout-per-rec-note';
     perRecNote.textContent = 'Multi-account bucket: each commitment can use its own payment option.';
@@ -4556,7 +4593,10 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
     const perRecList = document.createElement('ul');
     perRecList.className = 'fanout-per-rec-list';
     for (const rec of b.recs) {
-      const currentPayment = b.perRecPayments.get(rec.id) ?? b.payment;
+      const explicitPayment = paymentMap.get(rec.id);
+      const currentPayment = explicitPayment ?? b.payment;
+      const bucketDefaultValue = '__fanout-bucket-default__';
+      const rowOptions = cellPaymentOptions(rec, b.term, b.capacityPercent);
       const li = document.createElement('li');
       li.className = 'fanout-per-rec-item';
 
@@ -4569,34 +4609,61 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
       const recSelect = document.createElement('select');
       recSelect.className = 'fanout-per-rec-payment';
       recSelect.dataset['recId'] = rec.id;
-      for (const opt of paymentOptionsFor(b.provider, rec.service, b.term)) {
+      const defaultAvailable = rowOptions.includes(b.payment);
+      const currentAvailable = rowOptions.includes(currentPayment);
+      const inheritOption = document.createElement('option');
+      inheritOption.value = bucketDefaultValue;
+      inheritOption.textContent = `Use bucket default (${b.payment})`;
+      inheritOption.selected = explicitPayment === undefined && defaultAvailable;
+      inheritOption.disabled = !defaultAvailable;
+      recSelect.appendChild(inheritOption);
+      for (const opt of rowOptions) {
         const option = document.createElement('option');
         option.value = opt;
         option.textContent = opt;
-        if (opt === currentPayment) option.selected = true;
+        if (explicitPayment !== undefined && opt === currentPayment) option.selected = true;
         recSelect.appendChild(option);
       }
+      if (!currentAvailable) {
+        const unavailableOption = document.createElement('option');
+        unavailableOption.value = '';
+        unavailableOption.textContent = 'Unavailable: no priced payment';
+        unavailableOption.disabled = true;
+        unavailableOption.selected = true;
+        recSelect.prepend(unavailableOption);
+      }
+      recSelect.disabled = purchasePending || rowOptions.length === 0;
+      const renderedValue = recSelect.value;
       recSelect.addEventListener('change', () => {
-        const next = recSelect.value as BulkPurchasePayment;
-        // Keep perRecPayments as the explicit-override set: when the user
-        // picks the current bucket default, drop the entry so the row tracks
-        // future bucket-level changes again; otherwise record the override.
-        const applyToMap = (map: Map<string, BulkPurchasePayment> | undefined): void => {
-          if (!map) return;
-          if (next === b.payment) {
-            map.delete(rec.id);
-          } else {
-            map.set(rec.id, next);
-          }
-        };
-        // Update module state and the local bucket reference.
-        if (currentFanOutBuckets) {
-          const idx = currentFanOutBuckets.findIndex((cb) => cb.recs === b.recs);
-          if (idx >= 0) {
-            applyToMap(currentFanOutBuckets[idx]!.perRecPayments);
-          }
+        if (recSelect.disabled || document.getElementById('execute-purchase-btn')?.dataset['submitting'] === 'true') return;
+        const inherit = recSelect.value === bucketDefaultValue;
+        const next = (inherit ? b.payment : recSelect.value) as BulkPurchasePayment;
+        const replacement = pricedCellVariant(rec, b.term, next, b.capacityPercent);
+        if (!replacement) {
+          showToast({
+            message: `No priced ${next} option is available for this commitment at ${b.capacityPercent}% capacity.`,
+            kind: 'warning',
+          });
+          recSelect.value = renderedValue;
+          return;
         }
-        applyToMap(b.perRecPayments);
+        const updated = { ...replacement, payment: next };
+        const index = b.recs.indexOf(rec);
+        if (index < 0) return;
+        b.recs[index] = updated;
+        if (inherit) paymentMap.delete(rec.id);
+        else {
+          paymentMap.delete(rec.id);
+          paymentMap.set(updated.id, next);
+        }
+        refreshFanOutSummary();
+        const expanded = Array.from(section.querySelectorAll('details')).map((details) => details.open);
+        const refreshed = renderFanOutBucketSection(b);
+        refreshed.querySelectorAll('details').forEach((details, detailIndex) => {
+          details.open = expanded[detailIndex] ?? false;
+        });
+        section.replaceWith(refreshed);
+        refreshed.querySelector<HTMLSelectElement>(`[data-rec-id="${updated.id}"]`)?.focus();
       });
 
       li.appendChild(recSelect);
@@ -4970,6 +5037,7 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
 function resolvePerRecPaymentSeed(
   rec: LocalRecommendation,
   overridesByAccount: Map<string, AccountServiceOverride[]>,
+  capacityPercent: number,
 ): { payment: CompatPayment; source: 'override' | 'rec' | 'fallback'; variant: LocalRecommendation } | null {
   const provider = rec.provider as CompatProvider;
   const term = rec.term as 1 | 3;
@@ -4985,7 +5053,7 @@ function resolvePerRecPaymentSeed(
       // row's payment without the matching price.
       const overridePayment = normalizeBulkPayment(match?.payment);
       if (overridePayment && isPaymentSupported(provider, rec.service, term, overridePayment)) {
-        const variant = pricedCellVariant(rec, term, overridePayment);
+        const variant = pricedCellVariant(rec, term, overridePayment, capacityPercent);
         if (variant) return { payment: overridePayment, source: 'override', variant };
       }
     }
@@ -4996,14 +5064,14 @@ function resolvePerRecPaymentSeed(
     return { payment: ownPayment, source: 'rec', variant: rec };
   }
 
-  const options = cellPaymentOptions(rec, term);
+  const options = cellPaymentOptions(rec, term, capacityPercent);
   const preferred = normalizeBulkPayment(cachedGlobalDefaultPayment);
   if (preferred && options.includes(preferred)) {
     options.splice(options.indexOf(preferred), 1);
     options.unshift(preferred);
   }
   for (const payment of options) {
-    const variant = pricedCellVariant(rec, term, payment);
+    const variant = pricedCellVariant(rec, term, payment, capacityPercent);
     if (variant) return { payment, source: 'fallback', variant };
   }
   return null;
@@ -5090,7 +5158,7 @@ export async function openPurchaseModal(recommendations: LocalRecommendation[], 
 
   if (currentPurchaseRecommendations !== pendingRows) return;
 
-  const seeds = recommendations.map((r) => resolvePerRecPaymentSeed(r, overridesByAccount));
+  const seeds = recommendations.map((r) => resolvePerRecPaymentSeed(r, overridesByAccount, capacityPercent));
   const resolvedSeeds = seeds.filter((seed) => seed !== null);
   currentPurchaseRecommendations = resolvedSeeds.map((seed) => ({ ...seed.variant, payment: seed.payment }));
   checkedPurchaseIndices = new Set(currentPurchaseRecommendations.map((_, i) => i));
@@ -5541,7 +5609,7 @@ function renderPurchaseModalRow(idx: number, paymentSource: 'override' | 'rec' |
   const paymentCell = document.createElement('td');
   const paymentSelect = document.createElement('select');
   paymentSelect.className = 'purchase-row-payment';
-  rebuildPaymentOptions(paymentSelect, cellPaymentOptions(rec, rec.term as 1 | 3), (rec.payment ?? '') as BulkPurchasePayment | '');
+  rebuildPaymentOptions(paymentSelect, cellPaymentOptions(rec, rec.term as 1 | 3, currentPurchaseCapacityPercent), (rec.payment ?? '') as BulkPurchasePayment | '');
   paymentCell.appendChild(paymentSelect);
   if (paymentSource === 'override') {
     const sourceNote = document.createElement('span');
@@ -5574,7 +5642,7 @@ function renderPurchaseModalRow(idx: number, paymentSource: 'override' | 'rec' |
     const payment = paymentSelect.value as BulkPurchasePayment;
     const live = currentPurchaseRecommendations[idx];
     if (!live) return;
-    const variant = pricedCellVariant(live, term, payment);
+    const variant = pricedCellVariant(live, term, payment, currentPurchaseCapacityPercent);
     if (!variant) {
       // Reachable: a sibling variant with a smaller count can floor to 0 at
       // the modal's capacity. Keep the priced rec and put the selects back.
@@ -5583,7 +5651,7 @@ function renderPurchaseModalRow(idx: number, paymentSource: 'override' | 'rec' |
         kind: 'warning',
       });
       termSelect.value = String(live.term);
-      rebuildPaymentOptions(paymentSelect, cellPaymentOptions(live, live.term as 1 | 3), (live.payment ?? '') as BulkPurchasePayment | '');
+      rebuildPaymentOptions(paymentSelect, cellPaymentOptions(live, live.term as 1 | 3, currentPurchaseCapacityPercent), (live.payment ?? '') as BulkPurchasePayment | '');
       return;
     }
     currentPurchaseRecommendations[idx] = { ...variant, payment };
@@ -5601,7 +5669,7 @@ function renderPurchaseModalRow(idx: number, paymentSource: 'override' | 'rec' |
     // Rebuild this row's payment options for the new term before applying —
     // applyVariantChange reads paymentSelect.value, so it must already
     // reflect the new term's loaded options.
-    rebuildPaymentOptions(paymentSelect, cellPaymentOptions(live, newTerm), (live.payment ?? '') as BulkPurchasePayment | '');
+    rebuildPaymentOptions(paymentSelect, cellPaymentOptions(live, newTerm, currentPurchaseCapacityPercent), (live.payment ?? '') as BulkPurchasePayment | '');
     applyVariantChange('.purchase-row-term');
   });
 
