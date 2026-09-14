@@ -1085,6 +1085,111 @@ describe('Issue #1904: fan-out modal skips incompatible buckets', () => {
     expect(executeBtn.dataset['submitting']).toBeUndefined();
   });
 
+  test('pending fan-out bucket payment restores its value and preserves the captured request', async () => {
+    const rows: LocalRecommendation[] = [
+      ...buildRows(),
+      {
+        id: 'rds-3', provider: 'aws', cloud_account_id: 'a1', service: 'rds', region: 'us-east-1',
+        resource_type: 'db.r5.large', term: 3, payment: 'all-upfront', count: 2,
+        upfront_cost: 3000, monthly_cost: 0, savings: 500,
+      },
+    ];
+    const request = deferred<Awaited<ReturnType<typeof api.executePurchase>>>();
+    (api.executePurchase as jest.Mock).mockReturnValue(request.promise);
+    (api.getConfig as jest.Mock).mockResolvedValue({ global: { default_payment: 'all-upfront' } });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: rows, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['v-1-all', 'rds-3']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+    const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement;
+    const paymentSelect = document.querySelector<HTMLSelectElement>('.fanout-bucket-payment')!;
+    const beforeValue = paymentSelect.value;
+    const alternate = Array.from(paymentSelect.options).find((option) => !option.disabled && option.value !== beforeValue)!;
+    expect(alternate).toBeTruthy();
+    executeBtn.click();
+    await flush();
+    expect((api.executePurchase as jest.Mock).mock.calls).toHaveLength(2);
+    expect(executeBtn.dataset['submitting']).toBe('true');
+    const callsBefore = (api.executePurchase as jest.Mock).mock.calls
+      .map(([payload, capacity, mode]) => [JSON.parse(JSON.stringify(payload)), capacity, mode]);
+    const summaryBefore = document.getElementById('fanout-summary')!.textContent;
+    paymentSelect.value = alternate.value;
+    expect(paymentSelect.value).not.toBe(beforeValue);
+    paymentSelect.dispatchEvent(new Event('change'));
+    expect(paymentSelect.value).toBe(beforeValue);
+    expect(document.getElementById('fanout-summary')!.textContent).toBe(summaryBefore);
+    const livePaymentSelect = document.querySelector<HTMLSelectElement>('.fanout-bucket-payment')!;
+    expect(livePaymentSelect.isConnected).toBe(true);
+    expect(livePaymentSelect.value).toBe(beforeValue);
+    expect((api.executePurchase as jest.Mock).mock.calls).toHaveLength(2);
+    expect((api.executePurchase as jest.Mock).mock.calls.map(([payload, capacity, mode]) => [JSON.parse(JSON.stringify(payload)), capacity, mode]))
+      .toEqual(callsBefore);
+    request.resolve({ execution_id: 'pending-bucket', status: 'pending' });
+    await flush();
+  });
+
+  test('pending fan-out per-row payment restores its value and preserves the captured request', async () => {
+    const rows: LocalRecommendation[] = [
+      ...(['a1', 'a2'] as const).flatMap((account) => [
+        {
+          id: `${account}-all`, provider: 'aws' as const, cloud_account_id: account, service: 'ec2', region: 'us-east-1',
+          resource_type: 'm5.large', term: 1 as const, payment: 'all-upfront' as const,
+          count: 2, upfront_cost: 2000, monthly_cost: 0, savings: 500,
+        },
+        {
+          id: `${account}-partial`, provider: 'aws' as const, cloud_account_id: account, service: 'ec2', region: 'us-east-1',
+          resource_type: 'm5.large', term: 1 as const, payment: 'partial-upfront' as const,
+          count: 2, upfront_cost: 1000, monthly_cost: 50, savings: 450,
+        },
+      ]),
+      {
+        id: 'rds-3', provider: 'aws' as const, cloud_account_id: 'a3', service: 'rds', region: 'us-east-1',
+        resource_type: 'db.r5.large', term: 3 as const, payment: 'all-upfront' as const,
+        count: 2, upfront_cost: 3000, monthly_cost: 0, savings: 500,
+      },
+    ];
+    const request = deferred<Awaited<ReturnType<typeof api.executePurchase>>>();
+    (api.executePurchase as jest.Mock).mockReturnValue(request.promise);
+    (api.getConfig as jest.Mock).mockResolvedValue({ global: { default_payment: 'all-upfront' } });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: rows, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['a1-all', 'a2-all', 'rds-3']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+    const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement;
+    const rowSelect = document.querySelector<HTMLSelectElement>('.fanout-per-rec-payment')!;
+    const beforeValue = rowSelect.value;
+    const alternate = Array.from(rowSelect.options).find((option) => !option.disabled && option.value !== beforeValue)!;
+    expect(alternate).toBeTruthy();
+    executeBtn.click();
+    await flush();
+    expect((api.executePurchase as jest.Mock).mock.calls).toHaveLength(2);
+    expect(executeBtn.dataset['submitting']).toBe('true');
+    const callsBefore = (api.executePurchase as jest.Mock).mock.calls
+      .map(([payload, capacity, mode]) => [JSON.parse(JSON.stringify(payload)), capacity, mode]);
+    const summaryBefore = document.getElementById('fanout-summary')!.textContent;
+    rowSelect.value = alternate.value;
+    expect(rowSelect.value).not.toBe(beforeValue);
+    rowSelect.dispatchEvent(new Event('change'));
+    expect(rowSelect.value).toBe(beforeValue);
+    expect(document.getElementById('fanout-summary')!.textContent).toBe(summaryBefore);
+    const liveRowSelect = document.querySelector<HTMLSelectElement>('.fanout-per-rec-payment')!;
+    expect(liveRowSelect.isConnected).toBe(true);
+    expect(liveRowSelect.value).toBe(beforeValue);
+    expect((api.executePurchase as jest.Mock).mock.calls).toHaveLength(2);
+    expect((api.executePurchase as jest.Mock).mock.calls.map(([payload, capacity, mode]) => [JSON.parse(JSON.stringify(payload)), capacity, mode]))
+      .toEqual(callsBefore);
+    request.resolve({ execution_id: 'pending-row', status: 'pending' });
+    await flush();
+  });
+
   test('fan-out clears submitting state when result processing throws', async () => {
     const rows = buildFanOutRows().map((row) => row.service === 'rds'
       ? { ...row, payment: 'partial-upfront' as const, upfront_cost: 1000 }
@@ -1814,6 +1919,78 @@ describe('Issue #1904: fan-out modal skips incompatible buckets', () => {
     expect(body).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'a1-all', payment: 'all-upfront', count: 1, upfront_cost: 1000 }),
     ]));
+  });
+
+  test('fan-out skips a zero-priced current bucket and restores native row edits while execute is pending', async () => {
+    const loadedRows: LocalRecommendation[] = [
+      ...(['a1', 'a2'] as const).flatMap((account) => [
+        {
+          id: `${account}-all`, provider: 'aws' as const, cloud_account_id: account, service: 'ec2', region: 'us-east-1',
+          resource_type: 'm5.large', term: 1 as const, payment: 'all-upfront' as const,
+          count: 2, upfront_cost: 2000, monthly_cost: 0, savings: 500,
+        },
+        {
+          id: `${account}-partial`, provider: 'aws' as const, cloud_account_id: account, service: 'ec2', region: 'us-east-1',
+          resource_type: 'm5.large', term: 1 as const, payment: 'partial-upfront' as const,
+          count: 2, upfront_cost: 1000, monthly_cost: 50, savings: 450,
+        },
+      ]),
+      {
+        id: 'rds-3-all', provider: 'aws' as const, cloud_account_id: 'a3', service: 'rds', region: 'us-east-1',
+        resource_type: 'db.r5.large', term: 3 as const, payment: 'all-upfront' as const,
+        count: 2, upfront_cost: 3000, monthly_cost: 0, savings: 500,
+      },
+    ];
+    (localStorage.getItem as jest.Mock).mockReturnValue(JSON.stringify({ capacity: 50 }));
+    (api.getConfig as jest.Mock).mockResolvedValue({ global: { default_payment: 'all-upfront' } });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: loadedRows, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(loadedRows);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(loadedRows);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['a1-all', 'a2-all', 'rds-3-all']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+    let section = Array.from(document.querySelectorAll<HTMLElement>('.fanout-bucket'))
+      .find((candidate) => candidate.textContent?.includes('ec2'))!;
+    const a1 = section.querySelector<HTMLSelectElement>('[data-rec-id="a1-all"]')!;
+    a1.value = 'partial-upfront';
+    a1.dispatchEvent(new Event('change'));
+    section = Array.from(document.querySelectorAll<HTMLElement>('.fanout-bucket'))
+      .find((candidate) => candidate.textContent?.includes('ec2'))!;
+    const a2 = section.querySelector<HTMLSelectElement>('[data-rec-id="a2-all"]')!;
+    loadedRows.find((row) => row.id === 'a1-partial')!.count = 0;
+    a2.value = 'partial-upfront';
+    a2.dispatchEvent(new Event('change'));
+
+    expect(getFanOutBuckets()!.some((bucket) => bucket.service === 'ec2')).toBe(false);
+    expect(document.querySelector<HTMLElement>('.fanout-bucket-error')?.textContent)
+      .toBe('A selected payment option is unavailable at 50% capacity. This bucket will be skipped.');
+    expect(document.getElementById('fanout-summary')!.textContent).toContain('$1,500');
+    const execute = document.getElementById('execute-purchase-btn') as HTMLButtonElement;
+    const pending = deferred<unknown>();
+    (api.executePurchase as jest.Mock).mockReturnValueOnce(pending.promise);
+    const summaryBefore = document.getElementById('fanout-summary')!.textContent;
+    execute.click();
+    await flush();
+    expect((api.executePurchase as jest.Mock).mock.calls).toHaveLength(1);
+    const captured = (api.executePurchase as jest.Mock).mock.calls[0]![0] as Array<Record<string, unknown>>;
+    expect(captured).toEqual([expect.objectContaining({
+      id: 'rds-3-all', service: 'rds', payment: 'all-upfront', count: 1, recommended_count: 2, upfront_cost: 1500,
+    })]);
+    const liveRow = document.querySelector<HTMLSelectElement>('.fanout-bucket [data-rec-id="a1-partial"]')!;
+    const beforeValue = liveRow.value;
+    liveRow.value = 'all-upfront';
+    expect(liveRow.value).not.toBe(beforeValue);
+    liveRow.dispatchEvent(new Event('change'));
+    expect(liveRow.value).toBe(beforeValue);
+    expect(document.getElementById('fanout-summary')!.textContent).toBe(summaryBefore);
+    expect((api.executePurchase as jest.Mock).mock.calls).toHaveLength(1);
+    execute.click();
+    await flush();
+    expect((api.executePurchase as jest.Mock).mock.calls).toHaveLength(1);
+    pending.resolve({ execution_id: 'pending-test', status: 'pending' });
+    await flush();
   });
 
   test('fan-out skips an unresolved mixed legacy bucket while posting a valid bucket', async () => {

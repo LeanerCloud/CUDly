@@ -4159,7 +4159,8 @@ function isSubmittableBucket(b: FanOutBucket): boolean {
     const effectivePayment = b.perRecPayments?.get(rec.id) ?? b.payment;
     const actualPayment = normalizeBulkPayment(rec.payment);
     return actualPayment === effectivePayment
-      && isPaymentSupported(rec.provider as CompatProvider, rec.service, rec.term as 1 | 3, effectivePayment);
+      && isPaymentSupported(rec.provider as CompatProvider, rec.service, rec.term as 1 | 3, effectivePayment)
+      && pricedCellVariant(rec, b.term, effectivePayment, b.capacityPercent) !== null;
   });
 }
 
@@ -4493,7 +4494,7 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
     status.className = compat ? 'fanout-bucket-ok' : 'fanout-bucket-error';
     status.textContent = compat
       ? `${b.capacityPercent}% capacity · ${b.term}yr · ${b.payment}`
-      : `Invalid combo: ${b.provider} / ${serviceLabel} doesn't support ${b.term}yr + ${b.payment}. This bucket will be skipped.`;
+      : `A selected payment option is unavailable at ${b.capacityPercent}% capacity. This bucket will be skipped.`;
   };
   renderStatus();
   section.appendChild(status);
@@ -4543,7 +4544,12 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
     paymentSelect.value = '';
   }
   paymentSelect.disabled = purchasePending || bucketOptions.length === 0 || Boolean(b.perRecPayments && inheritingRows.length === 0);
+  const renderedValue = paymentSelect.value;
   paymentSelect.addEventListener('change', () => {
+    if (paymentSelect.disabled || document.getElementById('execute-purchase-btn')?.dataset['submitting'] === 'true') {
+      paymentSelect.value = renderedValue;
+      return;
+    }
     const next = paymentSelect.value as FanOutBucket['payment'];
     const replacements: Array<LocalRecommendation | null> = b.recs.map((rec) => {
       if (b.perRecPayments?.has(rec.id)) return rec;
@@ -4555,7 +4561,7 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
         message: `No priced ${next} option is available for every inherited row at ${b.capacityPercent}% capacity.`,
         kind: 'warning',
       });
-      paymentSelect.value = hasCurrentOption ? b.payment : '';
+      paymentSelect.value = renderedValue;
       return;
     }
     b.recs = replacements.map((replacement) => replacement!);
@@ -4635,7 +4641,10 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
       recSelect.disabled = purchasePending || rowOptions.length === 0;
       const renderedValue = recSelect.value;
       recSelect.addEventListener('change', () => {
-        if (recSelect.disabled || document.getElementById('execute-purchase-btn')?.dataset['submitting'] === 'true') return;
+        if (recSelect.disabled || document.getElementById('execute-purchase-btn')?.dataset['submitting'] === 'true') {
+          recSelect.value = renderedValue;
+          return;
+        }
         const inherit = recSelect.value === bucketDefaultValue;
         const next = (inherit ? b.payment : recSelect.value) as BulkPurchasePayment;
         const replacement = pricedCellVariant(rec, b.term, next, b.capacityPercent);
