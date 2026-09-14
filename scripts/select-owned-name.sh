@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # select-owned-name.sh
 #
-# Selects which AWS resources a destroy workflow may act destructively on.
+# Selects which cloud resources a destroy workflow may act destructively on.
 #
 # Reads the account's resource names on stdin, one per line, and prints back
 # only the ones that are byte-for-byte identical to the owned name passed as the
@@ -10,20 +10,25 @@
 #
 # The owned name comes from `terraform output` on the state the destroy is about
 # to tear down, so it is the name this environment actually created rather than
-# a pattern someone hopes only matches that name. Both current callers pass a
-# name derived from `local.stack_name`
-# (terraform/environments/aws/main.tf), which carries a random suffix, so no
-# literal list can be hardcoded here and no prefix describes it uniquely:
-# `cudly-dev-<hex>-backup` shares every prefix the real name has.
+# a pattern someone hopes only matches that name. The two AWS callers pass a
+# name derived from `local.stack_name` (terraform/environments/aws/main.tf),
+# which carries a random suffix, so no literal list can be hardcoded here and
+# no prefix describes it uniquely: `cudly-dev-<hex>-backup` shares every prefix
+# the real name has. The GCP caller passes
+# `${project_name}-${environment}-postgres`
+# (terraform/modules/database/gcp/main.tf:36), a fixed name with no suffix,
+# which every prefix shares with its `-replica` sibling. Equality is the only
+# comparison that serves both shapes.
 #
 # The comparison is deliberately resource-agnostic, and shared rather than
 # copied per resource: two copies of it would have to be hardened in lockstep,
 # and a guard landing on one resource and not its sibling is precisely how #1592
-# became #1820 and then #1821. The callers are:
+# became #1820 and then #1821 (and, on GCP, #1971). The callers are:
 #
-#   force-delete-owned-ecr-repo.sh          `aws ecr delete-repository --force`
-#   disable-owned-rds-deletion-protection.sh `aws rds modify-db-instance
-#                                            --no-deletion-protection`
+#   force-delete-owned-ecr-repo.sh            `aws ecr delete-repository --force`
+#   disable-owned-rds-deletion-protection.sh  `aws rds modify-db-instance
+#     --no-deletion-protection`
+#   delete-owned-cloud-sql-instance.sh        `gcloud sql instances delete`
 #
 # The filters this replaced were `contains(repositoryName,'cudly-dev')` and
 # `starts_with(DBInstanceIdentifier,'cudly-dev')` evaluated inside the destroy
@@ -49,10 +54,11 @@ fi
 
 owned="$1"
 
-# Neither an ECR repository name nor an RDS DBInstanceIdentifier may contain
-# whitespace, so anything that does is not a name this script was handed on
-# purpose -- most likely an empty or warning-polluted `terraform output`. Refuse
-# rather than guess.
+# Neither an ECR repository name, an RDS DBInstanceIdentifier, nor a Cloud SQL
+# instance name (RFC 1035, `[a-z][a-z0-9-]*`) may contain whitespace, so
+# anything that does is not a name this script was handed on purpose -- most
+# likely an empty or warning-polluted `terraform output`. Refuse rather than
+# guess.
 case "$owned" in
   '' | *[![:graph:]]*)
     echo "error: owned name must be non-empty and free of whitespace; got '${owned}'" >&2

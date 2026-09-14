@@ -382,7 +382,20 @@ jobs:
           cd terraform/environments/gcp
           terraform init -backend-config=/tmp/backend.tfbackend
 
-      - name: Delete Cloud SQL instance directly (avoids user/DB ordering deadlock)
+      # Runs before `terraform destroy`: destroying google_sql_user and
+      # google_sql_database through Terraform deadlocks on PostgreSQL object
+      # ownership, and github-staging.tfvars applies the instance with
+      # deletion_protection = true. Deletes only the instance THIS state owns,
+      # by exact name, then removes it from state. The
+      # `--filter="name:cudly-staging" | head -1` selection this step used to run
+      # also matched `cudly-staging-postgres-replica`, `backup-cudly-staging` and
+      # any operator-named `cudly-staging-*` instance, deleted with `|| true`,
+      # and then ran `terraform state rm` regardless (#1971). Rationale, the
+      # measured gcloud filter semantics and why nothing here is swallowed: the
+      # script's header. Same shape as the ECR and RDS steps in the AWS jobs
+      # above, which is how the guard reaches every sibling site (#1592 -> #1820
+      # -> #1821 was a guard landing on one site and not the next).
+      - name: Delete the Cloud SQL instance this state owns
         env:
           TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
           GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
@@ -390,37 +403,10 @@ jobs:
           # Routed via env: rather than interpolated into this script's source,
           # per the zero-expression-interpolation-in-run-blocks rule from #1641.
           PROJECT="$GCP_PROJECT_ID"
-          # Validate the shape, not merely non-emptiness: a whitespace-only or
-          # malformed value would otherwise reach `gcloud --project=`, match no
-          # instance, and silently skip the deletion this step exists to perform.
-          if ! printf '%s' "$PROJECT" | grep -Eq '^[a-z][a-z0-9-]{5,29}$'; then
-            echo "::error::vars.GCP_PROJECT_ID is unset or malformed ('$PROJECT'); refusing to run Cloud SQL cleanup"
-            exit 1
-          fi
-          # Find and delete the staging Cloud SQL instance to avoid PostgreSQL dependency errors
-          INSTANCE=$(gcloud sql instances list --project="$PROJECT" \
-            --filter="name:cudly-staging" --format="value(name)" 2>/dev/null | head -1)
-          if [ -n "$INSTANCE" ]; then
-            echo "Deleting Cloud SQL instance $INSTANCE..."
-            gcloud sql instances delete "$INSTANCE" --project="$PROJECT" --quiet || true
-            # Wait for deletion to complete (Service Networking Connection can't be removed until Cloud SQL is gone)
-            echo "Waiting for Cloud SQL instance to be fully deleted..."
-            for i in $(seq 1 30); do
-              if ! gcloud sql instances describe "$INSTANCE" --project="$PROJECT" --quiet 2>/dev/null; then
-                echo "Cloud SQL instance $INSTANCE deleted."
-                break
-              fi
-              echo "Still deleting... ($i/30)"
-              sleep 15
-            done
-          fi
-          # Remove Cloud SQL resources from Terraform state so destroy doesn't try to delete them again
-          cd terraform/environments/gcp
-          terraform state rm google_sql_database_instance.main 2>/dev/null || true
-          terraform state rm google_sql_database.main 2>/dev/null || true
-          terraform state rm google_sql_user.main 2>/dev/null || true
+          ./scripts/delete-owned-cloud-sql-instance.sh terraform/environments/gcp "$PROJECT"
           # Remove the Service Networking Connection from state and delete directly
           # GCP needs extra time after Cloud SQL deletion to release VPC peering
+          cd terraform/environments/gcp
           terraform state rm module.networking.google_service_networking_connection.private_vpc_connection 2>/dev/null || true
           gcloud services vpc-peerings delete \
             --service=servicenetworking.googleapis.com \
