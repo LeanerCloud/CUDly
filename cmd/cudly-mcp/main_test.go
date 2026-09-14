@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"log"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +18,32 @@ import (
 	cudlymcp "github.com/LeanerCloud/CUDly/mcp"
 	"github.com/LeanerCloud/CUDly/mcp/tools"
 )
+
+const runAsMCPServerEnv = "CUDLY_MCP_TEST_HELPER_PROCESS"
+
+func TestMain(m *testing.M) {
+	if os.Getenv(runAsMCPServerEnv) == "1" {
+		main()
+		os.Exit(0)
+	}
+
+	auditDir, err := os.MkdirTemp("", "cudly-mcp-audit-testmain")
+	if err != nil {
+		log.Printf("create MCP audit test directory: %v", err)
+		os.Exit(1)
+	}
+	if err := os.Setenv(tools.EnvAuditLog, filepath.Join(auditDir, "mcp-audit.jsonl")); err != nil {
+		log.Printf("set MCP audit log test path: %v", err)
+		if cleanupErr := os.RemoveAll(auditDir); cleanupErr != nil {
+			log.Printf("remove MCP audit test directory after setup failure: %v", cleanupErr)
+		}
+		os.Exit(1)
+	}
+
+	code := m.Run()
+	os.RemoveAll(auditDir)
+	os.Exit(code)
+}
 
 // isolateFromAmbientAWS points the AWS SDK at deliberately nonexistent
 // profile/config/credentials so config.LoadDefaultConfig cannot resolve any
@@ -36,6 +66,63 @@ func isolateFromAmbientAWS(t *testing.T) {
 	t.Setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", "")
 	t.Setenv("AWS_ROLE_ARN", "")
 	t.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", "")
+}
+
+func TestMainRejectsStdoutAuditLogBeforeProtocolTraffic(t *testing.T) {
+	info, err := os.Stat("/dev/stdout")
+	if err != nil {
+		t.Skipf("/dev/stdout unavailable: %v", err)
+	}
+	if info.Mode().IsRegular() {
+		t.Skip("/dev/stdout is a regular file in this environment")
+	}
+
+	exe, err := os.Executable()
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, exe)
+	childEnv := make([]string, 0, len(os.Environ())+2)
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, tools.EnvAuditLog+"=") {
+			continue
+		}
+		childEnv = append(childEnv, entry)
+	}
+	cmd.Env = append(childEnv, runAsMCPServerEnv+"=1", tools.EnvAuditLog+"=/dev/stdout")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	client := gosdk.NewClient(&gosdk.Implementation{Name: "test-client"}, nil)
+	session, err := client.Connect(ctx, &gosdk.CommandTransport{
+		Command:           cmd,
+		TerminateDuration: time.Second,
+	}, nil)
+	if err == nil {
+		_, err = session.CallTool(ctx, &gosdk.CallToolParams{
+			Name: "cudly_aws_ec2_ri_purchase",
+			Arguments: map[string]any{
+				"region":         "us-east-1",
+				"instance_type":  "m5.large",
+				"count":          1,
+				"term_years":     1,
+				"payment_option": "no-upfront",
+			},
+		})
+		closeErr := session.Close()
+		if err == nil {
+			err = closeErr
+		}
+	}
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "invalid message version tag")
+	assert.NoError(t, ctx.Err())
+	stderrText := stderr.String()
+	assert.Contains(t, stderrText, "failed to build server")
+	assert.Contains(t, stderrText, "non-regular audit log target")
 }
 
 // TestRealPurchasePastProviderRegistration is the regression guard for the
