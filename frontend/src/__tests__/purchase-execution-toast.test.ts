@@ -804,7 +804,7 @@ describe('handleFanOutExecute — fan-out path', () => {
 describe('handleExecutePurchase — double-submit guard (#644)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    (recs.getFanOutBuckets as jest.Mock).mockReturnValue([]);
+    (recs.getFanOutBuckets as jest.Mock).mockReturnValue(null);
     (recs.getPurchaseModalRecommendations as jest.Mock).mockReturnValue([buildMinimalRec()]);
     (plans.closePurchaseModal as jest.Mock).mockImplementation(() => undefined);
   });
