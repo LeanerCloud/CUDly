@@ -1009,17 +1009,10 @@ function cellTermOptions(rec: LocalRecommendation): Array<1 | 3> {
 }
 
 // Payment options for rec's cell at `term`, restricted to combinations that
-// were actually loaded (and thus priced) — the intersection of the compat
-// table's order with the loaded set (issue #1903).
+// were loaded and remain priced at the modal capacity (issue #1903).
 function cellPaymentOptions(rec: LocalRecommendation, term: 1 | 3): BulkPurchasePayment[] {
-  const loaded = new Set(
-    loadedCellVariants(rec)
-      .filter((v) => v.term === term)
-      .map((v) => normalizeBulkPayment(v.payment))
-      .filter((p): p is BulkPurchasePayment => p !== null),
-  );
   return paymentOptionsFor(rec.provider as CompatProvider, rec.service, term).filter((p) =>
-    loaded.has(p as BulkPurchasePayment),
+    pricedCellVariant(rec, term, p as BulkPurchasePayment) !== null,
   ) as BulkPurchasePayment[];
 }
 
@@ -4972,32 +4965,12 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   });
 }
 
-// resolvePerRecPaymentSeed picks the default Payment value for one rec
-// in the per-row purchase modal (issue #111 sub-option (iii)). The
-// precedence:
-//   1. Account override: rec carries a non-empty cloud_account_id, that
-//      account has an AccountServiceOverride matching
-//      `(rec.provider, rec.service)`, the override's `payment` is
-//      non-empty, AND `(provider, service, term, payment)` is supported
-//      by isPaymentSupported. → seed from override; the row's source-
-//      note span renders "(from account override)".
-//   2. Rec's own payment: the API stamps payment at collection time;
-//      use it if non-empty AND supported for `(provider, service, term)`.
-//   3. paymentOptionsFor(provider, service, term)[0]: defensive fallback
-//      for malformed test fixtures or pre-#111 cached responses where
-//      the rec lacks a payment. paymentOptionsFor returns at least one
-//      option for every provider/service the recommendations engine
-//      generates rows for.
-//
-// NOTE: this helper duplicates the override-fetch shape from
-// resolveBucketPaymentSeed (per-bucket, used by the fan-out modal). The
-// two are kept separate by deliberate scope discipline; a follow-up
-// issue will consolidate them into a single
-// `frontend/src/lib/overrides.ts` helper once both surfaces have shipped.
+// Resolve a priced override, valid own payment, or priced legacy fallback.
+// A payment label alone cannot establish the price of a legacy row.
 function resolvePerRecPaymentSeed(
   rec: LocalRecommendation,
   overridesByAccount: Map<string, AccountServiceOverride[]>,
-): { payment: CompatPayment; source: 'override' | 'rec' | 'fallback'; variant?: LocalRecommendation } {
+): { payment: CompatPayment; source: 'override' | 'rec' | 'fallback'; variant: LocalRecommendation } | null {
   const provider = rec.provider as CompatProvider;
   const term = rec.term as 1 | 3;
 
@@ -5018,20 +4991,22 @@ function resolvePerRecPaymentSeed(
     }
   }
 
-  if (rec.payment && isPaymentSupported(provider, rec.service, term, rec.payment as CompatPayment)) {
-    return { payment: rec.payment as CompatPayment, source: 'rec' };
+  const ownPayment = normalizeBulkPayment(rec.payment);
+  if (ownPayment && isPaymentSupported(provider, rec.service, term, ownPayment)) {
+    return { payment: ownPayment, source: 'rec', variant: rec };
   }
 
-  // Defensive fallback: rec is missing/has-unsupported payment AND no
-  // matching override. paymentOptionsFor always returns at least one
-  // option for the (provider, service, term) cells the engine emits.
-  // issue #223: prefer GlobalConfig.DefaultPayment over the first option
-  // so the fallback is consistent with the operator's configured preference.
-  const options = paymentOptionsFor(provider, rec.service, term);
-  const preferred = (options as string[]).includes(cachedGlobalDefaultPayment)
-    ? cachedGlobalDefaultPayment
-    : (options[0] ?? 'all-upfront') as CompatPayment;
-  return { payment: preferred, source: 'fallback' };
+  const options = cellPaymentOptions(rec, term);
+  const preferred = normalizeBulkPayment(cachedGlobalDefaultPayment);
+  if (preferred && options.includes(preferred)) {
+    options.splice(options.indexOf(preferred), 1);
+    options.unshift(preferred);
+  }
+  for (const payment of options) {
+    const variant = pricedCellVariant(rec, term, payment);
+    if (variant) return { payment, source: 'fallback', variant };
+  }
+  return null;
 }
 
 // renderDirectExecuteWarning rebuilds the "this will charge $X upfront
@@ -5082,7 +5057,8 @@ function renderDirectExecuteWarning(): void {
  * canonical).
  *
  * Defaults are seeded by resolvePerRecPaymentSeed:
- *   override → rec's own payment → paymentOptionsFor[0] fallback.
+ *   priced override, valid own payment, then a priced legacy fallback.
+ *   Rows without a priced payment are explicitly excluded.
  *
  * On change, handlers mutate `currentPurchaseRecommendations[idx]` in
  * place so `getPurchaseModalRecommendations()` returns the user's
@@ -5090,14 +5066,14 @@ function renderDirectExecuteWarning(): void {
  * (replacing the historical hardcoded `'all-upfront'` on that path).
  *
  * Async because it pre-fetches per-account overrides — same pattern as
- * `openFanOutModal`. Errors swallowed: the rec-payment fallback always
- * works, so a transient API blip shouldn't block the modal.
+ * `openFanOutModal`. A failed override fetch still permits valid own
+ * payments and loaded priced alternatives.
  */
 export async function openPurchaseModal(recommendations: LocalRecommendation[], capacityPercent = 100): Promise<void> {
   currentPurchaseCapacityPercent = capacityPercent;
-  currentPurchaseRecommendations = [...recommendations];
-  // Initialise all indices as checked (issue #320: all selected by default).
-  checkedPurchaseIndices = new Set(currentPurchaseRecommendations.map((_, i) => i));
+  currentPurchaseRecommendations = [];
+  const pendingRows = currentPurchaseRecommendations;
+  checkedPurchaseIndices = new Set();
   checkedPurchaseModalInitialised = true;
 
   const container = document.getElementById('purchase-details');
@@ -5107,26 +5083,35 @@ export async function openPurchaseModal(recommendations: LocalRecommendation[], 
   // in the input set. One fetch per account, parallel via Promise.all,
   // cached in a per-call Map.
   const accountIDs = new Set<string>();
-  for (const r of currentPurchaseRecommendations) {
+  for (const r of recommendations) {
     if (r.cloud_account_id) accountIDs.add(r.cloud_account_id);
   }
   const overridesByAccount = await fetchOverridesForAccounts(accountIDs);
 
-  // Compute seed per rec and mutate currentPurchaseRecommendations in
-  // place so the in-flight modal state matches what the dropdowns
-  // render. The 'rec' source case is a no-op write (same value), but
-  // keeping the assignment uniform avoids "did the user edit this?"
-  // ambiguity downstream — every rec carries an explicit payment by
-  // the time the modal opens.
-  const seeds = currentPurchaseRecommendations.map((r) => resolvePerRecPaymentSeed(r, overridesByAccount));
-  for (let i = 0; i < currentPurchaseRecommendations.length; i++) {
-    const seed = seeds[i]!;
-    currentPurchaseRecommendations[i] = seed.variant
-      ? { ...seed.variant, payment: seed.payment }
-      : { ...currentPurchaseRecommendations[i]!, payment: seed.payment };
-  }
+  if (currentPurchaseRecommendations !== pendingRows) return;
+
+  const seeds = recommendations.map((r) => resolvePerRecPaymentSeed(r, overridesByAccount));
+  const resolvedSeeds = seeds.filter((seed) => seed !== null);
+  currentPurchaseRecommendations = resolvedSeeds.map((seed) => ({ ...seed.variant, payment: seed.payment }));
+  checkedPurchaseIndices = new Set(currentPurchaseRecommendations.map((_, i) => i));
 
   while (container.firstChild) container.removeChild(container.firstChild);
+
+  const unavailable = recommendations.filter((_, i) => seeds[i] === null);
+  if (unavailable.length > 0) {
+    const notice = document.createElement('div');
+    notice.className = 'purchase-modal-unavailable';
+    notice.setAttribute('role', 'alert');
+    notice.textContent = 'These recommendations are unavailable and excluded: no priced payment is available for their term and selected capacity.';
+    const list = document.createElement('ul');
+    for (const rec of unavailable) {
+      const item = document.createElement('li');
+      item.textContent = [rec.cloud_account_id, rec.provider, rec.service, rec.resource_type, rec.region, `${rec.term}-year`].filter(Boolean).join(' / ');
+      list.appendChild(item);
+    }
+    notice.appendChild(list);
+    container.appendChild(notice);
+  }
 
   // Reset the execute mode for this modal session so a prior direct-execute
   // choice does not carry over to a freshly opened modal (issue #289).
@@ -5249,7 +5234,7 @@ export async function openPurchaseModal(recommendations: LocalRecommendation[], 
 
   const tbody = document.createElement('tbody');
   for (let i = 0; i < currentPurchaseRecommendations.length; i++) {
-    tbody.appendChild(renderPurchaseModalRow(i, seeds[i]!.source));
+    tbody.appendChild(renderPurchaseModalRow(i, resolvedSeeds[i]!.source));
   }
   table.appendChild(tbody);
 

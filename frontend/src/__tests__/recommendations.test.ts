@@ -1710,6 +1710,7 @@ describe('Recommendations Module', () => {
         region: 'us-east-1',
         count: opts.count ?? 1,
         term: opts.term ?? 1,
+        payment: 'partial-upfront',
         savings: opts.savings ?? 100,
         upfront_cost: opts.upfront_cost ?? 600,
         monthly_cost: opts.monthly_cost !== undefined ? opts.monthly_cost : 400,
@@ -2042,9 +2043,9 @@ describe('Recommendations Module', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
+//
 // Bundle A: numeric expression parser + applyColumnFilters
-// ---------------------------------------------------------------------------
+//
 
 import { parseNumericFilter, applyColumnFilters } from '../recommendations';
 import type { LocalRecommendation } from '../types';
@@ -2252,11 +2253,11 @@ describe('applyColumnFilters', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
+//
 // Bundle A: state-accessor tests for the new column-filter / visible-recs API.
 // These import the REAL state module (the recommendations.test.ts above mocks
 // it; here we exercise the actual implementation in a separate require scope).
-// ---------------------------------------------------------------------------
+//
 
 describe('state.ts column-filter accessors', () => {
   // The top-level jest.mock('../state', …) replaces the module for every
@@ -2320,12 +2321,12 @@ describe('state.ts column-filter accessors', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
+//
 // Bundle B: column-filter popover + sticky bottom action box DOM behaviour.
 // These tests assert the surfaces Bundle B introduced — header filter
 // triggers, the detached popover lifecycle, and the bottom action box's
 // label/disabled-state transitions.
-// ---------------------------------------------------------------------------
+//
 
 describe('Bundle B: column header filter triggers', () => {
   const sampleRecs = [
@@ -3912,8 +3913,8 @@ describe('Issue #132: bulk-buy collapses SP plan types into one bucket', () => {
 
   test('compute + sagemaker SPs at term=1 share a single bucket (happy path)', async () => {
     const recs = [
-      { id: 's1', provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-compute',   resource_type: 'sp', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
-      { id: 's2', provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-sagemaker', resource_type: 'sp', region: 'us-east-1', count: 1, term: 1, savings: 200, upfront_cost: 800 },
+      { id: 's1', provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-compute',   resource_type: 'sp', region: 'us-east-1', count: 1, term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 500 },
+      { id: 's2', provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-sagemaker', resource_type: 'sp', region: 'us-east-1', count: 1, term: 1, payment: 'all-upfront', savings: 200, upfront_cost: 800 },
     ];
     (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
     (state.getRecommendations as jest.Mock).mockReturnValue(recs);
@@ -3926,6 +3927,7 @@ describe('Issue #132: bulk-buy collapses SP plan types into one bucket', () => {
 
     const { getFanOutBuckets, getPurchaseModalRecommendations } = await import('../recommendations');
     // 1 collapsed bucket → openPurchaseModal happy path, no fan-out.
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     expect(getFanOutBuckets()).toBeNull();
     // The single-bucket modal carries BOTH SPs (proves they collapsed).
     const modalRecs = getPurchaseModalRecommendations();
@@ -4162,6 +4164,7 @@ describe('Issue #658: Azure SP bulk-buy bucketing', () => {
 
     const { getFanOutBuckets, getPurchaseModalRecommendations } = await import('../recommendations');
     // Single bucket -> happy path (no fan-out modal).
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     expect(getFanOutBuckets()).toBeNull();
     const modalRecs = getPurchaseModalRecommendations();
     expect(modalRecs).toHaveLength(1);
@@ -4368,11 +4371,11 @@ describe('Issue #224: one-variant-per-cell radio selection', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
+//
 // issue #223: default-seed from GlobalConfig across all 3 surfaces.
 // These tests exercise the pickBestVariantPerCell config-match tiebreaker
 // and the seedGlobalDefaults hook that injects resolved GlobalConfig values.
-// ---------------------------------------------------------------------------
+//
 
 describe('issue #223: pickBestVariantPerCell config-match tiebreaker', () => {
   const rec = (
@@ -4452,10 +4455,10 @@ describe('issue #223: pickBestVariantPerCell config-match tiebreaker', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
+//
 // Issue #220 / #221: effectiveMonthlySavings + effectiveSavingsPct helpers
 // + Monthly Cost and Effective % column rendering
-// ---------------------------------------------------------------------------
+//
 
 describe('effectiveMonthlySavings', () => {
   const mk = (overrides: Partial<LocalRecommendation>): LocalRecommendation => ({
@@ -5114,9 +5117,9 @@ describe('Monthly Cost + Effective % column rendering', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
+//
 // Issues #225 + #226: cell grouping with savings range and collapse/expand
-// ---------------------------------------------------------------------------
+//
 
 /** Helper to build a minimal LocalRecommendation fixture. */
 const mkRec = (overrides: Partial<LocalRecommendation> = {}): LocalRecommendation => ({
@@ -5453,9 +5456,9 @@ describe('Issues #225 + #226: cell grouping with savings range and collapse/expa
   });
 });
 
-// ---------------------------------------------------------------------------
+//
 // Issue #319: cost-period selector tests
-// ---------------------------------------------------------------------------
+//
 
 const DOM_FOR_319 = (
   '<div id="opportunities-tab" class="tab-content active">'
@@ -6151,9 +6154,9 @@ describe('Column visibility (issue #318)', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
+//
 // formatCapacity (closes #219)
-// ---------------------------------------------------------------------------
+//
 describe('formatCapacity', () => {
   test('returns formatted string when both vcpu and memory_gb are populated', () => {
     expect(formatCapacity(8, 32)).toBe('8 vCPU / 32 GB');
@@ -6188,7 +6191,7 @@ describe('formatCapacity', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
+//
 // Issue #494: deterministic group sort on multi-variant cells.
 //
 // After PR #195's per-(term, payment) fan-out, every cell has BOTH 1yr and 3yr
@@ -6200,7 +6203,7 @@ describe('formatCapacity', () => {
 //
 // PR #491 (closes #480) fixed the default-direction inversion; this PR fixes
 // the upstream "every cell ties" symptom.
-// ---------------------------------------------------------------------------
+//
 describe('Issue #494: deterministic group sort on multi-variant cells', () => {
   /** Build the minimum DOM loadRecommendations needs, using createElement so
    * no innerHTML assignment is required (the rest of the file uses innerHTML;
@@ -6325,9 +6328,9 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
     (state.getCostPeriod as jest.Mock).mockReturnValue('monthly');
   }
 
-  // -------------------------------------------------------------------------
+  //
   // 4.9 - Term
-  // -------------------------------------------------------------------------
+  //
   test('Term asc: orders cells by summary.termMin (1yr-grouped before 3yr-grouped)', async () => {
     const cellMixed = multiVariantCell({
       resourceType: 'aaa-mixed', payment1y: 'no-upfront', payment3y: 'no-upfront',
@@ -6400,9 +6403,9 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
       .toBeLessThan(indexOrFail(order, 'bbb-1y-only'));
   });
 
-  // -------------------------------------------------------------------------
+  //
   // 4.10 - Payment
-  // -------------------------------------------------------------------------
+  //
   test('Payment asc: orders cells by canonical PAYMENT_ORDER (no-upfront < partial-upfront < all-upfront)', async () => {
     // Each cell has term=1 + term=3 variants with the *same* payment so the
     // canonical first-variant payment per cell is unambiguous.
@@ -6433,9 +6436,9 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
       .toBeLessThan(indexOrFail(order, 'allup-cell'));
   });
 
-  // -------------------------------------------------------------------------
+  //
   // 4.12 - Upfront Cost
-  // -------------------------------------------------------------------------
+  //
   test('Upfront Cost asc: orders cells by summary.upfrontMin', async () => {
     const cellLow = multiVariantCell({
       resourceType: 'low-upfront', payment1y: 'no-upfront', payment3y: 'partial-upfront',
@@ -6462,9 +6465,9 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
       .toBeLessThan(indexOrFail(order, 'high-upfront'));
   });
 
-  // -------------------------------------------------------------------------
+  //
   // 4.13 - Monthly Cost
-  // -------------------------------------------------------------------------
+  //
   test('Monthly Cost asc: orders cells by Math.min over non-null variants', async () => {
     const cellLow = multiVariantCell({  // min(30, 20) = 20
       resourceType: 'low-monthly', payment1y: 'no-upfront', payment3y: 'no-upfront',
@@ -6552,9 +6555,9 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
     expect(second).toEqual(first);
   });
 
-  // -------------------------------------------------------------------------
+  //
   // 4.15 - Effective %
-  // -------------------------------------------------------------------------
+  //
   test('Effective % asc: orders cells by Math.max over non-null variants (lowest best-pct first)', async () => {
     // effectiveSavingsPct uses on_demand_cost when set. Pick on-demand values
     // so each cell's pct is predictable. Formula:
@@ -6619,7 +6622,7 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
       .toBeLessThan(indexOrFail(order, 'allnull-pct'));
   });
 
-  // -------------------------------------------------------------------------
+  //
   // Determinism: repeating the same sort yields the same order.
   //
   // The pre-#494 bug also surfaced as "two clicks of the same header may
@@ -6628,14 +6631,14 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
   // and varies across JS engines. With the new comparator every cell has a
   // distinct score (or, if genuinely tied, a stable cellKey tiebreaker), so
   // repeated invocations MUST produce the same order.
-  // -------------------------------------------------------------------------
+  //
   // Selection-independent Term sort: cells with different term distributions
   // must sort correctly by cellSummary score (termMin*100+termMax) regardless
   // of which variants the user has selected. Fix for Issue #768: the previous
   // "selected-variant short-circuit" in cellScoreFor() switched the score to
   // the selected variant's individual term value, which caused rows to reorder
   // on every checkbox toggle.
-  // -------------------------------------------------------------------------
+  //
   test('Term sort is selection-independent: cells rank by term distribution not by selected variant', async () => {
     // cell-1y-only: both variants are term=1 (termMin=1, termMax=1, score=101)
     const cell1yOnly: LocalRecommendation[] = [
@@ -6680,13 +6683,13 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
       .toBeLessThan(indexOrFail(order, '3y-only'));
   });
 
-  // -------------------------------------------------------------------------
+  //
   // Issue #768: toggling checkboxes must not change row sort order.
   //
   // Before the fix, cellScoreFor() switched to the selected variant's
   // individual value when selectedRecs contained a variant id, causing
   // groupsInSortOrder() to produce a different order after a checkbox toggle.
-  // -------------------------------------------------------------------------
+  //
   test('Issue #768: row order is identical before and after toggling checkboxes', async () => {
     // Three cells with distinct savings so they sort in a predictable order.
     // Cell A: savings = 10 (lowest) → should be last under desc
@@ -6759,7 +6762,7 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
     }
   });
 
-  // -------------------------------------------------------------------------
+  //
   // QA 4.13 - Monthly Cost: zero-cost (all-upfront) variants must not prevent
   // sort-direction toggle from reordering rows.
   //
@@ -6768,7 +6771,7 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
   // multiplier had nothing to act on and subsequent sort clicks were no-ops.
   // The fix uses the minimum NON-ZERO recurring cost, falling back to 0 only
   // when all finite values are 0 (pure all-upfront cell).
-  // -------------------------------------------------------------------------
+  //
   test('Monthly Cost: mixed cell (all-upfront + no-upfront) sorts by non-zero recurring cost, not 0', async () => {
     // cellLow: all-upfront (monthly=0) + no-upfront (monthly=20) -> score = 20
     const cellLow = multiVariantCell({
@@ -6849,12 +6852,12 @@ function setupOpportunitiesTabDom(): void {
   document.body.appendChild(purchaseModal);
 }
 
-// ---------------------------------------------------------------------------
+//
 // Issue #479: Select-all checkbox tri-state.
 // The header checkbox renders with the right .checked / .indeterminate state
 // reflecting current selection vs. the set of best-variant-per-cell recs
 // (the set the select-all click actually populates).
-// ---------------------------------------------------------------------------
+//
 describe('Issue #479: Select-all header checkbox tri-state', () => {
   const recs = [
     { id: 'r1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
@@ -6916,11 +6919,11 @@ describe('Issue #479: Select-all header checkbox tri-state', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
+//
 // Issue #480: First-click sort direction per column.
 // Text columns and most numerics default to 'asc' (A→Z / low → high).
 // `savings` and `on_demand_monthly` keep 'desc' as the platform default.
-// ---------------------------------------------------------------------------
+//
 describe('Issue #480: per-column default sort direction', () => {
   const recs = [
     { id: 'r1', provider: 'aws',   cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment: 'no-upfront', savings: 100, upfront_cost: 0,    monthly_cost: 50,  on_demand_cost: 80  },
@@ -6982,10 +6985,10 @@ describe('Issue #480: per-column default sort direction', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
+//
 // Issue #481: Sort column + direction persisted across page refresh via
 // URL query params (?sort=<col>&dir=<asc|desc>).
-// ---------------------------------------------------------------------------
+//
 describe('Issue #481: URL persistence of sort state', () => {
   const recs = [
     { id: 'r1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
@@ -7046,9 +7049,9 @@ describe('Issue #481: URL persistence of sort state', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
+//
 // Issue #482: "All" checkbox tri-state + null-filter renders as all-checked.
-// ---------------------------------------------------------------------------
+//
 describe('Issue #482: column filter "All" tri-state semantics', () => {
   const recs = [
     { id: 'r1', provider: 'aws',   cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
@@ -7213,9 +7216,9 @@ describe('Issue #482: column filter "All" tri-state semantics', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
+//
 // Issue #483: Scrolling inside the popover does NOT dismiss it.
-// ---------------------------------------------------------------------------
+//
 describe('Issue #483: popover stays open while user scrolls its contents', () => {
   const recs = [
     { id: 'r1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
@@ -7262,9 +7265,9 @@ describe('Issue #483: popover stays open while user scrolls its contents', () =>
   });
 });
 
-// ---------------------------------------------------------------------------
+//
 // Issue #484: Numeric filter exact-match against the displayed rounded value.
-// ---------------------------------------------------------------------------
+//
 describe('Issue #484: numeric filter matches the displayed rounded value', () => {
   // Choose a savings value whose raw form rounds to a different display
   // value depending on which precision we use. Under hourly period, the
@@ -7513,9 +7516,9 @@ describe('isHomogeneousSelection (#769)', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
+//
 // Issue #239: renderUsageSparkline unit tests
-// ---------------------------------------------------------------------------
+//
 describe('renderUsageSparkline (issue #239)', () => {
   test('returns em-dash for null', () => {
     expect(renderUsageSparkline(null)).toBe('—');
@@ -7865,9 +7868,9 @@ describe('Column filters localStorage persistence (issue #163)', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
+//
 // Issue #135: SP plan-type row grouping in the Recommendations table
-// ---------------------------------------------------------------------------
+//
 
 const mkSpRec = (service: string, overrides: Partial<LocalRecommendation> = {}): LocalRecommendation => ({
   id: 'sp-' + service + '-' + Math.random().toString(36).slice(2),

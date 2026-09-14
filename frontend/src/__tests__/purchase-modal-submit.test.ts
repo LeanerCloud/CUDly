@@ -147,6 +147,7 @@ import * as api from '../api';
 import * as state from '../state';
 import { showToast } from '../toast';
 import { confirmDialog } from '../confirmDialog';
+import { openModal } from '../modal';
 import {
   openPurchaseModal,
   getPurchaseModalRecommendations,
@@ -154,6 +155,7 @@ import {
   getFanOutBuckets,
   clearFanOutBuckets,
   loadRecommendations,
+  seedGlobalDefaults,
 } from '../recommendations';
 import { formatCurrency } from '../utils';
 import { ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID } from '../permissions';
@@ -234,11 +236,16 @@ beforeEach(() => {
   executeBtn.id = 'execute-purchase-btn';
   document.body.appendChild(executeBtn);
 
+  const closeBtn = document.createElement('button');
+  closeBtn.id = 'close-purchase-modal-btn';
+  purchaseModal.appendChild(closeBtn);
+
   setupEventListeners();
 
   jest.clearAllMocks();
   clearPurchaseModalRecommendations();
   clearFanOutBuckets();
+  seedGlobalDefaults(3, 'all-upfront');
 
   // loadBulkPurchaseState() (setup.ts's localStorage mock defaults getItem to
   // null) only reads cachedGlobalDefaultPayment when a raw value is present —
@@ -265,6 +272,161 @@ beforeEach(() => {
 // #1903: purchase modal re-prices on Term/Payment change
 
 describe('Issue #1903: purchase modal re-prices on Term/Payment change', () => {
+  test.each(['active', 'closed', 'executed'])('legacy payment delayed open cannot restore rows after newer modal is %s', async (action) => {
+    const firstFetch = deferred<Awaited<ReturnType<typeof api.listAccountServiceOverrides>>>();
+    (api.listAccountServiceOverrides as jest.Mock)
+      .mockReturnValueOnce(firstFetch.promise)
+      .mockResolvedValueOnce([]);
+    const first = { ...buildRows()[0]!, id: 'first', resource_type: 'c5.large' };
+    const second = { ...buildRows()[1]!, id: 'second', resource_type: 'm6i.large' };
+    (state.getRecommendations as jest.Mock).mockReturnValue([first, second]);
+
+    const pendingFirst = openPurchaseModal([first]);
+    await openPurchaseModal([second]);
+    expect(getPurchaseModalRecommendations()).toEqual([second]);
+    if (action === 'closed') (document.getElementById('close-purchase-modal-btn') as HTMLButtonElement).click();
+    if (action === 'executed') await handleExecutePurchase();
+    const rendered = document.getElementById('purchase-details')!.innerHTML;
+    const openCount = (openModal as jest.Mock).mock.calls.length;
+
+    firstFetch.resolve([]);
+    await pendingFirst;
+
+    expect(getPurchaseModalRecommendations()).toEqual(action === 'active' ? [second] : []);
+    expect(document.getElementById('purchase-details')!.innerHTML).toBe(rendered);
+    expect(openModal).toHaveBeenCalledTimes(openCount);
+    await handleExecutePurchase();
+    if (action === 'closed') {
+      expect(api.executePurchase).not.toHaveBeenCalled();
+    } else {
+      expect(api.executePurchase).toHaveBeenCalledTimes(1);
+      expect(api.executePurchase).toHaveBeenCalledWith([expect.objectContaining(second)], 100, undefined);
+    }
+  });
+
+  test.each([undefined, '', 'unrecognized'])('legacy payment %j resolves a complete priced variant before submission', async (payment) => {
+    const details = { platform: 'Linux/UNIX', tenancy: 'default', scope: 'Region' };
+    const legacy = { ...buildRows()[0]!, id: 'legacy', payment, upfront_cost: 17, monthly_cost: 29, details };
+    const priced = { ...buildRows()[0]!, count: 4, details: { ...details, vcpu: 2 } };
+    (state.getRecommendations as jest.Mock).mockReturnValue([legacy, priced]);
+
+    await openPurchaseModal([legacy]);
+
+    const row = document.querySelector<HTMLTableRowElement>('.purchase-modal-table tbody tr')!;
+    expect(row.cells[4]!.textContent).toBe('4');
+    expect(row.cells[5]!.textContent).toBe(formatCurrency(priced.upfront_cost));
+    expect(row.cells[6]!.textContent).toBe(formatCurrency(priced.monthly_cost!));
+    expect(getPurchaseModalRecommendations()).toEqual([expect.objectContaining(priced)]);
+    await handleExecutePurchase();
+    expect(api.executePurchase).toHaveBeenCalledWith([expect.objectContaining(priced)], 100, undefined);
+  });
+
+  test.each([true, false])('legacy payment uses configured preference only when priced (available: %s)', async (available) => {
+    const legacy = { ...buildRows()[0]!, id: 'legacy', payment: '' };
+    const all = buildRows()[0]!;
+    const partial = buildRows()[1]!;
+    seedGlobalDefaults(3, 'partial-upfront');
+    (state.getRecommendations as jest.Mock).mockReturnValue(available ? [legacy, all, partial] : [legacy, all]);
+
+    await openPurchaseModal([legacy]);
+
+    const expected = available ? partial : all;
+    expect(getPurchaseModalRecommendations()).toEqual([expect.objectContaining(expected)]);
+    expect(document.querySelector<HTMLSelectElement>('.purchase-row-payment')!.value).toBe(expected.payment);
+  });
+
+  test.each([false, true])('legacy payment resolves with account override fetch failure: %s', async (failed) => {
+    const legacy = { ...buildRows()[0]!, id: 'legacy', payment: '' };
+    (state.getRecommendations as jest.Mock).mockReturnValue([legacy, ...buildRows()]);
+    if (failed) {
+      (api.listAccountServiceOverrides as jest.Mock).mockRejectedValue(new Error('offline'));
+    } else {
+      (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+        { id: 'ovr', account_id: 'a1', provider: 'aws', service: 'ec2', payment: 'partial-upfront' },
+      ]);
+    }
+
+    await openPurchaseModal([legacy]);
+
+    expect(getPurchaseModalRecommendations()[0]).toMatchObject(buildRows()[failed ? 0 : 1]!);
+    expect(document.querySelector('.purchase-row-payment-source') !== null).toBe(!failed);
+  });
+
+  test.each([false, true])('legacy payment excludes an unavailable row (zero at capacity: %s)', async (zero) => {
+    const legacy = { ...buildRows()[0]!, id: 'legacy', payment: '' };
+    const priced = { ...buildRows()[0]!, count: 1 };
+    (state.getRecommendations as jest.Mock).mockReturnValue(zero ? [legacy, priced] : [legacy]);
+
+    await openPurchaseModal([legacy], zero ? 50 : 100);
+
+    const notice = document.querySelector('.purchase-modal-unavailable');
+    expect(notice?.getAttribute('role')).toBe('alert');
+    for (const label of ['a1', 'ec2', 'm5.large', 'us-east-1', 'excluded']) expect(notice?.textContent).toContain(label);
+    expect(getPurchaseModalRecommendations()).toEqual([]);
+    expect(document.querySelectorAll('.purchase-modal-table tbody tr')).toHaveLength(0);
+    expect((document.getElementById('execute-purchase-btn') as HTMLButtonElement).disabled).toBe(true);
+    await handleExecutePurchase();
+    expect(api.executePurchase).not.toHaveBeenCalled();
+
+    clearPurchaseModalRecommendations();
+    await openPurchaseModal([priced]);
+    expect(document.querySelector('.purchase-modal-unavailable')).toBeNull();
+    expect(getPurchaseModalRecommendations()).toEqual([expect.objectContaining(priced)]);
+  });
+
+  test('legacy payment skips a zero-unit preferred variant and scales the viable fallback once', async () => {
+    const legacy = { ...buildRows()[0]!, id: 'legacy', payment: '', count: 1, recommended_count: 2 };
+    const all = { ...buildRows()[0]!, count: 1 };
+    const partial = buildRows()[1]!;
+    (state.getRecommendations as jest.Mock).mockReturnValue([legacy, all, partial]);
+
+    await openPurchaseModal([legacy], 50);
+
+    expect(getPurchaseModalRecommendations()).toEqual([expect.objectContaining({
+      ...partial, count: 1, recommended_count: 2, upfront_cost: 9000, monthly_cost: 150, savings: 425,
+    })]);
+  });
+
+  test('legacy payment mixed bulk selection excludes unpriced rows from totals, selection and POST', async () => {
+    const legacy = { ...buildRows()[0]!, id: 'legacy', payment: '' };
+    const unavailable = { ...legacy, id: 'unavailable', resource_type: 'm6i.large' };
+    const priced = buildRows()[0]!;
+    const rows = [legacy, unavailable, priced];
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: rows, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set([legacy.id, unavailable.id]));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+
+    expect(getFanOutBuckets()).toBeNull();
+    expect(document.querySelector('.purchase-modal-unavailable')?.textContent).toContain('m6i.large');
+    expect(document.querySelectorAll('.purchase-modal-table tbody tr')).toHaveLength(1);
+    expect(document.getElementById('purchase-modal-totals-row')?.textContent).toContain(formatCurrency(priced.upfront_cost));
+    const selectAll = document.getElementById('purchase-modal-select-all') as HTMLInputElement;
+    selectAll.click();
+    expect(getPurchaseModalRecommendations()).toEqual([]);
+    selectAll.click();
+    expect(getPurchaseModalRecommendations()).toEqual([expect.objectContaining(priced)]);
+    (document.getElementById('execute-mode-direct') as HTMLInputElement).click();
+    expect(document.querySelector('.direct-execute-warning')?.textContent).toContain('36,000.00');
+    await handleExecutePurchase();
+    expect(api.executePurchase).toHaveBeenCalledWith([expect.objectContaining(priced)], 100, 'direct');
+  });
+
+  test('legacy payment normalization preserves a valid Azure upfront price', async () => {
+    const rec: LocalRecommendation = { ...buildRows()[0]!, provider: 'azure', service: 'compute', resource_type: 'Standard_D2s_v3', region: 'eastus', payment: 'upfront' };
+    (state.getRecommendations as jest.Mock).mockReturnValue([rec]);
+
+    await openPurchaseModal([rec]);
+
+    expect(getPurchaseModalRecommendations()).toEqual([{ ...rec, payment: 'all-upfront' }]);
+    await handleExecutePurchase();
+    expect(api.executePurchase).toHaveBeenCalledWith([expect.objectContaining({ ...rec, payment: 'all-upfront' })], 100, undefined);
+  });
+
   test.each<[string, string, string, Record<string, unknown>, unknown]>([
     ['ec2', 'platform', 'm5.large', { instance_type: 'm5.large', platform: 'Linux/UNIX', tenancy: 'default', scope: 'Region' }, 'Windows'],
     ['ec2', 'tenancy', 'm5.large', { instance_type: 'm5.large', platform: 'Linux/UNIX', tenancy: 'default', scope: 'Region' }, 'dedicated'],
@@ -434,6 +596,117 @@ describe('Issue #1903: purchase modal re-prices on Term/Payment change', () => {
     const paymentSelect2 = document.querySelector<HTMLSelectElement>('.purchase-row-payment')!;
     expect(Array.from(termSelect2.options).map((o) => o.value)).toEqual(['3']);
     expect(Array.from(paymentSelect2.options).map((o) => o.value)).toEqual(['all-upfront']);
+  });
+
+  test('T3 capacity-aware payment options choose the viable alternate on term change', async () => {
+    const details = { platform: 'Linux/UNIX', tenancy: 'default', scope: 'Region' };
+    const rows = buildRows().filter((row) => row.id !== 'v-3-partial').map((row) => {
+      if (row.id === 'v-1-all') return { ...row, details, count: 1, upfront_cost: 6000 };
+      if (row.id === 'v-1-no') return {
+        ...row, count: 2, recommended_count: 2, monthly_cost: 1600,
+        details,
+      };
+      return { ...row, details };
+    });
+    (localStorage.getItem as jest.Mock).mockReturnValue(JSON.stringify({ capacity: 50 }));
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: rows, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['v-3-all']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+
+    const termSelect = document.querySelector<HTMLSelectElement>('.purchase-row-term')!;
+    termSelect.value = '1';
+    termSelect.dispatchEvent(new Event('change'));
+
+    const row = document.querySelector<HTMLTableRowElement>('.purchase-modal-table tbody tr')!;
+    expect(row.cells[4]!.textContent).toBe('1');
+    expect(row.cells[5]!.textContent).toBe(formatCurrency(0));
+    expect(row.cells[6]!.textContent).toBe(formatCurrency(800));
+    expect(document.querySelector<HTMLSelectElement>('.purchase-row-payment')!.value).toBe('no-upfront');
+    expect(Array.from(document.querySelector<HTMLSelectElement>('.purchase-row-payment')!.options).map((o) => o.value))
+      .toEqual(['no-upfront']);
+    expect(getPurchaseModalRecommendations()[0]).toMatchObject({
+      id: 'v-1-no', term: 1, payment: 'no-upfront', count: 1, recommended_count: 2,
+      upfront_cost: 0, monthly_cost: 800,
+    });
+    expect(document.getElementById('purchase-modal-total-upfront')?.textContent).toContain(formatCurrency(0));
+    (document.getElementById('execute-mode-direct') as HTMLInputElement).click();
+    expect(document.querySelector('.direct-execute-warning')?.textContent).toContain(formatCurrency(0));
+
+    (document.getElementById('execute-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+    expect(api.executePurchase).toHaveBeenCalledWith(
+      [expect.objectContaining({
+        id: 'v-1-no', term: 1, payment: 'no-upfront', count: 1, recommended_count: 2,
+        details: { platform: 'Linux/UNIX', tenancy: 'default', scope: 'Region' },
+      })],
+      50,
+      'direct',
+    );
+  });
+
+  test('T3 viable payment survives term swaps and starts from loaded count', async () => {
+    const rows = [
+      { ...buildRows()[0]!, id: 'v-3-no', payment: 'no-upfront' as const, count: 2, monthly_cost: 1600 },
+      { ...buildRows()[2]!, count: 2 },
+      { ...buildRows()[3]!, count: 2, recommended_count: 2, monthly_cost: 1600 },
+    ];
+    (localStorage.getItem as jest.Mock).mockReturnValue(JSON.stringify({ capacity: 50 }));
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: rows, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['v-3-no']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+
+    const termSelect = document.querySelector<HTMLSelectElement>('.purchase-row-term')!;
+    termSelect.value = '1';
+    termSelect.dispatchEvent(new Event('change'));
+    expect(getPurchaseModalRecommendations()[0]).toMatchObject({ id: 'v-1-no', payment: 'no-upfront', count: 1 });
+    expect(Array.from(document.querySelector<HTMLSelectElement>('.purchase-row-payment')!.options).map((o) => o.value))
+      .toEqual(['all-upfront', 'no-upfront']);
+
+    const termSelectAgain = document.querySelector<HTMLSelectElement>('.purchase-row-term')!;
+    termSelectAgain.value = '3';
+    termSelectAgain.dispatchEvent(new Event('change'));
+    expect(getPurchaseModalRecommendations()[0]).toMatchObject({ id: 'v-3-no', payment: 'no-upfront', count: 1 });
+    const row = document.querySelector<HTMLTableRowElement>('.purchase-modal-table tbody tr')!;
+    expect(row.cells[6]!.textContent).toBe(formatCurrency(800));
+    expect(row.querySelector<HTMLSelectElement>('.purchase-row-term')!.value).toBe('3');
+    expect(row.querySelector<HTMLSelectElement>('.purchase-row-payment')!.value).toBe('no-upfront');
+  });
+
+  test('T3 all-zero term restores the prior priced row', async () => {
+    const rows = [
+      { ...buildRows()[0]!, count: 2 },
+      { ...buildRows()[2]!, count: 1, upfront_cost: 6000 },
+      { ...buildRows()[3]!, count: 1, recommended_count: 1 },
+    ];
+    (localStorage.getItem as jest.Mock).mockReturnValue(JSON.stringify({ capacity: 50 }));
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: rows, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['v-3-all']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+
+    const before = getPurchaseModalRecommendations()[0]!;
+    const termSelect = document.querySelector<HTMLSelectElement>('.purchase-row-term')!;
+    termSelect.value = '1';
+    termSelect.dispatchEvent(new Event('change'));
+
+    expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'warning' }));
+    expect(termSelect.value).toBe('3');
+    expect(getPurchaseModalRecommendations()[0]).toEqual(before);
+    expect(document.querySelector<HTMLSelectElement>('.purchase-row-payment')!.value).toBe('all-upfront');
   });
 
   test('T4 capacity scaling survives a swap (bulk path)', async () => {
