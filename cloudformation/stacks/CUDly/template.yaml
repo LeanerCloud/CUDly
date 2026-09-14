@@ -420,6 +420,7 @@ Resources:
           - Sid: CostExplorer
             Effect: Allow
             Action:
+              - ce:GetCostAndUsage
               - ce:GetReservationPurchaseRecommendation
               - ce:GetReservationUtilization
               - ce:GetReservationCoverage
@@ -458,7 +459,19 @@ Resources:
               - ec2:AcceptReservedInstancesExchangeQuote
               - ec2:DescribeRegions
               - ec2:DescribeInstanceTypeOfferings
+              - ec2:DescribeInstanceTypes
+              - ec2:CreateReservedInstancesListing
+              - ec2:DescribeReservedInstancesListings
+              - ec2:CancelReservedInstancesListing
             Resource: "*"
+
+          # Post-purchase tagging of EC2 RIs; the only action here that
+          # supports resource-level scoping.
+          - Sid: EC2ReservedInstanceTagging
+            Effect: Allow
+            Action:
+              - ec2:CreateTags
+            Resource: "arn:aws:ec2:*:*:reserved-instances/*"
 
           # OpenSearch Reserved Instances
           - Sid: OpenSearchReservedInstances
