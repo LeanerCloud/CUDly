@@ -4526,7 +4526,9 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
   if (!hasCurrentOption) {
     const option = document.createElement('option');
     option.value = '';
-    option.textContent = 'Unavailable: no priced payment';
+    option.textContent = b.perRecPayments && inheritingRows.length === 0
+      ? `${b.payment} (every row uses its own payment)`
+      : 'Unavailable: no priced payment';
     option.selected = true;
     option.disabled = true;
     paymentSelect.appendChild(option);

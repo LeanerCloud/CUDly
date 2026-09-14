@@ -1609,6 +1609,15 @@ describe('Issue #1904: fan-out modal skips incompatible buckets', () => {
       expect.objectContaining({ id: 'a1-partial', payment: 'partial-upfront', upfront_cost: 2000 }),
       expect.objectContaining({ id: 'a2-no', payment: 'no-upfront', upfront_cost: 0 }),
     ]));
+    const bucketSelect = document.querySelector<HTMLSelectElement>('.fanout-bucket-payment')!;
+    expect(bucketSelect.isConnected).toBe(true);
+    expect(bucketSelect.disabled).toBe(true);
+    expect(bucketSelect.value).toBe('');
+    expect(bucketSelect.selectedOptions[0]?.textContent).toBe('all-upfront (every row uses its own payment)');
+    expect(document.querySelector('.fanout-bucket-error')).toBeNull();
+    expect(document.getElementById('fanout-summary')!.textContent).toContain('Total commitments: 10');
+    expect(document.getElementById('fanout-summary')!.textContent).toContain('Total upfront: $8,000');
+    expect(document.getElementById('fanout-summary')!.textContent).toContain('Total savings / mo: $2,700');
     (document.getElementById('execute-purchase-btn') as HTMLButtonElement).click();
     await flush();
     const body = (api.executePurchase as jest.Mock).mock.calls
