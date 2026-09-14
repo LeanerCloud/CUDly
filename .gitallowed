@@ -10,8 +10,11 @@
 # DO NOT add a real account ID here. If a real account ID lands in the repo,
 # rotate it and treat the leak seriously instead of silencing the scanner.
 #
-# Format: one regex per line, matched against each line of file content
-# (path-scoping is not supported by .gitallowed).
+# Format: one regex per line, matched against the scanner's whole
+# "path:line:content" output line (not just the file content), so an entry
+# may anchor on the path with "^path:[0-9]+:". Every entry must still be a
+# synthetic literal or one known benign line, never a bare keyword: a
+# keyword whitelists every line that happens to contain it (#1972).
 
 # Sequential test placeholders (ascending and descending).
 123456789012
@@ -46,3 +49,34 @@
 # UUID-shaped account ID used in handler_accounts_test.go (synthetic, not a
 # real subscription/account).
 11111111-1111-1111-1111-111111111111
+
+# scripts/setup-git-secrets.sh registers its detectors as literal regex text
+# and three of them (Azure connection string, PostgreSQL and MySQL DSN
+# detectors, verified empirically -- MongoDB's does not) match their own
+# registration line. Each entry below is anchored on the path, the line
+# number, AND the entire line as it appears in that file (including the
+# trailing comment), with a trailing $ -- not just the "git secrets --add
+# '" command prefix, and not just the added pattern with the anchor left
+# open at the end. A prefix-only anchor whitelists a secret appended to
+# ANY registration line in this file; an anchor missing the trailing $
+# whitelists a secret appended to the END of one of these three specific
+# lines. Both are the #1972 hole reintroduced at a smaller scale, and both
+# were caught only by a fixture exercising exactly that mutation -- add
+# one for any future entry in this block that isn't already covered.
+#
+# Each entry below also replaces one letter of its own trigger substring
+# with a single-character bracket expression, e.g. "Protoco[l]" for
+# "Protocol". This is a no-op for matching (as a regex, [l] matches the
+# literal letter l exactly like l would) but it breaks the contiguous
+# trigger span each entry is built from, so .gitallowed does not need to
+# allow-list ITSELF against the very patterns these entries exist to
+# suppress (confirmed empirically: without this, the .gitallowed
+# self-scan case below fails -- and note this comment must not spell any
+# of those spans out literally either, for the same reason).
+^scripts/setup-git-secrets\.sh:[0-9]+:git secrets --add 'DefaultEndpointsProtoco[l]=https'                      # Azure Connection String$
+^scripts/setup-git-secrets\.sh:[0-9]+:git secrets --add 'postgre[s]://\[\^:\]\+:\[\^@\]\+@'                           # PostgreSQL$
+^scripts/setup-git-secrets\.sh:[0-9]+:git secrets --add 'mysq[l]://\[\^:\]\+:\[\^@\]\+@'                              # MySQL$
+# Truncated PEM fixtures in cmd/configure_test.go: a PEM header followed by
+# "\n..." is never a key body. Written without "BEGIN" so this line itself
+# does not trip the PEM detector.
+PRIVATE KEY-----\\n(MIIEvQIBADANBg)?\.\.\.

@@ -929,6 +929,41 @@ jobs:
       - name: Run guard script self-tests
         run: bash scripts/test-gcp-secret-scope.sh
 
+  # Self-test for the git-secrets allowlist (#1972): asserts, through the
+  # real pre-commit hook scan path, that secret-shaped fixtures are still
+  # caught and that the documented false positives still scan clean.
+  git-secrets-allowlist:
+    name: git-secrets allowlist self-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install git-secrets
+        # The 1.3.0 tag is mutable in principle, so clone it and then assert
+        # HEAD resolves to the exact commit verified at the time this was
+        # written (`git ls-remote --tags` against the upstream repo) before
+        # trusting it enough to `sudo make install`.
+        env:
+          GIT_SECRETS_SHA: ad82d68ee924906a0401dfd48de5057731a9bc84
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch 1.3.0 https://github.com/awslabs/git-secrets.git /tmp/git-secrets
+          resolved="$(git -C /tmp/git-secrets rev-parse HEAD)"
+          if [ "${resolved}" != "${GIT_SECRETS_SHA}" ]; then
+            echo "git-secrets 1.3.0 tag resolved to ${resolved}, expected ${GIT_SECRETS_SHA}" >&2
+            exit 1
+          fi
+          sudo make -C /tmp/git-secrets install
+
+      - name: Run allowlist self-tests
+        run: bash scripts/test-git-secrets-allowlist.sh
+
   # Assert that the ECR repository selector used by destroy-fargate-dev.yml and
   # cleanup-staging.yml picks the repository each state owns and nothing else.
   # The consumers force-delete what the selector prints, so both directions are
@@ -1074,6 +1109,7 @@ jobs:
       - azure-role-parity
       - aws-iam-parity
       - gcp-secret-scope
+      - git-secrets-allowlist
       - ecr-delete-selection
       - rds-deletion-protection-scope
       - aws-tfstate-platform-key

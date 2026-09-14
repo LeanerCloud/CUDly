@@ -36,6 +36,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Align pre-commit gocyclo threshold (10) with CI pipeline
 - Pin tool versions in GitHub Actions for reproducible builds
 - Update README Go version badge to match go.mod (1.25+)
+- The local git-secrets setup script aborted on its PEM pattern and, when
+  patched past that, made every scan fail on an invalid regex; its keyword
+  allowlist whitelisted whole Terraform and test-file lines. Allowlisting now
+  lives in `.gitallowed` as literal entries and the PEM detector covers
+  PKCS#8 keys (#1972)
 
 ## [0.9.0] - 2026-03-06
 
