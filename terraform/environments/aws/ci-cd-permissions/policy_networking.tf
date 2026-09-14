@@ -162,18 +162,6 @@ resource "aws_iam_policy" "networking" {
         ]
         Resource = "*"
       },
-      {
-        Sid    = "KMS"
-        Effect = "Allow"
-        Action = [
-          "kms:CreateGrant",
-          "kms:Decrypt",
-          "kms:DescribeKey",
-          "kms:Encrypt",
-          "kms:GenerateDataKey",
-        ]
-        Resource = "*"
-      },
     ]
   })
 
