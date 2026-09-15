@@ -3,7 +3,9 @@
 [![License: OSL-3.0](https://img.shields.io/badge/License-OSL--3.0-blue.svg)](https://opensource.org/licenses/OSL-3.0)
 [![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8.svg)](https://go.dev/)
 
-CUDly is a comprehensive CLI tool for managing cloud cost commitments across AWS, Azure, and GCP. It helps organizations optimize cloud spending by automating the discovery, analysis, and purchase of multiple Reserved Instances, Savings Plans, and Committed Use Discounts by running a single command.
+CUDly is an open source CLI for safely automating cloud commitment purchases — Reserved Instances, Savings Plans, and Committed Use Discounts — across AWS, Azure, and GCP. It discovers, analyzes, and executes purchase recommendations in a single command, dry-run by default, with multiple layers of guardrails against unintended purchases.
+
+It's specifically built with agents in mind: an AI agent can drive the entire discovery-to-proposal flow on its own — searching recommendations, sizing a plan, filtering by account or region — but every guardrail holds regardless of who, or what, is running the command, and no purchase completes without a separate human approval step.
 
 ## CLI Reference
 
@@ -23,13 +25,36 @@ Setup and usage: [mcp/README.md](mcp/README.md)
 
 ## Key Features
 
-- **Multi-Cloud Support** - Unified interface for AWS (production), Azure (experimental), and GCP (experimental)
-- **Intelligent Recommendations** - Fetches and analyzes commitment recommendations from cloud provider APIs
-- **Safe Purchase Automation** - Execute purchases with built-in safety controls (dry-run by default)
-- **Flexible Coverage Control** - Purchase only a percentage of recommendations for gradual adoption
-- **CSV Workflow** - Generate recommendations, review offline, then execute purchases
-- **Advanced Filtering** - Filter by region, instance type, engine, and account
-- **Comprehensive Reporting** - Detailed cost estimates, savings calculations, and audit trails
+- **Purchases Require a Human at a Terminal** - `--purchase` only goes through for someone typing a live confirmation at a real terminal — never for a script, a CI job, or an agent driving the CLI as a subprocess. See [Safety Features](#safety-features) for exactly how.
+- **Grounded Recommendations** - Every recommendation is built from the cloud provider's own recommendation data (AWS Cost Explorer, Azure Advisor, GCP recommender), not a guess — so an agent reasoning about a purchase is reasoning over real usage numbers.
+- **Multi-Cloud, One Interface** - AWS, Azure, and GCP through the same command and the same safety model — no separate tool or separate assumptions per cloud. See [Implementation Status](#implementation-status) for per-provider maturity.
+- **Conservative-by-Default Sizing** - Coverage control lets a run start small — a percentage of what's recommended, or of actual historical usage — so a first run can prove itself before scaling up, instead of committing to everything a provider suggests in one shot.
+- **A Reviewable Paper Trail** - Every dry run and every purchase is written to CSV and to a permanent audit log — a human reviews the literal line items, not a summary.
+
+Also included: per-region/instance-type/account filtering, and detailed cost and savings reporting with full audit trails — useful for deeper human analysis beyond the core buy/don't-buy decision.
+
+## Safety Features
+
+CUDly's purchase gate is built around one fact: only a human sitting at a real terminal can execute a purchase. No flag, no piped input, and no automation gets through it:
+
+1. **Dry-run is the only thing available to a non-interactive caller.** If stdin/stdout isn't a genuine interactive terminal — a script, a CI job, an AI agent driving the CLI as a subprocess — `--purchase` refuses outright. No prompt, no partial execution, nothing bought.
+2. **A real purchase requires a live confirmation, read straight from the terminal device — not from stdin.** Like `sudo`, this can't be piped, scripted, or satisfied by a flag; a human has to actually be there and type the response themselves.
+3. **Agents propose, humans execute.** When an agent runs CUDly and reaches a dry-run recommendation worth buying, CUDly doesn't buy it — it prints the exact, ready-to-run purchase command for a human to execute themselves, in their own terminal.
+4. **Coverage and instance limits shape what a dry run recommends in the first place**, so what a human is asked to confirm is already scoped, not a blank check.
+5. **Duplicate-purchase prevention** — checks commitments made in the last 24 hours and adjusts recommendations so a retried run can't buy the same thing twice.
+6. **Instance type validation** — every recommendation is checked against known, valid instance types before it's ever shown to a human.
+7. **Full audit trail** — every purchase, and every refused non-interactive attempt, is logged: what was requested, from what kind of session, and what happened.
+8. **Permanent CSV exports** of every dry run and every purchase.
+
+Full internals — the idempotency window, exactly what the audit log captures — are in [Purchase Safety](docs/cli/purchase-safety.md).
+
+## Implementation Status
+
+| Cloud | Status | What "Experimental" means |
+|---|---|---|
+| AWS | Production | Exercised end-to-end against real accounts; the primary tested path. |
+| Azure | Experimental | Implemented and functional; still accumulating real-world purchase validation. The approval/safety model applies identically — "experimental" is about service coverage maturity, not about whether it's safe to run. |
+| GCP | Experimental | Same as Azure. |
 
 ## Supported Cloud Providers & Services
 
@@ -129,10 +154,9 @@ go install github.com/LeanerCloud/CUDly/cmd@latest
 ```bash
 # Purchase from generated CSV (requires explicit --purchase flag)
 ./cudly --input-csv cudly-dryrun-*.csv --purchase
-
-# Skip confirmation prompt
-./cudly --input-csv cudly-dryrun-*.csv --purchase --yes
 ```
+
+`--purchase` only executes at a real, interactive terminal — you'll be asked to type a live confirmation, read directly from the terminal device. If CUDly detects it isn't running interactively (piped input, a script, an agent-driven subprocess), it refuses immediately and prints the exact command for a human to run themselves. See [Safety Features](#safety-features).
 
 ## Command Reference
 
@@ -169,10 +193,11 @@ go install github.com/LeanerCloud/CUDly/cmd@latest
 
 | Flag              | Description                                   | Default        |
 | ----------------- | --------------------------------------------- | -------------- |
-| `--purchase`      | Execute actual purchases (dry-run by default) | false          |
-| `--yes`           | Skip confirmation prompts                     | false          |
+| `--purchase`      | Execute real purchases — requires a live confirmation at a real terminal; refuses immediately if not run interactively (dry-run by default) | false          |
 | `-i, --input-csv` | Input CSV file with recommendations           | -              |
 | `-o, --output`    | Output CSV file path                          | auto-generated |
+
+> `--yes` has been retired as a way to skip purchase confirmation. A live terminal response is always required for `--purchase` and cannot be bypassed by any flag — see [Safety Features](#safety-features).
 
 ### Filtering
 
@@ -391,20 +416,6 @@ The override modal targets the same endpoint as scripted setups:
 `PUT /api/accounts/{id}/service-overrides/{provider}/{service}`. Existing
 automation continues to work without change; the UI and the API write to
 the same `account_service_overrides` row.
-
-## Safety Features
-
-CUDly includes multiple safety mechanisms to prevent unintended purchases:
-
-1. **Dry-run by default** - No purchases without explicit `--purchase` flag
-2. **Interactive confirmation** - Prompts before actual purchases (unless `--yes`)
-3. **CSV workflow** - Review recommendations before purchasing
-4. **Coverage control** - Purchase only what you need
-5. **Instance limits** - Cap total purchases with `--max-instances`
-6. **Duplicate prevention** - Checks for existing commitments
-7. **Instance type validation** - Validates against known types
-8. **Detailed logging** - Full audit trail of operations
-9. **CSV exports** - Permanent record of all recommendations and purchases
 
 ## Cloud Provider Authentication
 
