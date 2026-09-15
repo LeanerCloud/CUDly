@@ -3,7 +3,9 @@
 [![License: OSL-3.0](https://img.shields.io/badge/License-OSL--3.0-blue.svg)](https://opensource.org/licenses/OSL-3.0)
 [![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8.svg)](https://go.dev/)
 
-CUDly is an open source CLI built for engineers and the AI agents they delegate cloud cost work to. It discovers, analyzes, and proposes purchases of Reserved Instances, Savings Plans, and Committed Use Discounts across AWS, Azure, and GCP — and executes them only after a human approves the plan, whether the run was started by a person or an agent.
+CUDly is an open source CLI for safely automating cloud commitment purchases — Reserved Instances, Savings Plans, and Committed Use Discounts — across AWS, Azure, and GCP. It discovers, analyzes, and executes purchase recommendations in a single command, dry-run by default, with multiple layers of guardrails against unintended purchases.
+
+It's specifically built with agents in mind: an AI agent can drive the entire discovery-to-proposal flow on its own — searching recommendations, sizing a plan, filtering by account or region — but every guardrail holds regardless of who, or what, is running the command, and no purchase completes without a separate human approval step.
 
 ## CLI Reference
 
