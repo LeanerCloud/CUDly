@@ -1,5 +1,13 @@
 # Agent-SEO README — Claims vs. Current Implementation
 
+## TL;DR — Eli & Cristi to work through together
+
+We ran the drafted README, verbatim, past clean Sonnet 5 and Opus 5 instances (no other context, no tools, told to assume every claim is true) and asked each: given only this, would you use CUDly to execute a purchase, buy directly yourself, or refuse and hand off to a human? **Both refused to execute a purchase either way** — CUDly's or their own direct API calls — and landed on "generate a reviewable plan, a human approves and executes it." Their reasoning wasn't really about how much they trusted CUDly specifically; it was that multi-year, hard-to-reverse financial commitments are outside what either model was willing to do autonomously, full stop, no matter what a README claims about its own safety model.
+
+That's the thing to align on before we go further: **the honest ceiling for this positioning is "agent produces a plan a human trusts enough to approve faster," not "agent that can safely execute purchases."** The current draft still leans toward the second framing in places (the whole "even when run by an agent" emphasis). Worth deciding together whether to lean into the first framing explicitly rather than imply autonomy we don't actually expect a careful agent to use.
+
+Opus 5 also did real, uninstructed QA on the draft — see items 7–12 below, added directly from its critique. Some of these are just bugs in our edit (missed a few spots when reframing to "plans not purchases"); a couple are more substantive (the CLI approval mechanism is asserted but never actually described, and the "agent-directed refusal" bullet reads to a skeptical model as rhetoric, not a verifiable control).
+
 This tracks every claim in this PR's README/SECURITY.md changes that describes behavior CUDly doesn't fully have yet. The copy is written as the target state we're committing to build; this file is the honest build list that has to close before any of it goes public. Nothing here should stay open when this ships.
 
 1. **Pending-approval purchase flow (the core new claim).** The README now says `--purchase` submits a plan for human approval rather than executing immediately, and that this holds even when the CLI is driven by an agent. Today, `--purchase` (+ `--yes`) executes real purchases directly — there is no pending/approved plan state machine in the CLI path. Needs a new plan state (`pending` / `approved` / `rejected`) and execution gated on `approved`. This wording change also touched Quick Start step 3 and the Execution Control table, so those now assume the same not-yet-built flow.
@@ -14,3 +22,17 @@ This tracks every claim in this PR's README/SECURITY.md changes that describes b
 5. **`--max-instances` conservative default.** The safety framing implies purchases are capped conservatively out of the box; today the flag defaults to `0` (unlimited). No behavior change proposed here — just flagging the gap between the "safe by default" framing and the actual default.
 
 6. **SECURITY.md contact + supported-versions — resolved, not a gap.** SECURITY.md already existed with a full incident-response plan; this PR only fills in the contact email (`cristi@leanercloud.com`, replacing "see repository settings for contact") and adds a Supported Versions note ("latest `main` only, no patches for older versions"). The rest of the existing document (severity levels, response phases, runbooks) is untouched.
+
+## Found by the Sonnet 5 / Opus 5 README test (2026-09-15)
+
+7. **Internal contradiction: several spots still describe `--purchase` as direct execution**, undercutting the Safety Features claim that "`--purchase` never buys anything by itself." Specifically: the Disclaimer ("This tool can make actual cloud commitment purchases when used with the `--purchase` flag"), Example 4's comment ("Step 3: Purchase with filters"), and the Duplicate Purchase Prevention section's wording ("if you purchase 5 db.r6g.large RIs... run CUDly again within 24 hours"). All of these need to be reworded to match the plan/approval framing, or the plan/approval framing needs to be walked back — right now the document argues with itself.
+
+8. **The CLI approval mechanism is asserted, never described.** Safety Features says a plan needs approval "through CUDly's own approval step," but nowhere does the README say where a pending plan lives for a standalone CLI binary on local credentials, or how approver identity is checked. The only concrete approval workflow described anywhere in the document is the web dashboard's `purchase_executions` 4-eyes flow — and the Web Interface section calls that dashboard experimental, "not validated at scale, use the CLI for production workloads." So the claim rests on a mechanism the same README disclaims two sections later. This needs either a real description of the CLI-side mechanism (once #1/#2 above are built) or the claim needs to be scoped down to what's actually true.
+
+9. **"Conservative-by-Default Sizing" is contradicted by the actual flag defaults.** The feature bullet implies purchases start small; the real defaults are 3-year term, no-upfront payment, 80% coverage — the longest lock-in at the highest coverage level. Either change the defaults or stop calling them conservative.
+
+10. **AWS "Production" status in the new Implementation Status table glosses over per-service granularity.** The AWS CLI Support Matrix further down marks EC2 (Reserved Instances) and Savings Plans — plausibly the largest spend categories — as "Experimental (seeking testers)." A reader who only sees the top-level table gets a rosier picture than the detail supports.
+
+11. **The "agent-directed refusal" bullet didn't land as a trust signal.** Opus 5's read: "it's the tool asserting how I will behave. It isn't a control I can verify." Worth either dropping this bullet or reframing it as what it actually is (a UX/message-design choice) rather than a safety mechanism.
+
+12. **Unrelated pre-existing bug, surfaced incidentally:** the Go version badge says `1.25+`, but the Development section's Prerequisites say `Go 1.26.6 or later`. Doc drift, nothing to do with this PR, flagging since it was caught in the same pass.
