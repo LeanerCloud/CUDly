@@ -25,13 +25,28 @@ Setup and usage: [mcp/README.md](mcp/README.md)
 
 ## Key Features
 
-- **Human-Approved Purchase Automation** - An agent (or a script, or you) can generate and submit a purchase plan on its own, but nothing is bought until a separate human approves it — the same approval control whether the request came from a person or an agent.
-- **Grounded Recommendations** - Every plan is built from the cloud provider's own recommendation data (AWS Cost Explorer, Azure Advisor, GCP recommender), not a guess — so an agent reasoning about a purchase is reasoning over real usage numbers.
-- **Multi-Cloud, One Interface** - AWS, Azure, and GCP through the same command and the same approval model — no separate tool or separate safety assumptions per cloud. See [Implementation Status](#implementation-status) for per-provider maturity.
-- **Conservative-by-Default Sizing** - Coverage control lets a plan start small — a percentage of what's recommended, or of actual historical usage — so a first plan can prove itself before scaling up, instead of committing to everything a provider suggests in one shot.
-- **A Reviewable Paper Trail** - Every plan, approved or not, is written to CSV and to a permanent audit log before anything is purchased — a human approver reviews the literal line items, not a summary.
+- **Purchases Require a Human at a Terminal** - `--purchase` only goes through for someone typing a live confirmation at a real terminal — never for a script, a CI job, or an agent driving the CLI as a subprocess. See [Safety Features](#safety-features) for exactly how.
+- **Grounded Recommendations** - Every recommendation is built from the cloud provider's own recommendation data (AWS Cost Explorer, Azure Advisor, GCP recommender), not a guess — so an agent reasoning about a purchase is reasoning over real usage numbers.
+- **Multi-Cloud, One Interface** - AWS, Azure, and GCP through the same command and the same safety model — no separate tool or separate assumptions per cloud. See [Implementation Status](#implementation-status) for per-provider maturity.
+- **Conservative-by-Default Sizing** - Coverage control lets a run start small — a percentage of what's recommended, or of actual historical usage — so a first run can prove itself before scaling up, instead of committing to everything a provider suggests in one shot.
+- **A Reviewable Paper Trail** - Every dry run and every purchase is written to CSV and to a permanent audit log — a human reviews the literal line items, not a summary.
 
-Also included: per-region/instance-type/account filtering, and detailed cost and savings reporting with full audit trails — useful for deeper human analysis once you're past the core approve/reject decision.
+Also included: per-region/instance-type/account filtering, and detailed cost and savings reporting with full audit trails — useful for deeper human analysis beyond the core buy/don't-buy decision.
+
+## Safety Features
+
+CUDly's purchase gate is built around one fact: only a human sitting at a real terminal can execute a purchase. No flag, no piped input, and no automation gets through it:
+
+1. **Dry-run is the only thing available to a non-interactive caller.** If stdin/stdout isn't a genuine interactive terminal — a script, a CI job, an AI agent driving the CLI as a subprocess — `--purchase` refuses outright. No prompt, no partial execution, nothing bought.
+2. **A real purchase requires a live confirmation, read straight from the terminal device — not from stdin.** Like `sudo`, this can't be piped, scripted, or satisfied by a flag; a human has to actually be there and type the response themselves.
+3. **Agents propose, humans execute.** When an agent runs CUDly and reaches a dry-run recommendation worth buying, CUDly doesn't buy it — it prints the exact, ready-to-run purchase command for a human to execute themselves, in their own terminal.
+4. **Coverage and instance limits shape what a dry run recommends in the first place**, so what a human is asked to confirm is already scoped, not a blank check.
+5. **Duplicate-purchase prevention** — checks commitments made in the last 24 hours and adjusts recommendations so a retried run can't buy the same thing twice.
+6. **Instance type validation** — every recommendation is checked against known, valid instance types before it's ever shown to a human.
+7. **Full audit trail** — every purchase, and every refused non-interactive attempt, is logged: what was requested, from what kind of session, and what happened.
+8. **Permanent CSV exports** of every dry run and every purchase.
+
+Full internals — the idempotency window, exactly what the audit log captures — are in [Purchase Safety](docs/cli/purchase-safety.md).
 
 ## Implementation Status
 
@@ -134,17 +149,14 @@ go install github.com/LeanerCloud/CUDly/cmd@latest
   --coverage 50
 ```
 
-### 3. Submit a Purchase Plan
+### 3. Execute Purchases
 
 ```bash
-# Submit a plan from generated CSV for approval (requires explicit --purchase flag)
+# Purchase from generated CSV (requires explicit --purchase flag)
 ./cudly --input-csv cudly-dryrun-*.csv --purchase
-
-# Skip the local confirmation prompt (the plan still requires separate human approval)
-./cudly --input-csv cudly-dryrun-*.csv --purchase --yes
 ```
 
-`--purchase` never buys anything on its own — it submits a plan. See [Safety Features](#safety-features).
+`--purchase` only executes at a real, interactive terminal — you'll be asked to type a live confirmation, read directly from the terminal device. If CUDly detects it isn't running interactively (piped input, a script, an agent-driven subprocess), it refuses immediately and prints the exact command for a human to run themselves. See [Safety Features](#safety-features).
 
 ## Command Reference
 
@@ -181,10 +193,11 @@ go install github.com/LeanerCloud/CUDly/cmd@latest
 
 | Flag              | Description                                   | Default        |
 | ----------------- | --------------------------------------------- | -------------- |
-| `--purchase`      | Submit a purchase plan for human approval (dry-run by default) | false          |
-| `--yes`           | Skip the local confirmation prompt (approval is still required separately) | false          |
+| `--purchase`      | Execute real purchases — requires a live confirmation at a real terminal; refuses immediately if not run interactively (dry-run by default) | false          |
 | `-i, --input-csv` | Input CSV file with recommendations           | -              |
 | `-o, --output`    | Output CSV file path                          | auto-generated |
+
+> `--yes` has been retired as a way to skip purchase confirmation. A live terminal response is always required for `--purchase` and cannot be bypassed by any flag — see [Safety Features](#safety-features).
 
 ### Filtering
 
@@ -403,21 +416,6 @@ The override modal targets the same endpoint as scripted setups:
 `PUT /api/accounts/{id}/service-overrides/{provider}/{service}`. Existing
 automation continues to work without change; the UI and the API write to
 the same `account_service_overrides` row.
-
-## Safety Features
-
-CUDly is built so that no purchase — whether started by a person or an agent — completes without a separate human sign-off:
-
-1. **Plans, not purchases.** `--purchase` never buys anything by itself. It submits a purchase plan for approval. This holds identically whether the invoking process is an interactive human session, a script, or an AI agent — no flag combination skips straight to a live purchase.
-2. **Approval is a separate, independent action.** A plan moves from `pending` to `approved` only through CUDly's own approval step — never through a CLI flag on the same invocation that created the plan. The approver can't be the same identity that submitted the plan.
-3. **Agent-directed refusals.** An attempt to execute an unapproved plan is refused with a structured message naming the plan ID and explaining that human approval is required — written so an LLM-driven caller reads it as an instruction to stop and notify its operator, not as an obstacle to route around.
-4. **Coverage and instance limits shape the plan itself**, not just its execution, so what's waiting for approval is already sized conservatively before a human ever looks at it.
-5. **Duplicate-purchase prevention** — checks commitments made in the last 24 hours and folds them out of new plans, so a retried or duplicated run can't submit the same purchase twice.
-6. **Instance type validation** — every line in a plan is checked against known, valid instance types before it's ever put in front of an approver.
-7. **Full audit trail** — every plan is permanently logged: who proposed it, what it contained, who approved or rejected it, and when.
-8. **Permanent CSV exports** of every plan and its outcome, approved or not.
-
-Full internals — the idempotency window, exactly what the audit log captures — are in [Purchase Safety](docs/cli/purchase-safety.md).
 
 ## Cloud Provider Authentication
 

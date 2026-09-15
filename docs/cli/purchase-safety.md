@@ -21,31 +21,39 @@ A bare invocation is always a dry run; passing `--purchase` is the one and only 
 | (not set / false) | Dry run - nothing purchased |
 | `true` | Real purchases |
 
-> **History:** earlier versions had a separate `--dry-run` flag. As a default-true flag it silently suppressed purchases even when `--purchase` was set (you had to pass `--purchase --dry-run=false` to actually buy - a footgun surfaced on #1364), and once its default was flipped to false it became a redundant "force dry-run even with `--purchase`" override that only muddied the contract. It has been removed in favour of the single `--purchase` control. Real purchases still require the `--yes` confirmation (or the interactive prompt) below, so moving money remains a deliberate act.
+> **History:** earlier versions had a separate `--dry-run` flag. As a default-true flag it silently suppressed purchases even when `--purchase` was set (you had to pass `--purchase --dry-run=false` to actually buy - a footgun surfaced on #1364), and once its default was flipped to false it became a redundant "force dry-run even with `--purchase`" override that only muddied the contract. It has been removed in favour of the single `--purchase` control. Real purchases still require the interactive terminal gate below, so moving money remains a deliberate act a human has to be physically present for.
 
 ```bash
 # Dry run (the default - nothing is purchased):
 cudly --services rds
 
-# Execute real purchases (prompts for confirmation unless --yes is given):
+# Execute real purchases (only proceeds at a real, interactive terminal - see below):
 cudly --services rds --purchase
 
 # CSV mode behaves identically:
 cudly --input-csv recs.csv --purchase
 ```
 
-## Confirmation prompt: --yes
+## The interactive-only gate
 
-```text
---yes   bool   default: false
-```
+`--purchase` does not, by itself, decide whether money moves. Whether it's even allowed to prompt depends on how cudly was invoked:
 
-When running in purchase mode (`isDryRun=false`), cudly prints a summary of the total instance count and estimated savings and prompts for confirmation before executing any purchase. Pass `--yes` to skip this prompt in automation.
+| Invocation | `--purchase` behavior |
+|---|---|
+| Real, interactive terminal (a human runs `cudly` directly in their own shell) | Prints a summary of the total instance count and estimated savings, then prompts for confirmation. The prompt reads its answer from the controlling terminal device directly, not from stdin - a piped `yes` or a scripted response does not satisfy it. |
+| Anything else - piped stdin, a script, a CI job, an AI agent driving `cudly` as a subprocess | Refuses immediately, before any provider or credential is touched. No purchase happens. Instead, cudly prints the exact command a human can run themselves, in their own terminal, to complete the purchase. |
+
+This is deliberately closer to `sudo` than to a `--yes`-style flag: there is no flag, environment variable, or piped input that satisfies the confirmation on a non-interactive caller's behalf. An agent (or any other non-interactive process) can drive every other part of cudly - discovery, sizing, filtering, dry-run CSV generation - but the terminal gate on `--purchase` is not something any of that can clear on its own.
 
 ```bash
-# Unattended purchase (use with care):
-cudly --services rds --purchase --yes
+# Run by a human at their own terminal: prompts, then purchases on confirmation
+cudly --services rds --purchase
+
+# Run by a script/agent (no controlling terminal): refuses, prints the command to run instead
+cudly --services rds --purchase   # (non-interactive invocation)
 ```
+
+> **Note on `--yes`:** the flag previously used to skip this prompt in automation has been retired for purchase confirmation. There is no way to bypass the interactive-terminal check.
 
 ## Audit log: --audit-log
 
