@@ -3147,8 +3147,8 @@ describe('Bundle B: term-aware bucketing in the Purchase flow', () => {
     // that exercise the post-Purchase fan-out must explicitly select the
     // recs they want included in the target.
     const mixed = [
-      { id: 'a', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
-      { id: 'b', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 'm5.large', region: 'us-east-1', count: 1, term: 3, savings: 200, upfront_cost: 800 },
+      { id: 'a', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 500 },
+      { id: 'b', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 'm5.large', region: 'us-east-1', count: 1, term: 3, payment: 'all-upfront', savings: 200, upfront_cost: 800 },
     ];
     (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: mixed, regions: [] });
     (state.getRecommendations as jest.Mock).mockReturnValue(mixed);
@@ -3221,9 +3221,18 @@ describe('Issue #111: per-bucket Payment seed from per-account service override'
   // to exercise the (override / no-override / multi-account / edit)
   // matrix.
   const setupMixedTermRecs = (recs: Array<Record<string, unknown>>): void => {
+    const loadedRecs = recs.flatMap((rec) => {
+      if (rec['provider'] !== 'aws' || rec['service'] !== 'ec2') return [rec];
+      const payment = rec['payment'] ?? 'all-upfront';
+      const variants = [
+        { ...rec, id: `${String(rec['id'])}-partial`, payment: 'partial-upfront' },
+        { ...rec, id: `${String(rec['id'])}-no`, payment: 'no-upfront' },
+      ];
+      return [{ ...rec, payment }, ...variants];
+    });
     (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
-    (state.getRecommendations as jest.Mock).mockReturnValue(recs);
-    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getRecommendations as jest.Mock).mockReturnValue(loadedRecs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(loadedRecs);
     (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
     // #273: action buttons now require an explicit selection. Each fan-out
     // test in this suite is asserting bucket assembly, not the selection-
@@ -3531,9 +3540,9 @@ describe('Issue #111: per-bucket Payment seed from per-account service override'
     expect(bucket1yr.perRecPayments).toBeDefined();
     const prp = bucket1yr.perRecPayments!;
     // h1 (acct-x) seeded from partial-upfront override.
-    expect(prp.get('h1')).toBe('partial-upfront');
+    expect(prp.get('h1-partial')).toBe('partial-upfront');
     // h2 (acct-y) seeded from no-upfront override.
-    expect(prp.get('h2')).toBe('no-upfront');
+    expect(prp.get('h2-no')).toBe('no-upfront');
 
     // Bucket-level payment falls back to toolbar (multi-account, no single override).
     expect(bucket1yr.paymentSource).toBe('toolbar');
@@ -3541,8 +3550,8 @@ describe('Issue #111: per-bucket Payment seed from per-account service override'
     // Per-rec dropdowns must be rendered in the modal.
     const perRecSelects = document.querySelectorAll<HTMLSelectElement>('.fanout-per-rec-payment');
     expect(perRecSelects.length).toBeGreaterThanOrEqual(2);
-    const h1Select = Array.from(perRecSelects).find((s) => s.dataset['recId'] === 'h1');
-    const h2Select = Array.from(perRecSelects).find((s) => s.dataset['recId'] === 'h2');
+    const h1Select = Array.from(perRecSelects).find((s) => s.dataset['recId'] === 'h1-partial');
+    const h2Select = Array.from(perRecSelects).find((s) => s.dataset['recId'] === 'h2-no');
     expect(h1Select?.value).toBe('partial-upfront');
     expect(h2Select?.value).toBe('no-upfront');
   });
@@ -3582,16 +3591,19 @@ describe('Issue #111: per-bucket Payment seed from per-account service override'
 
     const after = getFanOutBuckets();
     const afterBucket1yr = after!.find((b) => b.term === 1)!;
-    expect(afterBucket1yr.perRecPayments!.get('i1')).toBe('no-upfront');
+    expect(afterBucket1yr.perRecPayments!.get('i1-no')).toBe('no-upfront');
     // i2 still follows the bucket default — absent from the override map.
     expect(afterBucket1yr.perRecPayments!.has('i2')).toBe(false);
 
     // Setting i1 back to the bucket default removes the override again so the
     // row resumes tracking the bucket-level dropdown.
-    i1Select.value = 'all-upfront';
-    i1Select.dispatchEvent(new Event('change'));
+    const liveI1Select = Array.from(
+      document.querySelectorAll<HTMLSelectElement>('.fanout-per-rec-payment'),
+    ).find((s) => s.dataset['recId'] === 'i1-no')!;
+    liveI1Select.value = '__fanout-bucket-default__';
+    liveI1Select.dispatchEvent(new Event('change'));
     const reset = getFanOutBuckets();
-    expect(reset!.find((b) => b.term === 1)!.perRecPayments!.has('i1')).toBe(false);
+    expect(reset!.find((b) => b.term === 1)!.perRecPayments!.has('i1-no')).toBe(false);
   });
 
   // Issue #197 regression (CR #838): the bucket-level Payment dropdown must
@@ -3644,10 +3656,10 @@ describe('Issue #111: per-bucket Payment seed from per-account service override'
     const perRecSelects = Array.from(
       document.querySelectorAll<HTMLSelectElement>('.fanout-per-rec-payment'),
     );
-    const j1Select = perRecSelects.find((s) => s.dataset['recId'] === 'j1');
-    const j2Select = perRecSelects.find((s) => s.dataset['recId'] === 'j2');
-    expect(j1Select?.value).toBe('no-upfront');
-    expect(j2Select?.value).toBe('no-upfront');
+    const j1Select = perRecSelects.find((s) => s.dataset['recId'] === 'j1-no');
+    const j2Select = perRecSelects.find((s) => s.dataset['recId'] === 'j2-no');
+    expect(j1Select?.value).toBe('__fanout-bucket-default__');
+    expect(j2Select?.value).toBe('__fanout-bucket-default__');
   });
 });
 
@@ -3940,10 +3952,10 @@ describe('Issue #132: bulk-buy collapses SP plan types into one bucket', () => {
 
   test('SP plan types + a non-SP rec produce one SP bucket + one EC2 bucket', async () => {
     const recs = [
-      { id: 's1', provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-compute',     resource_type: 'sp', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
-      { id: 's2', provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-sagemaker',   resource_type: 'sp', region: 'us-east-1', count: 1, term: 1, savings: 150, upfront_cost: 600 },
-      { id: 's3', provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-ec2instance', resource_type: 'sp', region: 'us-east-1', count: 1, term: 1, savings: 200, upfront_cost: 800 },
-      { id: 'e1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',                       resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings:  50, upfront_cost: 300 },
+      { id: 's1', provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-compute',     resource_type: 'sp', region: 'us-east-1', count: 1, term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 500 },
+      { id: 's2', provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-sagemaker',   resource_type: 'sp', region: 'us-east-1', count: 1, term: 1, payment: 'all-upfront', savings: 150, upfront_cost: 600 },
+      { id: 's3', provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-ec2instance', resource_type: 'sp', region: 'us-east-1', count: 1, term: 1, payment: 'all-upfront', savings: 200, upfront_cost: 800 },
+      { id: 'e1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',                       resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment: 'all-upfront', savings:  50, upfront_cost: 300 },
     ];
     (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
     (state.getRecommendations as jest.Mock).mockReturnValue(recs);
@@ -3982,8 +3994,8 @@ describe('Issue #132: bulk-buy collapses SP plan types into one bucket', () => {
 
   test('SP recs at different terms still split by term', async () => {
     const recs = [
-      { id: 's1', provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-compute',   resource_type: 'sp', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
-      { id: 's2', provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-sagemaker', resource_type: 'sp', region: 'us-east-1', count: 1, term: 3, savings: 200, upfront_cost: 800 },
+      { id: 's1', provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-compute',   resource_type: 'sp', region: 'us-east-1', count: 1, term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 500 },
+      { id: 's2', provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-sagemaker', resource_type: 'sp', region: 'us-east-1', count: 1, term: 3, payment: 'all-upfront', savings: 200, upfront_cost: 800 },
     ];
     (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
     (state.getRecommendations as jest.Mock).mockReturnValue(recs);
