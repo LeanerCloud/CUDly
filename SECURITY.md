@@ -4,13 +4,17 @@
 
 If you discover a security vulnerability in CUDly, **do not open a public GitHub issue**.
 
-Contact the maintainers directly via email (see repository settings for contact). Provide:
+Contact the maintainers directly at cristi@leanercloud.com. Provide:
 
 - A description of the vulnerability and its potential impact
 - Steps to reproduce
 - Any suggested mitigations
 
 We commit to acknowledging reports within 48 hours and providing an initial assessment within 7 days.
+
+## Supported Versions
+
+Only the latest commit on `main` is supported. There are no patches or backports for older versions — always run current `main`.
 
 ---
 

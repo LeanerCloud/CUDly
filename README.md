@@ -3,7 +3,7 @@
 [![License: OSL-3.0](https://img.shields.io/badge/License-OSL--3.0-blue.svg)](https://opensource.org/licenses/OSL-3.0)
 [![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8.svg)](https://go.dev/)
 
-CUDly is a comprehensive CLI tool for managing cloud cost commitments across AWS, Azure, and GCP. It helps organizations optimize cloud spending by automating the discovery, analysis, and purchase of multiple Reserved Instances, Savings Plans, and Committed Use Discounts by running a single command.
+CUDly is an open source CLI built for engineers and the AI agents they delegate cloud cost work to. It discovers, analyzes, and proposes purchases of Reserved Instances, Savings Plans, and Committed Use Discounts across AWS, Azure, and GCP — and executes them only after a human approves the plan, whether the run was started by a person or an agent.
 
 ## CLI Reference
 
@@ -23,13 +23,21 @@ Setup and usage: [mcp/README.md](mcp/README.md)
 
 ## Key Features
 
-- **Multi-Cloud Support** - Unified interface for AWS (production), Azure (experimental), and GCP (experimental)
-- **Intelligent Recommendations** - Fetches and analyzes commitment recommendations from cloud provider APIs
-- **Safe Purchase Automation** - Execute purchases with built-in safety controls (dry-run by default)
-- **Flexible Coverage Control** - Purchase only a percentage of recommendations for gradual adoption
-- **CSV Workflow** - Generate recommendations, review offline, then execute purchases
-- **Advanced Filtering** - Filter by region, instance type, engine, and account
-- **Comprehensive Reporting** - Detailed cost estimates, savings calculations, and audit trails
+- **Human-Approved Purchase Automation** - An agent (or a script, or you) can generate and submit a purchase plan on its own, but nothing is bought until a separate human approves it — the same approval control whether the request came from a person or an agent.
+- **Grounded Recommendations** - Every plan is built from the cloud provider's own recommendation data (AWS Cost Explorer, Azure Advisor, GCP recommender), not a guess — so an agent reasoning about a purchase is reasoning over real usage numbers.
+- **Multi-Cloud, One Interface** - AWS, Azure, and GCP through the same command and the same approval model — no separate tool or separate safety assumptions per cloud. See [Implementation Status](#implementation-status) for per-provider maturity.
+- **Conservative-by-Default Sizing** - Coverage control lets a plan start small — a percentage of what's recommended, or of actual historical usage — so a first plan can prove itself before scaling up, instead of committing to everything a provider suggests in one shot.
+- **A Reviewable Paper Trail** - Every plan, approved or not, is written to CSV and to a permanent audit log before anything is purchased — a human approver reviews the literal line items, not a summary.
+
+Also included: per-region/instance-type/account filtering, and detailed cost and savings reporting with full audit trails — useful for deeper human analysis once you're past the core approve/reject decision.
+
+## Implementation Status
+
+| Cloud | Status | What "Experimental" means |
+|---|---|---|
+| AWS | Production | Exercised end-to-end against real accounts; the primary tested path. |
+| Azure | Experimental | Implemented and functional; still accumulating real-world purchase validation. The approval/safety model applies identically — "experimental" is about service coverage maturity, not about whether it's safe to run. |
+| GCP | Experimental | Same as Azure. |
 
 ## Supported Cloud Providers & Services
 
@@ -124,15 +132,17 @@ go install github.com/LeanerCloud/CUDly/cmd@latest
   --coverage 50
 ```
 
-### 3. Execute Purchases
+### 3. Submit a Purchase Plan
 
 ```bash
-# Purchase from generated CSV (requires explicit --purchase flag)
+# Submit a plan from generated CSV for approval (requires explicit --purchase flag)
 ./cudly --input-csv cudly-dryrun-*.csv --purchase
 
-# Skip confirmation prompt
+# Skip the local confirmation prompt (the plan still requires separate human approval)
 ./cudly --input-csv cudly-dryrun-*.csv --purchase --yes
 ```
+
+`--purchase` never buys anything on its own — it submits a plan. See [Safety Features](#safety-features).
 
 ## Command Reference
 
@@ -169,8 +179,8 @@ go install github.com/LeanerCloud/CUDly/cmd@latest
 
 | Flag              | Description                                   | Default        |
 | ----------------- | --------------------------------------------- | -------------- |
-| `--purchase`      | Execute actual purchases (dry-run by default) | false          |
-| `--yes`           | Skip confirmation prompts                     | false          |
+| `--purchase`      | Submit a purchase plan for human approval (dry-run by default) | false          |
+| `--yes`           | Skip the local confirmation prompt (approval is still required separately) | false          |
 | `-i, --input-csv` | Input CSV file with recommendations           | -              |
 | `-o, --output`    | Output CSV file path                          | auto-generated |
 
@@ -394,17 +404,18 @@ the same `account_service_overrides` row.
 
 ## Safety Features
 
-CUDly includes multiple safety mechanisms to prevent unintended purchases:
+CUDly is built so that no purchase — whether started by a person or an agent — completes without a separate human sign-off:
 
-1. **Dry-run by default** - No purchases without explicit `--purchase` flag
-2. **Interactive confirmation** - Prompts before actual purchases (unless `--yes`)
-3. **CSV workflow** - Review recommendations before purchasing
-4. **Coverage control** - Purchase only what you need
-5. **Instance limits** - Cap total purchases with `--max-instances`
-6. **Duplicate prevention** - Checks for existing commitments
-7. **Instance type validation** - Validates against known types
-8. **Detailed logging** - Full audit trail of operations
-9. **CSV exports** - Permanent record of all recommendations and purchases
+1. **Plans, not purchases.** `--purchase` never buys anything by itself. It submits a purchase plan for approval. This holds identically whether the invoking process is an interactive human session, a script, or an AI agent — no flag combination skips straight to a live purchase.
+2. **Approval is a separate, independent action.** A plan moves from `pending` to `approved` only through CUDly's own approval step — never through a CLI flag on the same invocation that created the plan. The approver can't be the same identity that submitted the plan.
+3. **Agent-directed refusals.** An attempt to execute an unapproved plan is refused with a structured message naming the plan ID and explaining that human approval is required — written so an LLM-driven caller reads it as an instruction to stop and notify its operator, not as an obstacle to route around.
+4. **Coverage and instance limits shape the plan itself**, not just its execution, so what's waiting for approval is already sized conservatively before a human ever looks at it.
+5. **Duplicate-purchase prevention** — checks commitments made in the last 24 hours and folds them out of new plans, so a retried or duplicated run can't submit the same purchase twice.
+6. **Instance type validation** — every line in a plan is checked against known, valid instance types before it's ever put in front of an approver.
+7. **Full audit trail** — every plan is permanently logged: who proposed it, what it contained, who approved or rejected it, and when.
+8. **Permanent CSV exports** of every plan and its outcome, approved or not.
+
+Full internals — the idempotency window, exactly what the audit log captures — are in [Purchase Safety](docs/cli/purchase-safety.md).
 
 ## Cloud Provider Authentication
 
